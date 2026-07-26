@@ -1,0 +1,47 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  testes:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependências de sistema (Tauri + lame)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev lame
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Dependências Python
+        run: pip install mutagen pytest
+
+      - name: Dependências npm
+        run: npm ci
+
+      - name: Fixtures
+        run: python3 tools/make_fixtures.py
+
+      - name: Suíte completa (pytest + cargo + vitest com cobertura)
+        run: npm run test:all
+
+      - name: Navegador do Playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: E2E (Playwright)
+        run: npm run test:e2e
