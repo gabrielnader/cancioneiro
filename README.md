@@ -83,6 +83,29 @@ python3 tools/embed_lyrics.py --check musica.mp3                  # confere (lin
 Os temas são normalizados ao gravar (minúsculas, sem duplicatas, ordem alfabética)
 e a busca ignora acentos ("agua" encontra "água").
 
+## Organizar o acervo inteiro (`tools/curadoria.py`)
+
+Para curadoria em massa — do acervo bagunçado ao acervo pesquisável:
+
+```bash
+# 1) Diagnóstico: o que falta em cada MP3 (letra, temas, título/artista)
+python3 tools/curadoria.py relatorio ~/Musicas --csv plano.csv
+
+# 2) Busca automática de letra no LRCLIB (só para quem tem título+artista;
+#    primeiro veja o que seria encontrado, depois aplique)
+python3 tools/curadoria.py buscar-letra ~/Musicas
+python3 tools/curadoria.py buscar-letra ~/Musicas --aplicar
+
+# 3) Edição em massa: abra plano.csv no Excel/LibreOffice, preencha título,
+#    artista, temas e/ou o caminho de um .txt com a letra em cada linha, e:
+python3 tools/curadoria.py aplicar ~/Musicas --csv plano.csv --dry-run   # confere
+python3 tools/curadoria.py aplicar ~/Musicas --csv plano.csv             # grava
+```
+
+Campos vazios no CSV nunca apagam nada — só o que você preencher é gravado.
+A busca no LRCLIB acontece apenas na curadoria, sob demanda; **o player continua
+100% offline**. Depois da curadoria, abra o Cancioneiro e clique "Reindexar tudo".
+
 ## Testes
 
 ```bash
