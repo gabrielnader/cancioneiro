@@ -1,9 +1,10 @@
 name: ci
 
+# push cobre PRs do mesmo repositório; sem gatilho pull_request para não
+# executar a suíte duas vezes por PR
 on:
   push:
     branches: ["**"]
-  pull_request:
 
 jobs:
   testes:
@@ -28,8 +29,14 @@ jobs:
         with:
           workspaces: src-tauri
 
+      # Python do tool-cache: evita o "externally managed environment"
+      # (PEP 668) do Python de sistema do ubuntu-24.04
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Dependências Python
-        run: pip install mutagen pytest
+        run: python3 -m pip install mutagen pytest
 
       - name: Dependências npm
         run: npm ci
