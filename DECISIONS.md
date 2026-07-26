@@ -126,3 +126,19 @@ opção mais simples que passa nos Acceptance Checks do PRD.
 35. **Operação só-de-temas no CLI ignora --title/--artist** (que na V1 sempre
     acompanharam gravação de letra); adds aplicam antes de removes quando
     combinados. Ambiguidade da spec resolvida pela opção mais simples.
+
+## V2.2 — Curadoria em massa (tools/curadoria.py) e release
+
+36. **CSV como formato de edição em massa**: o coordenador organiza o acervo em
+    planilha (Excel/LibreOffice; UTF-8 com BOM). Campos vazios nunca apagam —
+    só o que for preenchido é gravado. `--dry-run` validado por hash byte a byte.
+37. **LRCLIB apenas na curadoria**: `buscar-letra` consulta a API pública do
+    LRCLIB sob demanda, com fetcher injetável (testes 100% offline). O player
+    permanece sem qualquer código de rede.
+38. **Relatório com arquivo ilegível**: tabela mostra "(ilegível)"; no CSV o
+    título sai vazio, para o round-trip relatorio→aplicar não gravar o texto
+    "(ilegível)" como TIT2.
+39. **Distribuição via GitHub Actions**: o ambiente de desenvolvimento é Linux;
+    binários Windows/macOS nascem no workflow release.yml (tauri-action) a cada
+    tag v*, publicados em GitHub Releases. CI (ci.yml) roda a suíte completa
+    a cada push.
