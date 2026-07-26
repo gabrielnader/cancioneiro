@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { SEARCH_INPUT_ID } from "../components/SearchBar";
 import { audioController } from "./playerAudioCore";
+import { playSelectedOrToggle } from "../lib/playbackActions";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlayerStore } from "../stores/playerStore";
 import { usePlaylistStore } from "../stores/playlistStore";
@@ -61,7 +62,8 @@ export function useKeyboardShortcuts() {
       switch (e.key) {
         case " ": {
           e.preventDefault(); // evita scroll da página
-          usePlayerStore.getState().togglePlayPause();
+          // com música carregada alterna; com apenas seleção, inicia (F4)
+          playSelectedOrToggle();
           break;
         }
         case "/": {

@@ -131,6 +131,24 @@ test.describe("Fluxo crítico: indexar → buscar → ver letra → tocar", () =
     expect(Math.abs(t - duration * 0.5)).toBeLessThan(1);
   });
 
+  test("selecionar com clique único e iniciar pelo botão ▶ Tocar da barra", async ({
+    page,
+  }) => {
+    await resetApp(page);
+    await addMockFolder(page);
+
+    const audio = page.getByTestId("player-audio");
+    // sem seleção: botão desabilitado
+    await expect(page.getByRole("button", { name: "Tocar", exact: true })).toBeDisabled();
+
+    await page.getByText("Coração Sertanejo").first().click();
+    await expect(audio).toHaveJSProperty("paused", true);
+
+    await page.getByRole("button", { name: "Tocar", exact: true }).click();
+    await expect(audio).toHaveJSProperty("paused", false);
+    await expect(page.getByRole("button", { name: "Pausar" })).toBeVisible();
+  });
+
   test("espaço alterna play/pause fora da busca; dentro da busca digita espaço", async ({
     page,
   }) => {

@@ -2,6 +2,8 @@ import { useRef, useState } from "react";
 import { usePlayerAudio } from "../hooks/usePlayerAudio";
 import { audioController } from "../hooks/playerAudioCore";
 import { formatTime } from "../lib/formatTime";
+import { playSelectedOrToggle } from "../lib/playbackActions";
+import { useLibraryStore } from "../stores/libraryStore";
 import { usePlayerStore } from "../stores/playerStore";
 
 /** Barra do player fixa no rodapé, 72px (F4). */
@@ -13,9 +15,9 @@ export function PlayerBar() {
   const isPlaying = usePlayerStore((s) => s.isPlaying);
   const volume = usePlayerStore((s) => s.volume);
   const setVolume = usePlayerStore((s) => s.setVolume);
-  const togglePlayPause = usePlayerStore((s) => s.togglePlayPause);
   const next = usePlayerStore((s) => s.next);
   const previous = usePlayerStore((s) => s.previous);
+  const hasSelection = useLibraryStore((s) => s.selectedSongId !== null);
 
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -79,9 +81,9 @@ export function PlayerBar() {
           <button
             type="button"
             aria-label={isPlaying ? "Pausar" : "Tocar"}
-            disabled={!current}
+            disabled={!current && !hasSelection}
             className="flex h-9 w-9 items-center justify-center rounded-full bg-[#FFFFFF] text-[#111827] disabled:opacity-40"
-            onClick={togglePlayPause}
+            onClick={playSelectedOrToggle}
           >
             {isPlaying ? "⏸" : "▶"}
           </button>
