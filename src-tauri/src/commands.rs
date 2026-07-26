@@ -85,6 +85,12 @@ pub fn list_songs(state: State<'_, Db>) -> Result<Vec<Song>> {
 }
 
 #[tauri::command]
+pub fn search(state: State<'_, Db>, query: String) -> Result<Vec<crate::search::SearchResult>> {
+    let conn = state.lock()?;
+    crate::search::search(&conn, &query, 200)
+}
+
+#[tauri::command]
 pub fn get_lyrics(state: State<'_, Db>, song_id: i64) -> Result<Option<String>> {
     let conn = state.lock()?;
     db::get_lyrics(&conn, song_id)

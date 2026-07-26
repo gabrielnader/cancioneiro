@@ -2,6 +2,7 @@ pub mod commands;
 pub mod db;
 pub mod error;
 pub mod indexer;
+pub mod search;
 
 use std::sync::Mutex;
 use tauri::Manager;
@@ -24,6 +25,7 @@ pub fn run() {
             commands::list_folders,
             commands::scan,
             commands::list_songs,
+            commands::search,
             commands::get_lyrics,
             commands::file_exists,
             commands::create_playlist,

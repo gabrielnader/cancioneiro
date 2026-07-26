@@ -168,10 +168,10 @@ pub fn list_folders(conn: &Connection) -> Result<Vec<Folder>> {
 // Songs
 // ---------------------------------------------------------------------------
 
-const SONG_COLS: &str =
+pub(crate) const SONG_COLS: &str =
     "id, file_path, folder_id, title, artist, album, duration_seconds, has_lyrics, available";
 
-fn song_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Song> {
+pub(crate) fn song_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Song> {
     Ok(Song {
         id: r.get(0)?,
         file_path: r.get(1)?,
