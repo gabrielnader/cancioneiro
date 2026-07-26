@@ -1,3 +1,18 @@
+# REPORT — Cancioneiro
+
+> **Atualização V2 (0.2.0):** após a entrega V1 abaixo, o projeto ganhou:
+> **V2.1 — Temas** (tags temáticas embutidas no MP3 via TXXX:TEMAS, busca sem
+> acento e chips clicáveis; spec em `PRD-v2-temas.md`), **V2.2 — Curadoria em
+> massa** (`tools/curadoria.py`: relatório do acervo + CSV, edição em massa via
+> planilha e busca de letra no LRCLIB — só na curadoria; o player segue 100%
+> offline), **ícone próprio**, e **CI/CD no GitHub Actions** (`ci.yml` roda a
+> suíte a cada push; `release.yml` publica instaladores Windows/macOS/Linux em
+> GitHub Releases a cada tag `v*`). Correções relevantes pós-V1 descobertas em
+> teste real: botão "▶ Tocar" inicia a música selecionada (F4, fluxo 2) e botão
+> "+" visível na linha selecionada (acessibilidade touch/teclado).
+> Suítes na V2.2: **88 pytest + 35 cargo + 133 vitest + 11 E2E — todas verdes.**
+> Cada fase da V2 passou por QA cético independente com veredito APROVADO.
+
 # REPORT — Cancioneiro V1
 
 Build autônomo completo a partir de `PRD-cancioneiro.md`, do zero ao binário, em
