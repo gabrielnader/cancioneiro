@@ -74,7 +74,11 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
               type="button"
               aria-label="Adicionar à playlist"
               title="Adicionar à playlist"
-              className="hidden h-6 w-6 rounded text-[#374151] hover:bg-[#E5E7EB] group-hover:block"
+              className={`h-6 w-6 rounded text-[#374151] hover:bg-[#E5E7EB] group-hover:block ${
+                // além do hover (PRD), fica visível na linha selecionada —
+                // sem isso não há como adicionar via toque ou teclado
+                selected || menuPos ? "block" : "hidden"
+              }`}
               onClick={(e) => {
                 e.stopPropagation();
                 if (menuPos) {

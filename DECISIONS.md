@@ -104,3 +104,7 @@ opção mais simples que passa nos Acceptance Checks do PRD.
 29. **Servidor de fixtures no Vite**: middleware próprio servindo `fixtures/*.mp3`
     com suporte a Range (sem Content-Length/Range o Chromium não faz seek).
 30. **Toast dura 5s e é clicável para fechar**: PRD omisso quanto à duração.
+31. **Botão "+" visível também na linha selecionada**: o PRD define o "+" como
+    hover-only ("aparece ao passar o mouse"), o que o torna inacessível por
+    toque e teclado. Mantido o hover e adicionada a visibilidade quando a linha
+    está selecionada — acomodação de acessibilidade, não feature nova.
