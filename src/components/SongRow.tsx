@@ -1,0 +1,128 @@
+import { useState } from "react";
+import { parseSnippet } from "../lib/highlight";
+import type { Song } from "../lib/types";
+import { usePlayerStore } from "../stores/playerStore";
+import { usePlaylistStore } from "../stores/playlistStore";
+
+interface SongRowProps {
+  song: Song;
+  snippet: string | null;
+  selected: boolean;
+  onSelect: () => void;
+  onPlay: () => void;
+}
+
+/** Linha de música (biblioteca/busca): clique seleciona, duplo-clique toca. */
+export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowProps) {
+  const isCurrent = usePlayerStore((s) => s.current?.id === song.id);
+  const isPlaying = usePlayerStore((s) => s.isPlaying && s.current?.id === song.id);
+  const playlists = usePlaylistStore((s) => s.playlists);
+  const addToPlaylist = usePlaylistStore((s) => s.addToPlaylist);
+  const [menuOpen, setMenuOpen] = useState(false);
+
+  const titleColor = !song.available
+    ? "text-[#9CA3AF]"
+    : isCurrent
+      ? "text-[#0F766E]"
+      : "text-[#111827]";
+
+  return (
+    <div
+      role="option"
+      aria-selected={selected}
+      tabIndex={-1}
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData(
+          "application/x-cancioneiro-song",
+          String(song.id),
+        );
+      }}
+      onClick={onSelect}
+      onDoubleClick={() => {
+        if (song.available) onPlay();
+      }}
+      className={`group relative flex min-h-9 cursor-default select-none flex-col justify-center px-4 py-1.5 ${
+        selected || isCurrent ? "bg-[#F0FDFA]" : "hover:bg-[#F3F4F6]"
+      }`}
+    >
+      <div className="flex items-center gap-2">
+        {isPlaying && (
+          <span
+            aria-hidden="true"
+            className="text-[#0F766E] motion-safe:animate-pulse"
+          >
+            ♪
+          </span>
+        )}
+        <span className={`truncate text-[15px] font-medium ${titleColor}`}>
+          {song.title}
+        </span>
+        {!song.has_lyrics && (
+          <span className="shrink-0 rounded bg-[#F3F4F6] px-1.5 py-0.5 text-[12px] text-[#6B7280]">
+            Sem letra
+          </span>
+        )}
+        <span className="ml-auto flex items-center gap-2">
+          {playlists.length > 0 && (
+            <span className="relative">
+              <button
+                type="button"
+                aria-label="Adicionar à playlist"
+                title="Adicionar à playlist"
+                className="hidden h-6 w-6 rounded text-[#374151] hover:bg-[#E5E7EB] group-hover:block"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setMenuOpen((v) => !v);
+                }}
+              >
+                +
+              </button>
+              {menuOpen && (
+                <span
+                  className="absolute right-0 top-7 z-20 block w-56 rounded border border-[#E5E7EB] bg-white py-1 shadow-lg"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <span className="block px-3 py-1 text-[12px] uppercase text-[#6B7280]">
+                    Adicionar à playlist
+                  </span>
+                  {playlists.map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      className="block w-full px-3 py-1.5 text-left text-[#374151] hover:bg-[#F3F4F6]"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        void addToPlaylist(p.id, song.id);
+                      }}
+                    >
+                      {p.name}
+                    </button>
+                  ))}
+                </span>
+              )}
+            </span>
+          )}
+          {song.artist && (
+            <span className="max-w-40 truncate text-[13px] text-[#6B7280]">
+              {song.artist}
+            </span>
+          )}
+        </span>
+      </div>
+      {snippet && (
+        <p className="mt-0.5 truncate text-[13px] text-[#6B7280]">
+          {parseSnippet(snippet).map((seg, i) =>
+            seg.highlighted ? (
+              <mark key={i} className="rounded-sm bg-[#FDE68A] px-0.5 text-[#78350F]">
+                {seg.text}
+              </mark>
+            ) : (
+              <span key={i}>{seg.text}</span>
+            ),
+          )}
+        </p>
+      )}
+    </div>
+  );
+}

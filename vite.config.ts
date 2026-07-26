@@ -1,14 +1,46 @@
 /// <reference types="vitest/config" />
-import { defineConfig } from "vite";
+import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import { createReadStream, existsSync } from "node:fs";
+import path from "node:path";
 
-// @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
+
+/**
+ * Serve os MP3s de fixtures/ em /fixtures/* no dev server e no preview —
+ * usado pelo backend mockado (modo web / E2E Playwright) para tocar áudio.
+ */
+function serveFixtures(): Plugin {
+  const fixturesDir = path.resolve(__dirname, "fixtures");
+  const handler = (
+    middlewares: import("vite").Connect.Server,
+  ) => {
+    middlewares.use("/fixtures", (req, res, next) => {
+      const name = path.basename((req.url ?? "").split("?")[0]);
+      const file = path.join(fixturesDir, name);
+      if (!name.endsWith(".mp3") || !existsSync(file)) {
+        next();
+        return;
+      }
+      res.setHeader("Content-Type", "audio/mpeg");
+      createReadStream(file).pipe(res);
+    });
+  };
+  return {
+    name: "cancioneiro-serve-fixtures",
+    configureServer(server) {
+      handler(server.middlewares);
+    },
+    configurePreviewServer(server) {
+      handler(server.middlewares);
+    },
+  };
+}
 
 // https://vite.dev/config/
 export default defineConfig(async () => ({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), serveFixtures()],
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
