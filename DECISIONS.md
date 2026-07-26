@@ -56,3 +56,51 @@ opção mais simples que passa nos Acceptance Checks do PRD.
     busca/listagem continuarem respondendo durante a varredura ("rescan em
     background" do PRD). `scan_all` pré-conta os arquivos para o progresso ser
     global ("n de total"), sem reiniciar a cada pasta.
+
+## Fases 2–5 — decisões de frontend/busca
+
+16. **Query FTS sempre literal**: cada token vira frase entre aspas; o último token
+    é prefixo (`"cora"*`) para busca enquanto digita. Operadores FTS do usuário
+    viram separadores/texto — nunca erro de sintaxe.
+17. **Marcadores de highlight**: o snippet usa U+E000/U+E001 (área privada do
+    Unicode) como delimitadores — não colidem com texto real de letra; o frontend
+    converte em `<mark>`.
+18. **Snippet só quando o match foi na letra**: espelha o PRD ("quando o match foi
+    na letra"); match apenas em título/artista não exibe trecho.
+19. **`search` com LIMIT 200**: o PRD não define limite; 200 resultados ordenados
+    por relevância cobrem o caso de uso (o usuário refina a busca). Campo
+    vazio/só-especiais NÃO passa pelo LIMIT — devolve a biblioteca completa.
+20. **Contador "{n} resultados"**: exibido apenas quando a query tem ao menos um
+    token alfanumérico (`hasSearchTokens`), espelhando o sanitizador — query só de
+    operadores é tratada como campo vazio também na UI.
+21. **Ordenação alfabética pt-BR**: collation SQLite customizada ("ptbr") que
+    ignora caixa e acentos ("Água" antes de "banana"); o COLLATE NOCASE padrão
+    ordenaria acentuados depois de "z".
+22. **Fila do player vs. remoção durante reprodução**: quando a música atual sai
+    da playlist, o player continua tocando ("detached") e rastreia o PRÓXIMO item
+    pela identidade (id), sobrevivendo a remoções e reordenações subsequentes.
+23. **Menu "Adicionar à playlist" em portal**: as linhas virtualizadas usam
+    `transform` (stacking context próprio); um dropdown inline ficaria por baixo da
+    linha seguinte. O menu renderiza em `document.body`.
+24. **Duplo-clique na mesma música reinicia do zero** (`playRequestId`): o PRD é
+    omisso; é o comportamento padrão de players.
+25. **Botão "Ocultar/Mostrar letra"**: flutuante no canto superior direito da
+    coluna central — precisa existir também quando o painel está oculto.
+26. **`reorder_playlist` transacional e validado**: rejeita conjuntos de itens que
+    não cobrem exatamente a playlist (evita positions duplicadas).
+
+## Fase 6 — E2E e empacotamento
+
+27. **E2E real vs. mockado**: Playwright roda o frontend no Chromium com IPC
+    mockado (`mockBackend.ts`, persistido em localStorage para simular restart).
+    REAL: UI completa, stores, atalhos, persistência e áudio (MP3s de fixtures
+    decodificados de verdade, incluindo avanço automático de playlist). MOCKADO:
+    comandos Rust — cobertos por `cargo test` (integração real com SQLite+lofty,
+    round-trip Python→Rust e teste de imutabilidade dos MP3s). Motivo: o
+    tauri-driver não suporta macOS (PRD, seção 2).
+28. **Cobertura frontend**: medida em stores/hooks/lib (como pede o PRD);
+    `api.ts` (cola fina de IPC) e `types.ts` (só tipos) excluídos — o lado real do
+    IPC é coberto por cargo test + E2E.
+29. **Servidor de fixtures no Vite**: middleware próprio servindo `fixtures/*.mp3`
+    com suporte a Range (sem Content-Length/Range o Chromium não faz seek).
+30. **Toast dura 5s e é clicável para fechar**: PRD omisso quanto à duração.

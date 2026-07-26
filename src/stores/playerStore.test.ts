@@ -133,6 +133,26 @@ describe("playerStore (F4/F5)", () => {
     expect(usePlayerStore.getState().current?.id).toBe(1);
   });
 
+  it("remoções compostas: remover a atual e depois um item ANTES do ponteiro ainda avança para o item certo", () => {
+    // toca B em [A,B,C]; remove B (atual, detached); remove A; próximo deve ser C
+    usePlayerStore.getState().playQueue([S1, S2, S3], 1, 7);
+    usePlayerStore.getState().syncQueue([S1, S3]);
+    usePlayerStore.getState().syncQueue([S3]);
+    usePlayerStore.getState().onEnded();
+    const s = usePlayerStore.getState();
+    expect(s.current?.id).toBe(3);
+    expect(s.isPlaying).toBe(true);
+  });
+
+  it("reordenar a playlist enquanto detached mantém o próximo correto", () => {
+    // toca B em [A,B,C]; remove B (próximo = C); reordena para [C,A]
+    usePlayerStore.getState().playQueue([S1, S2, S3], 1, 7);
+    usePlayerStore.getState().syncQueue([S1, S3]);
+    usePlayerStore.getState().syncQueue([S3, S1]);
+    usePlayerStore.getState().onEnded();
+    expect(usePlayerStore.getState().current?.id).toBe(3);
+  });
+
   it("remover a última música da fila em reprodução: ao terminar, para", () => {
     usePlayerStore.getState().playQueue([S1, S2], 1, 7);
     usePlayerStore.getState().syncQueue([S1]);

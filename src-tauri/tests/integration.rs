@@ -400,6 +400,59 @@ fn scan_reports_progress() {
 }
 
 // ---------------------------------------------------------------------------
+// Seção 8 do PRD: nenhum arquivo de áudio é modificado pelo app — bytes dos
+// MP3s idênticos antes/depois de todos os fluxos de backend (indexar,
+// reindexar, buscar, ler letra, playlists, rescan).
+// ---------------------------------------------------------------------------
+#[test]
+fn backend_flows_never_modify_audio_files() {
+    use cancioneiro_lib::search;
+
+    let dir = setup_music_dir(true);
+    let names = ["com_letra.mp3", "sem_letra.mp3", "sem_tags.mp3", "corrompido.mp3"];
+    let before: Vec<Vec<u8>> = names
+        .iter()
+        .map(|n| fs::read(dir.path().join(n)).unwrap())
+        .collect();
+    let mtimes_before: Vec<_> = names
+        .iter()
+        .map(|n| fs::metadata(dir.path().join(n)).unwrap().modified().unwrap())
+        .collect();
+
+    let conn = test_conn();
+    let folder_id = db::add_folder(&conn, dir.path().to_str().unwrap()).unwrap();
+    indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
+    indexer::scan_all(&conn, |_, _| {}).unwrap();
+    search::search(&conn, "coração", 50).unwrap();
+    search::search(&conn, "\"*especial", 50).unwrap();
+
+    let songs = db::list_songs(&conn).unwrap();
+    for s in &songs {
+        db::get_lyrics(&conn, s.id).unwrap();
+    }
+    let pid = db::create_playlist(&conn, "Fluxo").unwrap();
+    for s in &songs {
+        db::add_song_to_playlist(&conn, pid, s.id).unwrap();
+    }
+    let items = db::get_playlist_items(&conn, pid).unwrap();
+    let reversed: Vec<i64> = items.iter().rev().map(|i| i.id).collect();
+    db::reorder_playlist(&conn, pid, &reversed).unwrap();
+    db::remove_playlist_item(&conn, items[0].id).unwrap();
+    db::delete_playlist(&conn, pid).unwrap();
+    indexer::scan_all(&conn, |_, _| {}).unwrap();
+
+    for (i, name) in names.iter().enumerate() {
+        let after = fs::read(dir.path().join(name)).unwrap();
+        assert_eq!(before[i], after, "bytes de {name} não podem mudar");
+        let mtime_after = fs::metadata(dir.path().join(name))
+            .unwrap()
+            .modified()
+            .unwrap();
+        assert_eq!(mtimes_before[i], mtime_after, "mtime de {name} não pode mudar");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Duração extraída (fixtures têm 1.5–5.5s).
 // ---------------------------------------------------------------------------
 #[test]

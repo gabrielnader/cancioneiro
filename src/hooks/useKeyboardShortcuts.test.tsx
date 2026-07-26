@@ -107,6 +107,20 @@ describe("useKeyboardShortcuts (F4 — espaço e navegação)", () => {
     );
   });
 
+  it("setas ←/→ fazem seek de ∓5s fora de inputs", async () => {
+    const { audioController } = await import("./playerAudioCore");
+    const calls: number[] = [];
+    const original = audioController.seekBy;
+    audioController.seekBy = (d) => calls.push(d);
+
+    render(<Harness />);
+    fireEvent.keyDown(document.body, { key: "ArrowRight" });
+    fireEvent.keyDown(document.body, { key: "ArrowLeft" });
+    expect(calls).toEqual([5, -5]);
+
+    audioController.seekBy = original;
+  });
+
   it("Esc fora do campo limpa a busca", () => {
     render(<Harness />);
     useLibraryStore.setState({ query: "algo" });

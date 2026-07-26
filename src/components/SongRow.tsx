@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { parseSnippet } from "../lib/highlight";
 import type { Song } from "../lib/types";
 import { usePlayerStore } from "../stores/playerStore";
@@ -18,7 +19,10 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
   const isPlaying = usePlayerStore((s) => s.isPlaying && s.current?.id === song.id);
   const playlists = usePlaylistStore((s) => s.playlists);
   const addToPlaylist = usePlaylistStore((s) => s.addToPlaylist);
-  const [menuOpen, setMenuOpen] = useState(false);
+  // Menu em portal: as linhas virtualizadas usam transform (stacking context
+  // próprio), então um dropdown inline ficaria por baixo da linha seguinte.
+  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
+  const plusRef = useRef<HTMLButtonElement>(null);
 
   const titleColor = !song.available
     ? "text-[#9CA3AF]"
@@ -65,43 +69,24 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
         )}
         <span className="ml-auto flex items-center gap-2">
           {playlists.length > 0 && (
-            <span className="relative">
-              <button
-                type="button"
-                aria-label="Adicionar à playlist"
-                title="Adicionar à playlist"
-                className="hidden h-6 w-6 rounded text-[#374151] hover:bg-[#E5E7EB] group-hover:block"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setMenuOpen((v) => !v);
-                }}
-              >
-                +
-              </button>
-              {menuOpen && (
-                <span
-                  className="absolute right-0 top-7 z-20 block w-56 rounded border border-[#E5E7EB] bg-white py-1 shadow-lg"
-                  onClick={(e) => e.stopPropagation()}
-                >
-                  <span className="block px-3 py-1 text-[12px] uppercase text-[#6B7280]">
-                    Adicionar à playlist
-                  </span>
-                  {playlists.map((p) => (
-                    <button
-                      key={p.id}
-                      type="button"
-                      className="block w-full px-3 py-1.5 text-left text-[#374151] hover:bg-[#F3F4F6]"
-                      onClick={() => {
-                        setMenuOpen(false);
-                        void addToPlaylist(p.id, song.id);
-                      }}
-                    >
-                      {p.name}
-                    </button>
-                  ))}
-                </span>
-              )}
-            </span>
+            <button
+              ref={plusRef}
+              type="button"
+              aria-label="Adicionar à playlist"
+              title="Adicionar à playlist"
+              className="hidden h-6 w-6 rounded text-[#374151] hover:bg-[#E5E7EB] group-hover:block"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (menuPos) {
+                  setMenuPos(null);
+                } else {
+                  const rect = plusRef.current!.getBoundingClientRect();
+                  setMenuPos({ top: rect.bottom + 4, left: rect.right - 224 });
+                }
+              }}
+            >
+              +
+            </button>
           )}
           {song.artist && (
             <span className="max-w-40 truncate text-[13px] text-[#6B7280]">
@@ -123,6 +108,42 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
           )}
         </p>
       )}
+
+      {menuPos &&
+        createPortal(
+          <>
+            <div
+              className="fixed inset-0 z-40"
+              onClick={(e) => {
+                e.stopPropagation();
+                setMenuPos(null);
+              }}
+            />
+            <div
+              className="fixed z-50 w-56 rounded border border-[#E5E7EB] bg-white py-1 shadow-lg"
+              style={{ top: menuPos.top, left: Math.max(8, menuPos.left) }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <p className="px-3 py-1 text-[12px] uppercase text-[#6B7280]">
+                Adicionar à playlist
+              </p>
+              {playlists.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  className="block w-full px-3 py-1.5 text-left text-[#374151] hover:bg-[#F3F4F6]"
+                  onClick={() => {
+                    setMenuPos(null);
+                    void addToPlaylist(p.id, song.id);
+                  }}
+                >
+                  {p.name}
+                </button>
+              ))}
+            </div>
+          </>,
+          document.body,
+        )}
     </div>
   );
 }

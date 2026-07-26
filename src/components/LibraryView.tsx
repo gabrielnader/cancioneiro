@@ -1,3 +1,4 @@
+import { hasSearchTokens } from "../lib/searchQuery";
 import { useLibraryStore } from "../stores/libraryStore";
 import { useToastStore } from "../stores/toastStore";
 import { SearchBar } from "./SearchBar";
@@ -15,12 +16,14 @@ export function LibraryView() {
 
   const isEmptyLibrary =
     libraryLoaded && folders.length === 0 && results.length === 0;
+  // Query só de operadores/pontuação é tratada como campo vazio pelo backend
+  const isRealSearch = hasSearchTokens(query);
 
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col bg-[#F9FAFB]">
       <div className="shrink-0 p-4 pb-2 pr-36">
         <SearchBar />
-        {query.trim() !== "" && !isEmptyLibrary && (
+        {isRealSearch && !isEmptyLibrary && (
           <p className="mt-2 text-[13px] text-[#6B7280]">
             {results.length} resultados
           </p>
@@ -52,7 +55,7 @@ export function LibraryView() {
 
       {isEmptyLibrary ? (
         <EmptyLibrary />
-      ) : results.length === 0 && query.trim() !== "" ? (
+      ) : results.length === 0 && isRealSearch ? (
         <div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
           <p className="text-[#6B7280]">
             Nenhuma música encontrada para "{query.trim()}".

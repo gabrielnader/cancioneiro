@@ -14,6 +14,19 @@ function isTextInput(target: EventTarget | null): boolean {
   );
 }
 
+/** Foca a busca de qualquer tela: volta para a Biblioteca se preciso. */
+function focusSearch() {
+  const input = document.getElementById(SEARCH_INPUT_ID);
+  if (input) {
+    input.focus();
+    return;
+  }
+  useUiStore.getState().setView("library");
+  requestAnimationFrame(() => {
+    document.getElementById(SEARCH_INPUT_ID)?.focus();
+  });
+}
+
 /** Lista visível para navegação por teclado (biblioteca ou playlist aberta). */
 function visibleSongs(): { songs: Song[]; playlistId: number | null } {
   const view = useUiStore.getState().view;
@@ -39,7 +52,7 @@ export function useKeyboardShortcuts() {
       // Ctrl/Cmd+K funciona de qualquer lugar
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        document.getElementById(SEARCH_INPUT_ID)?.focus();
+        focusSearch();
         return;
       }
 
@@ -53,7 +66,7 @@ export function useKeyboardShortcuts() {
         }
         case "/": {
           e.preventDefault();
-          document.getElementById(SEARCH_INPUT_ID)?.focus();
+          focusSearch();
           break;
         }
         case "Escape": {

@@ -19,6 +19,7 @@ export function PlaylistView() {
   const playQueue = usePlayerStore((s) => s.playQueue);
   const playerCurrentId = usePlayerStore((s) => s.current?.id ?? null);
   const playerPlaylistId = usePlayerStore((s) => s.playlistId);
+  const playerIsPlaying = usePlayerStore((s) => s.isPlaying);
   const setView = useUiStore((s) => s.setView);
 
   const [dragIndex, setDragIndex] = useState<number | null>(null);
@@ -124,7 +125,7 @@ export function PlaylistView() {
                         : "text-[#111827]"
                   }`}
                 >
-                  {isCurrent && (
+                  {isCurrent && playerIsPlaying && (
                     <span aria-hidden="true" className="mr-1 motion-safe:animate-pulse">
                       ♪
                     </span>

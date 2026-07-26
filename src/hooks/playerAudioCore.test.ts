@@ -104,6 +104,20 @@ describe("loadCurrentIntoAudio (F4/F5 — arquivo ausente e carga do áudio)", (
     expect(usePlayerStore.getState().isPlaying).toBe(true);
   });
 
+  it("falha do play() (decodificação): toast exato e pausa", async () => {
+    const audio = fakeAudio();
+    audio.play = async () => {
+      throw new Error("decode error");
+    };
+    usePlayerStore.getState().playSong(song(1));
+    await loadCurrentIntoAudio(audio, usePlayerStore.getState().current!);
+
+    expect(useToastStore.getState().toasts[0]?.message).toBe(
+      "Não foi possível reproduzir este arquivo.",
+    );
+    expect(usePlayerStore.getState().isPlaying).toBe(false);
+  });
+
   it("última da playlist ausente: para a reprodução", async () => {
     const audio = fakeAudio();
     existing.delete("/m/2.mp3");

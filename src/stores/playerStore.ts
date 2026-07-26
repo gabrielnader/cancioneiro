@@ -103,11 +103,11 @@ export function createPlayerStore() {
         },
 
         previous: (currentTimeSec) => {
-          const { queue, queueIndex, detached } = get();
+          const { queue, queueIndex } = get();
           if (currentTimeSec > 3 || queueIndex === null) return "restart";
-          // detached: o índice já aponta para o próximo item; o "anterior"
-          // ao atual é o item antes desse índice.
-          const prevIndex = detached ? queueIndex - 1 : queueIndex - 1;
+          // detached ou não, o item "anterior" ao atual é queueIndex - 1
+          // (quando detached, queueIndex aponta para o próximo item).
+          const prevIndex = queueIndex - 1;
           const song = queue[prevIndex];
           if (!song) return "restart";
           set({
@@ -134,7 +134,7 @@ export function createPlayerStore() {
         },
 
         syncQueue: (songs) => {
-          const { current, queueIndex, detached } = get();
+          const { current, queue, queueIndex, detached } = get();
           if (queueIndex === null || !current) {
             set({ queue: songs });
             return;
@@ -142,16 +142,22 @@ export function createPlayerStore() {
           const newIndex = songs.findIndex((s) => s.id === current.id);
           if (newIndex >= 0) {
             set({ queue: songs, queueIndex: newIndex, detached: false });
-          } else {
-            // Música atual saiu da fila: continua tocando; o próximo é o item
-            // que ocupava a posição seguinte — que agora está no índice onde
-            // a atual estava (itens deslocam para a esquerda).
-            const nextIndex = Math.min(
-              detached ? queueIndex : queueIndex,
-              songs.length,
-            );
-            set({ queue: songs, queueIndex: nextIndex, detached: true });
+            return;
           }
+          // Música atual saiu da fila: continua tocando (detached) e o
+          // "próximo" é o item que a seguia. Rastreia esse item pela
+          // identidade — sobrevive a remoções/reordenações posteriores.
+          const oldNext = queue[detached ? queueIndex : queueIndex + 1];
+          let nextIndex: number;
+          if (oldNext) {
+            const found = songs.findIndex((s) => s.id === oldNext.id);
+            // se o seguinte também saiu, cai no item que ocupa a posição
+            // antiga (itens deslocam para a esquerda); fim da lista = para.
+            nextIndex = found >= 0 ? found : Math.min(queueIndex, songs.length);
+          } else {
+            nextIndex = songs.length;
+          }
+          set({ queue: songs, queueIndex: nextIndex, detached: true });
         },
 
         setVolume: (v) => set({ volume: Math.min(1, Math.max(0, v)) }),

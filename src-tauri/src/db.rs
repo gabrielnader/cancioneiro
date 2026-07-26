@@ -106,9 +106,33 @@ CREATE TABLE IF NOT EXISTS playlist_items (
 CREATE INDEX IF NOT EXISTS idx_playlist_items ON playlist_items(playlist_id, position);
 "#;
 
+/// Remove diacríticos latinos comuns (suficiente para ordenação pt-BR).
+fn strip_diacritic(c: char) -> char {
+    match c {
+        'á' | 'à' | 'â' | 'ã' | 'ä' | 'å' => 'a',
+        'é' | 'è' | 'ê' | 'ë' => 'e',
+        'í' | 'ì' | 'î' | 'ï' => 'i',
+        'ó' | 'ò' | 'ô' | 'õ' | 'ö' => 'o',
+        'ú' | 'ù' | 'û' | 'ü' => 'u',
+        'ç' => 'c',
+        'ñ' => 'n',
+        'ý' | 'ÿ' => 'y',
+        other => other,
+    }
+}
+
+fn fold_pt(s: &str) -> String {
+    s.chars()
+        .flat_map(char::to_lowercase)
+        .map(strip_diacritic)
+        .collect()
+}
+
 pub fn init_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch("PRAGMA foreign_keys = ON;")?;
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    // Ordenação alfabética que ignora caixa e acentos ("Água" antes de "Zebra")
+    conn.create_collation("ptbr", |a, b| fold_pt(a).cmp(&fold_pt(b)))?;
     conn.execute_batch(SCHEMA)?;
     Ok(())
 }
@@ -204,7 +228,7 @@ pub(crate) fn song_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Song> {
 
 pub fn list_songs(conn: &Connection) -> Result<Vec<Song>> {
     let mut stmt = conn.prepare(&format!(
-        "SELECT {SONG_COLS} FROM songs ORDER BY title COLLATE NOCASE, id"
+        "SELECT {SONG_COLS} FROM songs ORDER BY title COLLATE ptbr, id"
     ))?;
     let rows = stmt.query_map([], song_from_row)?;
     Ok(rows.collect::<std::result::Result<_, _>>()?)
@@ -254,7 +278,7 @@ pub fn list_playlists(conn: &Connection) -> Result<Vec<Playlist>> {
         "SELECT p.id, p.name, count(pi.id)
          FROM playlists p
          LEFT JOIN playlist_items pi ON pi.playlist_id = p.id
-         GROUP BY p.id ORDER BY p.name COLLATE NOCASE",
+         GROUP BY p.id ORDER BY p.name COLLATE ptbr",
     )?;
     let rows = stmt.query_map([], |r| {
         Ok(Playlist {
@@ -298,18 +322,35 @@ pub fn remove_playlist_item(conn: &Connection, item_id: i64) -> Result<()> {
     Ok(())
 }
 
-/// Reordena a playlist inteira: `item_ids` na nova ordem desejada.
+/// Reordena a playlist inteira: `item_ids` na nova ordem desejada. Deve
+/// cobrir exatamente os itens atuais (transacional — não deixa positions
+/// duplicadas se algo falhar no meio).
 pub fn reorder_playlist(conn: &Connection, playlist_id: i64, item_ids: &[i64]) -> Result<()> {
+    let current: std::collections::HashSet<i64> = {
+        let mut stmt =
+            conn.prepare("SELECT id FROM playlist_items WHERE playlist_id = ?1")?;
+        let rows = stmt.query_map(params![playlist_id], |r| r.get(0))?;
+        rows.collect::<std::result::Result<_, _>>()?
+    };
+    let requested: std::collections::HashSet<i64> = item_ids.iter().copied().collect();
+    if requested != current || requested.len() != item_ids.len() {
+        return Err(AppError(
+            "reordenação inválida: itens não correspondem à playlist".into(),
+        ));
+    }
+
+    let tx = conn.unchecked_transaction()?;
     for (pos, item_id) in item_ids.iter().enumerate() {
-        conn.execute(
+        tx.execute(
             "UPDATE playlist_items SET position = ?1 WHERE id = ?2 AND playlist_id = ?3",
             params![pos as i64, item_id, playlist_id],
         )?;
     }
-    conn.execute(
+    tx.execute(
         "UPDATE playlists SET updated_at = datetime('now') WHERE id = ?1",
         params![playlist_id],
     )?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -383,6 +424,26 @@ mod tests {
     }
 
     #[test]
+    fn list_songs_orders_alphabetically_ignoring_case_and_accents() {
+        let conn = open_in_memory().unwrap();
+        conn.execute_batch(
+            "INSERT INTO folders (path) VALUES ('/f');
+             INSERT INTO songs (file_path, folder_id, title, file_mtime, file_size) VALUES
+               ('/f/1.mp3', 1, 'zebra', 0, 0),
+               ('/f/2.mp3', 1, 'Água Viva', 0, 0),
+               ('/f/3.mp3', 1, 'banana', 0, 0),
+               ('/f/4.mp3', 1, 'Édipo', 0, 0);",
+        )
+        .unwrap();
+        let titles: Vec<String> = list_songs(&conn)
+            .unwrap()
+            .into_iter()
+            .map(|s| s.title)
+            .collect();
+        assert_eq!(titles, vec!["Água Viva", "banana", "Édipo", "zebra"]);
+    }
+
+    #[test]
     fn create_playlist_rejects_empty_name() {
         let conn = open_in_memory().unwrap();
         assert!(create_playlist(&conn, "").is_err());
@@ -444,6 +505,32 @@ mod tests {
         assert_eq!(
             items.iter().map(|i| i.position).collect::<Vec<_>>(),
             vec![0, 1, 2]
+        );
+    }
+
+    #[test]
+    fn reorder_playlist_rejects_incomplete_or_foreign_item_ids() {
+        let conn = open_in_memory().unwrap();
+        conn.execute_batch(
+            "INSERT INTO folders (path) VALUES ('/f');
+             INSERT INTO songs (file_path, folder_id, title, file_mtime, file_size)
+             VALUES ('/f/a.mp3', 1, 'A', 0, 0), ('/f/b.mp3', 1, 'B', 0, 0);",
+        )
+        .unwrap();
+        let pid = create_playlist(&conn, "P").unwrap();
+        add_song_to_playlist(&conn, pid, 1).unwrap();
+        add_song_to_playlist(&conn, pid, 2).unwrap();
+        let items = get_playlist_items(&conn, pid).unwrap();
+
+        // subconjunto → erro (positions ficariam duplicadas)
+        assert!(reorder_playlist(&conn, pid, &[items[0].id]).is_err());
+        // id estranho → erro
+        assert!(reorder_playlist(&conn, pid, &[items[0].id, 9999]).is_err());
+        // ordem original intacta
+        let after = get_playlist_items(&conn, pid).unwrap();
+        assert_eq!(
+            after.iter().map(|i| i.position).collect::<Vec<_>>(),
+            vec![0, 1]
         );
     }
 

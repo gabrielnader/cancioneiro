@@ -109,6 +109,35 @@ describe("playlistStore (F5)", () => {
     expect(usePlayerStore.getState().queue.map((s) => s.id)).toEqual([9]);
   });
 
+  it("addToPlaylist com a playlist aberta atualiza itens e sincroniza player", async () => {
+    await usePlaylistStore.getState().openPlaylist(7);
+    usePlayerStore
+      .getState()
+      .playQueue(items.map((i) => i.song), 0, 7);
+    await usePlaylistStore.getState().addToPlaylist(7, 4);
+    expect(usePlaylistStore.getState().items).toHaveLength(3); // fake devolve os mesmos
+    expect(usePlayerStore.getState().queue.length).toBeGreaterThan(0);
+  });
+
+  it("addToPlaylist com outra playlist aberta ainda sincroniza a que está tocando", async () => {
+    usePlayerStore
+      .getState()
+      .playQueue(items.map((i) => i.song), 0, 7);
+    // nenhuma playlist aberta na view
+    await usePlaylistStore.getState().addToPlaylist(7, 4);
+    expect(usePlayerStore.getState().queue.map((s) => s.id)).toEqual([1, 2, 3]);
+  });
+
+  it("removeItem sem playlist aberta é no-op", async () => {
+    await usePlaylistStore.getState().removeItem(10);
+    expect(usePlaylistStore.getState().items).toEqual([]);
+  });
+
+  it("reorder sem playlist aberta é no-op", async () => {
+    await usePlaylistStore.getState().reorder([12, 11, 10]);
+    expect(usePlaylistStore.getState().items).toEqual([]);
+  });
+
   it("createPlaylist recarrega a lista e retorna o id", async () => {
     const id = await usePlaylistStore.getState().createPlaylist("Nova");
     expect(id).toBe(8);

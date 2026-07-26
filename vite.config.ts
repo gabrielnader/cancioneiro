@@ -2,7 +2,7 @@
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
-import { createReadStream, existsSync } from "node:fs";
+import { createReadStream, existsSync, statSync } from "node:fs";
 import path from "node:path";
 
 const host = process.env.TAURI_DEV_HOST;
@@ -23,8 +23,22 @@ function serveFixtures(): Plugin {
         next();
         return;
       }
+      // Range/Content-Length são necessários para o <audio> conseguir seek
+      const size = statSync(file).size;
       res.setHeader("Content-Type", "audio/mpeg");
-      createReadStream(file).pipe(res);
+      res.setHeader("Accept-Ranges", "bytes");
+      const range = /^bytes=(\d*)-(\d*)$/.exec(req.headers.range ?? "");
+      if (range) {
+        const start = range[1] ? Number(range[1]) : 0;
+        const end = range[2] ? Number(range[2]) : size - 1;
+        res.statusCode = 206;
+        res.setHeader("Content-Range", `bytes ${start}-${end}/${size}`);
+        res.setHeader("Content-Length", end - start + 1);
+        createReadStream(file, { start, end }).pipe(res);
+      } else {
+        res.setHeader("Content-Length", size);
+        createReadStream(file).pipe(res);
+      }
     });
   };
   return {
@@ -72,6 +86,10 @@ export default defineConfig(async () => ({
     coverage: {
       provider: "v8" as const,
       include: ["src/stores/**", "src/hooks/**", "src/lib/**"],
+      // api.ts é cola fina de IPC (invoke/convertFileSrc): o lado Rust é
+      // coberto por cargo test e o fluxo completo pelo E2E; types.ts só tem
+      // tipos. Ambos sem lógica própria testável em jsdom.
+      exclude: ["src/lib/api.ts", "src/lib/types.ts"],
       thresholds: {
         lines: 85,
         functions: 85,
