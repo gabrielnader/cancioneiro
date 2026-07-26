@@ -5,6 +5,13 @@ name: release
 on:
   push:
     tags: ["v*"]
+  # disparo manual (a tag/release é criada pelo tauri-action)
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag da release (ex.: v0.2.0)"
+        required: true
+        default: "v0.2.0"
 
 jobs:
   build:
@@ -54,8 +61,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "Cancioneiro ${{ github.ref_name }}"
+          tagName: ${{ github.event.inputs.tag || github.ref_name }}
+          releaseName: "Cancioneiro ${{ github.event.inputs.tag || github.ref_name }}"
           releaseBody: |
             Instaladores do Cancioneiro — player offline com busca por letra e temas.
 
