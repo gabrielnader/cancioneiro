@@ -30,7 +30,7 @@ export function TemaChips({ temas }: TemaChipsProps) {
           data-testid="tema-chip"
           aria-label={`Tema: ${tema}`}
           title={`Buscar pelo tema "${tema}"`}
-          className="shrink-0 rounded-full bg-[#F0FDFA] px-2 py-0.5 text-[12px] text-[#0F766E] hover:bg-[#ccfbf1]"
+          className="max-w-32 shrink-0 truncate rounded-full bg-[#F0FDFA] px-2 py-0.5 text-[12px] text-[#0F766E] hover:bg-[#ccfbf1]"
           onClick={(e) => {
             e.stopPropagation();
             setQuery(tema);

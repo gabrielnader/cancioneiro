@@ -77,8 +77,9 @@ Acceptance Checks:
 
 ## Fixtures
 
-- `com_letra.mp3` ganha `TXXX:TEMAS = "esperança; água"` no gerador
-  (`tools/make_fixtures.py`) — cobre diacríticos nos dois lados.
+- `com_letra.mp3` ganha temas "esperança" e "água" no gerador
+  (`tools/make_fixtures.py`) — valor gravado após normalização/ordenação:
+  `TXXX:TEMAS = "água; esperança"`. Cobre diacríticos nos dois lados.
 - Demais fixtures permanecem sem temas.
 
 ## Out of scope (V2.1)

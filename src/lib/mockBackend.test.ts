@@ -393,6 +393,34 @@ describe("mockBackend", () => {
     });
   });
 
+  describe("temas (V2)", () => {
+    it("busca por tema sem acento encontra a música, com snippet null", async () => {
+      const backend = createMockBackend();
+      await backend.addFolder("/musicas/mock");
+      const results = await backend.search("agua");
+      expect(results).toHaveLength(1);
+      expect(results[0].song.title).toBe("Coração Sertanejo");
+      expect(results[0].song.temas).toBe("água; esperança");
+      expect(results[0].snippet).toBeNull();
+    });
+
+    it("multi-token título + tema encontra (AND)", async () => {
+      const backend = createMockBackend();
+      await backend.addFolder("/musicas/mock");
+      const results = await backend.search("sertanejo agua");
+      expect(results).toHaveLength(1);
+      expect(results[0].snippet).toBeNull();
+    });
+
+    it("músicas sem temas retornam temas null", async () => {
+      const backend = createMockBackend();
+      await backend.addFolder("/musicas/mock");
+      const songs = await backend.listSongs();
+      const semLetra = songs.find((s) => s.title === "Instrumental Sem Letra");
+      expect(semLetra?.temas).toBeNull();
+    });
+  });
+
   describe("_seedSongs", () => {
     it("popula N músicas sintéticas com títulos, artistas cíclicos e letras", async () => {
       backend._seedSongs(50);

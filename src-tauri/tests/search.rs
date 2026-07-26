@@ -60,6 +60,29 @@ fn search_finds_songs_by_tema_ignoring_diacritics() {
 }
 
 // ---------------------------------------------------------------------------
+// V2 (F8): busca multi-token cruza colunas — dois temas juntos, e
+// título + tema na mesma query (AND do FTS5 é por linha, não por coluna).
+// ---------------------------------------------------------------------------
+#[test]
+fn multi_token_search_matches_across_temas_and_title() {
+    let conn = conn_with_songs_temas(&[
+        ("Rio Divino", None, Some("uma letra qualquer"), Some("água; cura")),
+        ("Só Água", None, Some("outra letra"), Some("água")),
+        ("Sem Nada", None, Some("nada"), None),
+    ]);
+
+    // dois temas na mesma query (AND)
+    let results = search::search(&conn, "agua cura", 50).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].song.title, "Rio Divino");
+
+    // token do título + token do tema
+    let results = search::search(&conn, "rio agua", 50).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].song.title, "Rio Divino");
+}
+
+// ---------------------------------------------------------------------------
 // Acceptance: trecho existente apenas na letra de 1 música retorna essa
 // música em primeiro.
 // ---------------------------------------------------------------------------

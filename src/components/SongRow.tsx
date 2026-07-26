@@ -68,7 +68,11 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
             Sem letra
           </span>
         )}
-        <TemaChips temas={song.temas} />
+        {song.temas && (
+          <span className="flex min-w-0 shrink items-center gap-1.5 overflow-hidden">
+            <TemaChips temas={song.temas} />
+          </span>
+        )}
         <span className="ml-auto flex items-center gap-2">
           {playlists.length > 0 && (
             <button
