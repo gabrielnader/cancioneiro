@@ -31,3 +31,6 @@ __pycache__/
 coverage/
 playwright-report/
 test-results/
+
+# Demo em página única (Artifact)
+dist-artifact
