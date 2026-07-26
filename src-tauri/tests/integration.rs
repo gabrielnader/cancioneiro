@@ -33,6 +33,12 @@ fn setup_music_dir(include_corrupt: bool) -> tempfile::TempDir {
     dir
 }
 
+/// Caminho canônico do tempdir — add_folder canonicaliza, então os file_path
+/// gravados derivam desta forma do caminho.
+fn canon(dir: &tempfile::TempDir) -> PathBuf {
+    dir.path().canonicalize().unwrap()
+}
+
 // ---------------------------------------------------------------------------
 // F1 — Acceptance: adicionar pasta com 3 MP3s fixture => 3 registros em songs
 // ---------------------------------------------------------------------------
@@ -47,7 +53,7 @@ fn add_folder_indexes_three_fixtures_with_correct_paths() {
     let songs = db::list_songs(&conn).unwrap();
     assert_eq!(songs.len(), 3);
     for name in ["com_letra.mp3", "sem_letra.mp3", "sem_tags.mp3"] {
-        let expected = dir.path().join(name);
+        let expected = canon(&dir).join(name);
         assert!(
             songs.iter().any(|s| s.file_path == expected.to_str().unwrap()),
             "esperava song com file_path {:?}",
@@ -156,6 +162,16 @@ fn rescan_updates_only_changed_file() {
     let folder_id = db::add_folder(&conn, dir.path().to_str().unwrap()).unwrap();
     indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
 
+    let before: Vec<(String, String)> = {
+        let mut stmt = conn
+            .prepare("SELECT file_path, indexed_at FROM songs ORDER BY file_path")
+            .unwrap();
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+    };
+
     std::thread::sleep(std::time::Duration::from_millis(1100));
 
     // Toca o mtime de um arquivo (conteúdo idêntico, mtime novo)
@@ -166,6 +182,28 @@ fn rescan_updates_only_changed_file() {
     let stats = indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
     assert_eq!(stats.indexed, 1, "somente o arquivo tocado deve ser relido");
     assert_eq!(stats.skipped, 2);
+
+    // Confirma no banco: só o indexed_at do arquivo tocado mudou.
+    let after: Vec<(String, String)> = {
+        let mut stmt = conn
+            .prepare("SELECT file_path, indexed_at FROM songs ORDER BY file_path")
+            .unwrap();
+        stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+    };
+    for (path, indexed_at) in &after {
+        let (_, before_at) = before
+            .iter()
+            .find(|(p, _)| p == path)
+            .expect("mesmos arquivos antes e depois");
+        if path.ends_with("sem_letra.mp3") {
+            assert_ne!(indexed_at, before_at, "arquivo tocado deve ser reindexado");
+        } else {
+            assert_eq!(indexed_at, before_at, "demais arquivos intocados: {path}");
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -215,12 +253,78 @@ fn scan_with_corrupt_mp3_does_not_abort() {
     let songs = db::list_songs(&conn).unwrap();
     // Os 3 válidos indexados normalmente; o corrompido entra com fallback
     // (título = nome do arquivo) — nunca aborta a varredura.
-    assert!(songs.len() >= 3);
-    assert!(songs.iter().any(|s| s.title == "Coração Sertanejo"));
-    if let Some(corrupt) = songs.iter().find(|s| s.file_path.ends_with("corrompido.mp3")) {
-        assert_eq!(corrupt.title, "corrompido");
-        assert!(!corrupt.has_lyrics);
+    assert_eq!(songs.len(), 4);
+    for name in ["com_letra.mp3", "sem_letra.mp3", "sem_tags.mp3"] {
+        assert!(
+            songs.iter().any(|s| s.file_path.ends_with(name)),
+            "válido {name} deve estar indexado"
+        );
     }
+    assert!(songs.iter().any(|s| s.title == "Coração Sertanejo"));
+    let corrupt = songs
+        .iter()
+        .find(|s| s.file_path.ends_with("corrompido.mp3"))
+        .expect("corrompido indexado com fallback");
+    assert_eq!(corrupt.title, "corrompido");
+    assert!(!corrupt.has_lyrics);
+}
+
+// ---------------------------------------------------------------------------
+// F1 — varredura é recursiva e extensão é case-insensitive (.MP3).
+// ---------------------------------------------------------------------------
+#[test]
+fn scan_is_recursive_and_extension_case_insensitive() {
+    let dir = setup_music_dir(false);
+    let sub = dir.path().join("subpasta/aninhada");
+    fs::create_dir_all(&sub).unwrap();
+    fs::rename(
+        dir.path().join("sem_letra.mp3"),
+        sub.join("MAIUSCULA.MP3"),
+    )
+    .unwrap();
+
+    let conn = test_conn();
+    let folder_id = db::add_folder(&conn, dir.path().to_str().unwrap()).unwrap();
+    indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
+
+    let songs = db::list_songs(&conn).unwrap();
+    assert_eq!(songs.len(), 3);
+    let nested = songs
+        .iter()
+        .find(|s| s.file_path.ends_with("MAIUSCULA.MP3"))
+        .expect(".MP3 em subpasta deve ser indexado");
+    assert!(nested.file_path.contains("subpasta/aninhada") || nested.file_path.contains("subpasta\\aninhada"));
+}
+
+// ---------------------------------------------------------------------------
+// F1 — pastas sobrepostas são rejeitadas (evita perda de playlists via
+// cascade quando o mesmo arquivo pertenceria a duas pastas); mesma pasta
+// re-adicionada devolve o id existente.
+// ---------------------------------------------------------------------------
+#[test]
+fn overlapping_folders_are_rejected_and_readd_is_idempotent() {
+    let dir = setup_music_dir(false);
+    let sub = dir.path().join("interna");
+    fs::create_dir_all(&sub).unwrap();
+
+    let conn = test_conn();
+    let id1 = db::add_folder(&conn, dir.path().to_str().unwrap()).unwrap();
+
+    // subpasta de uma pasta registrada → erro
+    assert!(db::add_folder(&conn, sub.to_str().unwrap()).is_err());
+
+    // re-adicionar a mesma pasta → mesmo id, sem duplicar
+    let id_again = db::add_folder(&conn, dir.path().to_str().unwrap()).unwrap();
+    assert_eq!(id1, id_again);
+    assert_eq!(db::list_folders(&conn).unwrap().len(), 1);
+
+    // pasta-mãe de uma pasta registrada → erro
+    let outer = tempfile::tempdir().unwrap();
+    let inner = outer.path().join("musicas");
+    fs::create_dir_all(&inner).unwrap();
+    let conn2 = test_conn();
+    db::add_folder(&conn2, inner.to_str().unwrap()).unwrap();
+    assert!(db::add_folder(&conn2, outer.path().to_str().unwrap()).is_err());
 }
 
 // ---------------------------------------------------------------------------
@@ -241,7 +345,7 @@ fn scan_missing_folder_marks_songs_unavailable_without_deleting() {
     indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
     assert_eq!(db::list_songs(&conn).unwrap().len(), 3);
 
-    let path = dir.path().to_path_buf();
+    let path = canon(&dir);
     drop(dir); // remove a pasta do disco
 
     let outcome = indexer::scan_all(&conn, |_, _| {}).unwrap();

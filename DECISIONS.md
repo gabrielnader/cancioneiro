@@ -37,3 +37,22 @@ opção mais simples que passa nos Acceptance Checks do PRD.
     "(nenhuma letra embutida)") em vez de falhar — o arquivo em si é válido.
 11. **`sem_tags.mp3`**: `ID3.delete()` defensivo após o encode (o lame pode gravar
     frames residuais); teste garante `ID3NoHeaderError`.
+
+## Fase 1 — correções pós-QA
+
+12. **Coluna `songs.available`**: não consta do Data Model do PRD, mas é exigida
+    pelo estado de erro de F1 ("músicas ficam marcadas indisponíveis... não são
+    deletadas" quando a pasta some). Adicionada como INTEGER default 1.
+13. **Pastas sobrepostas rejeitadas**: `add_folder` canonicaliza o caminho e
+    rejeita pasta que contenha (ou esteja contida em) pasta já registrada, com o
+    erro "pasta sobreposta a uma pasta já adicionada: {path}". Motivo: file_path
+    é UNIQUE — com pastas sobrepostas, remover uma delas apagaria músicas (e
+    itens de playlist, em cascata) ainda cobertas pela outra. O PRD é omisso;
+    esta é a opção mais simples que evita perda de dados.
+14. **mtime em milissegundos** (não segundos): evita perder edição feita no
+    mesmo segundo da indexação com o mesmo tamanho de arquivo.
+15. **Scan não bloqueia o app**: comandos `scan`/`add_folder` usam conexão
+    SQLite dedicada (WAL + busy_timeout 5s) quando o banco é file-backed, para
+    busca/listagem continuarem respondendo durante a varredura ("rescan em
+    background" do PRD). `scan_all` pré-conta os arquivos para o progresso ser
+    global ("n de total"), sem reiniciar a cada pasta.

@@ -103,10 +103,12 @@ fn read_tags(path: &Path) -> TagData {
 }
 
 fn file_mtime_epoch(md: &std::fs::Metadata) -> i64 {
+    // Milissegundos: resolução de segundos deixaria passar um arquivo editado
+    // no mesmo segundo da indexação (com o mesmo tamanho).
     md.modified()
         .ok()
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_secs() as i64)
+        .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
 }
 
@@ -262,16 +264,31 @@ pub fn scan_all<F: FnMut(usize, usize)>(
     let folders = db::list_folders(conn)?;
     let mut outcome = ScanOutcome::default();
 
-    for folder in folders {
+    // Pré-conta os MP3s de todas as pastas existentes para que o progresso
+    // reportado seja global ("n de total"), não reiniciando a cada pasta.
+    let mut grand_total = 0usize;
+    let mut existing: Vec<&db::Folder> = Vec::new();
+    for folder in &folders {
+        if Path::new(&folder.path).is_dir() {
+            grand_total += count_mp3s(&folder.path);
+            existing.push(folder);
+        }
+    }
+
+    let mut base = 0usize;
+    for folder in &folders {
         if !Path::new(&folder.path).is_dir() {
             conn.execute(
                 "UPDATE songs SET available = 0 WHERE folder_id = ?1",
                 params![folder.id],
             )?;
-            outcome.missing_folders.push(folder.path);
+            outcome.missing_folders.push(folder.path.clone());
             continue;
         }
-        let stats = scan_folder(conn, folder.id, &mut progress)?;
+        let stats = scan_folder(conn, folder.id, |done, _local_total| {
+            progress(base + done, grand_total);
+        })?;
+        base += stats.total;
         outcome.stats.indexed += stats.indexed;
         outcome.stats.skipped += stats.skipped;
         outcome.stats.removed += stats.removed;
@@ -280,4 +297,13 @@ pub fn scan_all<F: FnMut(usize, usize)>(
     }
 
     Ok(outcome)
+}
+
+fn count_mp3s(folder_path: &str) -> usize {
+    WalkDir::new(folder_path)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file() && is_mp3(e.path()))
+        .count()
 }

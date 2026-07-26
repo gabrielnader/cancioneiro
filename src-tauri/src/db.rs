@@ -108,6 +108,7 @@ CREATE INDEX IF NOT EXISTS idx_playlist_items ON playlist_items(playlist_id, pos
 
 pub fn init_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+    conn.busy_timeout(std::time::Duration::from_secs(5))?;
     conn.execute_batch(SCHEMA)?;
     Ok(())
 }
@@ -133,17 +134,33 @@ pub fn add_folder(conn: &Connection, path: &str) -> Result<i64> {
     if !p.is_dir() {
         return Err(AppError(format!("pasta não encontrada: {path}")));
     }
+    // Canonicaliza para evitar duplicatas como "/musicas" vs "/musicas/".
+    let canonical = std::fs::canonicalize(p)
+        .map_err(|e| AppError(format!("pasta não encontrada: {path} ({e})")))?;
+    let canonical_str = canonical.to_string_lossy().into_owned();
+
+    // Pastas sobrepostas (uma dentro da outra) fariam o mesmo arquivo pertencer
+    // a duas folders: como file_path é UNIQUE, remover uma delas apagaria a
+    // música (e seus itens de playlist) mesmo estando coberta pela outra.
+    // Rejeitamos o overlap — exceto o caso da própria pasta já registrada.
+    for existing in list_folders(conn)? {
+        if existing.path == canonical_str {
+            return Ok(existing.id);
+        }
+        let existing_path = Path::new(&existing.path);
+        if canonical.starts_with(existing_path) || existing_path.starts_with(&canonical) {
+            return Err(AppError(format!(
+                "pasta sobreposta a uma pasta já adicionada: {}",
+                existing.path
+            )));
+        }
+    }
+
     conn.execute(
-        "INSERT INTO folders (path) VALUES (?1)
-         ON CONFLICT(path) DO NOTHING",
-        params![path],
+        "INSERT INTO folders (path) VALUES (?1)",
+        params![canonical_str],
     )?;
-    let id: i64 = conn.query_row(
-        "SELECT id FROM folders WHERE path = ?1",
-        params![path],
-        |r| r.get(0),
-    )?;
-    Ok(id)
+    Ok(conn.last_insert_rowid())
 }
 
 pub fn remove_folder(conn: &Connection, folder_id: i64) -> Result<()> {

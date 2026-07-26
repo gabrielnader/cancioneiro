@@ -4,7 +4,6 @@ pub mod error;
 pub mod indexer;
 pub mod search;
 
-use std::sync::Mutex;
 use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -14,9 +13,10 @@ pub fn run() {
         .setup(|app| {
             let data_dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&data_dir)?;
-            let conn = db::open_at(&data_dir.join("cancioneiro.db"))
+            let db_path = data_dir.join("cancioneiro.db");
+            let conn = db::open_at(&db_path)
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
-            app.manage(commands::Db(Mutex::new(conn)));
+            app.manage(commands::Db::new(conn, Some(db_path)));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

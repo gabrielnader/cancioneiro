@@ -3,18 +3,55 @@ use crate::error::{AppError, Result};
 use crate::indexer;
 use rusqlite::Connection;
 use serde::Serialize;
-use std::path::Path;
-use std::sync::Mutex;
+use std::ops::Deref;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, MutexGuard};
 use tauri::{AppHandle, Emitter, State};
 
-/// Estado global: conexão SQLite protegida por mutex.
-pub struct Db(pub Mutex<Connection>);
+/// Estado global: conexão SQLite protegida por mutex + caminho do arquivo do
+/// banco (quando file-backed), para abrir conexões dedicadas de scan.
+pub struct Db {
+    pub conn: Mutex<Connection>,
+    pub path: Option<PathBuf>,
+}
 
 impl Db {
-    fn lock(&self) -> Result<std::sync::MutexGuard<'_, Connection>> {
-        self.0
+    pub fn new(conn: Connection, path: Option<PathBuf>) -> Self {
+        Db {
+            conn: Mutex::new(conn),
+            path,
+        }
+    }
+
+    fn lock(&self) -> Result<MutexGuard<'_, Connection>> {
+        self.conn
             .lock()
             .map_err(|_| AppError("estado do banco corrompido (lock poisoned)".into()))
+    }
+
+    /// Conexão para varreduras longas: dedicada (WAL) quando o banco é um
+    /// arquivo, para não bloquear busca/listagem durante o scan; cai no lock
+    /// compartilhado quando in-memory (testes).
+    fn scan_conn(&self) -> Result<ScanConn<'_>> {
+        match &self.path {
+            Some(p) => Ok(ScanConn::Owned(db::open_at(p)?)),
+            None => Ok(ScanConn::Shared(self.lock()?)),
+        }
+    }
+}
+
+enum ScanConn<'a> {
+    Owned(Connection),
+    Shared(MutexGuard<'a, Connection>),
+}
+
+impl Deref for ScanConn<'_> {
+    type Target = Connection;
+    fn deref(&self) -> &Connection {
+        match self {
+            ScanConn::Owned(c) => c,
+            ScanConn::Shared(g) => g,
+        }
     }
 }
 
@@ -35,7 +72,7 @@ pub struct ScanResult {
 
 #[tauri::command]
 pub fn add_folder(app: AppHandle, state: State<'_, Db>, path: String) -> Result<ScanResult> {
-    let conn = state.lock()?;
+    let conn = state.scan_conn()?;
     let folder_id = db::add_folder(&conn, &path)?;
     let stats = indexer::scan_folder(&conn, folder_id, |done, total| {
         let _ = app.emit("scan:progress", ScanProgress { done, total });
@@ -65,7 +102,7 @@ pub fn list_folders(state: State<'_, Db>) -> Result<Vec<Folder>> {
 /// "Reindexar tudo").
 #[tauri::command]
 pub fn scan(app: AppHandle, state: State<'_, Db>) -> Result<ScanResult> {
-    let conn = state.lock()?;
+    let conn = state.scan_conn()?;
     let outcome = indexer::scan_all(&conn, |done, total| {
         let _ = app.emit("scan:progress", ScanProgress { done, total });
     })?;
