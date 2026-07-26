@@ -108,3 +108,21 @@ opção mais simples que passa nos Acceptance Checks do PRD.
     hover-only ("aparece ao passar o mouse"), o que o torna inacessível por
     toque e teclado. Mantido o hover e adicionada a visibilidade quando a linha
     está selecionada — acomodação de acessibilidade, não feature nova.
+
+## V2.1 — Temas (PRD-v2-temas.md)
+
+32. **Frame TXXX:TEMAS**: temas ficam no próprio MP3 (mesma filosofia da letra),
+    num frame TXXX desc="TEMAS", UTF-8, valor "tema1; tema2". Normalização na
+    gravação: trim, colapso de espaços, minúsculas, dedup e ordenação sem
+    acento/caixa (NFD + casefold). O exemplo literal do PRD ("esperança; água")
+    cede à regra de normalização → valor real "água; esperança".
+33. **Migração de banco v1→v2** (`PRAGMA user_version`): nova coluna
+    songs.temas, FTS recriada com a coluna extra e repovoada; file_mtime zerado
+    (-1) força o próximo rescan a reler os arquivos e popular temas. Playlists
+    intactas (testado).
+34. **Busca por tema**: mesma caixa de busca (coluna temas no FTS5, mesmo
+    tokenizer sem acentos); match só em tema não gera snippet de letra. Chip de
+    tema clicável (linha e painel) preenche a busca com o tema.
+35. **Operação só-de-temas no CLI ignora --title/--artist** (que na V1 sempre
+    acompanharam gravação de letra); adds aplicam antes de removes quando
+    combinados. Ambiguidade da spec resolvida pela opção mais simples.

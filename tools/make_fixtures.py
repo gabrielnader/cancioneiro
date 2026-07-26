@@ -3,7 +3,7 @@
 """make_fixtures.py — gera os MP3s de teste do Cancioneiro em fixtures/.
 
 Reprodutível e idempotente (sobrescreve). Gera:
-  - com_letra.mp3   tom 440Hz ~3s, TIT2/TPE1 + USLT em português
+  - com_letra.mp3   tom 440Hz ~3s, TIT2/TPE1 + USLT em português + TXXX:TEMAS
   - sem_letra.mp3   tom 523Hz ~2s, TIT2/TPE1, sem USLT
   - sem_tags.mp3    tom 330Hz ~2s, sem nenhuma tag ID3
   - corrompido.mp3  4096 bytes pseudo-aleatórios (seed 42), não é MP3
@@ -19,7 +19,7 @@ import wave
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from embed_lyrics import embed_lyrics  # noqa: E402
+from embed_lyrics import embed_lyrics, normalize_temas, write_temas  # noqa: E402
 
 from mutagen.id3 import ID3, ID3NoHeaderError, TIT2, TPE1, Encoding  # noqa: E402
 
@@ -34,6 +34,11 @@ E a alegria vai chegar
 
 Não há noite sem estrela
 Não há dor que não se cura"""
+
+# Temas da fixture com_letra.mp3 (F7/F8 — diacríticos nos dois lados).
+# Após normalização (ordenação sem acento: "agua" < "esperanca"),
+# o valor gravado no TXXX:TEMAS é "água; esperança".
+TEMAS_COM_LETRA = ["esperança", "água"]
 
 
 def write_sine_wav(path: Path, seconds: float, freq: float,
@@ -87,6 +92,7 @@ def make_com_letra(dest: Path) -> None:
     make_tone_mp3(dest, seconds=3.0, freq=440.0)
     embed_lyrics(dest, LETRA_COM_LETRA,
                  title="Coração Sertanejo", artist="Artista Teste")
+    write_temas(dest, normalize_temas(TEMAS_COM_LETRA))
 
 
 def make_sem_letra(dest: Path) -> None:

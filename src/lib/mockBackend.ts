@@ -160,6 +160,7 @@ function toSong(record: SongRecord): Song {
     duration_seconds: record.duration_seconds,
     has_lyrics: record.has_lyrics,
     available: record.available,
+    temas: record.temas ?? null,
   };
 }
 
@@ -236,7 +237,7 @@ export function createMockBackend(): MockBackend {
 
   function songWords(song: SongRecord): string[] {
     return tokenize(
-      `${song.title} ${song.artist ?? ""} ${song.lyrics ?? ""}`,
+      `${song.title} ${song.artist ?? ""} ${song.lyrics ?? ""} ${song.temas ?? ""}`,
     );
   }
 
@@ -268,6 +269,7 @@ export function createMockBackend(): MockBackend {
           has_lyrics: true,
           available: true,
           lyrics: FIXTURE_LYRICS,
+          temas: "água; esperança",
         },
         {
           file_path: `${path}/sem_letra.mp3`,

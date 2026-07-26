@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LyricsPanel } from "./LyricsPanel";
 import { setBackendForTests, type Backend } from "../lib/api";
@@ -18,6 +18,7 @@ function song(id: number, hasLyrics: boolean): Song {
     duration_seconds: 3,
     has_lyrics: hasLyrics,
     available: true,
+    temas: hasLyrics ? "água; esperança" : null,
   };
 }
 
@@ -56,6 +57,17 @@ describe("LyricsPanel (F3)", () => {
     // cabeçalho com título e artista
     expect(screen.getByText("Coração Sertanejo")).toBeInTheDocument();
     expect(screen.getByText("Artista Teste")).toBeInTheDocument();
+  });
+
+  it("temas aparecem como chips no cabeçalho e o clique busca pelo tema (V2)", async () => {
+    useLibraryStore.setState({ selectedSongId: 1 });
+    render(<LyricsPanel />);
+    await screen.findByTestId("lyrics-body");
+    const chip = screen.getByRole("button", { name: "Tema: esperança" });
+    expect(chip).toHaveTextContent("esperança");
+
+    fireEvent.click(chip);
+    expect(useLibraryStore.getState().query).toBe("esperança");
   });
 
   it("música sem letra: mensagens exatas do PRD", async () => {

@@ -67,7 +67,7 @@ pub fn search(conn: &Connection, input: &str, limit: usize) -> Result<Vec<Search
         ],
         |r| {
             let song = db::song_from_row(r)?;
-            let raw_snippet: Option<String> = r.get(9)?;
+            let raw_snippet: Option<String> = r.get(10)?;
             Ok(SearchResult {
                 song,
                 // snippet só é relevante quando o match foi na letra — o

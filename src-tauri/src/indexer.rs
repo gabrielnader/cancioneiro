@@ -35,8 +35,20 @@ struct TagData {
     album: Option<String>,
     duration_seconds: Option<i64>,
     lyrics: Option<String>,
+    /// Temas do frame TXXX:TEMAS ("água; cura") — V2, PRD-v2-temas.md.
+    temas: Option<String>,
     /// true se a leitura de tags falhou e usamos fallback
     fallback: bool,
+}
+
+/// Extrai o frame TXXX com descrição "TEMAS" (lofty expõe TXXX desconhecidos
+/// como ItemKey::Unknown(descrição)).
+fn read_temas(tag: &lofty::tag::Tag) -> Option<String> {
+    tag.items()
+        .find(|item| matches!(item.key(), ItemKey::Unknown(desc) if desc == "TEMAS"))
+        .and_then(|item| item.value().text())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
 }
 
 fn file_stem_title(path: &Path) -> String {
@@ -54,6 +66,7 @@ fn read_tags(path: &Path) -> TagData {
         album: None,
         duration_seconds: None,
         lyrics: None,
+        temas: None,
         fallback: true,
     };
 
@@ -68,7 +81,7 @@ fn read_tags(path: &Path) -> TagData {
     let duration = tagged.properties().duration().as_secs() as i64;
     let tag = tagged.primary_tag().or_else(|| tagged.first_tag());
 
-    let (title, artist, album, lyrics) = match tag {
+    let (title, artist, album, lyrics, temas) = match tag {
         Some(t) => {
             let title = t
                 .title()
@@ -87,9 +100,10 @@ fn read_tags(path: &Path) -> TagData {
                 .get_string(&ItemKey::Lyrics)
                 .map(|s| s.to_string())
                 .filter(|s| !s.trim().is_empty());
-            (title, artist, album, lyrics)
+            let temas = read_temas(t);
+            (title, artist, album, lyrics, temas)
         }
-        None => (file_stem_title(path), None, None, None),
+        None => (file_stem_title(path), None, None, None, None),
     };
 
     TagData {
@@ -98,6 +112,7 @@ fn read_tags(path: &Path) -> TagData {
         album,
         duration_seconds: Some(duration),
         lyrics,
+        temas,
         fallback: false,
     }
 }
@@ -200,8 +215,8 @@ pub fn scan_folder<F: FnMut(usize, usize)>(
         conn.execute(
             "INSERT INTO songs
                 (file_path, folder_id, title, artist, album, duration_seconds,
-                 has_lyrics, lyrics, file_mtime, file_size, available, indexed_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, datetime('now'))
+                 has_lyrics, lyrics, temas, file_mtime, file_size, available, indexed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, datetime('now'))
              ON CONFLICT(file_path) DO UPDATE SET
                 folder_id = excluded.folder_id,
                 title = excluded.title,
@@ -210,6 +225,7 @@ pub fn scan_folder<F: FnMut(usize, usize)>(
                 duration_seconds = excluded.duration_seconds,
                 has_lyrics = excluded.has_lyrics,
                 lyrics = excluded.lyrics,
+                temas = excluded.temas,
                 file_mtime = excluded.file_mtime,
                 file_size = excluded.file_size,
                 available = 1,
@@ -223,6 +239,7 @@ pub fn scan_folder<F: FnMut(usize, usize)>(
                 tags.duration_seconds,
                 has_lyrics as i64,
                 tags.lyrics,
+                tags.temas,
                 mtime,
                 size
             ],

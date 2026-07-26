@@ -4,6 +4,7 @@ import { parseSnippet } from "../lib/highlight";
 import type { Song } from "../lib/types";
 import { usePlayerStore } from "../stores/playerStore";
 import { usePlaylistStore } from "../stores/playlistStore";
+import { TemaChips } from "./TemaChips";
 
 interface SongRowProps {
   song: Song;
@@ -67,6 +68,7 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
             Sem letra
           </span>
         )}
+        <TemaChips temas={song.temas} />
         <span className="ml-auto flex items-center gap-2">
           {playlists.length > 0 && (
             <button

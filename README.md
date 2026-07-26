@@ -66,6 +66,23 @@ O frame gravado é `USLT` (UTF-8, lang `por`, ID3v2.4); rodar duas vezes substit
 (não duplica). As fixtures de teste em `fixtures/` são geradas por
 `python3 tools/make_fixtures.py` (tons senoidais curtos + um arquivo corrompido).
 
+### Temas (V2 — tags temáticas para busca)
+
+Marque cada música com temas livres ("água", "cura", "ceia"…), gravados no próprio
+MP3 (frame `TXXX:TEMAS`) — o app busca por eles na mesma caixa de busca e mostra
+chips clicáveis na lista e no painel de letra (spec: `PRD-v2-temas.md`):
+
+```bash
+python3 tools/embed_lyrics.py musica.mp3 --temas "água, cura"     # define a lista
+python3 tools/embed_lyrics.py musica.mp3 --add-tema "esperança"   # acrescenta
+python3 tools/embed_lyrics.py musica.mp3 --remove-tema "cura"     # remove um
+python3 tools/embed_lyrics.py musica.mp3 --temas ""               # remove todos
+python3 tools/embed_lyrics.py --check musica.mp3                  # confere (linha Temas:)
+```
+
+Os temas são normalizados ao gravar (minúsculas, sem duplicatas, ordem alfabética)
+e a busca ignora acentos ("agua" encontra "água").
+
 ## Testes
 
 ```bash

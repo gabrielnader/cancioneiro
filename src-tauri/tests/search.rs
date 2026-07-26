@@ -7,24 +7,56 @@ use rusqlite::{params, Connection};
 
 fn conn_with_songs(songs: &[(&str, Option<&str>, Option<&str>)]) -> Connection {
     // (title, artist, lyrics)
+    let with_temas: Vec<(&str, Option<&str>, Option<&str>, Option<&str>)> =
+        songs.iter().map(|&(t, a, l)| (t, a, l, None)).collect();
+    conn_with_songs_temas(&with_temas)
+}
+
+fn conn_with_songs_temas(
+    songs: &[(&str, Option<&str>, Option<&str>, Option<&str>)],
+) -> Connection {
+    // (title, artist, lyrics, temas)
     let conn = db::open_in_memory().unwrap();
     conn.execute("INSERT INTO folders (path) VALUES ('/f')", [])
         .unwrap();
-    for (i, (title, artist, lyrics)) in songs.iter().enumerate() {
+    for (i, (title, artist, lyrics, temas)) in songs.iter().enumerate() {
         conn.execute(
-            "INSERT INTO songs (file_path, folder_id, title, artist, lyrics, has_lyrics, file_mtime, file_size)
-             VALUES (?1, 1, ?2, ?3, ?4, ?5, 0, 0)",
+            "INSERT INTO songs (file_path, folder_id, title, artist, lyrics, temas, has_lyrics, file_mtime, file_size)
+             VALUES (?1, 1, ?2, ?3, ?4, ?5, ?6, 0, 0)",
             params![
                 format!("/f/{i}.mp3"),
                 title,
                 artist,
                 lyrics,
+                temas,
                 lyrics.map(|l| !l.is_empty()).unwrap_or(false) as i64
             ],
         )
         .unwrap();
     }
     conn
+}
+
+// ---------------------------------------------------------------------------
+// V2 (F8): busca encontra músicas por TEMA, ignorando acentos; match apenas
+// em tema não gera snippet de letra.
+// ---------------------------------------------------------------------------
+#[test]
+fn search_finds_songs_by_tema_ignoring_diacritics() {
+    let conn = conn_with_songs_temas(&[
+        ("Rio Divino", None, Some("uma letra qualquer"), Some("água; cura")),
+        ("Outra Canção", None, Some("nada relacionado"), None),
+    ]);
+
+    let results = search::search(&conn, "agua", 50).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].song.title, "Rio Divino");
+    assert_eq!(results[0].song.temas.as_deref(), Some("água; cura"));
+    // match só no tema: sem snippet de letra
+    assert!(results[0].snippet.is_none());
+
+    let results = search::search(&conn, "cura", 50).unwrap();
+    assert_eq!(results.len(), 1);
 }
 
 // ---------------------------------------------------------------------------

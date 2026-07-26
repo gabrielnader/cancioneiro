@@ -81,6 +81,35 @@ test.describe("Fluxo crítico: indexar → buscar → ver letra → tocar", () =
     await expect(page.getByText("Instrumental Sem Letra")).toBeVisible();
   });
 
+  test("temas (V2): chips na lista, clique busca pelo tema e busca sem acento encontra", async ({
+    page,
+  }) => {
+    await resetApp(page);
+    await addMockFolder(page);
+
+    // busca por tema sem acento ("agua" → tema "água")
+    const search = page.getByPlaceholder("Buscar por letra, título ou artista…");
+    await search.fill("agua");
+    await expect(page.getByText("1 resultados")).toBeVisible();
+    await expect(page.getByText("Coração Sertanejo")).toBeVisible();
+
+    // chips visíveis na linha
+    await search.fill("");
+    const chip = page.getByRole("button", { name: "Tema: esperança" }).first();
+    await expect(chip).toBeVisible();
+
+    // clique no chip preenche a busca e filtra
+    await chip.click();
+    await expect(search).toHaveValue("esperança");
+    await expect(page.getByText("1 resultados")).toBeVisible();
+    await expect(page.getByText("Coração Sertanejo")).toBeVisible();
+
+    // chips também no painel de letra
+    await page.getByText("Coração Sertanejo").first().click();
+    const panel = page.getByLabel("Painel de letra");
+    await expect(panel.getByRole("button", { name: "Tema: água" })).toBeVisible();
+  });
+
   test("clique único mostra a letra e NÃO toca; duplo-clique toca", async ({
     page,
   }) => {

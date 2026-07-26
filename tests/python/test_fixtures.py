@@ -60,6 +60,26 @@ def test_sem_letra_tem_tags_mas_nao_uslt():
     assert tags.getall("USLT") == []
 
 
+def test_com_letra_tem_temas():
+    tags = ID3(str(FIXTURES_DIR / "com_letra.mp3"))
+    frames = [f for f in tags.getall("TXXX") if f.desc == "TEMAS"]
+    assert len(frames) == 1
+    assert str(frames[0].text[0]) == "água; esperança"  # normalizado/ordenado sem acento
+
+
+def test_constante_temas_exportada():
+    import sys as _sys
+    _sys.path.insert(0, str(REPO_ROOT / "tools"))
+    from make_fixtures import TEMAS_COM_LETRA
+    assert TEMAS_COM_LETRA == ["esperança", "água"]
+
+
+def test_sem_letra_e_sem_tags_nao_tem_txxx():
+    tags = ID3(str(FIXTURES_DIR / "sem_letra.mp3"))
+    assert tags.getall("TXXX") == []
+    # sem_tags.mp3 nao tem header ID3 algum (coberto abaixo)
+
+
 def test_sem_tags_nao_tem_id3():
     with pytest.raises(ID3NoHeaderError):
         ID3(str(FIXTURES_DIR / "sem_tags.mp3"))

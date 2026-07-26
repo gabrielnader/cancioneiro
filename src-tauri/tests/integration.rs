@@ -400,6 +400,39 @@ fn scan_reports_progress() {
 }
 
 // ---------------------------------------------------------------------------
+// V2 (F8) — round-trip de temas: TXXX:TEMAS gravado pelo script Python é lido
+// idêntico pelo indexer Rust; busca por tema sem acento encontra a música.
+// ---------------------------------------------------------------------------
+#[test]
+fn roundtrip_temas_from_python_script_and_search_by_tema() {
+    use cancioneiro_lib::search;
+
+    let dir = setup_music_dir(false);
+    let conn = test_conn();
+    let folder_id = db::add_folder(&conn, dir.path().to_str().unwrap()).unwrap();
+    indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
+
+    let songs = db::list_songs(&conn).unwrap();
+    let com_letra = songs
+        .iter()
+        .find(|s| s.file_path.ends_with("com_letra.mp3"))
+        .unwrap();
+    assert_eq!(com_letra.temas.as_deref(), Some("água; esperança"));
+
+    // fixtures sem TXXX:TEMAS ficam sem temas
+    let sem_letra = songs
+        .iter()
+        .find(|s| s.file_path.ends_with("sem_letra.mp3"))
+        .unwrap();
+    assert_eq!(sem_letra.temas, None);
+
+    // busca por tema, sem acento
+    let results = search::search(&conn, "agua", 50).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].song.title, "Coração Sertanejo");
+}
+
+// ---------------------------------------------------------------------------
 // Seção 8 do PRD: nenhum arquivo de áudio é modificado pelo app — bytes dos
 // MP3s idênticos antes/depois de todos os fluxos de backend (indexar,
 // reindexar, buscar, ler letra, playlists, rescan).

@@ -8,6 +8,8 @@ export interface Song {
   duration_seconds: number | null;
   has_lyrics: boolean;
   available: boolean;
+  /** Temas do frame TXXX:TEMAS, unidos por "; " (V2). Ausente/null = sem temas. */
+  temas?: string | null;
 }
 
 export interface SearchResult {

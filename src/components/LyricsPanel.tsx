@@ -3,6 +3,7 @@ import { getBackend } from "../lib/api";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlaylistStore } from "../stores/playlistStore";
 import { FONT_SIZES_PX, useUiStore } from "../stores/uiStore";
+import { TemaChips } from "./TemaChips";
 
 /** Painel lateral direito (F3): letra da música selecionada. */
 export function LyricsPanel() {
@@ -60,6 +61,11 @@ export function LyricsPanel() {
                 <p className="truncate text-[14px] text-[#6B7280]">
                   {selected.artist}
                 </p>
+              )}
+              {selected.temas && (
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
+                  <TemaChips temas={selected.temas} />
+                </div>
               )}
             </div>
             <button

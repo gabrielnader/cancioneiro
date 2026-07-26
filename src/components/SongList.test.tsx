@@ -42,6 +42,7 @@ function results(): SearchResult[] {
       song: song(3, "Coração"),
       snippet: "meu coração vai cantar",
     },
+    { song: { ...song(4, "Rio Divino"), temas: "água; cura" }, snippet: null },
   ];
 }
 
@@ -79,6 +80,25 @@ describe("SongList (F1 UI / F2 / F3)", () => {
     render(<SongList />);
     const mark = screen.getByText("coração");
     expect(mark.tagName).toBe("MARK");
+  });
+
+  it("chips de tema aparecem na linha e o clique busca pelo tema sem selecionar a música (V2)", () => {
+    render(<SongList />);
+    const chip = screen.getByRole("button", { name: "Tema: água" });
+    expect(chip).toHaveTextContent("água");
+    expect(screen.getByRole("button", { name: "Tema: cura" })).toBeInTheDocument();
+
+    fireEvent.click(chip);
+    expect(useLibraryStore.getState().query).toBe("água");
+    // clique no chip não seleciona nem toca a música
+    expect(useLibraryStore.getState().selectedSongId).toBeNull();
+    expect(usePlayerStore.getState().current).toBeNull();
+  });
+
+  it("música sem temas não exibe chips", () => {
+    render(<SongList />);
+    const row = screen.getByText("Aurora").closest('[role="option"]')!;
+    expect(row.querySelectorAll('[data-testid="tema-chip"]')).toHaveLength(0);
   });
 
   it("lista tem papel de listbox com aria-selected no item selecionado", () => {

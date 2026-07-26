@@ -21,6 +21,8 @@ pub struct Song {
     pub duration_seconds: Option<i64>,
     pub has_lyrics: bool,
     pub available: bool,
+    /// Temas do frame TXXX:TEMAS, unidos por "; " (V2 — PRD-v2-temas.md).
+    pub temas: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -58,6 +60,7 @@ CREATE TABLE IF NOT EXISTS songs (
     duration_seconds INTEGER,
     has_lyrics INTEGER NOT NULL DEFAULT 0,
     lyrics TEXT,
+    temas TEXT,
     file_mtime INTEGER NOT NULL,
     file_size INTEGER NOT NULL,
     available INTEGER NOT NULL DEFAULT 1,
@@ -67,26 +70,26 @@ CREATE TABLE IF NOT EXISTS songs (
 CREATE INDEX IF NOT EXISTS idx_songs_folder_id ON songs(folder_id);
 
 CREATE VIRTUAL TABLE IF NOT EXISTS songs_fts USING fts5(
-    title, artist, lyrics,
+    title, artist, lyrics, temas,
     content='songs', content_rowid='id',
     tokenize='unicode61 remove_diacritics 2'
 );
 
 CREATE TRIGGER IF NOT EXISTS songs_ai AFTER INSERT ON songs BEGIN
-    INSERT INTO songs_fts(rowid, title, artist, lyrics)
-    VALUES (new.id, new.title, new.artist, new.lyrics);
+    INSERT INTO songs_fts(rowid, title, artist, lyrics, temas)
+    VALUES (new.id, new.title, new.artist, new.lyrics, new.temas);
 END;
 
 CREATE TRIGGER IF NOT EXISTS songs_ad AFTER DELETE ON songs BEGIN
-    INSERT INTO songs_fts(songs_fts, rowid, title, artist, lyrics)
-    VALUES ('delete', old.id, old.title, old.artist, old.lyrics);
+    INSERT INTO songs_fts(songs_fts, rowid, title, artist, lyrics, temas)
+    VALUES ('delete', old.id, old.title, old.artist, old.lyrics, old.temas);
 END;
 
 CREATE TRIGGER IF NOT EXISTS songs_au AFTER UPDATE ON songs BEGIN
-    INSERT INTO songs_fts(songs_fts, rowid, title, artist, lyrics)
-    VALUES ('delete', old.id, old.title, old.artist, old.lyrics);
-    INSERT INTO songs_fts(rowid, title, artist, lyrics)
-    VALUES (new.id, new.title, new.artist, new.lyrics);
+    INSERT INTO songs_fts(songs_fts, rowid, title, artist, lyrics, temas)
+    VALUES ('delete', old.id, old.title, old.artist, old.lyrics, old.temas);
+    INSERT INTO songs_fts(rowid, title, artist, lyrics, temas)
+    VALUES (new.id, new.title, new.artist, new.lyrics, new.temas);
 END;
 
 CREATE TABLE IF NOT EXISTS playlists (
@@ -128,12 +131,64 @@ fn fold_pt(s: &str) -> String {
         .collect()
 }
 
+const SCHEMA_VERSION: i64 = 2;
+
 pub fn init_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch("PRAGMA foreign_keys = ON;")?;
     conn.busy_timeout(std::time::Duration::from_secs(5))?;
     // Ordenação alfabética que ignora caixa e acentos ("Água" antes de "Zebra")
     conn.create_collation("ptbr", |a, b| fold_pt(a).cmp(&fold_pt(b)))?;
+    migrate_if_needed(conn)?;
     conn.execute_batch(SCHEMA)?;
+    conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    Ok(())
+}
+
+/// Migra banco V1 (sem coluna `temas`) para V2. O banco é reconstruível por
+/// reindexação, então a migração é simples: nova coluna, FTS recriada com a
+/// coluna extra e mtime zerado para o próximo rescan reler os arquivos (e
+/// popular os temas) — playlists e demais dados ficam intactos.
+fn migrate_if_needed(conn: &Connection) -> Result<()> {
+    let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+    if version >= SCHEMA_VERSION {
+        return Ok(());
+    }
+    let songs_exists: i64 = conn.query_row(
+        "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'songs'",
+        [],
+        |r| r.get(0),
+    )?;
+    if songs_exists == 0 {
+        return Ok(()); // banco novo: o SCHEMA cria tudo já na versão atual
+    }
+    let has_temas: i64 = conn.query_row(
+        "SELECT count(*) FROM pragma_table_info('songs') WHERE name = 'temas'",
+        [],
+        |r| r.get(0),
+    )?;
+    if has_temas > 0 {
+        return Ok(());
+    }
+
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(
+        "ALTER TABLE songs ADD COLUMN temas TEXT;
+         DROP TRIGGER IF EXISTS songs_ai;
+         DROP TRIGGER IF EXISTS songs_ad;
+         DROP TRIGGER IF EXISTS songs_au;
+         DROP TABLE IF EXISTS songs_fts;
+         -- força releitura dos arquivos no próximo rescan (popula temas)
+         UPDATE songs SET file_mtime = -1;",
+    )?;
+    tx.commit()?;
+    // O SCHEMA (IF NOT EXISTS) recria songs_fts/triggers com a coluna nova;
+    // repovoa o índice FTS com o conteúdo atual.
+    conn.execute_batch(SCHEMA)?;
+    conn.execute(
+        "INSERT INTO songs_fts(rowid, title, artist, lyrics, temas)
+         SELECT id, title, artist, lyrics, temas FROM songs",
+        [],
+    )?;
     Ok(())
 }
 
@@ -210,7 +265,7 @@ pub fn list_folders(conn: &Connection) -> Result<Vec<Folder>> {
 // ---------------------------------------------------------------------------
 
 pub(crate) const SONG_COLS: &str =
-    "id, file_path, folder_id, title, artist, album, duration_seconds, has_lyrics, available";
+    "id, file_path, folder_id, title, artist, album, duration_seconds, has_lyrics, available, temas";
 
 pub(crate) fn song_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Song> {
     Ok(Song {
@@ -223,6 +278,7 @@ pub(crate) fn song_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Song> {
         duration_seconds: r.get(6)?,
         has_lyrics: r.get::<_, i64>(7)? != 0,
         available: r.get::<_, i64>(8)? != 0,
+        temas: r.get(9)?,
     })
 }
 
@@ -399,6 +455,7 @@ pub fn get_playlist_items(conn: &Connection, playlist_id: i64) -> Result<Vec<Pla
                 duration_seconds: r.get(9)?,
                 has_lyrics: r.get::<_, i64>(10)? != 0,
                 available: r.get::<_, i64>(11)? != 0,
+                temas: r.get(12)?,
             },
         })
     })?;
@@ -421,6 +478,77 @@ mod tests {
             .query_row("SELECT count(*) FROM songs_fts", [], |r| r.get(0))
             .unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn v1_database_migrates_to_v2_keeping_playlists() {
+        // Cria um banco no schema V1 (sem coluna temas), com dados e playlist
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON;
+             CREATE TABLE folders (id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL UNIQUE,
+                 created_at TEXT NOT NULL DEFAULT (datetime('now')), last_scanned_at TEXT);
+             CREATE TABLE songs (id INTEGER PRIMARY KEY AUTOINCREMENT, file_path TEXT NOT NULL UNIQUE,
+                 folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+                 title TEXT NOT NULL, artist TEXT, album TEXT, duration_seconds INTEGER,
+                 has_lyrics INTEGER NOT NULL DEFAULT 0, lyrics TEXT,
+                 file_mtime INTEGER NOT NULL, file_size INTEGER NOT NULL,
+                 available INTEGER NOT NULL DEFAULT 1,
+                 indexed_at TEXT NOT NULL DEFAULT (datetime('now')));
+             CREATE VIRTUAL TABLE songs_fts USING fts5(title, artist, lyrics,
+                 content='songs', content_rowid='id',
+                 tokenize='unicode61 remove_diacritics 2');
+             CREATE TRIGGER songs_ai AFTER INSERT ON songs BEGIN
+                 INSERT INTO songs_fts(rowid, title, artist, lyrics)
+                 VALUES (new.id, new.title, new.artist, new.lyrics); END;
+             CREATE TABLE playlists (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                 updated_at TEXT NOT NULL DEFAULT (datetime('now')));
+             CREATE TABLE playlist_items (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+                 song_id INTEGER NOT NULL REFERENCES songs(id) ON DELETE CASCADE,
+                 position INTEGER NOT NULL);
+             INSERT INTO folders (path) VALUES ('/f');
+             INSERT INTO songs (file_path, folder_id, title, lyrics, has_lyrics, file_mtime, file_size)
+             VALUES ('/f/a.mp3', 1, 'Antiga', 'letra antiga', 1, 12345, 10);
+             INSERT INTO playlists (name) VALUES ('Reunião');
+             INSERT INTO playlist_items (playlist_id, song_id, position) VALUES (1, 1, 0);",
+        )
+        .unwrap();
+
+        // Reabre com o schema atual: deve migrar sem erro
+        init_schema(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 2);
+
+        // playlist intacta
+        let items = get_playlist_items(&conn, 1).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].song.title, "Antiga");
+        assert_eq!(items[0].song.temas, None);
+
+        // FTS repovoada e funcional com a coluna nova
+        let hits: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM songs_fts WHERE songs_fts MATCH '\"antiga\"'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hits, 1);
+
+        // mtime zerado força releitura (para popular temas) no próximo rescan
+        let mtime: i64 = conn
+            .query_row("SELECT file_mtime FROM songs WHERE id = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(mtime, -1);
+
+        // idempotente: reabrir de novo não erra nem re-zera dados
+        init_schema(&conn).unwrap();
+        assert_eq!(get_playlist_items(&conn, 1).unwrap().len(), 1);
     }
 
     #[test]
