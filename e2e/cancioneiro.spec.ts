@@ -7,6 +7,16 @@ import { expect, test, type Page } from "@playwright/test";
 
 const LETRA_TRECHO = "noite sem estrela";
 
+/** Coleta erros de console/página para o check "sem erros nos fluxos padrão". */
+function trackErrors(page: Page): string[] {
+  const errors: string[] = [];
+  page.on("console", (msg) => {
+    if (msg.type() === "error") errors.push(msg.text());
+  });
+  page.on("pageerror", (err) => errors.push(String(err)));
+  return errors;
+}
+
 async function resetApp(page: Page) {
   await page.goto("/");
   await page.evaluate(() => localStorage.clear());
@@ -20,7 +30,10 @@ async function addMockFolder(page: Page) {
 }
 
 test.describe("Fluxo crítico: indexar → buscar → ver letra → tocar", () => {
-  test("adicionar pasta indexa e lista as músicas", async ({ page }) => {
+  test("adicionar pasta indexa e lista as músicas — sem erros no console", async ({
+    page,
+  }) => {
+    const errors = trackErrors(page);
     await resetApp(page);
     await expect(page.getByText("Sua biblioteca está vazia")).toBeVisible();
     await addMockFolder(page);
@@ -28,6 +41,8 @@ test.describe("Fluxo crítico: indexar → buscar → ver letra → tocar", () =
     await expect(page.getByText("sem_tags")).toBeVisible();
     // badge para músicas sem letra
     expect(await page.getByText("Sem letra", { exact: true }).count()).toBe(2);
+    // seção 8 do PRD: sem erros no console nos fluxos padrão
+    expect(errors).toEqual([]);
   });
 
   test("buscar trecho que existe só na letra destaca o termo; sem acento também encontra", async ({
@@ -197,6 +212,7 @@ test.describe("Playlists (F5)", () => {
     page,
   }) => {
     test.setTimeout(45_000);
+    const errors = trackErrors(page);
     await resetApp(page);
     await addMockFolder(page);
     await createPlaylistWithSongs(page, "Culto");
@@ -233,6 +249,8 @@ test.describe("Playlists (F5)", () => {
       { timeout: 15_000 },
     );
     await expect(audio).toHaveJSProperty("paused", true);
+    // seção 8 do PRD: sem erros no console no fluxo de playlist
+    expect(errors).toEqual([]);
   });
 
   test("playlist persiste (ordem) após reload; item ausente é pulado com toast", async ({

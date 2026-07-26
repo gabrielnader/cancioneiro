@@ -12,7 +12,7 @@ cética por subagente ao fim de cada fase (lacunas corrigidas antes de avançar)
 | cargo test (backend Rust: db, indexer, search, integração) | **31 passed** (7 unit + 15 integração + 9 busca) |
 | Vitest (stores, hooks, lib, componentes) | **122 passed**, cobertura acima do limiar de 85% |
 | Playwright E2E (9 fluxos críticos) | **9 passed** |
-| `npm run tauri build` | **OK** — binário release + `Cancioneiro_0.1.0_amd64.deb` (plataforma atual: Linux; janela verificada sob Xvfb com screenshot) |
+| `npm run tauri build` | **OK** — binário release + `Cancioneiro_0.1.0_amd64.deb` (plataforma atual: Linux; janela verificada sob Xvfb — screenshots em `docs/screenshots/`) |
 
 ## Checklist da seção 8 do PRD, item a item
 
@@ -59,8 +59,10 @@ cética por subagente ao fim de cada fase (lacunas corrigidas antes de avançar)
    < 120 linhas montadas; busca com debounce responde < 2s no E2E (folga para
    ambiente de CI; a medição estrita de 100ms é a do backend). FPS não é medido
    numericamente (limitação registrada abaixo).
-9. **Sem erros no console/log nos fluxos padrão.** ✅ Os 9 testes E2E rodam os
-   fluxos padrão sem erros fatais; suítes com zero falhas. Warnings benignos de
+9. **Sem erros no console/log nos fluxos padrão.** ✅ Assertado diretamente no E2E:
+   os fluxos de indexação/busca/biblioteca e de playlist sequencial coletam
+   `console.error` + `pageerror` do Chromium e exigem lista vazia
+   (`e2e/cancioneiro.spec.ts`, helper `trackErrors`). Warnings benignos de
    `act(...)` existem em 1 teste de componente (não afetam produção).
 
 ### Cobertura de testes (exigências da seção 8)
