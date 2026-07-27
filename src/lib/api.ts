@@ -38,6 +38,12 @@ export interface EnrichProgress {
   total: number;
   /** Nome-base do arquivo em processamento (sem diretório). */
   atual: string;
+  /**
+   * Varredura que emitiu o evento. A UI IGNORA evento de scan_id diferente do
+   * atual: uma varredura cancelada continua respondendo por alguns segundos e
+   * estragava a barra da varredura seguinte (M4).
+   */
+  scan_id: string;
 }
 
 /**
@@ -50,6 +56,13 @@ export interface EnrichApply {
   artist: string | null;
   lyrics: string | null;
   add_temas: string | null;
+  /**
+   * Título/artista que a VARREDURA viu (ecoados da proposta). O backend recusa
+   * a gravação se a música mudou desde então — senão uma proposta velha
+   * reverteria em silêncio a edição feita à mão durante a varredura (A5).
+   */
+  current_title: string;
+  current_artist: string | null;
 }
 
 /**
@@ -106,8 +119,15 @@ export interface Backend {
   /**
    * Identifica no LRCLIB as músicas incompletas sob folderPrefix ("" =
    * biblioteca inteira) — ponto de rede EXPLÍCITO, pode levar minutos (F13).
+   * `scanId` identifica esta varredura nos eventos de progresso e é a chave
+   * do cancelamento (M4).
    */
-  enrichFolderScan(folderPrefix: string): Promise<EnrichProposal[]>;
+  enrichFolderScan(folderPrefix: string, scanId: string): Promise<EnrichProposal[]>;
+  /**
+   * Pede o cancelamento da varredura `scanId`: ela para na próxima música e
+   * resolve sem propostas (M4 — "Cancelar" precisa cancelar de verdade).
+   */
+  enrichCancelScan(scanId: string): Promise<void>;
   /**
    * Progresso da varredura F13 (evento `enrich:progress`) — mesmo contrato do
    * onScanProgress: devolve a função de cancelar a assinatura.
@@ -214,9 +234,16 @@ function tauriBackend(): Backend {
         durationSeconds,
       });
     },
-    async enrichFolderScan(folderPrefix) {
+    async enrichFolderScan(folderPrefix, scanId) {
       const { invoke } = await import("@tauri-apps/api/core");
-      return invoke<EnrichProposal[]>("enrich_folder_scan", { folderPrefix });
+      return invoke<EnrichProposal[]>("enrich_folder_scan", {
+        folderPrefix,
+        scanId,
+      });
+    },
+    async enrichCancelScan(scanId) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("enrich_cancel_scan", { scanId });
     },
     async onEnrichProgress(cb) {
       const { listen } = await import("@tauri-apps/api/event");

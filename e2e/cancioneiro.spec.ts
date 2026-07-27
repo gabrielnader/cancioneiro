@@ -675,6 +675,48 @@ test.describe("V5 — Completar dados em lote (F13)", () => {
     ).toBeVisible();
     expect(errors).toEqual([]);
   });
+
+  // M4: "Cancelar" só soltava a guarda de corrida — a varredura zumbi seguia
+  // emitindo e a barra da varredura SEGUINTE começava com os números dela.
+  test("Cancelar encerra a varredura de verdade e a seguinte começa limpa", async ({
+    page,
+  }) => {
+    const errors = trackErrors(page);
+    await resetApp(page);
+    await addMockFolder(page);
+    await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__CANCIONEIRO_MOCK__._enrichDelayMs = 1500;
+    });
+
+    const abrir = page.getByRole("button", {
+      name: "Completar dados da biblioteca",
+    });
+    await abrir.click();
+    const dialog = page.getByRole("dialog", { name: "Completar dados" });
+    await expect(dialog.getByText("Buscando dados… 0 de 2")).toBeVisible();
+
+    await dialog.getByRole("button", { name: "Cancelar" }).click();
+    await expect(dialog).toHaveCount(0);
+    // nem overlay nem indicador de segundo plano: a varredura acabou
+    await expect(page.getByRole("button", { name: /Buscando dados/ })).toHaveCount(0);
+    // o invoke ainda está respondendo: começar outra agora sobreporia as duas
+    await expect(abrir).toBeDisabled();
+    await expect(abrir).toHaveAttribute(
+      "title",
+      "Terminando de encerrar a busca anterior — aguarde alguns segundos",
+    );
+
+    // quando o invoke enfim responde, o ✎ volta e a nova varredura começa do zero
+    await expect(abrir).toBeEnabled({ timeout: 15000 });
+    await abrir.click();
+    await expect(dialog.getByText("Buscando dados… 0 de 2")).toBeVisible();
+    await expect(dialog.getByRole("progressbar")).toHaveAttribute(
+      "aria-valuenow",
+      "0",
+    );
+    expect(errors).toEqual([]);
+  });
 });
 
 test.describe("Escala: 2.000 músicas", () => {

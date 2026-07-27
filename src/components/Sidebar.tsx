@@ -176,6 +176,9 @@ function FolderTreeItem({ node, level }: { node: FolderNode; level: number }) {
   // só UMA varredura por vez: com uma rodando (inclusive em segundo plano, de
   // outra pasta) o ✎ de todas as pastas fica desabilitado
   const scanning = useEnrichStore((s) => s.status === "scanning");
+  // depois do "Cancelar" o invoke ainda leva alguns segundos para responder:
+  // liberar o ✎ aí faria a segunda varredura correr por cima da primeira (M4)
+  const encerrando = useEnrichStore((s) => s.scanInFlight && s.status !== "scanning");
   const isRoot = level === 0;
   const active = !isRoot && folderFilter === node.path;
   // raiz = Biblioteca (Q2): conta como "selecionada" quando não há filtro
@@ -213,13 +216,15 @@ function FolderTreeItem({ node, level }: { node: FolderNode; level: number }) {
               ? "Completar dados da biblioteca"
               : `Completar dados da pasta ${node.name}`
           }
-          disabled={scanning}
+          disabled={scanning || encerrando}
           title={
             scanning
               ? "Uma busca de dados já está em andamento"
-              : isRoot
-                ? "Completar dados da biblioteca"
-                : "Completar dados desta pasta"
+              : encerrando
+                ? "Terminando de encerrar a busca anterior — aguarde alguns segundos"
+                : isRoot
+                  ? "Completar dados da biblioteca"
+                  : "Completar dados desta pasta"
           }
           className={`h-6 w-6 shrink-0 rounded text-[13px] text-[#374151] hover:bg-[#E5E7EB] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent group-hover:block ${
             enrichVisible ? "block" : "hidden"

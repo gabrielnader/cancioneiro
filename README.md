@@ -177,6 +177,65 @@ campo vazio dos dois lados da comparação. Nenhum arquivo é renomeado.
 > No acervo real de teste (94 arquivos de repertório de nicho), o LRCLIB cobriu
 > cerca de 3% — por isso a v0.5 traz transcrição local de áudio para o restante.
 
+### Transcrição local do áudio (V5)
+
+Quando o acervo é de nicho e o LRCLIB não tem quase nada, a letra sai do próprio
+áudio: o `transcrever` roda o [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
+**na sua máquina** (CPU, sem chave de API, sem enviar áudio a lugar nenhum).
+Primeiro ele transcreve só um trecho (90 s a partir dos 20 s), extrai o refrão —
+a frase mais repetida costuma ser o título — e tenta identificar a música no
+LRCLIB pelo refrão + duração; se identificar, usa a letra **oficial**. Se não,
+transcreve a música inteira e grava o texto no `USLT`, marcado como
+`TXXX:LETRA_ORIGEM = "transcricao"` (o relatório mostra `SIM (transcrição)`).
+
+É dependência **opcional** — sem ela os outros subcomandos seguem normais:
+
+```bash
+pip3 install faster-whisper
+python3 tools/curadoria.py transcrever ~/Musicas --csv feito.csv
+```
+
+```bash
+  --modelo {tiny,base,small,medium}  padrão: small
+  --idioma pt                        padrão: pt
+  --trecho SEGUNDOS                  trecho de identificação (padrão: 90)
+  --so-identificar                   nunca transcreve a música inteira
+  --so-transcrever                   pula a identificação
+  --forcar                           refaz só as letras que vieram de transcrição
+  --forcar-tudo                      refaz qualquer letra (apaga letra oficial!)
+  --sobrescrever-tags                deixa a identificação ALTA trocar tag real
+  --csv arquivo.csv                  registra o que foi feito, para conferência
+  --verboso                          mostra o trecho transcrito e os candidatos
+```
+
+Na **primeira execução** a biblioteca baixa o modelo (~500 MB para o `small`),
+uma única vez, para o cache do seu perfil — é o único acesso à rede além do
+LRCLIB, e o script avisa antes. Depois disso a operação é **longa**: contando na
+CPU, alguns minutos por música, ou seja **horas** num acervo de 90 arquivos (por
+isso cada linha traz o contador `[12/94]`). Pode interromper com Ctrl-C a
+qualquer momento: o arquivo em andamento fica íntegro, o resumo é impresso e o
+`--csv` é gravado com tudo o que já foi feito.
+
+Regras de segurança deste subcomando (o palpite vem do **áudio**, então casar no
+LRCLIB não prova nada — e um lote de horas roda sem ninguém olhando):
+
+- **Título e artista reais nunca são sobrescritos**, nem quando a confiança é
+  ALTA: só campo vazio ou de preenchimento automático ("Faixa 5", "no artist") é
+  preenchido. Quem quiser o contrário pede explicitamente `--sobrescrever-tags`.
+- Quando a identificação **contradiz** a tag que já está no arquivo, nada é
+  gravado e sai uma linha `CONFLITO: … (não alterado)`, contada no `Resumo:` e
+  registrada no CSV — para você conferir depois, música por música.
+- Alucinações conhecidas do motor em trecho instrumental ("Música", "Legendas
+  pela comunidade Amara.org", "Obrigado por assistir") e frases de uma palavra
+  só nunca viram consulta ao LRCLIB.
+- **Letra existente nunca é substituída** sem pedido explícito: `--forcar`
+  reprocessa apenas o que a própria transcrição escreveu (o caso real: rodar de
+  novo com um modelo maior) e `--forcar-tudo` — destrutivo — inclui as letras
+  oficiais.
+- Como em todo o projeto: nada de renomear ou mover arquivo, e o áudio nunca é
+  alterado (a gravação de tags é atômica: escreve numa cópia temporária na mesma
+  pasta e a troca de lugar, então nem uma queda de energia trunca o MP3).
+
 ## Testes
 
 ```bash

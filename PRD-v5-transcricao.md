@@ -45,8 +45,11 @@ transcrever a música inteira e gravar o texto como letra no `USLT`.
 - Marcação de origem: `TXXX:LETRA_ORIGEM = "transcricao"`. A letra em si fica
   **limpa** (sem cabeçalho poluindo a busca por trecho); o relatório mostra
   `SIM (transcrição)`. Exibir esse selo no player fica para a rodada seguinte.
-- Transcrição **nunca sobrescreve letra existente** (nem oficial nem
-  transcrita), salvo `--forcar`.
+  A marca descreve a letra **atual**: qualquer gravação de letra nova sem
+  informar origem (busca oficial, planilha, edição no player) a limpa.
+- Transcrição **nunca sobrescreve letra existente**: `--forcar` reprocessa
+  somente as letras que vieram de transcrição (rodar de novo com um modelo
+  maior) e `--forcar-tudo` — destrutivo — inclui as oficiais.
 - Título/artista **não** são inventados a partir da transcrição: sem casamento
   no LRCLIB, os campos existentes ficam como estão (regra da V3.1).
 
@@ -59,20 +62,32 @@ python3 tools/curadoria.py transcrever ~/Musicas [opções]
   --trecho SEGUNDOS                   padrão: 90 (trecho de identificação)
   --so-identificar                    só F14.1; nunca transcreve a música inteira
   --so-transcrever                    pula F14.1; transcreve direto
-  --forcar                            reprocessa quem já tem letra
+  --forcar                            refaz só as letras vindas de transcrição
+  --forcar-tudo                       refaz qualquer letra (apaga letra oficial)
+  --sobrescrever-tags                 DESTRUTIVO: ALTA pode trocar tag real
   --csv arquivo.csv                   registra o que foi feito, para conferência
   --verboso                           mostra o trecho transcrito e os candidatos
 ```
 
-Saída por música, no padrão dos outros subcomandos:
+Saída por música, no padrão dos outros subcomandos (a linha `IDENTIFICADA`
+mostra o que foi **aplicado** no arquivo, com a confiança do casamento):
 
 ```
-IDENTIFICADA: barquinha - Faixa 5.mp3 → Me Apresento / Barquinha (refrão "me apresento", mp3 214s, lrclib 216s)
+IDENTIFICADA: barquinha - Faixa 5.mp3 → Me Apresento / Barquinha (ALTA, refrão "me apresento", mp3 214s, lrclib 216s)
 TRANSCRITA: barco - segura o remo.mp3 (1.842 caracteres, 4m12s de áudio em 38s)
+CONFLITO: barco - remo.mp3 — tag atual "Segura o Remo / Mestre Irineu" difere do identificado "Música / Outro" (não alterado)
+NÃO IDENTIFICADA: barco - Timoneiro.mp3
 PULADO: barco - Timoneiro.mp3 (já tem letra)
 ERRO: arquivo.mp3 — áudio ilegível
-Resumo: 94 arquivos | 6 identificadas | 71 transcritas | 13 puladas | 4 erros
+Resumo: 94 arquivos | 6 identificadas | 71 transcritas | 0 não identificadas | 13 puladas | 0 conflitos | 4 erros
 ```
+
+**Segurança do lote** (roda horas, sem ninguém olhando, e o candidato vem do
+áudio — casar no LRCLIB não prova nada): título/artista **reais** nunca são
+sobrescritos, em nenhuma confiança, salvo `--sobrescrever-tags` (só ALTA);
+identificação que contradiz a tag existente não grava nada e vira `CONFLITO`;
+alucinações típicas do motor ("Música", "Legendas pela comunidade Amara.org")
+e frases de uma palavra são descartadas antes de qualquer consulta.
 
 ## Requisitos técnicos
 
@@ -88,7 +103,10 @@ Resumo: 94 arquivos | 6 identificadas | 71 transcritas | 13 puladas | 4 erros
 - **Progresso**: uma linha por arquivo com contador `[12/94]`, porque a
   operação leva horas em acervos grandes.
 - **Interrupção segura**: Ctrl-C encerra sem corromper o arquivo em andamento
-  (gravação de tag só acontece após a transcrição completa daquele arquivo).
+  (gravação de tag só acontece após a transcrição completa daquele arquivo, e
+  é atômica: cópia temporária na mesma pasta + troca de lugar). O `Resumo:`
+  sempre sai, dizendo onde parou, e o `--csv` é gravado com o que já foi feito
+  — horas de trabalho não podem sumir com um Ctrl-C.
 
 ## Invioláveis (valem como em todo o projeto)
 

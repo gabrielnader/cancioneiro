@@ -6,17 +6,25 @@ import {
 } from "react";
 import { audioController } from "../hooks/playerAudioCore";
 import { getBackend, type EnrichApply, type EnrichProposal } from "../lib/api";
-import { useEnrichStore } from "../stores/enrichStore";
+import { textoSemPropostas, useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlayerStore } from "../stores/playerStore";
 import { usePlaylistStore } from "../stores/playlistStore";
 import { useToastStore } from "../stores/toastStore";
 
 /** Seleção inicial: ALTA pré-marcada; MÉDIA/BAIXA a cargo do humano. */
-function defaultSelection(proposals: EnrichProposal[]): Set<number> {
+function defaultSelection(
+  proposals: EnrichProposal[],
+  applyErrors: Record<number, string>,
+): Set<number> {
   return new Set(
     proposals
-      .filter((p) => p.error === null && p.confidence === "alta")
+      .filter(
+        (p) =>
+          p.error === null &&
+          applyErrors[p.song_id] === undefined &&
+          p.confidence === "alta",
+      )
       .map((p) => p.song_id),
   );
 }
@@ -44,27 +52,68 @@ export function EnrichReview() {
   const overlayOpen = useEnrichStore((s) => s.overlayOpen);
   const progress = useEnrichStore((s) => s.progress);
   const proposals = useEnrichStore((s) => s.proposals);
+  const scannedTotal = useEnrichStore((s) => s.scannedTotal);
+  // erros devolvidos pelo apply, por música (linhas ficam como as com error)
+  const applyErrors = useEnrichStore((s) => s.applyErrors);
   const close = useEnrichStore((s) => s.close);
   const hideOverlay = useEnrichStore((s) => s.hideOverlay);
+  const retainFailures = useEnrichStore((s) => s.retainFailures);
   const push = useToastStore((s) => s.push);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [busy, setBusy] = useState(false);
-  // erros devolvidos pelo apply, por música (linhas ficam como as com error)
-  const [applyErrors, setApplyErrors] = useState<Map<number, string>>(new Map());
+  /** Único texto lido por leitor de tela: só transições, nunca cada arquivo. */
+  const [anuncio, setAnuncio] = useState("");
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const previouslyFocused = useRef<HTMLElement | null>(null);
 
   // a varredura resolve com o overlay já aberto: re-inicializa a seleção
   useEffect(() => {
-    setSelected(defaultSelection(proposals));
-    setApplyErrors(new Map());
-  }, [proposals]);
+    setSelected(defaultSelection(proposals, applyErrors));
+  }, [proposals, applyErrors]);
 
   const visible = status !== "idle" && overlayOpen;
+
+  // M7: guarda quem tinha o foco ANTES do overlay e devolve ao sair (fechar,
+  // Esc ou mandar para segundo plano) — antes o foco caía no <body>.
+  useEffect(() => {
+    if (!visible) return;
+    previouslyFocused.current = document.activeElement as HTMLElement | null;
+    return () => {
+      const anterior = previouslyFocused.current;
+      previouslyFocused.current = null;
+      // o elemento pode ter saído do DOM enquanto o overlay estava aberto
+      if (anterior?.isConnected && typeof anterior.focus === "function") {
+        anterior.focus();
+      }
+    };
+  }, [visible]);
 
   // foco inicial entra no diálogo (a primeira ação existe em todos os estados)
   useEffect(() => {
     if (visible) closeButtonRef.current?.focus();
+  }, [visible, status]);
+
+  // M6: a região viva anuncia só o começo e o desfecho da varredura. O
+  // contador e o nome do arquivo mudam ~94 vezes e ficam FORA dela — quem
+  // conta o progresso para a tecnologia assistiva é o aria-valuenow da barra.
+  useEffect(() => {
+    if (!visible) {
+      setAnuncio("");
+      return;
+    }
+    if (status === "scanning") {
+      setAnuncio("A busca de dados começou. Isso pode demorar alguns minutos.");
+      return;
+    }
+    const atual = useEnrichStore.getState();
+    setAnuncio(
+      atual.proposals.length === 0
+        ? `Busca concluída. ${textoSemPropostas(atual.scannedTotal)}`
+        : atual.proposals.length === 1
+          ? "Busca concluída. 1 proposta para revisar."
+          : `Busca concluída. ${atual.proposals.length} propostas para revisar.`,
+    );
   }, [visible, status]);
 
   // Esc SAI do overlay; exceto no meio de uma gravação (busy). Durante a
@@ -88,7 +137,7 @@ export function EnrichReview() {
 
   /** Erro da linha: o da proposta (varredura) ou o devolvido pelo apply. */
   function rowError(p: EnrichProposal): string | null {
-    return p.error ?? applyErrors.get(p.song_id) ?? null;
+    return p.error ?? applyErrors[p.song_id] ?? null;
   }
 
   /** Focus trap mínimo: Tab no fim volta ao início (e vice-versa). */
@@ -156,13 +205,17 @@ export function EnrichReview() {
       audioController.pause();
     }
 
-    // nunca-apaga: null = "não mexer"; temas não fazem parte das propostas F13
+    // nunca-apaga: null = "não mexer"; temas não fazem parte das propostas F13.
+    // current_* = o que a varredura viu: o backend recusa a proposta se a
+    // música mudou desde então (A5), em vez de reverter a edição manual.
     const aplicacoes: EnrichApply[] = chosen.map((p) => ({
       song_id: p.song_id,
       title: p.proposed_title,
       artist: p.proposed_artist ?? null,
       lyrics: p.lyrics ?? null,
       add_temas: null,
+      current_title: p.current_title,
+      current_artist: p.current_artist,
     }));
 
     setBusy(true);
@@ -197,23 +250,13 @@ export function EnrichReview() {
         );
       }
 
-      if (gravadas.length > 0) {
+      if (falhas.length === 0) {
         close();
       } else {
-        // TODAS falharam: overlay aberto para o usuário ver as linhas —
-        // marca cada uma com o erro devolvido e desmarca
-        setApplyErrors((prev) => {
-          const next = new Map(prev);
-          for (const r of falhas) {
-            next.set(r.song_id, r.error ?? "não foi possível gravar");
-          }
-          return next;
-        });
-        setSelected((prev) => {
-          const next = new Set(prev);
-          for (const r of falhas) next.delete(r.song_id);
-          return next;
-        });
+        // A5: o que NÃO gravou fica na tela com o erro (uma proposta recusada
+        // por estar velha some do lote sem que ninguém perceba, e o usuário
+        // acharia que a sugestão foi aplicada). As que gravaram saem da lista.
+        retainFailures(falhas);
       }
     } catch {
       // defensivo: invoke rejeitado (erro de infraestrutura, não por música)
@@ -236,11 +279,16 @@ export function EnrichReview() {
       aria-label="Completar dados"
     >
       <div className="flex max-h-[calc(100vh-4rem)] w-[640px] max-w-[calc(100vw-2rem)] flex-col rounded-lg bg-white p-5 shadow-xl">
+        {/* única região viva do overlay (M6): montada o tempo todo e com o
+            texto trocando só nas transições — começo e fim da varredura */}
+        <p className="sr-only" role="status">
+          {anuncio}
+        </p>
         {status === "scanning" ? (
           <>
             {progress === null ? (
               // antes do primeiro evento não dá para estimar nada
-              <div className="flex items-center gap-3 py-4" role="status">
+              <div className="flex items-center gap-3 py-4">
                 <span
                   aria-hidden="true"
                   className="h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-[#0F766E] border-t-transparent"
@@ -250,12 +298,15 @@ export function EnrichReview() {
                 </p>
               </div>
             ) : (
-              <div className="py-4" role="status">
+              // sem live region aqui: o contador e o nome do arquivo mudam a
+              // cada música — quem informa o avanço é o aria-valuenow (M6)
+              <div className="py-4">
                 <p className="mb-1 text-[15px] text-[#111827]">
                   Buscando dados… {progress.done} de {progress.total}
                 </p>
                 <div
                   role="progressbar"
+                  aria-label="Progresso da busca de dados"
                   aria-valuemin={0}
                   aria-valuemax={progress.total}
                   aria-valuenow={progress.done}
@@ -301,8 +352,10 @@ export function EnrichReview() {
           </>
         ) : proposals.length === 0 ? (
           <>
+            {/* A6: "nada a ajustar" com 81 conferidas soava como "pasta
+                completa" — o texto conta o que houve e para onde ir */}
             <p className="py-4 text-[15px] text-[#111827]">
-              Nada a ajustar nesta pasta.
+              {textoSemPropostas(scannedTotal)}
             </p>
             <div className="mt-2 flex justify-end">{closeButton}</div>
           </>
@@ -310,8 +363,10 @@ export function EnrichReview() {
           <>
             <div className="flex flex-wrap items-center gap-2 pb-3">
               <h2 className="text-[16px] font-semibold text-[#111827]">
-                {proposals.length} propostas — {counts.alta} alta,{" "}
-                {counts.media} média, {counts.baixa} baixa
+                {proposals.length === 1
+                  ? "1 proposta"
+                  : `${proposals.length} propostas`}{" "}
+                — {counts.alta} alta, {counts.media} média, {counts.baixa} baixa
               </h2>
               <span className="ml-auto flex gap-2">
                 <button

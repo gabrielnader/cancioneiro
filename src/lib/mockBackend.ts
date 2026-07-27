@@ -258,6 +258,8 @@ export function createMockBackend(): MockBackend {
   let state = loadState();
   const progressListeners = new Set<(p: ScanProgress) => void>();
   const enrichProgressListeners = new Set<(p: EnrichProgress) => void>();
+  /** Varreduras que pediram cancelamento e ainda não pararam (M4). */
+  const enrichCancelled = new Set<string>();
 
   function save(): void {
     try {
@@ -274,8 +276,15 @@ export function createMockBackend(): MockBackend {
     }
   }
 
-  function emitEnrichProgress(done: number, total: number, atual: string): void {
-    const payload: EnrichProgress = { done, total, atual };
+  function emitEnrichProgress(
+    scanId: string,
+    done: number,
+    total: number,
+    atual: string,
+  ): void {
+    // o evento carrega a varredura que o emitiu: a UI ignora o que vier de
+    // uma varredura já cancelada (M4)
+    const payload: EnrichProgress = { done, total, atual, scan_id: scanId };
     enrichProgressListeners.forEach((cb) => cb(payload));
   }
 
@@ -589,7 +598,11 @@ export function createMockBackend(): MockBackend {
       return null;
     },
 
-    async enrichFolderScan(folderPrefix: string): Promise<EnrichProposal[]> {
+    async enrichFolderScan(
+      folderPrefix: string,
+      scanId: string,
+    ): Promise<EnrichProposal[]> {
+      enrichCancelled.delete(scanId);
       // candidatas pré-contadas ANTES do trabalho (como o scan_all): o total
       // do progresso não muda no meio da varredura
       const candidatas = state.songs.filter((song) => {
@@ -607,7 +620,7 @@ export function createMockBackend(): MockBackend {
       const proposals: EnrichProposal[] = [];
       // primeiro evento com done=0 antes de começar: só o total na tela
       // (mesmo contrato do Rust — `atual` vazio nesse evento)
-      emitEnrichProgress(0, total, "");
+      emitEnrichProgress(scanId, 0, total, "");
 
       for (let i = 0; i < total; i++) {
         const song = candidatas[i];
@@ -615,9 +628,15 @@ export function createMockBackend(): MockBackend {
         if (backend._enrichDelayMs > 0) {
           await new Promise((r) => setTimeout(r, backend._enrichDelayMs));
         }
+        // cancelada: para de emitir e resolve sem propostas (M4)
+        if (enrichCancelled.has(scanId)) {
+          enrichCancelled.delete(scanId);
+          return [];
+        }
         // emitido DEPOIS de cada música, com o nome da que acabou de sair
         // (mesmo ponto do on_progress do Rust)
-        const avanca = () => emitEnrichProgress(i + 1, total, nomeArquivo(song));
+        const avanca = () =>
+          emitEnrichProgress(scanId, i + 1, total, nomeArquivo(song));
 
         const base = {
           song_id: song.id,
@@ -705,8 +724,15 @@ export function createMockBackend(): MockBackend {
         });
         avanca();
       }
+      enrichCancelled.delete(scanId);
       // propostas sem nada a decidir não chegam à UI (mesmo corte do Rust)
       return proposals.filter((p) => !propostaNoOp(p));
+    },
+
+    async enrichCancelScan(scanId: string): Promise<void> {
+      // marca e sai: a varredura para na próxima música (como o Rust, que
+      // checa a flag entre as idas ao LRCLIB)
+      enrichCancelled.add(scanId);
     },
 
     async onEnrichProgress(cb: (p: EnrichProgress) => void): Promise<() => void> {
@@ -740,6 +766,19 @@ export function createMockBackend(): MockBackend {
         }
         if (!ap.title.trim()) {
           results.push({ song_id: ap.song_id, song: null, error: "título vazio" });
+          continue;
+        }
+        // A5: a varredura demora minutos; se a música mudou nesse meio-tempo
+        // (edição à mão), a proposta está velha e reverteria o trabalho do
+        // usuário em silêncio — recusa por música, o lote segue
+        if (song.title !== ap.current_title || song.artist !== ap.current_artist) {
+          results.push({
+            song_id: ap.song_id,
+            song: null,
+            error:
+              `a música mudou depois da busca ("${song.title}") —` +
+              " refaça a busca de dados",
+          });
           continue;
         }
         // o lote NUNCA apaga: null/vazio preserva o valor atual do arquivo;

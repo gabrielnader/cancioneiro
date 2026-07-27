@@ -120,6 +120,10 @@ describe("Sidebar — Completar dados (V5 F13)", () => {
       folderPrefix: "",
       proposals: [],
       progress: null,
+      scanId: "",
+      scannedTotal: 0,
+      applyErrors: {},
+      scanInFlight: false,
     });
   });
 
@@ -183,6 +187,28 @@ describe("Sidebar — Completar dados (V5 F13)", () => {
       );
     }
   });
+
+  // M4: depois de "Cancelar" o invoke ainda está na rede por alguns segundos;
+  // liberar o ✎ aí começava uma segunda varredura por cima da primeira.
+  it("varredura cancelada mas ainda respondendo: ✎ segue desabilitado, com o porquê", () => {
+    useEnrichStore.setState({ status: "idle", scanInFlight: true });
+    render(<Sidebar />);
+    const botao = screen.getByRole("button", {
+      name: "Completar dados da biblioteca",
+    });
+    expect(botao).toBeDisabled();
+    expect(botao).toHaveAttribute(
+      "title",
+      "Terminando de encerrar a busca anterior — aguarde alguns segundos",
+    );
+  });
+
+  it("nada rodando: ✎ habilitado", () => {
+    render(<Sidebar />);
+    expect(
+      screen.getByRole("button", { name: "Completar dados da biblioteca" }),
+    ).toBeEnabled();
+  });
 });
 
 describe("Sidebar — indicador de varredura em segundo plano (V5 F13)", () => {
@@ -204,6 +230,10 @@ describe("Sidebar — indicador de varredura em segundo plano (V5 F13)", () => {
       folderPrefix: "",
       proposals: [],
       progress: null,
+      scanId: "",
+      scannedTotal: 0,
+      applyErrors: {},
+      scanInFlight: false,
     });
   });
 
@@ -211,7 +241,7 @@ describe("Sidebar — indicador de varredura em segundo plano (V5 F13)", () => {
     useEnrichStore.setState({
       status: "scanning",
       overlayOpen: true,
-      progress: { done: 2, total: 9, atual: "a.mp3" },
+      progress: { done: 2, total: 9, atual: "a.mp3", scan_id: "s1" },
     });
     render(<Sidebar />);
     expect(
@@ -223,7 +253,7 @@ describe("Sidebar — indicador de varredura em segundo plano (V5 F13)", () => {
     useEnrichStore.setState({
       status: "scanning",
       overlayOpen: false,
-      progress: { done: 2, total: 9, atual: "a.mp3" },
+      progress: { done: 2, total: 9, atual: "a.mp3", scan_id: "s1" },
     });
     render(<Sidebar />);
     const indicador = screen.getByRole("button", {

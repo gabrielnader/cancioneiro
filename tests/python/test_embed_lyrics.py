@@ -1,11 +1,18 @@
 # -*- coding: utf-8 -*-
 """Testes do CLI tools/embed_lyrics.py (spec F6 do PRD) — escritos antes da implementacao (TDD)."""
+import hashlib
+import os
+import stat
+import sys
 from pathlib import Path
 
 import pytest
 from mutagen.id3 import ID3, ID3NoHeaderError
 
-from conftest import run_embed
+from conftest import TOOLS_DIR, run_embed
+
+sys.path.insert(0, str(TOOLS_DIR))
+import embed_lyrics as el  # noqa: E402
 
 LETRA = (
     "Quando o sol amanhecer\n"
@@ -194,3 +201,77 @@ class TestErros:
     def test_letra_vazia_nao_grava_nada(self, mp3_file):
         run_embed(mp3_file, "--lyrics", "")
         assert uslt_frames(mp3_file) == [] or not uslt_frames(mp3_file)
+
+
+# ------------------------------------------------- gravação atômica (M3)
+
+def sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+class TestGravacaoAtomica:
+    """A gravação de tags cresce o arquivo no lugar (2–5 KB de USLT novo num
+    MP3 que não tinha nenhum): uma queda no meio truncaria o MP3. O caminho
+    compartilhado escreve numa cópia temporária na MESMA pasta e faz
+    os.replace — atômico, e o nome visível do arquivo nunca muda."""
+
+    def test_falha_na_gravacao_preserva_o_arquivo_original(self, mp3_file,
+                                                           monkeypatch):
+        """Gravação truncada (queda/disco cheio) atinge só a cópia."""
+        antes = sha256(mp3_file)
+
+        def sabota(self, filename=None, **kwargs):
+            Path(filename).write_bytes(b"MP3 pela metade")  # trunca
+            raise OSError("disco cheio")
+
+        monkeypatch.setattr(ID3, "save", sabota)
+        with pytest.raises(OSError):
+            el.embed_lyrics(mp3_file, "letra nova " * 500)
+        assert sha256(mp3_file) == antes           # nem um byte
+        # e nenhum resto temporário na pasta
+        assert [p.name for p in mp3_file.parent.iterdir()] == [mp3_file.name]
+
+    def test_grava_numa_copia_na_mesma_pasta(self, mp3_file, monkeypatch):
+        real_save = ID3.save
+        destinos = []
+
+        def espiao(self, filename=None, **kwargs):
+            destinos.append(Path(filename))
+            return real_save(self, filename, **kwargs)
+
+        monkeypatch.setattr(ID3, "save", espiao)
+        el.embed_lyrics(mp3_file, "letra nova")
+        assert destinos, "nenhuma gravação aconteceu"
+        # nunca escreve direto no arquivo do usuário...
+        assert all(d != mp3_file for d in destinos)
+        # ...e a cópia fica no mesmo volume (os.replace atômico)
+        assert all(d.parent == mp3_file.parent for d in destinos)
+        assert uslt_frames(mp3_file)[0].text == "letra nova"
+
+    def test_gravacao_nao_renomeia_nem_move_o_arquivo(self, mp3_file):
+        antes = sorted(p.name for p in mp3_file.parent.iterdir())
+        el.embed_lyrics(mp3_file, "uma letra qualquer")
+        assert sorted(p.name for p in mp3_file.parent.iterdir()) == antes
+        assert mp3_file.is_file()
+        assert uslt_frames(mp3_file)[0].text == "uma letra qualquer"
+
+    def test_gravacao_preserva_o_modo_do_arquivo(self, mp3_file):
+        os.chmod(mp3_file, 0o640)
+        el.embed_lyrics(mp3_file, "uma letra qualquer")
+        assert stat.S_IMODE(mp3_file.stat().st_mode) == 0o640
+
+    def test_temas_e_tags_usam_o_mesmo_caminho_seguro(self, mp3_file,
+                                                      monkeypatch):
+        antes = sha256(mp3_file)
+
+        def sabota(self, filename=None, **kwargs):
+            Path(filename).write_bytes(b"MP3 pela metade")
+            raise OSError("disco cheio")
+
+        monkeypatch.setattr(ID3, "save", sabota)
+        with pytest.raises(OSError):
+            el.write_temas(mp3_file, ["água", "cura"])
+        with pytest.raises(OSError):
+            el.write_title_artist(mp3_file, title="X", artist="Y")
+        assert sha256(mp3_file) == antes
+        assert [p.name for p in mp3_file.parent.iterdir()] == [mp3_file.name]

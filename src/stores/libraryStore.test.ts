@@ -63,6 +63,7 @@ function fakeBackend(overrides: Partial<Backend> = {}): Backend {
     writeTags: vi.fn(async () => song(1, "Aurora")),
     fetchLyricsOnline: vi.fn(async () => null),
     enrichFolderScan: vi.fn(async () => []),
+    enrichCancelScan: vi.fn(async () => {}),
     enrichApply: vi.fn(async () => []),
     ...overrides,
   };

@@ -15,7 +15,10 @@ Uso:
 
 from __future__ import annotations
 import argparse
+import os
+import shutil
 import sys
+import tempfile
 import unicodedata
 from pathlib import Path
 
@@ -56,13 +59,46 @@ def load_tags(path: Path) -> ID3:
         return ID3()
 
 
+def save_tags(tags: ID3, path: Path) -> None:
+    """Grava as tags de forma ATÔMICA — sem nunca renomear o arquivo.
+
+    O mutagen redimensiona o bloco ID3 no lugar: gravar 2–5 KB de letra nova
+    num MP3 que não tinha nenhuma reescreve o arquivo inteiro, e uma queda
+    (ou disco cheio) no meio deixaria o MP3 truncado. Aqui a gravação vai
+    para uma CÓPIA temporária na MESMA pasta (mesmo volume; modo e mtime
+    preservados na cópia) e só ocupa o lugar do original por os.replace —
+    atômico no POSIX e no Windows para troca no mesmo volume. Em qualquer
+    falha, a cópia é descartada e o arquivo do usuário fica intacto; o nome
+    visível nunca muda (renomear é proibido em todo o projeto)."""
+    destino = Path(path)
+    if not destino.exists():  # nada a preservar
+        tags.save(str(destino), v2_version=4)
+        return
+    fd, temporario = tempfile.mkstemp(prefix=f".{destino.name}.",
+                                      suffix=".tmp", dir=str(destino.parent))
+    os.close(fd)
+    try:
+        shutil.copy2(str(destino), temporario)  # bytes + modo + mtime
+        tags.save(temporario, v2_version=4)
+        os.replace(temporario, str(destino))
+    except BaseException:  # inclui KeyboardInterrupt: não deixa lixo
+        try:
+            os.unlink(temporario)
+        except OSError:
+            pass
+        raise
+
+
 def embed_lyrics(path: Path, lyrics: str, title: str | None = None,
-                 artist: str | None = None, origem: str | None = None) -> None:
+                 artist: str | None = None, origem: str = "") -> None:
     """Grava/substitui o frame USLT (UTF-8, lang 'por') e salva como ID3v2.4.
 
-    origem (V5/F14) marca a procedência da letra em TXXX:LETRA_ORIGEM:
-    None não mexe no frame existente, "" o remove (letra oficial) e
-    "transcricao" o grava. Tudo numa gravação só, com a letra."""
+    origem (V5/F14) marca a procedência da letra em TXXX:LETRA_ORIGEM. A
+    marca descreve a letra ATUAL do arquivo: por isso o padrão ("" ou None)
+    LIMPA a marca — quem grava letra nova sem dizer a procedência está
+    gravando letra oficial/digitada, e um selo de transcrição herdado da
+    letra anterior seria mentira no relatório. Só o transcrever passa
+    origem="transcricao". Tudo numa gravação só, com a letra."""
     tags = load_tags(path)
     tags.delall("USLT")  # substitui, nunca duplica
     tags.add(USLT(encoding=Encoding.UTF8, lang=LANG, desc="", text=lyrics))
@@ -70,12 +106,11 @@ def embed_lyrics(path: Path, lyrics: str, title: str | None = None,
         tags.setall("TIT2", [TIT2(encoding=Encoding.UTF8, text=[title])])
     if artist:
         tags.setall("TPE1", [TPE1(encoding=Encoding.UTF8, text=[artist])])
-    if origem is not None:
-        tags.delall(LETRA_ORIGEM_KEY)
-        if origem:
-            tags.add(TXXX(encoding=Encoding.UTF8, desc=LETRA_ORIGEM_DESC,
-                          text=[origem]))
-    tags.save(str(path), v2_version=4)
+    tags.delall(LETRA_ORIGEM_KEY)
+    if origem:
+        tags.add(TXXX(encoding=Encoding.UTF8, desc=LETRA_ORIGEM_DESC,
+                      text=[origem]))
+    save_tags(tags, path)
 
 
 def read_letra_origem(tags: ID3) -> str:
@@ -94,7 +129,7 @@ def write_title_artist(path: Path, title: str | None = None,
         tags.setall("TIT2", [TIT2(encoding=Encoding.UTF8, text=[title])])
     if artist:
         tags.setall("TPE1", [TPE1(encoding=Encoding.UTF8, text=[artist])])
-    tags.save(str(path), v2_version=4)
+    save_tags(tags, path)
 
 
 def _sem_acento(text: str) -> str:
@@ -139,7 +174,7 @@ def write_temas(path: Path, temas: list[str]) -> int:
     if temas:
         tags.add(TXXX(encoding=Encoding.UTF8, desc=TEMAS_DESC,
                       text=["; ".join(temas)]))
-    tags.save(str(path), v2_version=4)
+    save_tags(tags, path)
     return len(temas)
 
 

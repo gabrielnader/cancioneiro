@@ -1,8 +1,32 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { EnrichProgress } from "./api";
+import type { EnrichApply, EnrichProgress } from "./api";
 import { createMockBackend, installMockBackend, type MockBackend } from "./mockBackend";
 import { HIGHLIGHT_END, HIGHLIGHT_START } from "./highlight";
-import type { ScanProgress } from "./types";
+import type { ScanProgress, Song } from "./types";
+
+/**
+ * Payload de apply montado a partir da Song atual: current_title/current_artist
+ * são o que a varredura viu (A5 — o backend recusa proposta velha).
+ */
+function aplicar(
+  song: Song,
+  campos: {
+    title?: string;
+    artist?: string | null;
+    lyrics?: string | null;
+    add_temas?: string | null;
+  },
+): EnrichApply {
+  return {
+    song_id: song.id,
+    title: campos.title ?? song.title,
+    artist: campos.artist ?? null,
+    lyrics: campos.lyrics ?? null,
+    add_temas: campos.add_temas ?? null,
+    current_title: song.title,
+    current_artist: song.artist,
+  };
+}
 
 const FIXTURE_LYRICS =
   "Quando o sol amanhecer\nMeu coração vai cantar\nA esperança vai nascer\nE a alegria vai chegar\n\nNão há noite sem estrela\nNão há dor que não se cura";
@@ -618,7 +642,7 @@ describe("mockBackend", () => {
   describe("enrichFolderScan (V5 — F13)", () => {
     it("retorna propostas SÓ para músicas incompletas (com_letra completa fica de fora)", async () => {
       await backend.addFolder("/musicas/teste");
-      const proposals = await backend.enrichFolderScan("");
+      const proposals = await backend.enrichFolderScan("", "s1");
       const paths = proposals.map((p) => p.file_path).sort();
       expect(paths).toEqual([
         "/musicas/teste/sem_letra.mp3",
@@ -629,17 +653,17 @@ describe("mockBackend", () => {
     it("filtra por prefixo de pasta; '' = biblioteca inteira", async () => {
       await backend.addFolder("/a");
       await backend.addFolder("/b");
-      const onlyA = await backend.enrichFolderScan("/a");
+      const onlyA = await backend.enrichFolderScan("/a", "s1");
       expect(onlyA.length).toBeGreaterThan(0);
       expect(onlyA.every((p) => p.file_path.startsWith("/a/"))).toBe(true);
-      const all = await backend.enrichFolderScan("");
+      const all = await backend.enrichFolderScan("", "s1");
       expect(all.length).toBe(onlyA.length * 2);
     });
 
     it("prefixo casa na FRONTEIRA de separador: '/acervo/1' NÃO inclui '/acervo/10'", async () => {
       await backend.addFolder("/acervo/1");
       await backend.addFolder("/acervo/10");
-      const proposals = await backend.enrichFolderScan("/acervo/1");
+      const proposals = await backend.enrichFolderScan("/acervo/1", "s1");
       expect(proposals.length).toBeGreaterThan(0);
       expect(
         proposals.every((p) => p.file_path.startsWith("/acervo/1/")),
@@ -651,7 +675,7 @@ describe("mockBackend", () => {
 
     it("música com artista mas sem letra vira MÉDIA com letra encontrada", async () => {
       await backend.addFolder("/musicas/teste");
-      const proposals = await backend.enrichFolderScan("");
+      const proposals = await backend.enrichFolderScan("", "s1");
       const semLetra = proposals.find((p) =>
         p.file_path.endsWith("sem_letra.mp3"),
       )!;
@@ -665,7 +689,7 @@ describe("mockBackend", () => {
 
     it("música sem artista vira BAIXA com palpite do nome do arquivo, sem letra", async () => {
       await backend.addFolder("/musicas/teste");
-      const proposals = await backend.enrichFolderScan("");
+      const proposals = await backend.enrichFolderScan("", "s1");
       const semTags = proposals.find((p) =>
         p.file_path.endsWith("sem_tags.mp3"),
       )!;
@@ -681,7 +705,7 @@ describe("mockBackend", () => {
       const songs = await backend.listSongs();
       const semTags = songs.find((s) => s.title === "sem_tags")!;
       await backend.writeTags(semTags.id, "Coracao Sertanejo", null, null, null);
-      const proposals = await backend.enrichFolderScan("");
+      const proposals = await backend.enrichFolderScan("", "s1");
       const alta = proposals.find((p) => p.song_id === semTags.id)!;
       expect(alta.confidence).toBe("alta");
       expect(alta.proposed_title).toBe("Coração Sertanejo");
@@ -692,7 +716,7 @@ describe("mockBackend", () => {
     it("arquivo removido do disco vira proposta com error (linha desabilitada)", async () => {
       await backend.addFolder("/musicas/teste");
       backend._removeFileFromDisk("/musicas/teste/sem_letra.mp3");
-      const proposals = await backend.enrichFolderScan("");
+      const proposals = await backend.enrichFolderScan("", "s1");
       const sumiu = proposals.find((p) =>
         p.file_path.endsWith("sem_letra.mp3"),
       )!;
@@ -703,7 +727,7 @@ describe("mockBackend", () => {
     it("_offline = true NUNCA rejeita: cada proposta vem com error 'sem conexão' (DECISIONS #47)", async () => {
       await backend.addFolder("/musicas/teste");
       backend._offline = true;
-      const proposals = await backend.enrichFolderScan("");
+      const proposals = await backend.enrichFolderScan("", "s1");
       expect(proposals).toHaveLength(2);
       expect(proposals.every((p) => p.error === "sem conexão")).toBe(true);
       expect(proposals.every((p) => p.lyrics === null)).toBe(true);
@@ -717,7 +741,7 @@ describe("mockBackend", () => {
       // letra: a linha "atual → proposto" seria igual dos dois lados
       await backend.writeTags(semTags.id, "sem tags", null, null, null);
 
-      const proposals = await backend.enrichFolderScan("");
+      const proposals = await backend.enrichFolderScan("", "s1");
       expect(proposals.some((p) => p.song_id === semTags.id)).toBe(false);
       // a MÉDIA (mesmo título/artista) SOBREVIVE porque carrega letra
       expect(proposals.map((p) => p.file_path)).toEqual([
@@ -732,7 +756,7 @@ describe("mockBackend", () => {
       await backend.writeTags(semTags.id, "sem tags", null, null, null);
       backend._offline = true;
 
-      const proposals = await backend.enrichFolderScan("");
+      const proposals = await backend.enrichFolderScan("", "s1");
       const noop = proposals.find((p) => p.song_id === semTags.id)!;
       expect(noop.error).toBe("sem conexão");
       expect(noop.proposed_title).toBe(noop.current_title);
@@ -747,7 +771,7 @@ describe("mockBackend", () => {
       const events: EnrichProgress[] = [];
       const unsub = await backend.onEnrichProgress((p) => events.push(p));
 
-      await backend.enrichFolderScan("");
+      await backend.enrichFolderScan("", "s1");
       expect(events.length).toBeGreaterThan(0);
       // primeiro evento chega ANTES do trabalho começar
       expect(events[0].done).toBe(0);
@@ -760,8 +784,43 @@ describe("mockBackend", () => {
 
       unsub();
       const count = events.length;
-      await backend.enrichFolderScan("");
+      await backend.enrichFolderScan("", "s1");
       expect(events.length).toBe(count);
+    });
+
+    // M4: sem o scan_id no evento a UI não distingue a varredura viva da zumbi
+    it("todo evento carrega o scan_id da varredura que o emitiu", async () => {
+      await backend.addFolder("/musicas/teste");
+      const events: EnrichProgress[] = [];
+      await backend.onEnrichProgress((p) => events.push(p));
+
+      await backend.enrichFolderScan("", "scan-abc");
+      expect(events.length).toBeGreaterThan(0);
+      expect(events.every((e) => e.scan_id === "scan-abc")).toBe(true);
+    });
+  });
+
+  describe("enrichCancelScan (V5 — F13, M4)", () => {
+    it("cancelar para a emissão de progresso e resolve a varredura sem propostas", async () => {
+      await backend.addFolder("/musicas/teste");
+      backend._enrichDelayMs = 5;
+      const events: EnrichProgress[] = [];
+      await backend.onEnrichProgress((p) => events.push(p));
+
+      const scan = backend.enrichFolderScan("", "scan-cancelada");
+      await backend.enrichCancelScan("scan-cancelada");
+      const proposals = await scan;
+
+      expect(proposals).toEqual([]);
+      // no máximo o evento inicial (done=0) escapou antes do cancelamento
+      expect(events.filter((e) => e.done > 0)).toHaveLength(0);
+    });
+
+    it("cancelar uma varredura NÃO derruba a seguinte", async () => {
+      await backend.addFolder("/musicas/teste");
+      await backend.enrichCancelScan("scan-antiga");
+      const proposals = await backend.enrichFolderScan("", "scan-nova");
+      expect(proposals.length).toBeGreaterThan(0);
     });
   });
 
@@ -777,6 +836,8 @@ describe("mockBackend", () => {
           artist: "Artista Novo",
           lyrics: "linha um\nlinha dois",
           add_temas: null,
+          current_title: semTags.title,
+          current_artist: semTags.artist,
         },
       ]);
       expect(results).toHaveLength(1);
@@ -801,6 +862,8 @@ describe("mockBackend", () => {
           artist: null,
           lyrics: null,
           add_temas: null,
+          current_title: comLetra.title,
+          current_artist: comLetra.artist,
         },
       ]);
       const updated = result.song!;
@@ -822,6 +885,8 @@ describe("mockBackend", () => {
           artist: null,
           lyrics: null,
           add_temas: "fé; Água",
+          current_title: comLetra.title,
+          current_artist: comLetra.artist,
         },
       ]);
       expect(result.song!.temas).toBe("água; esperança; fé");
@@ -833,8 +898,8 @@ describe("mockBackend", () => {
       const semLetra = songs.find((s) => s.title === "Instrumental Sem Letra")!;
       const semTags = songs.find((s) => s.title === "sem_tags")!;
       const results = await backend.enrichApply([
-        { song_id: semLetra.id, title: "Um", artist: null, lyrics: "la", add_temas: null },
-        { song_id: semTags.id, title: "Dois", artist: "A", lyrics: null, add_temas: null },
+        aplicar(semLetra, { title: "Um", lyrics: "la" }),
+        aplicar(semTags, { title: "Dois", artist: "A" }),
       ]);
       expect(results.map((r) => r.song!.title)).toEqual(["Um", "Dois"]);
       const reborn = createMockBackend();
@@ -851,8 +916,8 @@ describe("mockBackend", () => {
       backend._removeFileFromDisk(semLetra.file_path);
 
       const results = await backend.enrichApply([
-        { song_id: semLetra.id, title: "Um", artist: null, lyrics: "la", add_temas: null },
-        { song_id: semTags.id, title: "Dois", artist: "A", lyrics: null, add_temas: null },
+        aplicar(semLetra, { title: "Um", lyrics: "la" }),
+        aplicar(semTags, { title: "Dois", artist: "A" }),
       ]);
       expect(results).toHaveLength(2);
 
@@ -874,9 +939,76 @@ describe("mockBackend", () => {
       );
     });
 
+    // A5: a proposta velha reverteria em silêncio a edição feita durante a
+    // varredura — o backend (e o mock) recusam e a UI mostra a recusa.
+    it("recusa a proposta cuja música mudou depois da varredura", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const semTags = songs.find((s) => s.title === "sem_tags")!;
+      const proposta = aplicar(semTags, {
+        title: "Palpite do LRCLIB",
+        artist: "Palpite",
+      });
+      // o usuário editou a música à mão enquanto a varredura rodava
+      await backend.writeTags(semTags.id, "Nome Certo à Mão", null, null, null);
+
+      const [result] = await backend.enrichApply([proposta]);
+      expect(result.song).toBeNull();
+      expect(result.error).toContain("mudou depois da busca");
+      // a edição manual continua de pé
+      const depois = await backend.listSongs();
+      expect(depois.find((s) => s.id === semTags.id)!.title).toBe(
+        "Nome Certo à Mão",
+      );
+    });
+
+    it("recusa também quando só o ARTISTA mudou depois da varredura", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const semLetra = songs.find((s) => s.title === "Instrumental Sem Letra")!;
+      const proposta = aplicar(semLetra, { lyrics: "letra achada" });
+      await backend.writeTags(
+        semLetra.id,
+        semLetra.title,
+        "Outro Artista",
+        null,
+        null,
+      );
+
+      const [result] = await backend.enrichApply([proposta]);
+      expect(result.song).toBeNull();
+      expect(result.error).toContain("mudou depois da busca");
+    });
+
+    it("a recusa é por música: as demais do lote gravam normalmente", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const semLetra = songs.find((s) => s.title === "Instrumental Sem Letra")!;
+      const semTags = songs.find((s) => s.title === "sem_tags")!;
+      const propostas = [
+        aplicar(semLetra, { title: "Um", lyrics: "la" }),
+        aplicar(semTags, { title: "Dois", artist: "A" }),
+      ];
+      await backend.writeTags(semLetra.id, "Editada à Mão", null, null, null);
+
+      const results = await backend.enrichApply(propostas);
+      expect(results[0].song).toBeNull();
+      expect(results[0].error).toContain("mudou depois da busca");
+      expect(results[1].error).toBeNull();
+      expect(results[1].song!.title).toBe("Dois");
+    });
+
     it("id inexistente vira resultado com error (não rejeita)", async () => {
       const [result] = await backend.enrichApply([
-        { song_id: 99999, title: "X", artist: null, lyrics: null, add_temas: null },
+        {
+          song_id: 99999,
+          title: "X",
+          artist: null,
+          lyrics: null,
+          add_temas: null,
+          current_title: "X",
+          current_artist: null,
+        },
       ]);
       expect(result.song).toBeNull();
       expect(result.error).toContain("não encontrada");

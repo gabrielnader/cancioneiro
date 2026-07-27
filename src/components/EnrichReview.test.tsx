@@ -92,24 +92,35 @@ function failed(songId: number, error: string): EnrichApplyResult {
   return { song_id: songId, song: null, error };
 }
 
-function renderReview(proposals: EnrichProposal[]) {
+function renderReview(proposals: EnrichProposal[], scannedTotal = 0) {
   useEnrichStore.setState({
     status: "review",
     overlayOpen: true,
     folderPrefix: "",
     proposals,
     progress: null,
+    scannedTotal,
+    applyErrors: {},
   });
   return render(<EnrichReview />);
 }
 
-function renderScanning(progress: EnrichProgress | null = null) {
+function progresso(
+  p: Omit<EnrichProgress, "scan_id"> | null,
+): EnrichProgress | null {
+  return p === null ? null : { ...p, scan_id: "scan-1" };
+}
+
+function renderScanning(progress: Omit<EnrichProgress, "scan_id"> | null = null) {
   useEnrichStore.setState({
     status: "scanning",
     overlayOpen: true,
     folderPrefix: "/x",
     proposals: [],
-    progress,
+    progress: progresso(progress),
+    scanId: "scan-1",
+    scannedTotal: 0,
+    applyErrors: {},
   });
   return render(<EnrichReview />);
 }
@@ -123,6 +134,10 @@ describe("EnrichReview (V5 — F13)", () => {
       folderPrefix: "",
       proposals: [],
       progress: null,
+      scanId: "",
+      scannedTotal: 0,
+      applyErrors: {},
+      scanInFlight: false,
     });
     useToastStore.setState({ toasts: [] });
     useLibraryStore.setState({ allSongs: [], results: [] });
@@ -196,17 +211,51 @@ describe("EnrichReview (V5 — F13)", () => {
     expect(useEnrichStore.getState().overlayOpen).toBe(false);
   });
 
-  it("resultado vazio: 'Nada a ajustar nesta pasta.' com Fechar", () => {
-    renderReview([]);
+  it("resultado vazio SEM candidatas: 'Nada a ajustar nesta pasta.' com Fechar", () => {
+    renderReview([], 0);
     expect(screen.getByText("Nada a ajustar nesta pasta.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Fechar" }));
     expect(useEnrichStore.getState().status).toBe("idle");
+  });
+
+  // A6: 94 conferidas, zero achadas. "Nada a ajustar" fazia o coordenador
+  // ler "pasta completa" — o texto tem que dizer o que aconteceu de verdade.
+  it("resultado vazio COM candidatas: diz quantas foram conferidas e aponta a transcrição", () => {
+    renderReview([], 81);
+    expect(
+      screen.getByText(
+        "Conferimos as 81 músicas incompletas desta pasta e não achamos nenhuma" +
+          " delas na internet. Para completar essas letras, use a transcrição" +
+          " das ferramentas de curadoria.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("Nada a ajustar nesta pasta."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("resultado vazio com UMA candidata: texto no singular", () => {
+    renderReview([], 1);
+    expect(
+      screen.getByText(
+        "Conferimos a única música incompleta desta pasta e não a achamos na" +
+          " internet. Para completar essa letra, use a transcrição das" +
+          " ferramentas de curadoria.",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("header com contadores por confiança", () => {
     renderReview([ALTA, MEDIA, BAIXA, COM_ERRO]);
     expect(
       screen.getByText("4 propostas — 1 alta, 1 média, 2 baixa"),
+    ).toBeInTheDocument();
+  });
+
+  it("header no singular quando sobra uma proposta só", () => {
+    renderReview([ALTA]);
+    expect(
+      screen.getByText("1 proposta — 1 alta, 0 média, 0 baixa"),
     ).toBeInTheDocument();
   });
 
@@ -276,6 +325,8 @@ describe("EnrichReview (V5 — F13)", () => {
     });
 
     expect(enrichApply).toHaveBeenCalledTimes(1);
+    // current_title/current_artist viajam junto (A5): o backend recusa a
+    // proposta cuja música mudou depois da varredura
     expect(enrichApply).toHaveBeenCalledWith([
       {
         song_id: 1,
@@ -283,6 +334,8 @@ describe("EnrichReview (V5 — F13)", () => {
         artist: "Artista Um",
         lyrics: "letra da um",
         add_temas: null,
+        current_title: "faixa 1",
+        current_artist: null,
       },
       {
         song_id: 3,
@@ -290,6 +343,8 @@ describe("EnrichReview (V5 — F13)", () => {
         artist: null,
         lyrics: null,
         add_temas: null,
+        current_title: "faixa 3",
+        current_artist: null,
       },
     ]);
   });
@@ -355,7 +410,7 @@ describe("EnrichReview (V5 — F13)", () => {
     expect(useEnrichStore.getState().status).toBe("idle");
   });
 
-  it("falha parcial: sincroniza as gravadas, toast de sucesso + toast de erro e fecha", async () => {
+  it("falha parcial: sincroniza as gravadas e MANTÉM na tela só a que falhou, com o erro", async () => {
     const gravada: Song = { ...song(1, "Faixa Um"), artist: "Artista Um" };
     setBackendForTests({
       enrichApply: vi.fn(async () => [
@@ -386,8 +441,53 @@ describe("EnrichReview (V5 — F13)", () => {
     expect(toasts[0].kind).toBe("success");
     expect(toasts[1].message).toBe("1 não pôde ser gravada.");
     expect(toasts[1].kind).toBe("error");
-    // ao menos uma gravou: fecha
-    expect(useEnrichStore.getState().status).toBe("idle");
+    // A5: a recusada NÃO some de vista — some quem gravou
+    expect(useEnrichStore.getState().status).toBe("review");
+    expect(
+      screen.getByText("arquivo não encontrado: /acervo/2.mp3"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("checkbox", { name: /faixa 1/ }),
+    ).not.toBeInTheDocument();
+    const restante = screen.getByRole("checkbox", { name: /faixa 2/ });
+    expect(restante).toBeDisabled();
+    expect(restante).not.toBeChecked();
+  });
+
+  // A5: o backend recusa a proposta cuja música mudou depois da varredura —
+  // aplicar não pode reverter em silêncio a edição manual do usuário.
+  it("proposta recusada por estar velha: fica visível com o erro e conta no toast", async () => {
+    const gravada: Song = { ...song(1, "Faixa Um"), artist: "Artista Um" };
+    setBackendForTests({
+      enrichApply: vi.fn(async () => [
+        ok(gravada),
+        failed(
+          2,
+          'a música mudou depois da busca ("Nome Editado") — refaça a busca',
+        ),
+      ]),
+    } as unknown as Backend);
+
+    renderReview([ALTA, MEDIA]);
+    fireEvent.click(screen.getByRole("checkbox", { name: /faixa 2/ }));
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Aplicar selecionadas (2)" }),
+      );
+    });
+
+    const toasts = useToastStore.getState().toasts;
+    expect(toasts[1].message).toBe("1 não pôde ser gravada.");
+    expect(
+      screen.getByText(
+        'a música mudou depois da busca ("Nome Editado") — refaça a busca',
+      ),
+    ).toBeInTheDocument();
+    // mesmo tratamento visual das linhas com erro da varredura
+    expect(screen.getByRole("checkbox", { name: /faixa 2/ })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Aplicar selecionadas (0)" }),
+    ).toBeDisabled();
   });
 
   it("TODAS falharam: só toast de erro, overlay aberto, linhas marcadas com o erro e desmarcadas", async () => {
@@ -510,6 +610,101 @@ describe("EnrichReview (V5 — F13)", () => {
       renderReview([ALTA]);
       expect(document.activeElement).toBe(
         screen.getByRole("button", { name: "Fechar" }),
+      );
+    });
+
+    // M7: sem isso o Esc largava o foco no <body> e o teclado voltava do zero
+    it("ao fechar, o foco volta para quem abriu o overlay", () => {
+      const abridor = document.createElement("button");
+      abridor.textContent = "✎";
+      document.body.appendChild(abridor);
+      abridor.focus();
+
+      const { rerender } = renderReview([ALTA]);
+      expect(document.activeElement).not.toBe(abridor);
+
+      fireEvent.keyDown(window, { key: "Escape" });
+      rerender(<EnrichReview />);
+      expect(document.activeElement).toBe(abridor);
+      abridor.remove();
+    });
+
+    it("mandar para segundo plano também devolve o foco", () => {
+      const abridor = document.createElement("button");
+      document.body.appendChild(abridor);
+      abridor.focus();
+
+      const { rerender } = renderScanning({ done: 1, total: 5, atual: "a.mp3" });
+      fireEvent.click(
+        screen.getByRole("button", { name: "Deixar rodando em segundo plano" }),
+      );
+      rerender(<EnrichReview />);
+      expect(document.activeElement).toBe(abridor);
+      abridor.remove();
+    });
+
+    it("quem abriu saiu do DOM: fechar não quebra", () => {
+      const abridor = document.createElement("button");
+      document.body.appendChild(abridor);
+      abridor.focus();
+
+      const { rerender } = renderReview([ALTA]);
+      abridor.remove();
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(() => rerender(<EnrichReview />)).not.toThrow();
+    });
+
+    // M6: role="status" em volta do contador + barra + nome do arquivo fazia
+    // uma varredura de 94 músicas ser anunciada ~94 vezes, com nome de arquivo.
+    it("o nome do arquivo em processamento NÃO fica dentro de região viva", () => {
+      renderScanning({ done: 12, total: 94, atual: "Fulano - Canção.mp3" });
+      const arquivo = screen.getByText("Fulano - Canção.mp3");
+      expect(arquivo.closest("[role='status']")).toBeNull();
+      expect(arquivo.closest("[aria-live]")).toBeNull();
+      expect(
+        screen.getByText("Buscando dados… 12 de 94").closest("[role='status']"),
+      ).toBeNull();
+      // a barra continua contando a história para a tecnologia assistiva
+      expect(screen.getByRole("progressbar")).toHaveAttribute(
+        "aria-valuenow",
+        "12",
+      );
+    });
+
+    it("a região viva anuncia só as transições: início e fim da varredura", () => {
+      const { rerender } = renderScanning({ done: 1, total: 94, atual: "a.mp3" });
+      const regiao = screen.getByRole("status");
+      expect(regiao).toHaveTextContent(
+        "A busca de dados começou. Isso pode demorar alguns minutos.",
+      );
+
+      // eventos de progresso não mexem no que é anunciado
+      act(() => {
+        useEnrichStore.setState({
+          progress: { done: 2, total: 94, atual: "b.mp3", scan_id: "scan-1" },
+        });
+      });
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "A busca de dados começou. Isso pode demorar alguns minutos.",
+      );
+
+      act(() => {
+        useEnrichStore.setState({
+          status: "review",
+          proposals: [ALTA, MEDIA],
+          progress: null,
+        });
+      });
+      rerender(<EnrichReview />);
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "Busca concluída. 2 propostas para revisar.",
+      );
+    });
+
+    it("varredura sem resultado: a região viva conta o desfecho honesto", () => {
+      renderReview([], 81);
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "Busca concluída. Conferimos as 81 músicas incompletas desta pasta",
       );
     });
 
