@@ -51,7 +51,7 @@ describe("Sidebar — árvore de pastas (V4 F11)", () => {
     expect(dois).toHaveTextContent("1");
   });
 
-  it("clicar numa pasta define o filtro, abre a Biblioteca e fecha a playlist", () => {
+  it("clicar numa SUBPASTA define o filtro, abre a Biblioteca e fecha a playlist", () => {
     useUiStore.setState({ view: "playlist" });
     usePlaylistStore.setState({ activePlaylistId: 7 });
     render(<Sidebar />);
@@ -59,6 +59,23 @@ describe("Sidebar — árvore de pastas (V4 F11)", () => {
     expect(useLibraryStore.getState().folderFilter).toBe("/acervo/1");
     expect(useUiStore.getState().view).toBe("library");
     expect(usePlaylistStore.getState().activePlaylistId).toBeNull();
+  });
+
+  it("clicar na pasta RAIZ não seta filtro — equivale a Biblioteca (V5 Q2)", () => {
+    useUiStore.setState({ view: "playlist" });
+    usePlaylistStore.setState({ activePlaylistId: 7 });
+    render(<Sidebar />);
+    fireEvent.click(screen.getByRole("button", { name: "Pasta acervo" }));
+    expect(useLibraryStore.getState().folderFilter).toBeNull();
+    expect(useUiStore.getState().view).toBe("library");
+    expect(usePlaylistStore.getState().activePlaylistId).toBeNull();
+  });
+
+  it("clicar na pasta RAIZ com filtro de subpasta ativo LIMPA o filtro (V5 Q2)", () => {
+    useLibraryStore.setState({ folderFilter: "/acervo/1" });
+    render(<Sidebar />);
+    fireEvent.click(screen.getByRole("button", { name: "Pasta acervo" }));
+    expect(useLibraryStore.getState().folderFilter).toBeNull();
   });
 
   it("clicar em Biblioteca limpa o filtro de pasta", () => {

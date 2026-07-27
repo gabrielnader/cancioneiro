@@ -243,6 +243,50 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
     expect(screen.queryByLabelText("Título")).not.toBeInTheDocument();
   });
 
+  it("BUG v0.4: tema digitado SEM Enter é incluído ao Salvar no arquivo", async () => {
+    await enterEditMode();
+    const temaInput = screen.getByPlaceholderText("Adicionar tema");
+    fireEvent.change(temaInput, { target: { value: "fé" } });
+    // usuário clica direto em Salvar, sem confirmar com Enter
+    fireEvent.click(screen.getByRole("button", { name: "Salvar no arquivo" }));
+
+    await waitFor(() => expect(writeTags).toHaveBeenCalledTimes(1));
+    expect(writeTags).toHaveBeenCalledWith(
+      1,
+      "Coração Sertanejo",
+      "Artista Teste",
+      LYRICS,
+      "água; esperança; fé",
+    );
+  });
+
+  it("BUG v0.4: tema pendente duplicado (case-insensitive) não é incluído duas vezes ao Salvar", async () => {
+    await enterEditMode();
+    const temaInput = screen.getByPlaceholderText("Adicionar tema");
+    fireEvent.change(temaInput, { target: { value: "ÁGUA" } });
+    fireEvent.click(screen.getByRole("button", { name: "Salvar no arquivo" }));
+
+    await waitFor(() => expect(writeTags).toHaveBeenCalledTimes(1));
+    expect(writeTags).toHaveBeenCalledWith(
+      1,
+      "Coração Sertanejo",
+      "Artista Teste",
+      LYRICS,
+      "água; esperança",
+    );
+  });
+
+  it("BUG v0.4: blur no input de tema adiciona o chip e limpa o input", async () => {
+    await enterEditMode();
+    const temaInput = screen.getByPlaceholderText("Adicionar tema");
+    fireEvent.change(temaInput, { target: { value: "fé" } });
+    fireEvent.blur(temaInput);
+    expect(
+      screen.getByRole("button", { name: "Remover tema fé" }),
+    ).toBeInTheDocument();
+    expect(temaInput).toHaveValue("");
+  });
+
   it("falha ao salvar: toast de erro exato e o formulário permanece com os dados", async () => {
     writeTags.mockRejectedValueOnce(new Error("lock"));
     await enterEditMode();
@@ -367,6 +411,52 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
         }),
       ]),
     );
+  });
+
+  it("loading da busca (V5 Q5): botão vira 'Buscando…' desabilitado e restaura no sucesso", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    let resolveFetch!: (v: unknown) => void;
+    fetchLyricsOnline.mockImplementationOnce(
+      () => new Promise((resolve) => (resolveFetch = resolve)),
+    );
+    await enterEditMode();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Buscar letra na internet" }),
+    );
+
+    // promise pendente: botão desabilitado com a copy exata (ellipsis U+2026)
+    const buscando = screen.getByRole("button", { name: "Buscando…" });
+    expect(buscando).toBeDisabled();
+    expect(
+      screen.queryByRole("button", { name: "Buscar letra na internet" }),
+    ).not.toBeInTheDocument();
+
+    resolveFetch({
+      lyrics: "Letra vinda da internet\nSegunda linha",
+      matched_title: "Coração Sertanejo",
+      matched_artist: "Artista Teste",
+      confidence: "alta",
+    });
+    const restaurado = await screen.findByRole("button", {
+      name: "Buscar letra na internet",
+    });
+    expect(restaurado).toBeEnabled();
+    confirmSpy.mockRestore();
+  });
+
+  it("loading da busca (V5 Q5): restaura também quando não acha e quando dá erro", async () => {
+    fetchLyricsOnline.mockResolvedValueOnce(null);
+    await enterEditMode();
+    const botao = () =>
+      screen.getByRole("button", { name: "Buscar letra na internet" });
+    fireEvent.click(botao());
+    await waitFor(() => expect(botao()).toBeEnabled());
+
+    fetchLyricsOnline.mockRejectedValueOnce(new Error("sem conexão"));
+    fireEvent.click(botao());
+    await waitFor(() => expect(botao()).toBeEnabled());
+    // salvar não ficou travado pelo busy da busca
+    expect(screen.getByRole("button", { name: "Salvar no arquivo" })).toBeEnabled();
   });
 
   it("trocar a música selecionada sai do modo edição", async () => {

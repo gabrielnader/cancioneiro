@@ -45,18 +45,27 @@ export function EditSongForm({
   const [lyrics, setLyrics] = useState(initialLyrics);
   const [titleError, setTitleError] = useState(false);
   const [busy, setBusy] = useState(false);
+  // busy próprio da busca de letra (V5 Q5): não trava Salvar/Cancelar
+  const [fetchBusy, setFetchBusy] = useState(false);
 
-  function addTema() {
+  /**
+   * Confirma o texto pendente do input de tema como chip e devolve a lista
+   * resultante — handleSave precisa dela na hora (setState é assíncrono).
+   * BUG v0.4: tema digitado sem Enter era perdido ao salvar.
+   */
+  function commitTemaInput(): string[] {
     const tema = temaInput.trim();
     setTemaInput("");
-    if (!tema) return;
-    if (!temas.some((t) => t.toLowerCase() === tema.toLowerCase())) {
-      setTemas((prev) => [...prev, tema]);
+    if (!tema || temas.some((t) => t.toLowerCase() === tema.toLowerCase())) {
+      return temas;
     }
+    const next = [...temas, tema];
+    setTemas(next);
+    return next;
   }
 
   async function handleFetchLyrics() {
-    setBusy(true);
+    setFetchBusy(true);
     try {
       const match = await getBackend().fetchLyricsOnline(
         title.trim(),
@@ -77,11 +86,15 @@ export function EditSongForm({
     } catch {
       push("Sem conexão — a busca de letra precisa de internet.", "warning");
     } finally {
-      setBusy(false);
+      setFetchBusy(false);
     }
   }
 
   async function handleSave() {
+    // tema digitado e não confirmado com Enter conta como se tivesse dado
+    // Enter (BUG v0.4) — inclusive quando o título inválido aborta o save.
+    const finalTemas = commitTemaInput();
+
     if (!title.trim()) {
       setTitleError(true);
       return;
@@ -105,7 +118,7 @@ export function EditSongForm({
         title.trim(),
         artist.trim() ? artist.trim() : null,
         lyrics.trim() ? lyrics : null,
-        temas.length > 0 ? temas.join("; ") : null,
+        finalTemas.length > 0 ? finalTemas.join("; ") : null,
       );
       useLibraryStore.getState().updateSong(saved);
       usePlaylistStore.getState().updateSongInItems(saved);
@@ -193,9 +206,11 @@ export function EditSongForm({
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
-                addTema();
+                commitTemaInput();
               }
             }}
+            // sair do campo confirma o tema pendente como chip (BUG v0.4)
+            onBlur={commitTemaInput}
             className="min-w-28 flex-1 rounded-md border border-[#D1D5DB] bg-white px-2 py-1 text-[13px] text-[#111827] outline-none placeholder:text-[#9CA3AF] focus:border-[#0F766E]"
           />
         </div>
@@ -219,11 +234,11 @@ export function EditSongForm({
       <div className="flex shrink-0 flex-wrap items-center gap-2">
         <button
           type="button"
-          disabled={busy}
+          disabled={busy || fetchBusy}
           onClick={() => void handleFetchLyrics()}
           className="rounded-md border border-[#0F766E] px-3 py-1.5 text-[14px] font-medium text-[#0F766E] hover:bg-[#F0FDFA] disabled:opacity-60"
         >
-          Buscar letra na internet
+          {fetchBusy ? "Buscando…" : "Buscar letra na internet"}
         </button>
         <span className="ml-auto flex items-center gap-2">
           <button

@@ -60,7 +60,9 @@ function App() {
             className="absolute right-3 top-3 z-10 rounded-md bg-white/90 px-3 py-1.5 text-[14px] font-medium text-[#0F766E] shadow-sm ring-1 ring-[#E5E7EB] hover:bg-[#F0FDFA]"
             onClick={toggleLyricsPanel}
           >
-            {lyricsPanelVisible ? "Ocultar letra" : "Mostrar letra"}
+            {/* o painel virou ficha completa (título, artista, temas, letra,
+                edição) — a copy fala em "detalhes" (V5 Q4) */}
+            {lyricsPanelVisible ? "Ocultar detalhes" : "Mostrar detalhes"}
           </button>
         </main>
         {lyricsPanelVisible && <LyricsPanel />}

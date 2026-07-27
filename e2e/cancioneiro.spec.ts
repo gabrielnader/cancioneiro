@@ -79,6 +79,16 @@ test.describe("Fluxo crítico: indexar → buscar → ver letra → tocar", () =
     await search.fill("");
     await expect(page.getByText("Coração Sertanejo")).toBeVisible();
     await expect(page.getByText("Instrumental Sem Letra")).toBeVisible();
+
+    // botão × limpa a busca e devolve o foco ao campo (V5 Q1)
+    await search.fill("coracao");
+    const limpar = page.getByRole("button", { name: "Limpar busca" });
+    await expect(limpar).toBeVisible();
+    await limpar.click();
+    await expect(search).toHaveValue("");
+    await expect(search).toBeFocused();
+    await expect(limpar).toHaveCount(0);
+    await expect(page.getByText("Instrumental Sem Letra")).toBeVisible();
   });
 
   test("temas (V2): chips na lista, clique busca pelo tema e busca sem acento encontra", async ({
@@ -214,10 +224,10 @@ test.describe("Persistência entre sessões (reload)", () => {
     // volume
     await page.getByLabel("Volume").fill("0.4");
     // painel de letra: oculta
-    await page.getByRole("button", { name: "Ocultar letra" }).click();
+    await page.getByRole("button", { name: "Ocultar detalhes" }).click();
     await expect(page.getByLabel("Painel de letra")).toHaveCount(0);
     await expect(
-      page.getByRole("button", { name: "Mostrar letra" }),
+      page.getByRole("button", { name: "Mostrar detalhes" }),
     ).toBeVisible();
 
     await page.reload();
@@ -225,7 +235,7 @@ test.describe("Persistência entre sessões (reload)", () => {
     await expect(page.getByLabel("Painel de letra")).toHaveCount(0);
 
     // reexibe e cicla fonte 16 → 20
-    await page.getByRole("button", { name: "Mostrar letra" }).click();
+    await page.getByRole("button", { name: "Mostrar detalhes" }).click();
     await page.getByText("Coração Sertanejo").first().click();
     const body = page.getByTestId("lyrics-body");
     await expect(body).toHaveCSS("font-size", "16px");
@@ -475,6 +485,88 @@ test.describe("V4", () => {
     await expect(chip).toHaveCount(0);
     await expect(list.getByText("Faixa Um")).toBeVisible();
     await expect(list.getByText("Faixa Dois")).toBeVisible();
+
+    // pasta RAIZ não filtra nem cria chip — equivale a Biblioteca (V5 Q2)
+    await pasta2.click();
+    await expect(chip).toBeVisible();
+    await root.click();
+    await expect(chip).toHaveCount(0);
+    await expect(list.getByText("Faixa Um")).toBeVisible();
+    await expect(list.getByText("Faixa Dois")).toBeVisible();
+  });
+
+  test("BUG v0.4: tema digitado SEM Enter é salvo ao clicar em Salvar e a busca encontra", async ({
+    page,
+  }) => {
+    const errors = trackErrors(page);
+    await resetApp(page);
+    await addMockFolder(page);
+
+    await page.getByText("sem_tags", { exact: true }).first().click();
+    const panel = page.getByLabel("Painel de letra");
+    await panel.getByRole("button", { name: "Editar" }).click();
+
+    // digita o tema e clica DIRETO em Salvar, sem Enter
+    await panel.getByPlaceholder("Adicionar tema").fill("peregrinação");
+    await panel.getByRole("button", { name: "Salvar no arquivo" }).click();
+    await expect(
+      page.getByText("Alterações salvas em sem_tags.mp3."),
+    ).toBeVisible();
+
+    // o tema virou chip na ficha da música
+    await expect(
+      panel.getByRole("button", { name: "Tema: peregrinação" }),
+    ).toBeVisible();
+
+    // buscar pelo tema encontra a música
+    const search = page.getByPlaceholder("Buscar por letra, título ou artista…");
+    await search.fill("peregrinação");
+    await expect(page.getByText("1 resultados")).toBeVisible();
+    await expect(
+      page.getByRole("option").filter({ hasText: "sem_tags" }),
+    ).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
+  test("filtro de pasta ativo: tema salvo em música de OUTRA pasta só aparece na busca ao limpar o filtro (×)", async ({
+    page,
+  }) => {
+    await resetApp(page);
+    await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__CANCIONEIRO_MOCK__._seedFolderTree();
+    });
+    await page.reload();
+
+    // seleciona a música da pasta 2/ e SÓ DEPOIS filtra pela pasta 1/
+    await page.getByText("Faixa Dois").first().click();
+    await page.getByRole("button", { name: "Pasta 1", exact: true }).click();
+    const panel = page.getByLabel("Painel de letra");
+    // a seleção sobrevive ao filtro: o painel continua na Faixa Dois
+    await expect(panel.getByText("Faixa Dois")).toBeVisible();
+
+    // salva um tema (sem Enter) na música da OUTRA pasta
+    await panel.getByRole("button", { name: "Editar" }).click();
+    await panel.getByPlaceholder("Adicionar tema").fill("advento");
+    await panel.getByRole("button", { name: "Salvar no arquivo" }).click();
+    await expect(page.getByText("Alterações salvas em b.mp3.")).toBeVisible();
+
+    // com o filtro da pasta 1/ ativo, a busca pelo tema NÃO mostra a música;
+    // a UI deixa claro o porquê: o chip 📁 1 segue visível sobre o empty state
+    const search = page.getByPlaceholder("Buscar por letra, título ou artista…");
+    await search.fill("advento");
+    await expect(
+      page.getByText('Nenhuma música encontrada para "advento".'),
+    ).toBeVisible();
+    const chip = page.getByRole("button", { name: "Remover filtro de pasta" });
+    await expect(chip).toContainText("📁 1");
+
+    // limpar o filtro no × do chip revela a música na busca pelo tema
+    await chip.click();
+    await expect(page.getByText("1 resultados")).toBeVisible();
+    await expect(
+      page.getByRole("option").filter({ hasText: "Faixa Dois" }),
+    ).toBeVisible();
   });
 });
 

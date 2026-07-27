@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SongList } from "./SongList";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlayerStore } from "../stores/playerStore";
+import { usePlaylistStore } from "../stores/playlistStore";
 import type { SearchResult, Song } from "../lib/types";
 
 // Virtualização depende de medidas reais de layout — inexistentes no jsdom.
@@ -99,6 +100,55 @@ describe("SongList (F1 UI / F2 / F3)", () => {
     render(<SongList />);
     const row = screen.getByText("Aurora").closest('[role="option"]')!;
     expect(row.querySelectorAll('[data-testid="tema-chip"]')).toHaveLength(0);
+  });
+
+  describe("ordem da linha (V5 Q3): título → artista → badge/temas → '+' no fim", () => {
+    /** a aparece antes de b no DOM? */
+    function before(a: Element, b: Element): boolean {
+      return Boolean(
+        a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING,
+      );
+    }
+
+    beforeEach(() => {
+      usePlaylistStore.setState({
+        playlists: [{ id: 1, name: "Culto", song_count: 0 }],
+      });
+    });
+
+    it("artista vem logo após o título, antes do badge 'Sem letra'", () => {
+      render(<SongList />);
+      const row = screen.getByText("Brisa").closest('[role="option"]')!;
+      const title = screen.getByText("Brisa");
+      const artist = row.querySelector("span.text-\\[13px\\]")!;
+      expect(artist).toHaveTextContent("Alguém");
+      const badge = Array.from(row.querySelectorAll("span")).find(
+        (el) => el.textContent === "Sem letra",
+      )!;
+      expect(before(title, artist)).toBe(true);
+      expect(before(artist, badge)).toBe(true);
+    });
+
+    it("artista antes dos chips de tema; botão '+' é o último elemento da linha", () => {
+      render(<SongList />);
+      const row = screen.getByText("Rio Divino").closest('[role="option"]')!;
+      const artist = Array.from(row.querySelectorAll("span")).find(
+        (el) => el.textContent === "Alguém",
+      )!;
+      const chip = screen.getByRole("button", { name: "Tema: água" });
+      const plus = row.querySelector('[aria-label="Adicionar à playlist"]')!;
+      expect(before(artist, chip)).toBe(true);
+      expect(before(chip, plus)).toBe(true);
+    });
+
+    it("artista mantém truncate para não estourar a linha", () => {
+      render(<SongList />);
+      const row = screen.getByText("Aurora").closest('[role="option"]')!;
+      const artist = Array.from(row.querySelectorAll("span")).find(
+        (el) => el.textContent === "Alguém",
+      )!;
+      expect(artist.className).toContain("truncate");
+    });
   });
 
   it("lista tem papel de listbox com aria-selected no item selecionado", () => {

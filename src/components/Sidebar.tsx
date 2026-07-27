@@ -123,13 +123,18 @@ export function Sidebar() {
   );
 }
 
-/** Item recursivo da árvore de pastas (V4 — F11): clique filtra a biblioteca. */
+/**
+ * Item recursivo da árvore de pastas (V4 — F11): clique numa SUBPASTA filtra a
+ * biblioteca. A pasta RAIZ (level 0, pasta registrada) equivale a "Biblioteca":
+ * clicar nela LIMPA o filtro — sem chip 📁 (V5 Q2, o × na raiz assustava).
+ */
 function FolderTreeItem({ node, level }: { node: FolderNode; level: number }) {
   const folderFilter = useLibraryStore((s) => s.folderFilter);
   const setFolderFilter = useLibraryStore((s) => s.setFolderFilter);
   const setView = useUiStore((s) => s.setView);
   const closePlaylist = usePlaylistStore((s) => s.closePlaylist);
-  const active = folderFilter === node.path;
+  const isRoot = level === 0;
+  const active = !isRoot && folderFilter === node.path;
 
   return (
     <>
@@ -145,7 +150,7 @@ function FolderTreeItem({ node, level }: { node: FolderNode; level: number }) {
         style={{ paddingLeft: 20 + level * 14 }}
         onClick={() => {
           closePlaylist();
-          setFolderFilter(node.path);
+          setFolderFilter(isRoot ? null : node.path);
           setView("library");
         }}
       >

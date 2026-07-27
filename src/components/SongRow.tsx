@@ -60,9 +60,15 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
             ♪
           </span>
         )}
-        <span className={`truncate text-[15px] font-medium ${titleColor}`}>
+        {/* Ordem da linha (V5 Q3): título → artista → badge → temas → "+" */}
+        <span className={`min-w-0 truncate text-[15px] font-medium ${titleColor}`}>
           {song.title}
         </span>
+        {song.artist && (
+          <span className="max-w-40 truncate text-[13px] text-[#6B7280]">
+            {song.artist}
+          </span>
+        )}
         {!song.has_lyrics && (
           <span className="shrink-0 rounded bg-[#F3F4F6] px-1.5 py-0.5 text-[12px] text-[#6B7280]">
             Sem letra
@@ -73,7 +79,7 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
             <TemaChips temas={song.temas} />
           </span>
         )}
-        <span className="ml-auto flex items-center gap-2">
+        <span className="ml-auto flex shrink-0 items-center">
           {playlists.length > 0 && (
             <button
               ref={plusRef}
@@ -97,11 +103,6 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
             >
               +
             </button>
-          )}
-          {song.artist && (
-            <span className="max-w-40 truncate text-[13px] text-[#6B7280]">
-              {song.artist}
-            </span>
           )}
         </span>
       </div>
