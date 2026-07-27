@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import { EnrichReview } from "./components/EnrichReview";
 import { LibraryView } from "./components/LibraryView";
 import { LyricsPanel } from "./components/LyricsPanel";
 import { PlayerBar } from "./components/PlayerBar";
@@ -68,6 +69,7 @@ function App() {
         {lyricsPanelVisible && <LyricsPanel />}
       </div>
       <PlayerBar />
+      <EnrichReview />
       <Toasts />
     </div>
   );

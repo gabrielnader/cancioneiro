@@ -254,7 +254,8 @@ test.describe("Playlists (F5)", () => {
     await page.getByPlaceholder("Nome da playlist").fill(name);
     await page.getByRole("button", { name: "Criar" }).click();
     // volta para a biblioteca para adicionar músicas
-    await page.getByRole("button", { name: "Biblioteca" }).click();
+    // exact: o botão "Completar dados da biblioteca" (F13) também contém o texto
+    await page.getByRole("button", { name: "Biblioteca", exact: true }).click();
     for (const title of ["Coração Sertanejo", "Instrumental Sem Letra"]) {
       const row = page.getByRole("option").filter({ hasText: title }).first();
       await row.hover();
@@ -567,6 +568,57 @@ test.describe("V4", () => {
     await expect(
       page.getByRole("option").filter({ hasText: "Faixa Dois" }),
     ).toBeVisible();
+  });
+});
+
+test.describe("V5 — Completar dados em lote (F13)", () => {
+  test("varrer a biblioteca propõe dados; aplicar a selecionada atualiza a música", async ({
+    page,
+  }) => {
+    const errors = trackErrors(page);
+    await resetApp(page);
+    await addMockFolder(page);
+    // com_letra completa fica de fora: sem_letra (MÉDIA) e sem_tags (BAIXA)
+    expect(await page.getByText("Sem letra", { exact: true }).count()).toBe(2);
+
+    // raiz da árvore = biblioteca inteira (prefixo "")
+    await page
+      .getByRole("button", { name: "Completar dados da biblioteca" })
+      .click();
+
+    const dialog = page.getByRole("dialog", { name: "Completar dados" });
+    await expect(
+      dialog.getByText("2 propostas — 0 alta, 1 média, 1 baixa"),
+    ).toBeVisible();
+    await expect(dialog.getByText("MÉDIA", { exact: true })).toBeVisible();
+    await expect(dialog.getByText("BAIXA", { exact: true })).toBeVisible();
+    await expect(dialog.getByText("letra encontrada")).toBeVisible();
+
+    // nada pré-marcado (nenhuma ALTA): aplicar começa desabilitado
+    const aplicar0 = dialog.getByRole("button", {
+      name: "Aplicar selecionadas (0)",
+    });
+    await expect(aplicar0).toBeDisabled();
+
+    // o humano decide: marca a MÉDIA (letra encontrada para a instrumental)
+    await dialog
+      .getByRole("checkbox", { name: "Aplicar proposta: Instrumental Sem Letra" })
+      .check();
+    await dialog
+      .getByRole("button", { name: "Aplicar selecionadas (1)" })
+      .click();
+
+    await expect(page.getByText("1 músicas atualizadas.")).toBeVisible();
+    await expect(dialog).toHaveCount(0);
+    // a música ganhou letra: só a sem_tags continua com o badge
+    expect(await page.getByText("Sem letra", { exact: true }).count()).toBe(1);
+
+    // a letra aplicada abre no painel de detalhes
+    await page.getByText("Instrumental Sem Letra").first().click();
+    await expect(
+      page.getByLabel("Painel de letra").getByText(LETRA_TRECHO),
+    ).toBeVisible();
+    expect(errors).toEqual([]);
   });
 });
 

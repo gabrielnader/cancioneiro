@@ -1,4 +1,4 @@
-import type { Backend } from "./api";
+import type { Backend, EnrichApply, EnrichProposal } from "./api";
 import { HIGHLIGHT_END, HIGHLIGHT_START } from "./highlight";
 import type {
   Folder,
@@ -27,7 +27,7 @@ export interface MockBackend extends Backend {
   _reset(): void;
   /** Valor devolvido pelo próximo pickFolder(). */
   _nextPickedFolder: string;
-  /** Simula falta de rede: fetchLyricsOnline rejeita com "sem conexão" (V4). */
+  /** Simula falta de rede: fetchLyricsOnline e enrichFolderScan rejeitam com "sem conexão" (V4/V5). */
   _offline: boolean;
   /** Popula a pasta /acervo com subpastas 1/ e 2/ para o E2E da árvore (V4 F11). */
   _seedFolderTree(): void;
@@ -542,6 +542,125 @@ export function createMockBackend(): MockBackend {
         };
       }
       return null;
+    },
+
+    async enrichFolderScan(folderPrefix: string): Promise<EnrichProposal[]> {
+      // Mesma convenção do fetchLyricsOnline: sem rede, o invoke rejeita.
+      if (backend._offline) {
+        throw new Error("sem conexão");
+      }
+      const proposals: EnrichProposal[] = [];
+      for (const song of state.songs) {
+        if (!song.available) continue;
+        if (folderPrefix && !song.file_path.startsWith(folderPrefix)) continue;
+        // incompleta = sem letra OU sem artista (regra simplificada do Rust)
+        const completa = song.has_lyrics && song.artist !== null;
+        if (completa) continue;
+
+        const base = {
+          song_id: song.id,
+          file_path: song.file_path,
+          current_title: song.title,
+          current_artist: song.artist,
+        };
+
+        // arquivo sumido do disco: proposta com error, sem gastar "rede"
+        if (state.deletedFiles.includes(song.file_path)) {
+          proposals.push({
+            ...base,
+            proposed_title: song.title,
+            proposed_artist: song.artist,
+            lyrics: null,
+            confidence: "baixa",
+            error: `arquivo não encontrado: ${song.file_path}`,
+          });
+          continue;
+        }
+
+        // "LRCLIB" determinístico: o único hit ALTA é o da fixture (mesmo
+        // conhecimento do fetchLyricsOnline)
+        if (normalize(song.title).includes("coracao sertanejo")) {
+          proposals.push({
+            ...base,
+            proposed_title: "Coração Sertanejo",
+            proposed_artist: "Artista Teste",
+            lyrics: FIXTURE_LYRICS,
+            confidence: "alta",
+            error: null,
+          });
+          continue;
+        }
+
+        // título+artista reais → match MÉDIA com letra encontrada
+        if (song.artist !== null) {
+          proposals.push({
+            ...base,
+            proposed_title: song.title,
+            proposed_artist: song.artist,
+            lyrics: FIXTURE_LYRICS,
+            confidence: "media",
+            error: null,
+          });
+          continue;
+        }
+
+        // resto: BAIXA — palpite do nome do arquivo, sem letra
+        const stem = (song.file_path.split(/[\\/]/).pop() ?? "")
+          .replace(/\.mp3$/i, "")
+          .replace(/_/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+        const divisor = stem.indexOf(" - ");
+        const [guessArtist, guessTitle] =
+          divisor > 0
+            ? [stem.slice(0, divisor).trim(), stem.slice(divisor + 3).trim()]
+            : [null, stem];
+        proposals.push({
+          ...base,
+          proposed_title: guessTitle || song.title,
+          proposed_artist: guessArtist,
+          lyrics: null,
+          confidence: "baixa",
+          error: null,
+        });
+      }
+      return proposals;
+    },
+
+    async enrichApply(aplicacoes: EnrichApply[]): Promise<Song[]> {
+      const updated: Song[] = [];
+      for (const ap of aplicacoes) {
+        const song = state.songs.find((s) => s.id === ap.song_id);
+        if (!song) {
+          throw new Error(`música não encontrada: ${ap.song_id}`);
+        }
+        if (state.deletedFiles.includes(song.file_path)) {
+          throw new Error(`arquivo removido do disco: ${song.file_path}`);
+        }
+        if (!ap.title.trim()) {
+          throw new Error("título vazio");
+        }
+        // o lote NUNCA apaga: null/vazio preserva o valor atual do arquivo;
+        // NUNCA renomeia (file_path intocado)
+        song.title = ap.title.trim();
+        if (ap.artist?.trim()) {
+          song.artist = ap.artist.trim();
+        }
+        if (ap.lyrics?.trim()) {
+          song.lyrics = ap.lyrics;
+          song.has_lyrics = true;
+        }
+        if (ap.add_temas?.trim()) {
+          // temas SOMAM aos existentes (normalização deduplica e ordena)
+          const joined = song.temas
+            ? `${song.temas}; ${ap.add_temas}`
+            : ap.add_temas;
+          song.temas = normalizeTemas(joined);
+        }
+        updated.push(toSong(song));
+      }
+      save();
+      return updated;
     },
 
     async onScanProgress(cb: (p: ScanProgress) => void): Promise<() => void> {

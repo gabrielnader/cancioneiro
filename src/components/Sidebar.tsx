@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { buildFolderTree, type FolderNode } from "../lib/folderTree";
+import { useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlaylistStore } from "../stores/playlistStore";
 import { useUiStore } from "../stores/uiStore";
@@ -133,30 +134,55 @@ function FolderTreeItem({ node, level }: { node: FolderNode; level: number }) {
   const setFolderFilter = useLibraryStore((s) => s.setFolderFilter);
   const setView = useUiStore((s) => s.setView);
   const closePlaylist = usePlaylistStore((s) => s.closePlaylist);
+  const startScan = useEnrichStore((s) => s.startScan);
   const isRoot = level === 0;
   const active = !isRoot && folderFilter === node.path;
+  // raiz = Biblioteca (Q2): conta como "selecionada" quando não há filtro
+  const enrichVisible = isRoot ? folderFilter === null : active;
 
   return (
     <>
-      <button
-        type="button"
-        aria-label={`Pasta ${node.name}`}
-        title={node.path}
-        className={`flex w-full items-center justify-between gap-2 rounded-md py-1 pr-3 text-left text-[14px] ${
-          active
-            ? "bg-[#F0FDFA] font-medium text-[#0F766E]"
-            : "text-[#374151] hover:bg-[#F3F4F6]"
-        }`}
-        style={{ paddingLeft: 20 + level * 14 }}
-        onClick={() => {
-          closePlaylist();
-          setFolderFilter(isRoot ? null : node.path);
-          setView("library");
-        }}
-      >
-        <span className="truncate">{node.name}</span>
-        <span className="shrink-0 text-[12px] text-[#9CA3AF]">{node.count}</span>
-      </button>
+      <span className="group relative flex w-full items-center gap-1 pr-2">
+        <button
+          type="button"
+          aria-label={`Pasta ${node.name}`}
+          title={node.path}
+          className={`flex min-w-0 flex-1 items-center justify-between gap-2 rounded-md py-1 pr-2 text-left text-[14px] ${
+            active
+              ? "bg-[#F0FDFA] font-medium text-[#0F766E]"
+              : "text-[#374151] hover:bg-[#F3F4F6]"
+          }`}
+          style={{ paddingLeft: 20 + level * 14 }}
+          onClick={() => {
+            closePlaylist();
+            setFolderFilter(isRoot ? null : node.path);
+            setView("library");
+          }}
+        >
+          <span className="truncate">{node.name}</span>
+          <span className="shrink-0 text-[12px] text-[#9CA3AF]">{node.count}</span>
+        </button>
+        {/* F13: dispara o "Completar dados" da pasta (raiz = biblioteca
+            inteira, prefixo ""). Como o "+" do SongRow (DECISIONS #31):
+            hover + visível quando selecionada, para toque/teclado. */}
+        <button
+          type="button"
+          aria-label={
+            isRoot
+              ? "Completar dados da biblioteca"
+              : `Completar dados da pasta ${node.name}`
+          }
+          title={
+            isRoot ? "Completar dados da biblioteca" : "Completar dados desta pasta"
+          }
+          className={`h-6 w-6 shrink-0 rounded text-[13px] text-[#374151] hover:bg-[#E5E7EB] group-hover:block ${
+            enrichVisible ? "block" : "hidden"
+          }`}
+          onClick={() => void startScan(isRoot ? "" : node.path)}
+        >
+          ✎
+        </button>
+      </span>
       {node.children.map((child) => (
         <FolderTreeItem key={child.path} node={child} level={level + 1} />
       ))}

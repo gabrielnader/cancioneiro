@@ -614,6 +614,169 @@ describe("mockBackend", () => {
     });
   });
 
+  describe("enrichFolderScan (V5 — F13)", () => {
+    it("retorna propostas SÓ para músicas incompletas (com_letra completa fica de fora)", async () => {
+      await backend.addFolder("/musicas/teste");
+      const proposals = await backend.enrichFolderScan("");
+      const paths = proposals.map((p) => p.file_path).sort();
+      expect(paths).toEqual([
+        "/musicas/teste/sem_letra.mp3",
+        "/musicas/teste/sem_tags.mp3",
+      ]);
+    });
+
+    it("filtra por prefixo de pasta; '' = biblioteca inteira", async () => {
+      await backend.addFolder("/a");
+      await backend.addFolder("/b");
+      const onlyA = await backend.enrichFolderScan("/a");
+      expect(onlyA.length).toBeGreaterThan(0);
+      expect(onlyA.every((p) => p.file_path.startsWith("/a/"))).toBe(true);
+      const all = await backend.enrichFolderScan("");
+      expect(all.length).toBe(onlyA.length * 2);
+    });
+
+    it("música com artista mas sem letra vira MÉDIA com letra encontrada", async () => {
+      await backend.addFolder("/musicas/teste");
+      const proposals = await backend.enrichFolderScan("");
+      const semLetra = proposals.find((p) =>
+        p.file_path.endsWith("sem_letra.mp3"),
+      )!;
+      expect(semLetra.confidence).toBe("media");
+      expect(semLetra.current_title).toBe("Instrumental Sem Letra");
+      expect(semLetra.proposed_title).toBe("Instrumental Sem Letra");
+      expect(semLetra.proposed_artist).toBe("Banda Fixture");
+      expect(semLetra.lyrics).not.toBeNull();
+      expect(semLetra.error).toBeNull();
+    });
+
+    it("música sem artista vira BAIXA com palpite do nome do arquivo, sem letra", async () => {
+      await backend.addFolder("/musicas/teste");
+      const proposals = await backend.enrichFolderScan("");
+      const semTags = proposals.find((p) =>
+        p.file_path.endsWith("sem_tags.mp3"),
+      )!;
+      expect(semTags.confidence).toBe("baixa");
+      expect(semTags.proposed_title).toBe("sem tags");
+      expect(semTags.proposed_artist).toBeNull();
+      expect(semTags.lyrics).toBeNull();
+      expect(semTags.error).toBeNull();
+    });
+
+    it("título contendo 'coração sertanejo' vira ALTA com o match fixo do LRCLIB", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const semTags = songs.find((s) => s.title === "sem_tags")!;
+      await backend.writeTags(semTags.id, "Coracao Sertanejo", null, null, null);
+      const proposals = await backend.enrichFolderScan("");
+      const alta = proposals.find((p) => p.song_id === semTags.id)!;
+      expect(alta.confidence).toBe("alta");
+      expect(alta.proposed_title).toBe("Coração Sertanejo");
+      expect(alta.proposed_artist).toBe("Artista Teste");
+      expect(alta.lyrics).toBe(FIXTURE_LYRICS);
+    });
+
+    it("arquivo removido do disco vira proposta com error (linha desabilitada)", async () => {
+      await backend.addFolder("/musicas/teste");
+      backend._removeFileFromDisk("/musicas/teste/sem_letra.mp3");
+      const proposals = await backend.enrichFolderScan("");
+      const sumiu = proposals.find((p) =>
+        p.file_path.endsWith("sem_letra.mp3"),
+      )!;
+      expect(sumiu.error).toContain("arquivo não encontrado");
+      expect(sumiu.lyrics).toBeNull();
+    });
+
+    it("_offline = true rejeita com 'sem conexão' (mesma convenção do fetchLyricsOnline)", async () => {
+      await backend.addFolder("/musicas/teste");
+      backend._offline = true;
+      await expect(backend.enrichFolderScan("")).rejects.toThrow("sem conexão");
+    });
+  });
+
+  describe("enrichApply (V5 — F13)", () => {
+    it("aplica título/artista/letra e devolve as Songs atualizadas", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const semTags = songs.find((s) => s.title === "sem_tags")!;
+      const updated = await backend.enrichApply([
+        {
+          song_id: semTags.id,
+          title: "Título Novo",
+          artist: "Artista Novo",
+          lyrics: "linha um\nlinha dois",
+          add_temas: null,
+        },
+      ]);
+      expect(updated).toHaveLength(1);
+      expect(updated[0].title).toBe("Título Novo");
+      expect(updated[0].artist).toBe("Artista Novo");
+      expect(updated[0].has_lyrics).toBe(true);
+      // NUNCA renomeia
+      expect(updated[0].file_path).toBe(semTags.file_path);
+      expect(await backend.getLyrics(semTags.id)).toBe("linha um\nlinha dois");
+    });
+
+    it("null NUNCA apaga: artist/lyrics/add_temas null preservam os valores atuais", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const comLetra = songs.find((s) => s.title === "Coração Sertanejo")!;
+      const [updated] = await backend.enrichApply([
+        {
+          song_id: comLetra.id,
+          title: "Coração Sertanejo (revisado)",
+          artist: null,
+          lyrics: null,
+          add_temas: null,
+        },
+      ]);
+      expect(updated.title).toBe("Coração Sertanejo (revisado)");
+      expect(updated.artist).toBe("Artista Teste");
+      expect(updated.has_lyrics).toBe(true);
+      expect(updated.temas).toBe("água; esperança");
+      expect(await backend.getLyrics(comLetra.id)).toBe(FIXTURE_LYRICS);
+    });
+
+    it("add_temas SOMA aos temas existentes (dedup e ordem do writer)", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const comLetra = songs.find((s) => s.title === "Coração Sertanejo")!;
+      const [updated] = await backend.enrichApply([
+        {
+          song_id: comLetra.id,
+          title: comLetra.title,
+          artist: null,
+          lyrics: null,
+          add_temas: "fé; Água",
+        },
+      ]);
+      expect(updated.temas).toBe("água; esperança; fé");
+    });
+
+    it("aplica várias músicas de uma vez e persiste em localStorage", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const semLetra = songs.find((s) => s.title === "Instrumental Sem Letra")!;
+      const semTags = songs.find((s) => s.title === "sem_tags")!;
+      const updated = await backend.enrichApply([
+        { song_id: semLetra.id, title: "Um", artist: null, lyrics: "la", add_temas: null },
+        { song_id: semTags.id, title: "Dois", artist: "A", lyrics: null, add_temas: null },
+      ]);
+      expect(updated.map((s) => s.title)).toEqual(["Um", "Dois"]);
+      const reborn = createMockBackend();
+      const after = await reborn.listSongs();
+      expect(after.find((s) => s.id === semLetra.id)!.title).toBe("Um");
+      expect(after.find((s) => s.id === semTags.id)!.title).toBe("Dois");
+    });
+
+    it("rejeita id inexistente", async () => {
+      await expect(
+        backend.enrichApply([
+          { song_id: 99999, title: "X", artist: null, lyrics: null, add_temas: null },
+        ]),
+      ).rejects.toThrow();
+    });
+  });
+
   describe("installMockBackend", () => {
     it("atribui o backend a window.__CANCIONEIRO_MOCK__ e retorna", () => {
       const installed = installMockBackend();

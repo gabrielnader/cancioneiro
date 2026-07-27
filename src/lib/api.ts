@@ -10,6 +10,36 @@ import type {
 } from "./types";
 
 /**
+ * Proposta de enriquecimento em lote (F13 — PRD V5), espelhando o struct
+ * Rust EnrichProposal (serde sem rename: chaves snake_case no JSON).
+ */
+export interface EnrichProposal {
+  song_id: number;
+  file_path: string;
+  current_title: string;
+  current_artist: string | null;
+  proposed_title: string;
+  proposed_artist: string | null;
+  /** Letra achada no LRCLIB (vem na proposta — o apply não volta à rede). */
+  lyrics: string | null;
+  confidence: "alta" | "media" | "baixa";
+  /** Erro por música (ex.: "sem conexão") — a linha fica desabilitada. */
+  error: string | null;
+}
+
+/**
+ * Aplicação aceita pelo usuário (F13). `null` em artist/lyrics/add_temas =
+ * "não mexer" — o lote nunca apaga dados existentes.
+ */
+export interface EnrichApply {
+  song_id: number;
+  title: string;
+  artist: string | null;
+  lyrics: string | null;
+  add_temas: string | null;
+}
+
+/**
  * Camada de acesso ao backend. Em produção fala com os comandos Tauri via
  * invoke; fora do Tauri (dev no navegador / E2E Playwright) usa o backend
  * mockado em memória (./mockBackend), mantendo a mesma interface.
@@ -47,6 +77,13 @@ export interface Backend {
     artist: string | null,
     durationSeconds: number,
   ): Promise<LyricsMatch | null>;
+  /**
+   * Identifica no LRCLIB as músicas incompletas sob folderPrefix ("" =
+   * biblioteca inteira) — ponto de rede EXPLÍCITO, pode levar minutos (F13).
+   */
+  enrichFolderScan(folderPrefix: string): Promise<EnrichProposal[]>;
+  /** Aplica as propostas aceitas (nunca renomeia, nunca apaga) — F13. */
+  enrichApply(aplicacoes: EnrichApply[]): Promise<Song[]>;
 }
 
 export function isTauri(): boolean {
@@ -141,6 +178,14 @@ function tauriBackend(): Backend {
         artist,
         durationSeconds,
       });
+    },
+    async enrichFolderScan(folderPrefix) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<EnrichProposal[]>("enrich_folder_scan", { folderPrefix });
+    },
+    async enrichApply(aplicacoes) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<Song[]>("enrich_apply", { aplicacoes });
     },
   };
 }

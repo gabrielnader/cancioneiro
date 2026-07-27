@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Sidebar } from "./Sidebar";
 import { setBackendForTests, type Backend } from "../lib/api";
+import { useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlaylistStore } from "../stores/playlistStore";
 import { useUiStore } from "../stores/uiStore";
@@ -97,5 +98,66 @@ describe("Sidebar — árvore de pastas (V4 F11)", () => {
     render(<Sidebar />);
     expect(screen.getByRole("button", { name: "Pasta acervo" })).toHaveTextContent("0");
     expect(screen.queryByRole("button", { name: "Pasta 1" })).not.toBeInTheDocument();
+  });
+});
+
+describe("Sidebar — Completar dados (V5 F13)", () => {
+  beforeEach(() => {
+    setBackendForTests({
+      listPlaylists: vi.fn(async () => []),
+      getPlaylistItems: vi.fn(async () => []),
+    } as unknown as Backend);
+    useUiStore.setState({ view: "library" });
+    usePlaylistStore.setState({ playlists: [], activePlaylistId: null, items: [] });
+    useLibraryStore.setState({
+      folders: [{ id: 1, path: "/acervo", last_scanned_at: null }],
+      allSongs: [song(1, "/acervo/1/a.mp3"), song(2, "/acervo/2/b.mp3")],
+      folderFilter: null,
+    });
+    useEnrichStore.setState({ status: "idle", folderPrefix: "", proposals: [] });
+  });
+
+  it("SUBPASTA tem o botão 'Completar dados desta pasta' que dispara com o caminho da pasta", () => {
+    const startScan = vi.fn(async () => {});
+    useEnrichStore.setState({ startScan });
+    render(<Sidebar />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Completar dados da pasta 1" }),
+    );
+    expect(startScan).toHaveBeenCalledWith("/acervo/1");
+  });
+
+  it("RAIZ tem 'Completar dados da biblioteca' que dispara com prefixo vazio", () => {
+    const startScan = vi.fn(async () => {});
+    useEnrichStore.setState({ startScan });
+    render(<Sidebar />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Completar dados da biblioteca" }),
+    );
+    expect(startScan).toHaveBeenCalledWith("");
+  });
+
+  it("botão da subpasta não dispara o filtro de pasta (clique não propaga)", () => {
+    const startScan = vi.fn(async () => {});
+    useEnrichStore.setState({ startScan });
+    render(<Sidebar />);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Completar dados da pasta 2" }),
+    );
+    expect(useLibraryStore.getState().folderFilter).toBeNull();
+    expect(startScan).toHaveBeenCalledWith("/acervo/2");
+  });
+
+  it("botão fica visível (block) quando a pasta está selecionada — alcançável por toque", () => {
+    useLibraryStore.setState({ folderFilter: "/acervo/1" });
+    render(<Sidebar />);
+    const selecionada = screen.getByRole("button", {
+      name: "Completar dados da pasta 1",
+    });
+    expect(selecionada.className).toContain("block");
+    const outra = screen.getByRole("button", {
+      name: "Completar dados da pasta 2",
+    });
+    expect(outra.className).toContain("hidden");
   });
 });
