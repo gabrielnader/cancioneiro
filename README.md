@@ -3,7 +3,8 @@
 Player desktop **offline** (Windows + macOS) para localizar músicas em acervos grandes
 lembrando apenas um trecho da letra, visualizar a letra antes de tocar e reproduzir com
 playlist automática. A letra vive **embutida no próprio MP3** (frame ID3 `USLT`) — o
-arquivo carrega seus dados consigo. Sem backend, sem contas, sem rede.
+arquivo carrega seus dados consigo. Sem backend, sem contas, sem telemetria — e sem
+rede, exceto quando você clica explicitamente para buscar dados de uma música.
 
 Stack: Tauri 2 (Rust) · React 18 + TypeScript + Vite · Tailwind CSS · SQLite FTS5
 (`unicode61 remove_diacritics 2`) · zustand. Especificação completa em
@@ -47,9 +48,31 @@ O V1 não assina/notariza os binários. No macOS, na primeira abertura use
 botão direito → "Abrir" para aceitar o aviso de desenvolvedor não identificado;
 no Windows, "Mais informações" → "Executar assim mesmo" no SmartScreen.
 
+## Curadoria dentro do player (V4/V5)
+
+Desde a V4 dá para organizar o acervo sem sair do app — os scripts abaixo continuam
+valendo para quem prefere linha de comando ou edição em planilha, mas não são mais
+obrigatórios:
+
+- **Editar uma música**: selecione a faixa e use "Editar" no painel de detalhes para
+  corrigir título, artista, letra e temas, gravando direto no MP3.
+- **Buscar letra na internet**: botão no formulário de edição (consulta o LRCLIB por
+  título + artista + duração). É uma ação explícita — sem ela o app não acessa a rede.
+- **Completar dados desta pasta** (V5/F13): o botão ✎ na árvore de pastas varre as
+  músicas incompletas daquela pasta (ou da biblioteca inteira, na raiz), propõe
+  título/artista/letra com nível de confiança (ALTA/MÉDIA/BAIXA) e aplica só o que
+  você marcar. As de confiança alta já vêm marcadas.
+- **Navegar e buscar por pasta**: a árvore lateral reflete as subpastas do acervo, e o
+  nome da pasta também entra na busca — digitar `barco` acha as músicas da pasta
+  "Barco" mesmo sem tag alguma.
+
+**Regra invariável**: a *reprodução* nunca escreve. Gravação acontece somente quando
+você clica em salvar/aplicar, e grava apenas tags ID3 — o áudio nunca é alterado e
+**nenhum arquivo é renomeado ou movido**, em nenhuma ferramenta do projeto.
+
 ## Preparar um MP3 de teste com letra embutida (`tools/embed_lyrics.py`)
 
-O player **nunca escreve** nos arquivos de áudio — quem grava a letra é este script:
+Gravação de letra por linha de comando (útil para lotes e fixtures de teste):
 
 ```bash
 # grava a letra a partir de um arquivo texto (e opcionalmente título/artista)
@@ -103,8 +126,28 @@ python3 tools/curadoria.py aplicar ~/Musicas --csv plano.csv             # grava
 ```
 
 Campos vazios no CSV nunca apagam nada — só o que você preencher é gravado.
-A busca no LRCLIB acontece apenas na curadoria, sob demanda; **o player continua
-100% offline**. Depois da curadoria, abra o Cancioneiro e clique "Reindexar tudo".
+A busca no LRCLIB acontece sob demanda; fora dela **o app é 100% offline**.
+Depois da curadoria, abra o Cancioneiro e clique "Reindexar tudo".
+
+### Identificação automática e temas por pasta (V3)
+
+Para acervos onde as tags são inexistentes ou lixo ("Faixa 8", "no artist"), o
+`enriquecer` deduz título/artista do **nome do arquivo** e confirma no LRCLIB
+comparando a **duração** da faixa (±3s = confiança alta):
+
+```bash
+python3 tools/curadoria.py enriquecer ~/Musicas --interativo   # confirma uma a uma
+python3 tools/curadoria.py enriquecer ~/Musicas --auto         # aplica só as de confiança alta
+python3 tools/curadoria.py enriquecer ~/Musicas --csv restantes.csv --verboso
+python3 tools/curadoria.py temas-de-pastas ~/Musicas --aplicar # nome da pasta vira tema
+```
+
+Propostas de confiança baixa nunca sobrescrevem tags reais, e valores de
+preenchimento automático ("AudioTrack 02", "Artista desconhecido") são tratados como
+campo vazio dos dois lados da comparação. Nenhum arquivo é renomeado.
+
+> No acervo real de teste (94 arquivos de repertório de nicho), o LRCLIB cobriu
+> cerca de 3% — por isso a v0.5 traz transcrição local de áudio para o restante.
 
 ## Testes
 
@@ -172,9 +215,13 @@ Prepare: `python3 tools/make_fixtures.py` e copie `fixtures/com_letra.mp3`,
 ```
 src/                 frontend React (components, stores zustand, hooks, lib)
 src-tauri/src/       backend Rust: db.rs (SQLite+FTS5), indexer.rs (lofty/walkdir),
-                     search.rs (sanitização+snippet), commands.rs (IPC), error.rs
-src-tauri/tests/     integração: indexer, busca, round-trip USLT, hash de arquivos
-tools/               embed_lyrics.py (curadoria) e make_fixtures.py (fixtures)
+                     search.rs (sanitização+snippet), writer.rs (grava tags ID3),
+                     lyrics_fetch.rs + enrich.rs (LRCLIB: letra avulsa e lote),
+                     commands.rs (IPC), error.rs
+src-tauri/tests/     integração: indexer, busca, round-trip USLT, hash de arquivos,
+                     escrita de tags e enriquecimento em lote
+tools/               embed_lyrics.py e curadoria.py (curadoria por linha de comando),
+                     make_fixtures.py (fixtures)
 tests/python/        pytest das ferramentas Python
 e2e/                 Playwright (modo web + IPC mockado)
 fixtures/            MP3s de teste gerados (não são áudio real baixado)
