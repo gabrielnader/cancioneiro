@@ -46,6 +46,64 @@ fn audio_duration(path: &Path) -> Duration {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers V5/F14 — frames "estrangeiros" (gravados pelas ferramentas Python):
+// TXXX:LETRA_ORIGEM, outros TXXX e a capa (APIC).
+// ---------------------------------------------------------------------------
+
+const LETRA_ORIGEM: &str = "LETRA_ORIGEM";
+
+fn id3_tag(path: &Path) -> lofty::id3::v2::Id3v2Tag {
+    use lofty::config::ParseOptions;
+    use lofty::file::AudioFile;
+    lofty::mpeg::MpegFile::read_from(&mut fs::File::open(path).unwrap(), ParseOptions::new())
+        .expect("arquivo deve continuar parseável")
+        .id3v2()
+        .cloned()
+        .unwrap_or_default()
+}
+
+/// Simula o que o `tools/curadoria.py transcrever` deixa no arquivo: a marca
+/// de origem da letra + frames estrangeiros que o app NUNCA pode perder
+/// (outro TXXX e a capa).
+fn marcar_transcricao_com_capa(path: &Path) {
+    use lofty::config::WriteOptions;
+    use lofty::picture::{MimeType, Picture, PictureType};
+    use lofty::tag::TagExt;
+
+    let mut tag = id3_tag(path);
+    tag.insert_user_text(LETRA_ORIGEM.to_string(), "transcricao".to_string());
+    tag.insert_user_text("OUTRA_COISA".to_string(), "valor alheio".to_string());
+    tag.insert_picture(Picture::new_unchecked(
+        PictureType::CoverFront,
+        Some(MimeType::Png),
+        Some("capa".to_string()),
+        b"\x89PNG\r\n\x1a\n-fake".to_vec(),
+    ));
+    tag.save_to_path(path, WriteOptions::default()).unwrap();
+}
+
+fn letra_origem(path: &Path) -> Option<String> {
+    id3_tag(path).get_user_text(LETRA_ORIGEM).map(str::to_string)
+}
+
+/// Os frames estrangeiros que precisam sobreviver a QUALQUER gravação.
+fn frames_alheios_intactos(path: &Path) {
+    use lofty::id3::v2::FrameId;
+    use std::borrow::Cow;
+
+    let tag = id3_tag(path);
+    assert_eq!(
+        tag.get_user_text("OUTRA_COISA"),
+        Some("valor alheio"),
+        "TXXX alheio nunca pode ser removido"
+    );
+    assert!(
+        tag.get(&FrameId::Valid(Cow::Borrowed("APIC"))).is_some(),
+        "a capa (APIC) nunca pode ser removida"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // F10 — Acceptance (round-trip): write_tags grava e o indexer relê
 // título/artista/letra/temas idênticos (acentos e \n preservados); o arquivo
 // NÃO é renomeado; o áudio não muda de duração e continua parseável.
@@ -305,4 +363,105 @@ fn write_tags_creates_id3_tag_on_untagged_file() {
         db::get_lyrics(&conn, reread.id).unwrap().as_deref(),
         Some("Letra única\ncom acentuação")
     );
+}
+
+// ---------------------------------------------------------------------------
+// V5/F14 (QA A3) — a marca TXXX:LETRA_ORIGEM descreve a letra ATUAL: gravar
+// uma letra nova por cima de um arquivo marcado como "transcricao" derruba a
+// marca (senão o arquivo passa a mentir que a letra escrita à mão saiu do
+// áudio, e o selo "transcrição automática" do player mentiria junto).
+// Os demais frames estrangeiros (outro TXXX, capa) continuam intactos.
+// ---------------------------------------------------------------------------
+#[test]
+fn write_tags_drops_letra_origem_when_lyrics_are_replaced() {
+    let (_dir, conn, _folder_id) = setup();
+    let song = song_by_suffix(&conn, "com_letra.mp3");
+    let path = PathBuf::from(&song.file_path);
+    marcar_transcricao_com_capa(&path);
+    assert_eq!(letra_origem(&path).as_deref(), Some("transcricao"));
+
+    writer::write_tags(
+        &conn,
+        song.id,
+        &song.title,
+        song.artist.as_deref(),
+        Some("Letra escrita à mão pelo usuário"),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(
+        letra_origem(&path),
+        None,
+        "letra substituída: a marca de transcrição não pode sobreviver"
+    );
+    frames_alheios_intactos(&path);
+}
+
+// ---------------------------------------------------------------------------
+// V5/F14 (QA A3) — apagar a letra também derruba a marca (não há letra alguma
+// para ser "transcrição automática").
+// ---------------------------------------------------------------------------
+#[test]
+fn write_tags_drops_letra_origem_when_lyrics_are_cleared() {
+    let (_dir, conn, _folder_id) = setup();
+    let song = song_by_suffix(&conn, "com_letra.mp3");
+    let path = PathBuf::from(&song.file_path);
+    marcar_transcricao_com_capa(&path);
+
+    let updated =
+        writer::write_tags(&conn, song.id, &song.title, song.artist.as_deref(), None, None)
+            .unwrap();
+    assert!(!updated.has_lyrics);
+
+    assert_eq!(letra_origem(&path), None, "letra apagada derruba a marca");
+    frames_alheios_intactos(&path);
+}
+
+// ---------------------------------------------------------------------------
+// V5/F14 (QA A3) — gravação que NÃO mexe na letra (só título/artista/temas,
+// letra repassada igual, como faz o apply do lote) PRESERVA a marca: ela ainda
+// descreve a letra que está no arquivo.
+// ---------------------------------------------------------------------------
+#[test]
+fn write_tags_keeps_letra_origem_when_lyrics_pass_through_unchanged() {
+    let (_dir, conn, _folder_id) = setup();
+    let song = song_by_suffix(&conn, "com_letra.mp3");
+    let path = PathBuf::from(&song.file_path);
+    marcar_transcricao_com_capa(&path);
+    let letra = db::get_lyrics(&conn, song.id).unwrap().expect("fixture tem letra");
+
+    writer::write_tags(
+        &conn,
+        song.id,
+        "Outro Título",
+        Some("Outro Artista"),
+        Some(&letra), // repasse: a mesma letra que já está no arquivo
+        Some("novo tema"),
+    )
+    .unwrap();
+
+    assert_eq!(
+        letra_origem(&path).as_deref(),
+        Some("transcricao"),
+        "letra inalterada: a marca legítima tem de continuar"
+    );
+    frames_alheios_intactos(&path);
+
+    // e a letra continua lá, byte a byte
+    assert_eq!(db::get_lyrics(&conn, song.id).unwrap().as_deref(), Some(letra.as_str()));
+}
+
+// ---------------------------------------------------------------------------
+// V5/F14 (QA A3) — arquivo SEM marca nunca ganha uma: gravar letra nova não
+// inventa TXXX:LETRA_ORIGEM.
+// ---------------------------------------------------------------------------
+#[test]
+fn write_tags_never_invents_letra_origem() {
+    let (_dir, conn, _folder_id) = setup();
+    let song = song_by_suffix(&conn, "sem_tags.mp3");
+    let path = PathBuf::from(&song.file_path);
+
+    writer::write_tags(&conn, song.id, "T", None, Some("letra nova"), None).unwrap();
+    assert_eq!(letra_origem(&path), None);
 }

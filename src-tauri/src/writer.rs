@@ -34,6 +34,10 @@ use std::path::Path;
 /// Idioma do USLT — o mesmo que o embed_lyrics.py (mutagen) grava.
 const USLT_LANG: [u8; 3] = *b"por";
 const TEMAS_DESC: &str = "TEMAS";
+/// V5/F14 — procedência da letra, gravada pelas ferramentas Python
+/// (`TXXX:LETRA_ORIGEM = "transcricao"` = letra saída do áudio). A marca
+/// descreve a letra que está NO ARQUIVO: quem troca a letra derruba a marca.
+const LETRA_ORIGEM_DESC: &str = "LETRA_ORIGEM";
 
 /// Normalização de temas IGUAL à do Python (embed_lyrics.normalize_temas +
 /// split_temas_input): split por vírgula OU ponto-e-vírgula, trim, colapso de
@@ -106,14 +110,36 @@ pub fn write_tags(
     // USLT — substitui, nunca duplica (delall + add, como o mutagen);
     // None/vazio remove. A letra é gravada exatamente como veio (sem trim),
     // preservando \n e acentos.
+    //
+    // A letra que JÁ está no arquivo é lida antes da troca para decidir o
+    // destino da marca TXXX:LETRA_ORIGEM (V5/F14) — o mesmo critério de
+    // "tem letra" do indexer (texto em branco conta como ausente).
+    let letra_anterior: Option<String> = tag
+        .unsync_text()
+        .next()
+        .map(|f| f.content.clone())
+        .filter(|l| !l.trim().is_empty());
+    let letra_nova = lyrics.filter(|l| !l.trim().is_empty());
     drop(tag.remove(&FrameId::Valid(Cow::Borrowed("USLT"))));
-    if let Some(l) = lyrics.filter(|l| !l.trim().is_empty()) {
+    if let Some(l) = letra_nova {
         tag.insert(Frame::UnsynchronizedText(UnsynchronizedTextFrame::new(
             TextEncoding::UTF8,
             USLT_LANG,
             String::new(),
             l.to_string(),
         )));
+    }
+
+    // TXXX:LETRA_ORIGEM (V5/F14, achado do QA A3) — a marca descreve a letra
+    // ATUAL. Trocar ou apagar a letra invalida a marca: sem isso, uma letra
+    // digitada à mão por cima de uma transcrição continuaria se declarando
+    // "transcrição automática" (e o selo do player mentiria). Gravação que
+    // NÃO mexe na letra — só título/artista/temas, ou o repasse da mesma
+    // letra que o apply do lote faz (enrich::apply_one) — preserva a marca.
+    // Todos os demais frames estrangeiros (capa, outros TXXX) continuam
+    // intocados, como sempre.
+    if letra_nova != letra_anterior.as_deref() {
+        drop(tag.remove_user_text(LETRA_ORIGEM_DESC));
     }
 
     // TXXX:TEMAS — normalizados; None/vazio (ou só separadores) remove

@@ -52,6 +52,12 @@ pub struct EnrichApplyResult {
 
 /// Uma aplicação aceita pelo usuário. `None` em artist/lyrics/add_temas
 /// significa "não mexer" — o lote nunca apaga, só preenche/atualiza.
+///
+/// `current_title`/`current_artist` são o ECO do estado contra o qual a
+/// proposta foi montada (os mesmos campos da `EnrichProposal`). O apply os
+/// confere com o banco antes de gravar: a varredura leva minutos e o usuário
+/// pode corrigir a música à mão nesse meio-tempo — sem essa conferência a
+/// proposta obsoleta silenciosamente desfazia a edição manual (QA A5).
 #[derive(Debug, Clone, Deserialize)]
 pub struct EnrichApply {
     pub song_id: i64,
@@ -60,7 +66,13 @@ pub struct EnrichApply {
     pub lyrics: Option<String>,
     /// Temas a SOMAR aos existentes (normalização/dedup do writer).
     pub add_temas: Option<String>,
+    pub current_title: String,
+    pub current_artist: Option<String>,
 }
+
+/// Mensagem (pt-BR, curta) que a UI mostra como está quando a proposta ficou
+/// obsoleta entre a varredura e o apply.
+pub const AVISO_PROPOSTA_OBSOLETA: &str = "a música mudou depois da varredura — sugestão ignorada";
 
 // ---------------------------------------------------------------------------
 // Placeholders (porte do eh_placeholder do tools/curadoria.py)
@@ -362,17 +374,30 @@ fn registrar(propostas: &mut Vec<EnrichProposal>, proposta: EnrichProposal) {
 /// de músicas completas, antes do descarte de no-op): mede trabalho, não
 /// resultado — o progresso avança mesmo quando a proposta é descartada, quando
 /// a rede falha ou quando o arquivo sumiu do disco.
-pub fn enrich_scan<F, P>(
+///
+/// `cancelled()` (QA M4) é consultado ANTES de cada música — inclusive antes
+/// da primeira, quando nem o evento inicial de progresso sai. Cancelar faz a
+/// varredura voltar CEDO com as propostas que já tinha (vec vazio se ainda não
+/// havia nenhuma), sem gastar mais rede nem emitir mais progresso: o "Cancelar"
+/// da UI só descarta o resultado, e a varredura zumbi ficava consultando o
+/// LRCLIB por minutos e embaralhando a barra da varredura seguinte.
+pub fn enrich_scan<F, P, C>(
     conn: &Connection,
     folder_prefix: &str,
     fetch: F,
     pausa: Duration,
     on_progress: P,
+    cancelled: C,
 ) -> Result<Vec<EnrichProposal>>
 where
     F: Fn(&str) -> Result<String>,
     P: Fn(usize, usize, &str),
+    C: Fn() -> bool,
 {
+    if cancelled() {
+        return Ok(Vec::new());
+    }
+
     // 1ª passada (sem rede): seleciona as candidatas para o total do progresso
     // ser conhecido antes da primeira consulta.
     let mut candidatas: Vec<(Song, String, String, String)> = Vec::new();
@@ -402,6 +427,11 @@ where
     let mut propostas = Vec::new();
     let mut primeira = true;
     for (feitas, (song, titulo_tag, artista_tag, nome)) in candidatas.into_iter().enumerate() {
+        // cancelamento entre músicas: volta com o que já tem (QA M4)
+        if cancelled() {
+            return Ok(propostas);
+        }
+
         // arquivo sumido do disco: reporta sem gastar rede
         if !Path::new(&song.file_path).is_file() {
             registrar(
@@ -510,12 +540,31 @@ pub fn apply(conn: &Connection, aplicacoes: &[EnrichApply]) -> Result<Vec<Enrich
     Ok(resultados)
 }
 
+/// Dois campos de texto valem o MESMO valor: comparação após trim, com
+/// `None` e string vazia tratados como o mesmo "ausente".
+fn mesmo_valor(a: Option<&str>, b: Option<&str>) -> bool {
+    fn efetivo(v: Option<&str>) -> &str {
+        v.map(str::trim).unwrap_or("")
+    }
+    efetivo(a) == efetivo(b)
+}
+
 /// Grava UMA aplicação (regras de preservação do lote) e devolve a Song
 /// atualizada — o apply converte o Err em `EnrichApplyResult::error`.
 fn apply_one(conn: &Connection, ap: &EnrichApply) -> Result<Song> {
     let song = db::get_song(conn, ap.song_id)?.ok_or_else(|| {
         crate::error::AppError(format!("música não encontrada: {}", ap.song_id))
     })?;
+
+    // QA A5 — proposta obsoleta não escreve: a varredura pode ter rodado em
+    // segundo plano por minutos enquanto o usuário corrigia esta música à mão.
+    // Comparação por texto aparado, com None e "" valendo o mesmo (ausente).
+    if !mesmo_valor(Some(&song.title), Some(&ap.current_title))
+        || !mesmo_valor(song.artist.as_deref(), ap.current_artist.as_deref())
+    {
+        return Err(crate::error::AppError(AVISO_PROPOSTA_OBSOLETA.into()));
+    }
+
     let lyrics_novo = ap
         .lyrics
         .as_deref()

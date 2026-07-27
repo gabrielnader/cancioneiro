@@ -17,6 +17,9 @@ const ZERO: Duration = Duration::ZERO;
 /// Callback de progresso ignorado pelos testes que não o exercitam.
 const SEM_PROGRESSO: fn(usize, usize, &str) = |_, _, _| {};
 
+/// Predicado de cancelamento dos testes que não exercitam o "Cancelar".
+const SEM_CANCELAMENTO: fn() -> bool = || false;
+
 /// `enrich_scan` sem pausa de cortesia nem progresso — a forma usada pela
 /// maioria dos testes, que exercitam só as propostas.
 fn scan_props(
@@ -24,7 +27,7 @@ fn scan_props(
     prefixo: &str,
     fetch: impl Fn(&str) -> Result<String, AppError>,
 ) -> Vec<enrich::EnrichProposal> {
-    enrich::enrich_scan(conn, prefixo, fetch, ZERO, SEM_PROGRESSO).unwrap()
+    enrich::enrich_scan(conn, prefixo, fetch, ZERO, SEM_PROGRESSO, SEM_CANCELAMENTO).unwrap()
 }
 
 fn fixtures_dir() -> PathBuf {
@@ -86,6 +89,7 @@ fn enrich_scan_proposes_and_apply_writes_full_flow() {
         },
         ZERO,
         SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
     )
     .unwrap();
 
@@ -119,6 +123,8 @@ fn enrich_scan_proposes_and_apply_writes_full_flow() {
             artist: p.proposed_artist.clone(),
             lyrics: p.lyrics.clone(),
             add_temas: Some("chuva".into()),
+            current_title: p.current_title.clone(),
+            current_artist: p.current_artist.clone(),
         }],
     )
     .unwrap();
@@ -256,6 +262,7 @@ fn placeholder_tags_are_treated_as_empty_and_never_queried() {
         },
         ZERO,
         SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
     )
     .unwrap();
 
@@ -370,6 +377,7 @@ fn error_proposal_survives_even_when_it_changes_nothing() {
         |_: &str| -> Result<String, AppError> { Err(AppError("sem conexão".into())) },
         ZERO,
         SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
     )
     .unwrap();
 
@@ -444,6 +452,7 @@ fn enrich_scan_reports_progress_per_candidate_song() {
         |_: &str| Ok("[]".into()),
         ZERO,
         |done, total, atual| eventos.borrow_mut().push((done, total, atual.to_string())),
+        SEM_CANCELAMENTO,
     )
     .unwrap();
 
@@ -503,6 +512,7 @@ fn progress_advances_for_dropped_failed_and_missing_songs() {
         },
         ZERO,
         |done, total, atual| eventos.borrow_mut().push((done, total, atual.to_string())),
+        SEM_CANCELAMENTO,
     )
     .unwrap();
 
@@ -545,6 +555,8 @@ fn apply_with_none_preserves_existing_lyrics_artist_and_temas() {
             artist: None,
             lyrics: None,
             add_temas: None,
+            current_title: song.title.clone(),
+            current_artist: song.artist.clone(),
         }],
     )
     .unwrap();
@@ -567,6 +579,8 @@ fn apply_with_none_preserves_existing_lyrics_artist_and_temas() {
             artist: None,
             lyrics: None,
             add_temas: Some("Chuva; agua".into()),
+            current_title: song.title.clone(),
+            current_artist: song.artist.clone(),
         }],
     )
     .unwrap();
@@ -604,6 +618,7 @@ fn missing_file_becomes_proposal_with_error_without_network() {
         },
         ZERO,
         SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
     )
     .unwrap();
     assert_eq!(props.len(), 1);
@@ -621,6 +636,8 @@ fn missing_file_becomes_proposal_with_error_without_network() {
             artist: None,
             lyrics: None,
             add_temas: None,
+            current_title: song.title.clone(),
+            current_artist: song.artist.clone(),
         }],
     )
     .unwrap();
@@ -657,6 +674,8 @@ fn apply_continues_batch_and_reports_per_song_errors() {
             artist: Some("Artista A".into()),
             lyrics: None,
             add_temas: None,
+            current_title: a.title.clone(),
+            current_artist: a.artist.clone(),
         },
         EnrichApply {
             song_id: b.id,
@@ -664,6 +683,8 @@ fn apply_continues_batch_and_reports_per_song_errors() {
             artist: None,
             lyrics: None,
             add_temas: None,
+            current_title: b.title.clone(),
+            current_artist: b.artist.clone(),
         },
         EnrichApply {
             song_id: c.id,
@@ -671,6 +692,8 @@ fn apply_continues_batch_and_reports_per_song_errors() {
             artist: None,
             lyrics: Some("letra c".into()),
             add_temas: None,
+            current_title: c.title.clone(),
+            current_artist: c.artist.clone(),
         },
     ];
     let results = enrich::apply(&conn, &lote).unwrap();
@@ -727,6 +750,7 @@ fn network_error_yields_baixa_proposal_and_never_aborts_batch() {
         |_: &str| -> Result<String, AppError> { Err(AppError("sem conexão".into())) },
         ZERO,
         SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
     )
     .unwrap();
 
@@ -770,6 +794,7 @@ fn network_error_keeps_candidate_found_by_earlier_guess() {
         },
         ZERO,
         SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
     )
     .unwrap();
 
@@ -781,4 +806,337 @@ fn network_error_keeps_candidate_found_by_earlier_guess() {
     assert_eq!(p.proposed_artist.as_deref(), Some("Falamansa"));
     assert_eq!(p.lyrics.as_deref(), Some("letra"));
     assert!(p.error.is_none(), "erro posterior não vira error na proposta");
+}
+
+// ---------------------------------------------------------------------------
+// F13 (QA A5) — proposta OBSOLETA nunca sobrescreve edição manual. A revisão
+// do lote é montada na varredura (minutos) e o usuário pode editar a música à
+// mão nesse meio-tempo: o apply confere o eco current_title/current_artist
+// contra o banco e, se mudou, NÃO grava (arquivo byte a byte intacto).
+// ---------------------------------------------------------------------------
+
+const AVISO_OBSOLETA: &str = "a música mudou depois da varredura — sugestão ignorada";
+
+#[test]
+fn apply_writes_when_the_song_is_untouched_since_the_scan() {
+    let (_dir, conn, _folder_id) = setup_with(&[("sem_tags.mp3", "Falamansa - Oh! Chuva.mp3")]);
+    let song = song_by_suffix(&conn, "Oh! Chuva.mp3");
+
+    let results = enrich::apply(
+        &conn,
+        &[EnrichApply {
+            song_id: song.id,
+            title: "Oh! Chuva".into(),
+            artist: Some("Falamansa".into()),
+            lyrics: Some("chove".into()),
+            add_temas: None,
+            current_title: song.title.clone(),
+            current_artist: song.artist.clone(),
+        }],
+    )
+    .unwrap();
+
+    assert!(results[0].error.is_none(), "proposta fresca grava normalmente");
+    let updated = results[0].song.as_ref().expect("gravada");
+    assert_eq!(updated.title, "Oh! Chuva");
+    assert_eq!(updated.artist.as_deref(), Some("Falamansa"));
+}
+
+#[test]
+fn apply_refuses_stale_proposal_when_title_changed_after_the_scan() {
+    let (_dir, conn, _folder_id) = setup_with(&[("sem_tags.mp3", "Falamansa - Oh! Chuva.mp3")]);
+    let song = song_by_suffix(&conn, "Oh! Chuva.mp3");
+    let titulo_na_varredura = song.title.clone();
+
+    // o usuário corrige a música à mão DEPOIS da varredura
+    writer::write_tags(&conn, song.id, "Título Corrigido à Mão", None, None, None).unwrap();
+    let bytes_antes = fs::read(&song.file_path).unwrap();
+
+    let results = enrich::apply(
+        &conn,
+        &[EnrichApply {
+            song_id: song.id,
+            title: "Oh! Chuva".into(),
+            artist: Some("Falamansa".into()),
+            lyrics: Some("chove".into()),
+            add_temas: None,
+            current_title: titulo_na_varredura,
+            current_artist: song.artist.clone(),
+        }],
+    )
+    .unwrap();
+
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].song_id, song.id);
+    assert!(results[0].song.is_none());
+    assert_eq!(results[0].error.as_deref(), Some(AVISO_OBSOLETA));
+
+    // a edição manual continua de pé e o arquivo não foi tocado
+    assert_eq!(song_by_suffix(&conn, "Oh! Chuva.mp3").title, "Título Corrigido à Mão");
+    assert_eq!(
+        fs::read(&song.file_path).unwrap(),
+        bytes_antes,
+        "proposta obsoleta não pode escrever byte algum"
+    );
+}
+
+#[test]
+fn apply_refuses_stale_proposal_when_only_the_artist_changed() {
+    let (_dir, conn, _folder_id) = setup_with(&[("com_letra.mp3", "com_letra.mp3")]);
+    let song = song_by_suffix(&conn, "com_letra.mp3");
+    let artista_na_varredura = song.artist.clone();
+    assert!(artista_na_varredura.is_some(), "fixture tem artista");
+
+    // só o artista muda entre a varredura e o apply (título idêntico)
+    writer::write_tags(&conn, song.id, &song.title, Some("Outro Artista"), None, None).unwrap();
+    let bytes_antes = fs::read(&song.file_path).unwrap();
+
+    let results = enrich::apply(
+        &conn,
+        &[EnrichApply {
+            song_id: song.id,
+            title: song.title.clone(),
+            artist: Some("Artista da Proposta".into()),
+            lyrics: None,
+            add_temas: None,
+            current_title: song.title.clone(),
+            current_artist: artista_na_varredura,
+        }],
+    )
+    .unwrap();
+
+    assert_eq!(results[0].error.as_deref(), Some(AVISO_OBSOLETA));
+    assert!(results[0].song.is_none());
+    assert_eq!(
+        song_by_suffix(&conn, "com_letra.mp3").artist.as_deref(),
+        Some("Outro Artista")
+    );
+    assert_eq!(fs::read(&song.file_path).unwrap(), bytes_antes);
+}
+
+#[test]
+fn apply_compares_trimmed_and_treats_missing_artist_as_empty() {
+    let (_dir, conn, _folder_id) = setup_with(&[("sem_tags.mp3", "Falamansa - Oh! Chuva.mp3")]);
+    let song = song_by_suffix(&conn, "Oh! Chuva.mp3");
+    assert_eq!(song.artist, None, "sem_tags não tem artista");
+
+    // espaços nas pontas não são mudança; None e "" são o mesmo artista
+    let results = enrich::apply(
+        &conn,
+        &[EnrichApply {
+            song_id: song.id,
+            title: "Oh! Chuva".into(),
+            artist: Some("Falamansa".into()),
+            lyrics: None,
+            add_temas: None,
+            current_title: format!("  {}  ", song.title),
+            current_artist: Some("   ".into()),
+        }],
+    )
+    .unwrap();
+
+    assert!(results[0].error.is_none(), "trim/vazio não contam como mudança");
+    assert_eq!(results[0].song.as_ref().unwrap().title, "Oh! Chuva");
+}
+
+#[test]
+fn apply_batch_mixes_stale_and_fresh_without_aborting() {
+    let (_dir, conn, folder_id) = setup_with(&[
+        ("sem_tags.mp3", "a_sem_tags.mp3"),
+        ("sem_tags.mp3", "b_sem_tags.mp3"),
+        ("sem_tags.mp3", "c_sem_tags.mp3"),
+    ]);
+    let a = song_by_suffix(&conn, "a_sem_tags.mp3");
+    let b = song_by_suffix(&conn, "b_sem_tags.mp3");
+    let c = song_by_suffix(&conn, "c_sem_tags.mp3");
+
+    // a 2ª foi editada à mão depois da varredura
+    writer::write_tags(&conn, b.id, "B Editada à Mão", None, None, None).unwrap();
+    let bytes_b_antes = fs::read(&b.file_path).unwrap();
+
+    let results = enrich::apply(
+        &conn,
+        &[
+            EnrichApply {
+                song_id: a.id,
+                title: "Título A".into(),
+                artist: None,
+                lyrics: None,
+                add_temas: None,
+                current_title: a.title.clone(),
+                current_artist: a.artist.clone(),
+            },
+            EnrichApply {
+                song_id: b.id,
+                title: "Título B".into(),
+                artist: None,
+                lyrics: None,
+                add_temas: None,
+                current_title: b.title.clone(), // eco da varredura: obsoleto
+                current_artist: b.artist.clone(),
+            },
+            EnrichApply {
+                song_id: c.id,
+                title: "Título C".into(),
+                artist: None,
+                lyrics: None,
+                add_temas: None,
+                current_title: c.title.clone(),
+                current_artist: c.artist.clone(),
+            },
+        ],
+    )
+    .unwrap();
+
+    assert_eq!(results.len(), 3, "um resultado por aplicação, na mesma ordem");
+    assert!(results[0].error.is_none(), "1ª fresca: gravada");
+    assert_eq!(results[1].error.as_deref(), Some(AVISO_OBSOLETA), "2ª obsoleta");
+    assert!(results[1].song.is_none());
+    assert!(results[2].error.is_none(), "o lote não aborta na obsoleta");
+
+    assert_eq!(
+        fs::read(&b.file_path).unwrap(),
+        bytes_b_antes,
+        "a música editada à mão fica byte a byte como estava"
+    );
+    indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
+    assert_eq!(song_by_suffix(&conn, "a_sem_tags.mp3").title, "Título A");
+    assert_eq!(song_by_suffix(&conn, "b_sem_tags.mp3").title, "B Editada à Mão");
+    assert_eq!(song_by_suffix(&conn, "c_sem_tags.mp3").title, "Título C");
+}
+
+// ---------------------------------------------------------------------------
+// V5/F14 (QA A3) — o repasse de letra do lote NÃO derruba a marca de
+// transcrição: aplicar só título/artista/temas (lyrics: None ⇒ apply_one relê
+// e regrava a MESMA letra) preserva TXXX:LETRA_ORIGEM.
+// ---------------------------------------------------------------------------
+#[test]
+fn apply_pass_through_keeps_the_transcription_marker() {
+    use lofty::config::{ParseOptions, WriteOptions};
+    use lofty::file::AudioFile;
+    use lofty::id3::v2::Id3v2Tag;
+    use lofty::tag::TagExt;
+
+    fn tag_de(path: &str) -> Id3v2Tag {
+        lofty::mpeg::MpegFile::read_from(
+            &mut fs::File::open(path).unwrap(),
+            ParseOptions::new(),
+        )
+        .unwrap()
+        .id3v2()
+        .cloned()
+        .unwrap_or_default()
+    }
+
+    let (_dir, conn, _folder_id) = setup_with(&[("com_letra.mp3", "com_letra.mp3")]);
+    let song = song_by_suffix(&conn, "com_letra.mp3");
+
+    // marca de transcrição gravada pelas ferramentas Python
+    let mut tag = tag_de(&song.file_path);
+    tag.insert_user_text("LETRA_ORIGEM".into(), "transcricao".into());
+    tag.save_to_path(&song.file_path, WriteOptions::default()).unwrap();
+
+    let results = enrich::apply(
+        &conn,
+        &[EnrichApply {
+            song_id: song.id,
+            title: "Título do Lote".into(),
+            artist: Some("Artista do Lote".into()),
+            lyrics: None, // repasse: o lote nunca apaga a letra
+            add_temas: Some("chuva".into()),
+            current_title: song.title.clone(),
+            current_artist: song.artist.clone(),
+        }],
+    )
+    .unwrap();
+    assert!(results[0].error.is_none());
+
+    assert_eq!(
+        tag_de(&song.file_path).get_user_text("LETRA_ORIGEM"),
+        Some("transcricao"),
+        "lote que preserva a letra não pode apagar a marca legítima"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// F13 (QA M4) — "Cancelar" cancela DE VERDADE: `enrich_scan` consulta o
+// predicado de cancelamento entre músicas e volta cedo com o que já tem, sem
+// gastar mais rede nem emitir mais progresso (a varredura zumbi corrompia a
+// barra da varredura seguinte).
+// ---------------------------------------------------------------------------
+#[test]
+fn enrich_scan_stops_early_when_cancelled_between_songs() {
+    let (_dir, conn, _folder_id) = setup_with(&[
+        ("sem_tags.mp3", "a - Um.mp3"),
+        ("sem_tags.mp3", "b - Dois.mp3"),
+        ("sem_tags.mp3", "c - Tres.mp3"),
+        ("sem_tags.mp3", "d - Quatro.mp3"),
+    ]);
+
+    let musicas_consultadas: RefCell<Vec<String>> = RefCell::new(Vec::new());
+    let eventos: RefCell<Vec<(usize, usize, String)>> = RefCell::new(Vec::new());
+    let cancelada = std::cell::Cell::new(false);
+
+    let props = enrich::enrich_scan(
+        &conn,
+        "",
+        |url: &str| {
+            musicas_consultadas.borrow_mut().push(url.to_string());
+            Ok("[]".into())
+        },
+        ZERO,
+        |done, total, atual| {
+            eventos.borrow_mut().push((done, total, atual.to_string()));
+            if done == 1 {
+                cancelada.set(true); // usuário clica "Cancelar" após a 1ª
+            }
+        },
+        || cancelada.get(),
+    )
+    .unwrap();
+
+    let ev = eventos.borrow();
+    assert_eq!(ev.iter().map(|e| e.0).collect::<Vec<_>>(), vec![0, 1],
+        "o progresso para no cancelamento: {ev:?}");
+    assert!(ev.iter().all(|e| e.1 == 4), "o total continua sendo o das candidatas");
+    assert!(props.len() <= 1, "volta com o que já tinha: {props:?}");
+
+    // nenhuma consulta de rede depois do cancelamento
+    let consultas = musicas_consultadas.borrow();
+    assert!(!consultas.is_empty(), "a 1ª música foi consultada");
+    let nome_da_primeira = ev[1].2.clone();
+    for url in consultas.iter() {
+        for outra in ["Dois", "Tres", "Quatro", "Um"] {
+            if !nome_da_primeira.contains(outra) {
+                assert!(
+                    !url.contains(outra),
+                    "varredura cancelada não pode consultar {outra}: {url}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn enrich_scan_cancelled_before_starting_does_nothing() {
+    let (_dir, conn, _folder_id) = setup_with(&[("sem_tags.mp3", "a - Um.mp3")]);
+
+    let chamadas = RefCell::new(0usize);
+    let eventos = RefCell::new(0usize);
+    let props = enrich::enrich_scan(
+        &conn,
+        "",
+        |_: &str| {
+            *chamadas.borrow_mut() += 1;
+            Ok("[]".into())
+        },
+        ZERO,
+        |_, _, _| *eventos.borrow_mut() += 1,
+        || true,
+    )
+    .unwrap();
+
+    assert!(props.is_empty());
+    assert_eq!(*chamadas.borrow(), 0, "cancelada antes de começar: zero rede");
+    assert_eq!(*eventos.borrow(), 0, "nem o evento inicial de progresso");
 }

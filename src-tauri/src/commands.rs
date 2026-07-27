@@ -3,16 +3,25 @@ use crate::error::{AppError, Result};
 use crate::indexer;
 use rusqlite::Connection;
 use serde::Serialize;
+use std::collections::HashMap;
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard};
 use tauri::{AppHandle, Emitter, State};
 
 /// Estado global: conexão SQLite protegida por mutex + caminho do arquivo do
-/// banco (quando file-backed), para abrir conexões dedicadas de scan.
+/// banco (quando file-backed), para abrir conexões dedicadas de scan, + o
+/// registro das varreduras de enriquecimento em andamento (QA M4).
 pub struct Db {
     pub conn: Mutex<Connection>,
     pub path: Option<PathBuf>,
+    /// Varreduras de enriquecimento VIVAS, por `scan_id` gerado no frontend:
+    /// cada uma tem sua bandeira de cancelamento. A entrada nasce no início da
+    /// varredura e morre no fim (inclusive quando ela falha ou é cancelada), de
+    /// modo que o mapa não cresce sem limite e cancelar um id desconhecido —
+    /// varredura já encerrada, id inventado — é um no-op inofensivo.
+    scans: Mutex<HashMap<String, Arc<AtomicBool>>>,
 }
 
 impl Db {
@@ -20,6 +29,7 @@ impl Db {
         Db {
             conn: Mutex::new(conn),
             path,
+            scans: Mutex::new(HashMap::new()),
         }
     }
 
@@ -27,6 +37,44 @@ impl Db {
         self.conn
             .lock()
             .map_err(|_| AppError("estado do banco corrompido (lock poisoned)".into()))
+    }
+
+    /// Registra uma varredura e devolve sua bandeira de cancelamento.
+    /// Reiniciar um `scan_id` em uso substitui a bandeira antiga (a nova
+    /// varredura nasce não-cancelada).
+    fn scan_begin(&self, scan_id: &str) -> Result<Arc<AtomicBool>> {
+        let flag = Arc::new(AtomicBool::new(false));
+        self.scans
+            .lock()
+            .map_err(|_| AppError("estado das varreduras corrompido (lock poisoned)".into()))?
+            .insert(scan_id.to_string(), Arc::clone(&flag));
+        Ok(flag)
+    }
+
+    /// Desregistra a varredura (fim normal, erro ou cancelamento).
+    fn scan_end(&self, scan_id: &str) {
+        if let Ok(mut scans) = self.scans.lock() {
+            scans.remove(scan_id);
+        }
+    }
+
+    /// Marca a varredura `scan_id` como cancelada. Id desconhecido é no-op
+    /// (nada é registrado — o mapa só guarda varreduras vivas).
+    pub fn cancel_scan(&self, scan_id: &str) -> Result<()> {
+        let scans = self
+            .scans
+            .lock()
+            .map_err(|_| AppError("estado das varreduras corrompido (lock poisoned)".into()))?;
+        if let Some(flag) = scans.get(scan_id) {
+            flag.store(true, Ordering::SeqCst);
+        }
+        Ok(())
+    }
+
+    /// Quantas varreduras estão vivas (usado pelos testes de limpeza).
+    #[cfg(test)]
+    fn scans_vivas(&self) -> usize {
+        self.scans.lock().unwrap().len()
     }
 
     /// Conexão para varreduras longas: dedicada (WAL) quando o banco é um
@@ -64,11 +112,16 @@ pub struct ScanProgress {
 /// Progresso da varredura de enriquecimento (evento `enrich:progress`):
 /// `atual` é o NOME BASE do arquivo em processamento (vazio no evento inicial
 /// com `done = 0`, emitido só para a UI já mostrar o total).
+///
+/// `scan_id` (QA M4) identifica a varredura que emitiu o evento: sem ele, uma
+/// varredura antiga que ainda não morreu embaralhava a barra de progresso da
+/// varredura nova. A UI ignora eventos de um id que não é o dela.
 #[derive(Debug, Clone, Serialize)]
 pub struct EnrichProgress {
     pub done: usize,
     pub total: usize,
     pub atual: String,
+    pub scan_id: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -275,30 +328,51 @@ pub fn fetch_lyrics_online(
 ///
 /// Emite `enrich:progress` (EnrichProgress) a cada música processada — no
 /// acervo real são minutos de varredura, e o invoke sozinho não dá sinal de
-/// vida. Mesmo padrão do `scan:progress` da indexação.
+/// vida. Mesmo padrão do `scan:progress` da indexação. Todo evento carrega o
+/// `scan_id` (gerado pelo frontend) para a UI descartar o que vier de uma
+/// varredura antiga.
+///
+/// Cancelável por `enrich_cancel_scan(scan_id)`: a varredura verifica a
+/// bandeira entre músicas e volta cedo com as propostas que já tiver.
 #[tauri::command]
 pub fn enrich_folder_scan(
     app: AppHandle,
     state: State<'_, Db>,
     folder_prefix: String,
+    scan_id: String,
 ) -> Result<Vec<crate::enrich::EnrichProposal>> {
-    let conn = state.scan_conn()?;
-    crate::enrich::enrich_scan(
-        &conn,
-        &folder_prefix,
-        lrclib_fetcher,
-        std::time::Duration::from_millis(300),
-        |done, total, atual| {
-            let _ = app.emit(
-                "enrich:progress",
-                EnrichProgress {
-                    done,
-                    total,
-                    atual: atual.to_string(),
-                },
-            );
-        },
-    )
+    let cancel = state.scan_begin(&scan_id)?;
+    let resultado = (|| {
+        let conn = state.scan_conn()?;
+        crate::enrich::enrich_scan(
+            &conn,
+            &folder_prefix,
+            lrclib_fetcher,
+            std::time::Duration::from_millis(300),
+            |done, total, atual| {
+                let _ = app.emit(
+                    "enrich:progress",
+                    EnrichProgress {
+                        done,
+                        total,
+                        atual: atual.to_string(),
+                        scan_id: scan_id.clone(),
+                    },
+                );
+            },
+            || cancel.load(Ordering::SeqCst),
+        )
+    })();
+    state.scan_end(&scan_id); // a entrada morre sempre — o mapa não cresce
+    resultado
+}
+
+/// Cancela a varredura `scan_id` de verdade (QA M4): a bandeira é lida entre
+/// músicas e a varredura volta cedo, parando de consultar o LRCLIB e de emitir
+/// progresso. Id desconhecido (varredura já encerrada) é no-op silencioso.
+#[tauri::command]
+pub fn enrich_cancel_scan(state: State<'_, Db>, scan_id: String) -> Result<()> {
+    state.cancel_scan(&scan_id)
 }
 
 /// Aplica as propostas aceitas (write_tags por música; nunca renomeia, nunca
@@ -313,4 +387,99 @@ pub fn enrich_apply(
 ) -> Result<Vec<crate::enrich::EnrichApplyResult>> {
     let conn = state.lock()?;
     crate::enrich::apply(&conn, &aplicacoes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn estado() -> Db {
+        Db::new(db::open_in_memory().unwrap(), None)
+    }
+
+    // -----------------------------------------------------------------------
+    // QA M4 — registro de cancelamento: a bandeira nasce baixada, cancelar a
+    // levanta, e a entrada some no fim da varredura (o mapa não cresce).
+    // -----------------------------------------------------------------------
+    #[test]
+    fn cancel_scan_raises_the_flag_of_the_running_scan() {
+        let state = estado();
+        let flag = state.scan_begin("scan-1").unwrap();
+        assert!(!flag.load(Ordering::SeqCst), "varredura nasce não-cancelada");
+
+        state.cancel_scan("scan-1").unwrap();
+        assert!(flag.load(Ordering::SeqCst), "cancelar levanta a bandeira");
+
+        state.scan_end("scan-1");
+        assert_eq!(state.scans_vivas(), 0, "entrada limpa no fim da varredura");
+    }
+
+    #[test]
+    fn cancelling_unknown_scan_id_is_a_harmless_no_op() {
+        let state = estado();
+        // id que nunca existiu
+        state.cancel_scan("nunca-existiu").unwrap();
+        // id de varredura já encerrada
+        state.scan_begin("scan-1").unwrap();
+        state.scan_end("scan-1");
+        state.cancel_scan("scan-1").unwrap();
+
+        assert_eq!(
+            state.scans_vivas(),
+            0,
+            "cancelar id desconhecido não registra nada (mapa não cresce)"
+        );
+    }
+
+    #[test]
+    fn cancelling_one_scan_does_not_touch_another() {
+        let state = estado();
+        let a = state.scan_begin("scan-a").unwrap();
+        let b = state.scan_begin("scan-b").unwrap();
+
+        state.cancel_scan("scan-a").unwrap();
+        assert!(a.load(Ordering::SeqCst));
+        assert!(!b.load(Ordering::SeqCst), "cada varredura tem sua bandeira");
+
+        state.scan_end("scan-a");
+        state.scan_end("scan-b");
+        assert_eq!(state.scans_vivas(), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // QA M4 — o evento enrich:progress carrega a identidade da varredura
+    // (snake_case, sem renames: é o contrato com o frontend).
+    // -----------------------------------------------------------------------
+    #[test]
+    fn enrich_progress_event_carries_the_scan_id() {
+        let json = serde_json::to_value(EnrichProgress {
+            done: 2,
+            total: 7,
+            atual: "Falamansa - Oh! Chuva.mp3".into(),
+            scan_id: "scan-42".into(),
+        })
+        .unwrap();
+
+        assert_eq!(json["done"], 2);
+        assert_eq!(json["total"], 7);
+        assert_eq!(json["atual"], "Falamansa - Oh! Chuva.mp3");
+        assert_eq!(json["scan_id"], "scan-42");
+    }
+
+    // -----------------------------------------------------------------------
+    // QA A5 — o eco da proposta chega do frontend em snake_case, sem renames.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn enrich_apply_deserializes_the_proposal_echo_from_snake_case() {
+        let ap: crate::enrich::EnrichApply = serde_json::from_str(
+            r#"{"song_id": 7, "title": "Oh! Chuva", "artist": "Falamansa",
+                "lyrics": null, "add_temas": null,
+                "current_title": "Falamansa - Oh! Chuva", "current_artist": null}"#,
+        )
+        .unwrap();
+
+        assert_eq!(ap.song_id, 7);
+        assert_eq!(ap.current_title, "Falamansa - Oh! Chuva");
+        assert_eq!(ap.current_artist, None);
+    }
 }

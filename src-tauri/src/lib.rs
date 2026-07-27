@@ -41,6 +41,7 @@ pub fn run() {
             commands::write_tags,
             commands::fetch_lyrics_online,
             commands::enrich_folder_scan,
+            commands::enrich_cancel_scan,
             commands::enrich_apply,
         ])
         .run(tauri::generate_context!())
