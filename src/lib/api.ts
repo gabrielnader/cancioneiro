@@ -40,6 +40,19 @@ export interface EnrichApply {
 }
 
 /**
+ * Resultado POR MÚSICA do enrich_apply (chaves snake_case, como no serde do
+ * struct Rust): o lote nunca aborta no meio — cada aplicação grava ou falha
+ * individualmente.
+ */
+export interface EnrichApplyResult {
+  song_id: number;
+  /** Não-nulo = gravada e reindexada. */
+  song: Song | null;
+  /** Não-nulo = falhou nesta música (ex.: "arquivo não encontrado: …"). */
+  error: string | null;
+}
+
+/**
  * Camada de acesso ao backend. Em produção fala com os comandos Tauri via
  * invoke; fora do Tauri (dev no navegador / E2E Playwright) usa o backend
  * mockado em memória (./mockBackend), mantendo a mesma interface.
@@ -82,8 +95,12 @@ export interface Backend {
    * biblioteca inteira) — ponto de rede EXPLÍCITO, pode levar minutos (F13).
    */
   enrichFolderScan(folderPrefix: string): Promise<EnrichProposal[]>;
-  /** Aplica as propostas aceitas (nunca renomeia, nunca apaga) — F13. */
-  enrichApply(aplicacoes: EnrichApply[]): Promise<Song[]>;
+  /**
+   * Aplica as propostas aceitas (nunca renomeia, nunca apaga) — F13. Devolve
+   * um resultado por música e NUNCA aborta o lote no meio: falhas viram
+   * entradas com `error`, as demais gravam normalmente.
+   */
+  enrichApply(aplicacoes: EnrichApply[]): Promise<EnrichApplyResult[]>;
 }
 
 export function isTauri(): boolean {
@@ -185,7 +202,7 @@ function tauriBackend(): Backend {
     },
     async enrichApply(aplicacoes) {
       const { invoke } = await import("@tauri-apps/api/core");
-      return invoke<Song[]>("enrich_apply", { aplicacoes });
+      return invoke<EnrichApplyResult[]>("enrich_apply", { aplicacoes });
     },
   };
 }

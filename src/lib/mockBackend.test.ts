@@ -635,6 +635,19 @@ describe("mockBackend", () => {
       expect(all.length).toBe(onlyA.length * 2);
     });
 
+    it("prefixo casa na FRONTEIRA de separador: '/acervo/1' NÃO inclui '/acervo/10'", async () => {
+      await backend.addFolder("/acervo/1");
+      await backend.addFolder("/acervo/10");
+      const proposals = await backend.enrichFolderScan("/acervo/1");
+      expect(proposals.length).toBeGreaterThan(0);
+      expect(
+        proposals.every((p) => p.file_path.startsWith("/acervo/1/")),
+      ).toBe(true);
+      expect(
+        proposals.some((p) => p.file_path.startsWith("/acervo/10/")),
+      ).toBe(false);
+    });
+
     it("música com artista mas sem letra vira MÉDIA com letra encontrada", async () => {
       await backend.addFolder("/musicas/teste");
       const proposals = await backend.enrichFolderScan("");
@@ -686,19 +699,22 @@ describe("mockBackend", () => {
       expect(sumiu.lyrics).toBeNull();
     });
 
-    it("_offline = true rejeita com 'sem conexão' (mesma convenção do fetchLyricsOnline)", async () => {
+    it("_offline = true NUNCA rejeita: cada proposta vem com error 'sem conexão' (DECISIONS #47)", async () => {
       await backend.addFolder("/musicas/teste");
       backend._offline = true;
-      await expect(backend.enrichFolderScan("")).rejects.toThrow("sem conexão");
+      const proposals = await backend.enrichFolderScan("");
+      expect(proposals).toHaveLength(2);
+      expect(proposals.every((p) => p.error === "sem conexão")).toBe(true);
+      expect(proposals.every((p) => p.lyrics === null)).toBe(true);
     });
   });
 
-  describe("enrichApply (V5 — F13)", () => {
-    it("aplica título/artista/letra e devolve as Songs atualizadas", async () => {
+  describe("enrichApply (V5 — F13, resultados por música)", () => {
+    it("aplica título/artista/letra e devolve resultados com a Song atualizada", async () => {
       await backend.addFolder("/musicas/teste");
       const songs = await backend.listSongs();
       const semTags = songs.find((s) => s.title === "sem_tags")!;
-      const updated = await backend.enrichApply([
+      const results = await backend.enrichApply([
         {
           song_id: semTags.id,
           title: "Título Novo",
@@ -707,12 +723,14 @@ describe("mockBackend", () => {
           add_temas: null,
         },
       ]);
-      expect(updated).toHaveLength(1);
-      expect(updated[0].title).toBe("Título Novo");
-      expect(updated[0].artist).toBe("Artista Novo");
-      expect(updated[0].has_lyrics).toBe(true);
+      expect(results).toHaveLength(1);
+      expect(results[0].song_id).toBe(semTags.id);
+      expect(results[0].error).toBeNull();
+      expect(results[0].song!.title).toBe("Título Novo");
+      expect(results[0].song!.artist).toBe("Artista Novo");
+      expect(results[0].song!.has_lyrics).toBe(true);
       // NUNCA renomeia
-      expect(updated[0].file_path).toBe(semTags.file_path);
+      expect(results[0].song!.file_path).toBe(semTags.file_path);
       expect(await backend.getLyrics(semTags.id)).toBe("linha um\nlinha dois");
     });
 
@@ -720,7 +738,7 @@ describe("mockBackend", () => {
       await backend.addFolder("/musicas/teste");
       const songs = await backend.listSongs();
       const comLetra = songs.find((s) => s.title === "Coração Sertanejo")!;
-      const [updated] = await backend.enrichApply([
+      const [result] = await backend.enrichApply([
         {
           song_id: comLetra.id,
           title: "Coração Sertanejo (revisado)",
@@ -729,6 +747,7 @@ describe("mockBackend", () => {
           add_temas: null,
         },
       ]);
+      const updated = result.song!;
       expect(updated.title).toBe("Coração Sertanejo (revisado)");
       expect(updated.artist).toBe("Artista Teste");
       expect(updated.has_lyrics).toBe(true);
@@ -740,7 +759,7 @@ describe("mockBackend", () => {
       await backend.addFolder("/musicas/teste");
       const songs = await backend.listSongs();
       const comLetra = songs.find((s) => s.title === "Coração Sertanejo")!;
-      const [updated] = await backend.enrichApply([
+      const [result] = await backend.enrichApply([
         {
           song_id: comLetra.id,
           title: comLetra.title,
@@ -749,7 +768,7 @@ describe("mockBackend", () => {
           add_temas: "fé; Água",
         },
       ]);
-      expect(updated.temas).toBe("água; esperança; fé");
+      expect(result.song!.temas).toBe("água; esperança; fé");
     });
 
     it("aplica várias músicas de uma vez e persiste em localStorage", async () => {
@@ -757,23 +776,54 @@ describe("mockBackend", () => {
       const songs = await backend.listSongs();
       const semLetra = songs.find((s) => s.title === "Instrumental Sem Letra")!;
       const semTags = songs.find((s) => s.title === "sem_tags")!;
-      const updated = await backend.enrichApply([
+      const results = await backend.enrichApply([
         { song_id: semLetra.id, title: "Um", artist: null, lyrics: "la", add_temas: null },
         { song_id: semTags.id, title: "Dois", artist: "A", lyrics: null, add_temas: null },
       ]);
-      expect(updated.map((s) => s.title)).toEqual(["Um", "Dois"]);
+      expect(results.map((r) => r.song!.title)).toEqual(["Um", "Dois"]);
       const reborn = createMockBackend();
       const after = await reborn.listSongs();
       expect(after.find((s) => s.id === semLetra.id)!.title).toBe("Um");
       expect(after.find((s) => s.id === semTags.id)!.title).toBe("Dois");
     });
 
-    it("rejeita id inexistente", async () => {
-      await expect(
-        backend.enrichApply([
-          { song_id: 99999, title: "X", artist: null, lyrics: null, add_temas: null },
-        ]),
-      ).rejects.toThrow();
+    it("NUNCA aborta o lote: arquivo deletado vira erro por música e as demais gravam", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const semLetra = songs.find((s) => s.title === "Instrumental Sem Letra")!;
+      const semTags = songs.find((s) => s.title === "sem_tags")!;
+      backend._removeFileFromDisk(semLetra.file_path);
+
+      const results = await backend.enrichApply([
+        { song_id: semLetra.id, title: "Um", artist: null, lyrics: "la", add_temas: null },
+        { song_id: semTags.id, title: "Dois", artist: "A", lyrics: null, add_temas: null },
+      ]);
+      expect(results).toHaveLength(2);
+
+      const falhou = results.find((r) => r.song_id === semLetra.id)!;
+      expect(falhou.song).toBeNull();
+      expect(falhou.error).toBe(
+        `arquivo não encontrado: ${semLetra.file_path}`,
+      );
+
+      const gravou = results.find((r) => r.song_id === semTags.id)!;
+      expect(gravou.error).toBeNull();
+      expect(gravou.song!.title).toBe("Dois");
+      // a que gravou persiste; a que falhou fica intocada
+      const reborn = createMockBackend();
+      const after = await reborn.listSongs();
+      expect(after.find((s) => s.id === semTags.id)!.title).toBe("Dois");
+      expect(after.find((s) => s.id === semLetra.id)!.title).toBe(
+        "Instrumental Sem Letra",
+      );
+    });
+
+    it("id inexistente vira resultado com error (não rejeita)", async () => {
+      const [result] = await backend.enrichApply([
+        { song_id: 99999, title: "X", artist: null, lyrics: null, add_temas: null },
+      ]);
+      expect(result.song).toBeNull();
+      expect(result.error).toContain("não encontrada");
     });
   });
 

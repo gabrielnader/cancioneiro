@@ -608,7 +608,7 @@ test.describe("V5 — Completar dados em lote (F13)", () => {
       .getByRole("button", { name: "Aplicar selecionadas (1)" })
       .click();
 
-    await expect(page.getByText("1 músicas atualizadas.")).toBeVisible();
+    await expect(page.getByText("1 música atualizada.")).toBeVisible();
     await expect(dialog).toHaveCount(0);
     // a música ganhou letra: só a sem_tags continua com o badge
     expect(await page.getByText("Sem letra", { exact: true }).count()).toBe(1);

@@ -1,4 +1,9 @@
-import { useEffect, useState } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { audioController } from "../hooks/playerAudioCore";
 import { getBackend, type EnrichApply, type EnrichProposal } from "../lib/api";
 import { useEnrichStore } from "../stores/enrichStore";
@@ -41,17 +46,67 @@ export function EnrichReview() {
   const push = useToastStore((s) => s.push);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [busy, setBusy] = useState(false);
+  // erros devolvidos pelo apply, por música (linhas ficam como as com error)
+  const [applyErrors, setApplyErrors] = useState<Map<number, string>>(new Map());
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
 
   // a varredura resolve com o overlay já aberto: re-inicializa a seleção
   useEffect(() => {
     setSelected(defaultSelection(proposals));
+    setApplyErrors(new Map());
   }, [proposals]);
 
+  // foco inicial entra no diálogo (botão Fechar existe em todos os estados)
+  useEffect(() => {
+    if (status !== "idle") closeButtonRef.current?.focus();
+  }, [status]);
+
+  // Esc SEMPRE fecha (durante a varredura o resultado é descartado — mesma
+  // semântica do botão Fechar); exceto no meio de uma gravação (busy)
+  useEffect(() => {
+    if (status === "idle") return;
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key === "Escape" && !busy) close();
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [status, busy, close]);
+
   if (status === "idle") return null;
+
+  /** Erro da linha: o da proposta (varredura) ou o devolvido pelo apply. */
+  function rowError(p: EnrichProposal): string | null {
+    return p.error ?? applyErrors.get(p.song_id) ?? null;
+  }
+
+  /** Focus trap mínimo: Tab no fim volta ao início (e vice-versa). */
+  function trapTab(e: ReactKeyboardEvent) {
+    if (e.key !== "Tab") return;
+    const root = dialogRef.current;
+    if (!root) return;
+    const focusables = Array.from(
+      root.querySelectorAll<HTMLElement>(
+        'button:not(:disabled), input:not(:disabled), [tabindex]:not([tabindex="-1"])',
+      ),
+    );
+    if (focusables.length === 0) return;
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const active = document.activeElement;
+    if (!e.shiftKey && active === last) {
+      e.preventDefault();
+      first.focus();
+    } else if (e.shiftKey && (active === first || !root.contains(active))) {
+      e.preventDefault();
+      last.focus();
+    }
+  }
 
   const closeButton = (
     <button
       type="button"
+      ref={closeButtonRef}
       disabled={busy}
       onClick={close}
       className="rounded-md px-4 py-2 text-[15px] font-medium text-[#374151] hover:bg-[#F3F4F6] disabled:opacity-60"
@@ -74,7 +129,7 @@ export function EnrichReview() {
 
   async function handleApply() {
     const chosen = proposals.filter(
-      (p) => p.error === null && selected.has(p.song_id),
+      (p) => rowError(p) === null && selected.has(p.song_id),
     );
     if (chosen.length === 0) return;
 
@@ -101,16 +156,56 @@ export function EnrichReview() {
 
     setBusy(true);
     try {
-      const updated = await getBackend().enrichApply(aplicacoes);
-      // pós-save igual ao EditSongForm: library + playlists + player
-      for (const song of updated) {
-        useLibraryStore.getState().updateSong(song);
-        usePlaylistStore.getState().updateSongInItems(song);
-        usePlayerStore.getState().updateSongRefs(song);
+      // o lote nunca aborta: um resultado por música, gravadas E falhas
+      const results = await getBackend().enrichApply(aplicacoes);
+      const gravadas = results.filter((r) => r.song !== null);
+      const falhas = results.filter((r) => r.song === null);
+
+      // pós-save igual ao EditSongForm: library + playlists + player —
+      // TODA música gravada sincroniza, mesmo quando outras falharam
+      for (const r of gravadas) {
+        useLibraryStore.getState().updateSong(r.song!);
+        usePlaylistStore.getState().updateSongInItems(r.song!);
+        usePlayerStore.getState().updateSongRefs(r.song!);
       }
-      push(`${updated.length} músicas atualizadas.`, "success");
-      close();
+
+      if (gravadas.length > 0) {
+        push(
+          gravadas.length === 1
+            ? "1 música atualizada."
+            : `${gravadas.length} músicas atualizadas.`,
+          "success",
+        );
+      }
+      if (falhas.length > 0) {
+        push(
+          falhas.length === 1
+            ? "1 não pôde ser gravada."
+            : `${falhas.length} não puderam ser gravadas.`,
+          "error",
+        );
+      }
+
+      if (gravadas.length > 0) {
+        close();
+      } else {
+        // TODAS falharam: overlay aberto para o usuário ver as linhas —
+        // marca cada uma com o erro devolvido e desmarca
+        setApplyErrors((prev) => {
+          const next = new Map(prev);
+          for (const r of falhas) {
+            next.set(r.song_id, r.error ?? "não foi possível gravar");
+          }
+          return next;
+        });
+        setSelected((prev) => {
+          const next = new Set(prev);
+          for (const r of falhas) next.delete(r.song_id);
+          return next;
+        });
+      }
     } catch {
+      // defensivo: invoke rejeitado (erro de infraestrutura, não por música)
       push("Não foi possível aplicar as alterações.", "error");
     } finally {
       setBusy(false);
@@ -122,6 +217,8 @@ export function EnrichReview() {
 
   return (
     <div
+      ref={dialogRef}
+      onKeyDown={trapTab}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
       role="dialog"
       aria-modal="true"
@@ -162,7 +259,7 @@ export function EnrichReview() {
                     setSelected(
                       new Set(
                         proposals
-                          .filter((p) => p.error === null)
+                          .filter((p) => rowError(p) === null)
                           .map((p) => p.song_id),
                       ),
                     )
@@ -183,7 +280,8 @@ export function EnrichReview() {
 
             <ul className="min-h-0 flex-1 divide-y divide-[#F3F4F6] overflow-y-auto">
               {proposals.map((p) => {
-                const disabled = p.error !== null;
+                const error = rowError(p);
+                const disabled = error !== null;
                 const badge = BADGES[p.confidence];
                 return (
                   <li
@@ -210,9 +308,9 @@ export function EnrichReview() {
                           {nomeCompleto(p.proposed_title, p.proposed_artist)}
                         </span>
                       </span>
-                      {p.error !== null ? (
+                      {error !== null ? (
                         <span className="block text-[13px] text-[#B91C1C]">
-                          {p.error}
+                          {error}
                         </span>
                       ) : (
                         p.lyrics !== null && (

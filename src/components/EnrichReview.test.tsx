@@ -6,6 +6,7 @@ import {
   setBackendForTests,
   type Backend,
   type EnrichApply,
+  type EnrichApplyResult,
   type EnrichProposal,
 } from "../lib/api";
 import type { Song } from "../lib/types";
@@ -81,6 +82,14 @@ const COM_ERRO = proposal({
   confidence: "baixa",
   error: "sem conexão",
 });
+
+function ok(song: Song): EnrichApplyResult {
+  return { song_id: song.id, song, error: null };
+}
+
+function failed(songId: number, error: string): EnrichApplyResult {
+  return { song_id: songId, song: null, error };
+}
 
 function renderReview(proposals: EnrichProposal[]) {
   useEnrichStore.setState({ status: "review", folderPrefix: "", proposals });
@@ -187,7 +196,7 @@ describe("EnrichReview (V5 — F13)", () => {
 
   it("aplicar monta o payload nunca-apaga (?? null) só com as selecionadas", async () => {
     const enrichApply = vi.fn(async (aplicacoes: EnrichApply[]) =>
-      aplicacoes.map((a) => song(a.song_id, a.title)),
+      aplicacoes.map((a) => ok(song(a.song_id, a.title))),
     );
     setBackendForTests({ enrichApply } as unknown as Backend);
     renderReview([ALTA, MEDIA, BAIXA, COM_ERRO]);
@@ -219,14 +228,14 @@ describe("EnrichReview (V5 — F13)", () => {
     ]);
   });
 
-  it("sucesso: toast 'N músicas atualizadas.', sincroniza stores e fecha", async () => {
+  it("sucesso de 1: toast SINGULAR '1 música atualizada.', sincroniza stores e fecha", async () => {
     const updated: Song = {
       ...song(1, "Faixa Um"),
       artist: "Artista Um",
       has_lyrics: true,
     };
     setBackendForTests({
-      enrichApply: vi.fn(async () => [updated]),
+      enrichApply: vi.fn(async () => [ok(updated)]),
     } as unknown as Backend);
 
     const before = song(1, "faixa 1");
@@ -248,7 +257,7 @@ describe("EnrichReview (V5 — F13)", () => {
 
     const toasts = useToastStore.getState().toasts;
     expect(toasts).toHaveLength(1);
-    expect(toasts[0].message).toBe("1 músicas atualizadas.");
+    expect(toasts[0].message).toBe("1 música atualizada.");
     expect(toasts[0].kind).toBe("success");
     // pós-save igual ao EditSongForm: library + playlist + player
     expect(useLibraryStore.getState().allSongs[0].title).toBe("Faixa Um");
@@ -258,10 +267,107 @@ describe("EnrichReview (V5 — F13)", () => {
     expect(useEnrichStore.getState().status).toBe("idle");
   });
 
+  it("sucesso de várias: toast PLURAL 'N músicas atualizadas.'", async () => {
+    setBackendForTests({
+      enrichApply: vi.fn(async (aplicacoes: EnrichApply[]) =>
+        aplicacoes.map((a) => ok(song(a.song_id, a.title))),
+      ),
+    } as unknown as Backend);
+
+    renderReview([ALTA, MEDIA]);
+    fireEvent.click(screen.getByRole("checkbox", { name: /faixa 2/ }));
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Aplicar selecionadas (2)" }),
+      );
+    });
+
+    const toasts = useToastStore.getState().toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0].message).toBe("2 músicas atualizadas.");
+    expect(toasts[0].kind).toBe("success");
+    expect(useEnrichStore.getState().status).toBe("idle");
+  });
+
+  it("falha parcial: sincroniza as gravadas, toast de sucesso + toast de erro e fecha", async () => {
+    const gravada: Song = { ...song(1, "Faixa Um"), artist: "Artista Um" };
+    setBackendForTests({
+      enrichApply: vi.fn(async () => [
+        ok(gravada),
+        failed(2, "arquivo não encontrado: /acervo/2.mp3"),
+      ]),
+    } as unknown as Backend);
+
+    const before = song(1, "faixa 1");
+    useLibraryStore.setState({
+      allSongs: [before, song(2, "faixa 2")],
+      results: [{ song: before, snippet: null }],
+    });
+
+    renderReview([ALTA, MEDIA]);
+    fireEvent.click(screen.getByRole("checkbox", { name: /faixa 2/ }));
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Aplicar selecionadas (2)" }),
+      );
+    });
+
+    // a gravada sincroniza MESMO com outra falhando
+    expect(useLibraryStore.getState().allSongs[0].title).toBe("Faixa Um");
+    const toasts = useToastStore.getState().toasts;
+    expect(toasts).toHaveLength(2);
+    expect(toasts[0].message).toBe("1 música atualizada.");
+    expect(toasts[0].kind).toBe("success");
+    expect(toasts[1].message).toBe("1 não pôde ser gravada.");
+    expect(toasts[1].kind).toBe("error");
+    // ao menos uma gravou: fecha
+    expect(useEnrichStore.getState().status).toBe("idle");
+  });
+
+  it("TODAS falharam: só toast de erro, overlay aberto, linhas marcadas com o erro e desmarcadas", async () => {
+    setBackendForTests({
+      enrichApply: vi.fn(async () => [
+        failed(1, "arquivo não encontrado: /acervo/1.mp3"),
+        failed(2, "arquivo não encontrado: /acervo/2.mp3"),
+      ]),
+    } as unknown as Backend);
+
+    renderReview([ALTA, MEDIA]);
+    fireEvent.click(screen.getByRole("checkbox", { name: /faixa 2/ }));
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Aplicar selecionadas (2)" }),
+      );
+    });
+
+    const toasts = useToastStore.getState().toasts;
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0].message).toBe("2 não puderam ser gravadas.");
+    expect(toasts[0].kind).toBe("error");
+    // overlay continua aberto para o usuário ver as linhas com erro
+    expect(useEnrichStore.getState().status).toBe("review");
+    expect(
+      screen.getByText("arquivo não encontrado: /acervo/1.mp3"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("arquivo não encontrado: /acervo/2.mp3"),
+    ).toBeInTheDocument();
+    // linhas com erro: desmarcadas e desabilitadas (mesmo estilo das com error)
+    const cb1 = screen.getByRole("checkbox", { name: /faixa 1/ });
+    const cb2 = screen.getByRole("checkbox", { name: /faixa 2/ });
+    expect(cb1).not.toBeChecked();
+    expect(cb1).toBeDisabled();
+    expect(cb2).not.toBeChecked();
+    expect(cb2).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Aplicar selecionadas (0)" }),
+    ).toBeDisabled();
+  });
+
   it("pausa o áudio antes de aplicar quando a música tocando está entre as selecionadas", async () => {
     const pauseSpy = vi.spyOn(audioController, "pause");
     setBackendForTests({
-      enrichApply: vi.fn(async () => [song(1, "Faixa Um")]),
+      enrichApply: vi.fn(async () => [ok(song(1, "Faixa Um"))]),
     } as unknown as Backend);
     usePlayerStore.setState({ current: song(1, "faixa 1"), isPlaying: true });
 
@@ -280,7 +386,7 @@ describe("EnrichReview (V5 — F13)", () => {
   it("não pausa quando a música tocando NÃO está entre as selecionadas", async () => {
     const pauseSpy = vi.spyOn(audioController, "pause");
     setBackendForTests({
-      enrichApply: vi.fn(async () => [song(1, "Faixa Um")]),
+      enrichApply: vi.fn(async () => [ok(song(1, "Faixa Um"))]),
     } as unknown as Backend);
     usePlayerStore.setState({ current: song(99, "outra"), isPlaying: true });
 
@@ -296,7 +402,7 @@ describe("EnrichReview (V5 — F13)", () => {
     pauseSpy.mockRestore();
   });
 
-  it("falha do apply: toast de erro e a revisão continua aberta", async () => {
+  it("invoke rejeitado (erro de infraestrutura): toast genérico e a revisão continua aberta", async () => {
     setBackendForTests({
       enrichApply: vi.fn(async () => {
         throw new Error("falhou");
@@ -318,5 +424,44 @@ describe("EnrichReview (V5 — F13)", () => {
     renderReview([ALTA]);
     fireEvent.click(screen.getByRole("button", { name: "Fechar" }));
     expect(useEnrichStore.getState().status).toBe("idle");
+  });
+
+  describe("modal: Esc e foco (QA achado 3)", () => {
+    it("Esc fecha o overlay na revisão", () => {
+      renderReview([ALTA]);
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(useEnrichStore.getState().status).toBe("idle");
+    });
+
+    it("Esc fecha DURANTE a varredura (descarta o resultado)", () => {
+      useEnrichStore.setState({ status: "scanning", folderPrefix: "", proposals: [] });
+      render(<EnrichReview />);
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(useEnrichStore.getState().status).toBe("idle");
+    });
+
+    it("o foco inicial entra no diálogo (botão Fechar) ao abrir", () => {
+      renderReview([ALTA]);
+      expect(document.activeElement).toBe(
+        screen.getByRole("button", { name: "Fechar" }),
+      );
+    });
+
+    it("Tab no último elemento volta ao primeiro (focus trap); Shift+Tab no primeiro vai ao último", () => {
+      renderReview([ALTA]);
+      const dialog = screen.getByRole("dialog", { name: "Completar dados" });
+      const first = screen.getByRole("button", { name: "Marcar todas" });
+      const last = screen.getByRole("button", {
+        name: "Aplicar selecionadas (1)",
+      });
+
+      last.focus();
+      fireEvent.keyDown(dialog, { key: "Tab" });
+      expect(document.activeElement).toBe(first);
+
+      first.focus();
+      fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
+      expect(document.activeElement).toBe(last);
+    });
   });
 });

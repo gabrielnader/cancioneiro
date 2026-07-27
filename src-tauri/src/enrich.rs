@@ -39,6 +39,17 @@ pub struct EnrichProposal {
     pub error: Option<String>,
 }
 
+/// Resultado por música do `apply`: `song` Some = gravada e reindexada;
+/// `error` Some = falhou (mensagem do writer) — o lote nunca aborta no meio,
+/// então a UI recebe o desfecho de TODAS as aplicações, inclusive das que já
+/// foram para o disco antes de uma falha.
+#[derive(Debug, Clone, Serialize)]
+pub struct EnrichApplyResult {
+    pub song_id: i64,
+    pub song: Option<Song>,
+    pub error: Option<String>,
+}
+
 /// Uma aplicação aceita pelo usuário. `None` em artist/lyrics/add_temas
 /// significa "não mexer" — o lote nunca apaga, só preenche/atualiza.
 #[derive(Debug, Clone, Deserialize)]
@@ -252,6 +263,20 @@ pub(crate) fn gerar_palpites(
 // Scan (propostas) e apply
 // ---------------------------------------------------------------------------
 
+/// True se `file_path` está DENTRO da pasta `prefix` (fronteira de pasta
+/// exata: "/m/1" não casa "/m/10/a.mp3"). Prefixo vazio = biblioteca inteira.
+/// Espelha o `isUnderFolder` de src/lib/folderTree.ts: exige o separador
+/// ('/' ou '\\') logo após o prefixo — ou o próprio prefixo já termina nele.
+pub(crate) fn under_prefix(file_path: &str, prefix: &str) -> bool {
+    if prefix.is_empty() {
+        return true;
+    }
+    match file_path.strip_prefix(prefix) {
+        Some(resto) => prefix.ends_with(['/', '\\']) || resto.starts_with(['/', '\\']),
+        None => false,
+    }
+}
+
 /// Proposta BAIXA: só o palpite de nome de arquivo, sem letra. Tag REAL
 /// existente é preservada no palpite (o lote nunca propõe apagar).
 fn proposta_baixa(
@@ -303,7 +328,7 @@ where
         if !song.available {
             continue;
         }
-        if !folder_prefix.is_empty() && !song.file_path.starts_with(folder_prefix) {
+        if !under_prefix(&song.file_path, folder_prefix) {
             continue;
         }
         let titulo_tag = sem_placeholder(&song.title).to_string();
@@ -354,7 +379,17 @@ where
                 }
                 Ok(None) => {}
                 Err(e) => {
-                    erro = Some(e.to_string()); // por música: nunca aborta o lote
+                    // Por música: nunca aborta o lote. E um candidato válido
+                    // (MÉDIA/ALTA) já achado por palpite anterior é mantido —
+                    // a proposta de erro só vale se nada aproveitável veio
+                    // antes da falha.
+                    if best
+                        .as_ref()
+                        .and_then(|b| lyrics_fetch::classify(b.sim, b.dif))
+                        .is_none()
+                    {
+                        erro = Some(e.to_string());
+                    }
                     break;
                 }
             }
@@ -386,47 +421,69 @@ where
 /// Aplica as propostas aceitas via writer::write_tags (título obrigatório).
 /// O lote NUNCA apaga: artist/lyrics `None` (ou vazios) preservam o valor
 /// atual do arquivo; `add_temas` SOMA aos temas existentes (a normalização
-/// do writer deduplica e ordena). Devolve as Songs atualizadas.
-pub fn apply(conn: &Connection, aplicacoes: &[EnrichApply]) -> Result<Vec<Song>> {
-    let mut atualizadas = Vec::with_capacity(aplicacoes.len());
+/// do writer deduplica e ordena).
+///
+/// Falha por música (arquivo sumido, título inválido, erro de escrita) vira
+/// entrada com `error` e o lote CONTINUA — nunca aborta no meio deixando a
+/// UI dessincronizada do disco. O `Result` externo fica reservado a erros de
+/// infraestrutura (lock envenenado é tratado no commands.rs).
+pub fn apply(conn: &Connection, aplicacoes: &[EnrichApply]) -> Result<Vec<EnrichApplyResult>> {
+    let mut resultados = Vec::with_capacity(aplicacoes.len());
     for ap in aplicacoes {
-        let song = db::get_song(conn, ap.song_id)?.ok_or_else(|| {
-            crate::error::AppError(format!("música não encontrada: {}", ap.song_id))
-        })?;
-        let lyrics_novo = ap
-            .lyrics
-            .as_deref()
-            .map(str::trim)
-            .filter(|l| !l.is_empty());
-        let lyrics_final = match lyrics_novo {
-            Some(_) => ap.lyrics.clone(), // grava exatamente como veio (sem trim)
-            None => db::get_lyrics(conn, ap.song_id)?, // preserva a letra atual
-        };
-        let artist_final = ap
-            .artist
-            .as_deref()
-            .map(str::trim)
-            .filter(|a| !a.is_empty())
-            .map(str::to_string)
-            .or_else(|| song.artist.clone());
-        let temas_final = match (
-            ap.add_temas.as_deref().map(str::trim).filter(|t| !t.is_empty()),
-            song.temas.as_deref(),
-        ) {
-            (Some(novos), Some(atuais)) => Some(format!("{atuais}; {novos}")),
-            (Some(novos), None) => Some(novos.to_string()),
-            (None, atuais) => atuais.map(str::to_string),
-        };
-        atualizadas.push(writer::write_tags(
-            conn,
-            ap.song_id,
-            &ap.title,
-            artist_final.as_deref(),
-            lyrics_final.as_deref(),
-            temas_final.as_deref(),
-        )?);
+        resultados.push(match apply_one(conn, ap) {
+            Ok(song) => EnrichApplyResult {
+                song_id: ap.song_id,
+                song: Some(song),
+                error: None,
+            },
+            Err(e) => EnrichApplyResult {
+                song_id: ap.song_id,
+                song: None,
+                error: Some(e.to_string()),
+            },
+        });
     }
-    Ok(atualizadas)
+    Ok(resultados)
+}
+
+/// Grava UMA aplicação (regras de preservação do lote) e devolve a Song
+/// atualizada — o apply converte o Err em `EnrichApplyResult::error`.
+fn apply_one(conn: &Connection, ap: &EnrichApply) -> Result<Song> {
+    let song = db::get_song(conn, ap.song_id)?.ok_or_else(|| {
+        crate::error::AppError(format!("música não encontrada: {}", ap.song_id))
+    })?;
+    let lyrics_novo = ap
+        .lyrics
+        .as_deref()
+        .map(str::trim)
+        .filter(|l| !l.is_empty());
+    let lyrics_final = match lyrics_novo {
+        Some(_) => ap.lyrics.clone(), // grava exatamente como veio (sem trim)
+        None => db::get_lyrics(conn, ap.song_id)?, // preserva a letra atual
+    };
+    let artist_final = ap
+        .artist
+        .as_deref()
+        .map(str::trim)
+        .filter(|a| !a.is_empty())
+        .map(str::to_string)
+        .or_else(|| song.artist.clone());
+    let temas_final = match (
+        ap.add_temas.as_deref().map(str::trim).filter(|t| !t.is_empty()),
+        song.temas.as_deref(),
+    ) {
+        (Some(novos), Some(atuais)) => Some(format!("{atuais}; {novos}")),
+        (Some(novos), None) => Some(novos.to_string()),
+        (None, atuais) => atuais.map(str::to_string),
+    };
+    writer::write_tags(
+        conn,
+        ap.song_id,
+        &ap.title,
+        artist_final.as_deref(),
+        lyrics_final.as_deref(),
+        temas_final.as_deref(),
+    )
 }
 
 #[cfg(test)]
@@ -517,6 +574,26 @@ mod tests {
         let p = gerar_palpites("x.mp3", "A - B", "Artista");
         assert_eq!(p[0], ("A - B".into(), "Artista".into()));
         assert!(!p.contains(&("B".to_string(), "A".to_string())));
+    }
+
+    #[test]
+    fn under_prefix_respects_folder_boundaries() {
+        // vazio = biblioteca inteira
+        assert!(under_prefix("/m/1/a.mp3", ""));
+        // fronteira exata de pasta: "/m/1" casa "/m/1/..." mas não "/m/10/..."
+        assert!(under_prefix("/m/1/a.mp3", "/m/1"));
+        assert!(!under_prefix("/m/10/a.mp3", "/m/1"));
+        assert!(under_prefix("/m/10/a.mp3", "/m/10"));
+        assert!(under_prefix("/m/1/Sub/a.mp3", "/m/1"));
+        // prefixo com barra final também funciona
+        assert!(under_prefix("/m/1/a.mp3", "/m/1/"));
+        assert!(!under_prefix("/m/10/a.mp3", "/m/1/"));
+        // prefixo é pasta: nunca casa o próprio caminho como arquivo
+        assert!(!under_prefix("/m/1", "/m/1"));
+        // separador Windows
+        assert!(under_prefix(r"C:\m\1\a.mp3", r"C:\m\1"));
+        assert!(!under_prefix(r"C:\m\10\a.mp3", r"C:\m\1"));
+        assert!(under_prefix(r"C:\m\1\a.mp3", r"C:\m\1\"));
     }
 
     #[test]

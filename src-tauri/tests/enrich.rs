@@ -96,8 +96,8 @@ fn enrich_scan_proposes_and_apply_writes_full_flow() {
     assert_eq!(p.current_artist, None);
     assert_eq!(p.file_path, chuva.file_path);
 
-    // apply grava via write_tags e devolve as Songs atualizadas
-    let songs = enrich::apply(
+    // apply grava via write_tags e devolve um resultado por música
+    let results = enrich::apply(
         &conn,
         &[EnrichApply {
             song_id: chuva.id,
@@ -108,12 +108,15 @@ fn enrich_scan_proposes_and_apply_writes_full_flow() {
         }],
     )
     .unwrap();
-    assert_eq!(songs.len(), 1);
-    assert_eq!(songs[0].id, chuva.id);
-    assert_eq!(songs[0].title, "Oh! Chuva");
-    assert_eq!(songs[0].artist.as_deref(), Some("Falamansa"));
-    assert!(songs[0].has_lyrics);
-    assert_eq!(songs[0].temas.as_deref(), Some("chuva"));
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].song_id, chuva.id);
+    assert!(results[0].error.is_none());
+    let song = results[0].song.as_ref().expect("gravada e reindexada");
+    assert_eq!(song.id, chuva.id);
+    assert_eq!(song.title, "Oh! Chuva");
+    assert_eq!(song.artist.as_deref(), Some("Falamansa"));
+    assert!(song.has_lyrics);
+    assert_eq!(song.temas.as_deref(), Some("chuva"));
 
     // round-trip: rescan relê do disco exatamente o que foi gravado
     indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
@@ -168,6 +171,39 @@ fn enrich_scan_selects_only_incomplete_songs_under_prefix() {
     let props = enrich::enrich_scan(&conn, &prefix, |_: &str| Ok("[]".into()), ZERO).unwrap();
     assert_eq!(props.len(), 1);
     assert!(props[0].file_path.ends_with("faixa_sem_tags.mp3"));
+}
+
+// ---------------------------------------------------------------------------
+// F13 — o prefixo de pasta casa FRONTEIRA de pasta, não string bruta: com as
+// pastas irmãs "1" e "10", o prefixo ".../1" NÃO pode incluir ".../10/x.mp3"
+// (mesma regra do isUnderFolder de src/lib/folderTree.ts).
+// ---------------------------------------------------------------------------
+#[test]
+fn folder_prefix_matches_whole_path_segments_only() {
+    let (dir, conn, _folder_id) = setup_with(&[
+        ("sem_tags.mp3", "1/um_sem_tags.mp3"),
+        ("sem_tags.mp3", "10/dez_sem_tags.mp3"),
+    ]);
+    let raiz = dir.path().canonicalize().unwrap();
+
+    // prefixo ".../1" sem barra final: só a música da pasta "1"
+    let prefixo = raiz.join("1").to_string_lossy().into_owned();
+    let props = enrich::enrich_scan(&conn, &prefixo, |_: &str| Ok("[]".into()), ZERO).unwrap();
+    let paths: Vec<&str> = props.iter().map(|p| p.file_path.as_str()).collect();
+    assert_eq!(props.len(), 1, "prefixo .../1 não casa .../10: {paths:?}");
+    assert!(props[0].file_path.ends_with("um_sem_tags.mp3"));
+
+    // prefixo com separador no fim: mesmo resultado
+    let com_barra = format!("{prefixo}{}", std::path::MAIN_SEPARATOR);
+    let props = enrich::enrich_scan(&conn, &com_barra, |_: &str| Ok("[]".into()), ZERO).unwrap();
+    assert_eq!(props.len(), 1);
+    assert!(props[0].file_path.ends_with("um_sem_tags.mp3"));
+
+    // e a pasta "10" continua alcançável pelo próprio prefixo
+    let prefixo10 = raiz.join("10").to_string_lossy().into_owned();
+    let props = enrich::enrich_scan(&conn, &prefixo10, |_: &str| Ok("[]".into()), ZERO).unwrap();
+    assert_eq!(props.len(), 1);
+    assert!(props[0].file_path.ends_with("dez_sem_tags.mp3"));
 }
 
 // ---------------------------------------------------------------------------
@@ -269,7 +305,7 @@ fn apply_with_none_preserves_existing_lyrics_artist_and_temas() {
     let letra_antes = db::get_lyrics(&conn, song.id).unwrap().expect("fixture tem letra");
     assert_eq!(song.temas.as_deref(), Some("água; esperança"));
 
-    let updated = enrich::apply(
+    let results = enrich::apply(
         &conn,
         &[EnrichApply {
             song_id: song.id,
@@ -280,9 +316,10 @@ fn apply_with_none_preserves_existing_lyrics_artist_and_temas() {
         }],
     )
     .unwrap();
-    assert_eq!(updated[0].artist.as_deref(), Some("Artista Teste"), "artista preservado");
-    assert!(updated[0].has_lyrics, "letra preservada");
-    assert_eq!(updated[0].temas.as_deref(), Some("água; esperança"), "temas preservados");
+    let updated = results[0].song.as_ref().expect("gravada");
+    assert_eq!(updated.artist.as_deref(), Some("Artista Teste"), "artista preservado");
+    assert!(updated.has_lyrics, "letra preservada");
+    assert_eq!(updated.temas.as_deref(), Some("água; esperança"), "temas preservados");
     assert_eq!(
         db::get_lyrics(&conn, song.id).unwrap().as_deref(),
         Some(letra_antes.as_str()),
@@ -290,7 +327,7 @@ fn apply_with_none_preserves_existing_lyrics_artist_and_temas() {
     );
 
     // add_temas soma (dedup sem acento, ordenado) sem apagar os existentes
-    let updated = enrich::apply(
+    let results = enrich::apply(
         &conn,
         &[EnrichApply {
             song_id: song.id,
@@ -301,7 +338,8 @@ fn apply_with_none_preserves_existing_lyrics_artist_and_temas() {
         }],
     )
     .unwrap();
-    assert_eq!(updated[0].temas.as_deref(), Some("água; chuva; esperança"));
+    let updated = results[0].song.as_ref().expect("gravada");
+    assert_eq!(updated.temas.as_deref(), Some("água; chuva; esperança"));
 
     // releitura do disco confirma que nada foi apagado no arquivo
     indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
@@ -340,8 +378,9 @@ fn missing_file_becomes_proposal_with_error_without_network() {
     assert!(props[0].error.is_some(), "arquivo ausente reportado na proposta");
     assert_eq!(*calls.borrow(), 0, "arquivo sumido não gasta rede");
 
-    // aplicar numa música cujo arquivo sumiu falha com a mensagem padrão
-    let err = enrich::apply(
+    // aplicar numa música cujo arquivo sumiu vira resultado com error (a
+    // mensagem padrão do writer), sem abortar o lote
+    let results = enrich::apply(
         &conn,
         &[EnrichApply {
             song_id: song.id,
@@ -351,10 +390,90 @@ fn missing_file_becomes_proposal_with_error_without_network() {
             add_temas: None,
         }],
     )
-    .expect_err("arquivo sumido deve falhar no apply");
+    .unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].song_id, song.id);
+    assert!(results[0].song.is_none());
     assert_eq!(
-        err.to_string(),
-        format!("arquivo não encontrado: {}", song.file_path)
+        results[0].error.as_deref(),
+        Some(format!("arquivo não encontrado: {}", song.file_path).as_str())
+    );
+}
+
+// ---------------------------------------------------------------------------
+// F13 — apply NUNCA aborta no meio do lote: falha numa música vira entrada
+// com `error` e as demais continuam sendo gravadas (a UI recebe o resultado
+// de TODAS, inclusive das que já foram para o disco).
+// ---------------------------------------------------------------------------
+#[test]
+fn apply_continues_batch_and_reports_per_song_errors() {
+    let (_dir, conn, folder_id) = setup_with(&[
+        ("sem_tags.mp3", "a_sem_tags.mp3"),
+        ("sem_tags.mp3", "b_sem_tags.mp3"),
+        ("sem_tags.mp3", "c_sem_tags.mp3"),
+    ]);
+    let a = song_by_suffix(&conn, "a_sem_tags.mp3");
+    let b = song_by_suffix(&conn, "b_sem_tags.mp3");
+    let c = song_by_suffix(&conn, "c_sem_tags.mp3");
+    fs::remove_file(&b.file_path).unwrap(); // a 2ª do lote vai falhar
+
+    let lote = [
+        EnrichApply {
+            song_id: a.id,
+            title: "Título A".into(),
+            artist: Some("Artista A".into()),
+            lyrics: None,
+            add_temas: None,
+        },
+        EnrichApply {
+            song_id: b.id,
+            title: "Título B".into(),
+            artist: None,
+            lyrics: None,
+            add_temas: None,
+        },
+        EnrichApply {
+            song_id: c.id,
+            title: "Título C".into(),
+            artist: None,
+            lyrics: Some("letra c".into()),
+            add_temas: None,
+        },
+    ];
+    let results = enrich::apply(&conn, &lote).unwrap();
+
+    assert_eq!(results.len(), 3, "um resultado por aplicação, na mesma ordem");
+
+    // 1ª: gravada e reindexada
+    assert_eq!(results[0].song_id, a.id);
+    assert!(results[0].error.is_none());
+    let song_a = results[0].song.as_ref().expect("1ª gravada");
+    assert_eq!(song_a.title, "Título A");
+    assert_eq!(song_a.artist.as_deref(), Some("Artista A"));
+
+    // 2ª: falhou (arquivo sumido) com a mensagem do writer; lote continuou
+    assert_eq!(results[1].song_id, b.id);
+    assert!(results[1].song.is_none());
+    assert_eq!(
+        results[1].error.as_deref(),
+        Some(format!("arquivo não encontrado: {}", b.file_path).as_str())
+    );
+
+    // 3ª: gravada mesmo com a 2ª tendo falhado
+    assert_eq!(results[2].song_id, c.id);
+    assert!(results[2].error.is_none());
+    let song_c = results[2].song.as_ref().expect("3ª gravada");
+    assert_eq!(song_c.title, "Título C");
+    assert!(song_c.has_lyrics);
+
+    // round-trip: o disco confirma que 1ª e 3ª foram realmente escritas
+    indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
+    assert_eq!(song_by_suffix(&conn, "a_sem_tags.mp3").title, "Título A");
+    let c_reread = song_by_suffix(&conn, "c_sem_tags.mp3");
+    assert_eq!(c_reread.title, "Título C");
+    assert_eq!(
+        db::get_lyrics(&conn, c_reread.id).unwrap().as_deref(),
+        Some("letra c")
     );
 }
 
@@ -383,4 +502,48 @@ fn network_error_yields_baixa_proposal_and_never_aborts_batch() {
         assert_eq!(p.error.as_deref(), Some("sem conexão"));
         assert!(p.lyrics.is_none());
     }
+}
+
+// ---------------------------------------------------------------------------
+// F13 — erro de rede num palpite POSTERIOR não descarta o candidato válido
+// que um palpite anterior já achou: a proposta sai do candidato (sem error);
+// a proposta de erro só vale quando nada aproveitável veio antes da falha.
+// ---------------------------------------------------------------------------
+#[test]
+fn network_error_keeps_candidate_found_by_earlier_guess() {
+    let (_dir, conn, _folder_id) =
+        setup_with(&[("sem_tags.mp3", "Falamansa - Oh! Chuva.mp3")]);
+    let song = song_by_suffix(&conn, "Oh! Chuva.mp3");
+    let dur = song.duration_seconds.unwrap() as f64 + 10.0; // dif 10 s ⇒ MÉDIA
+    let body = format!(
+        r#"[{{"trackName": "Oh! Chuva", "artistName": "Falamansa",
+             "duration": {dur}, "plainLyrics": "letra"}}]"#
+    );
+
+    // 1ª consulta acha candidato MÉDIA (não para o loop, só ALTA para);
+    // 2ª consulta cai com erro de rede.
+    let calls = RefCell::new(0usize);
+    let props = enrich::enrich_scan(
+        &conn,
+        "",
+        |_: &str| {
+            *calls.borrow_mut() += 1;
+            if *calls.borrow() == 1 {
+                Ok(body.clone())
+            } else {
+                Err(AppError("sem conexão".into()))
+            }
+        },
+        ZERO,
+    )
+    .unwrap();
+
+    assert!(*calls.borrow() >= 2, "houve palpite depois do candidato válido");
+    assert_eq!(props.len(), 1);
+    let p = &props[0];
+    assert_eq!(p.confidence, "media", "candidato achado antes do erro é mantido");
+    assert_eq!(p.proposed_title, "Oh! Chuva");
+    assert_eq!(p.proposed_artist.as_deref(), Some("Falamansa"));
+    assert_eq!(p.lyrics.as_deref(), Some("letra"));
+    assert!(p.error.is_none(), "erro posterior não vira error na proposta");
 }

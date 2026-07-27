@@ -3,6 +3,7 @@ import { SEARCH_INPUT_ID } from "../components/SearchBar";
 import { audioController } from "./playerAudioCore";
 import { filterResultsByFolder } from "../lib/folderTree";
 import { playSelectedOrToggle } from "../lib/playbackActions";
+import { useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlayerStore } from "../stores/playerStore";
 import { usePlaylistStore } from "../stores/playlistStore";
@@ -14,6 +15,16 @@ function isTextInput(target: EventTarget | null): boolean {
     target instanceof HTMLElement &&
     (target.tagName === "INPUT" || target.tagName === "TEXTAREA")
   );
+}
+
+/**
+ * True enquanto um modal está aberto — TODOS os atalhos globais ficam
+ * suspensos (mesma ideia do guard de inputs acima): o modal é quem trata o
+ * teclado (Esc fecha, Tab cicla dentro dele). Outros modais que precisem
+ * suspender os atalhos entram neste OR.
+ */
+function isModalOpen(): boolean {
+  return useEnrichStore.getState().status !== "idle";
 }
 
 /** Foca a busca de qualquer tela: volta para a Biblioteca se preciso. */
@@ -51,6 +62,8 @@ function visibleSongs(): { songs: Song[]; playlistId: number | null } {
 export function useKeyboardShortcuts() {
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
+      if (isModalOpen()) return; // o modal cuida do próprio teclado
+
       const inInput = isTextInput(e.target);
 
       // Ctrl/Cmd+K funciona de qualquer lugar

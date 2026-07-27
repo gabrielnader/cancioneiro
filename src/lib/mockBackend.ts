@@ -1,4 +1,10 @@
-import type { Backend, EnrichApply, EnrichProposal } from "./api";
+import type {
+  Backend,
+  EnrichApply,
+  EnrichApplyResult,
+  EnrichProposal,
+} from "./api";
+import { isUnderFolder } from "./folderTree";
 import { HIGHLIGHT_END, HIGHLIGHT_START } from "./highlight";
 import type {
   Folder,
@@ -27,7 +33,11 @@ export interface MockBackend extends Backend {
   _reset(): void;
   /** Valor devolvido pelo próximo pickFolder(). */
   _nextPickedFolder: string;
-  /** Simula falta de rede: fetchLyricsOnline e enrichFolderScan rejeitam com "sem conexão" (V4/V5). */
+  /**
+   * Simula falta de rede: fetchLyricsOnline rejeita com "sem conexão" (V4);
+   * enrichFolderScan NUNCA rejeita — cada proposta vem com error "sem
+   * conexão" (V5, DECISIONS #47 — mesma semântica do backend real).
+   */
   _offline: boolean;
   /** Popula a pasta /acervo com subpastas 1/ e 2/ para o E2E da árvore (V4 F11). */
   _seedFolderTree(): void;
@@ -545,14 +555,12 @@ export function createMockBackend(): MockBackend {
     },
 
     async enrichFolderScan(folderPrefix: string): Promise<EnrichProposal[]> {
-      // Mesma convenção do fetchLyricsOnline: sem rede, o invoke rejeita.
-      if (backend._offline) {
-        throw new Error("sem conexão");
-      }
       const proposals: EnrichProposal[] = [];
       for (const song of state.songs) {
         if (!song.available) continue;
-        if (folderPrefix && !song.file_path.startsWith(folderPrefix)) continue;
+        // prefixo casa na FRONTEIRA de separador ("/m/1" não casa "/m/10/a.mp3"),
+        // como o filtro da árvore de pastas (isUnderFolder) e o backend Rust
+        if (folderPrefix && !isUnderFolder(song.file_path, folderPrefix)) continue;
         // incompleta = sem letra OU sem artista (regra simplificada do Rust)
         const completa = song.has_lyrics && song.artist !== null;
         if (completa) continue;
@@ -573,6 +581,20 @@ export function createMockBackend(): MockBackend {
             lyrics: null,
             confidence: "baixa",
             error: `arquivo não encontrado: ${song.file_path}`,
+          });
+          continue;
+        }
+
+        // sem rede: o backend real NUNCA rejeita por rede — o erro vem POR
+        // MÚSICA na proposta e a linha fica desabilitada (DECISIONS #47)
+        if (backend._offline) {
+          proposals.push({
+            ...base,
+            proposed_title: song.title,
+            proposed_artist: song.artist,
+            lyrics: null,
+            confidence: "baixa",
+            error: "sem conexão",
           });
           continue;
         }
@@ -627,18 +649,31 @@ export function createMockBackend(): MockBackend {
       return proposals;
     },
 
-    async enrichApply(aplicacoes: EnrichApply[]): Promise<Song[]> {
-      const updated: Song[] = [];
+    async enrichApply(aplicacoes: EnrichApply[]): Promise<EnrichApplyResult[]> {
+      // NUNCA aborta o lote: cada música grava ou falha individualmente e o
+      // resultado volta por música (mesma semântica do backend Rust)
+      const results: EnrichApplyResult[] = [];
       for (const ap of aplicacoes) {
         const song = state.songs.find((s) => s.id === ap.song_id);
         if (!song) {
-          throw new Error(`música não encontrada: ${ap.song_id}`);
+          results.push({
+            song_id: ap.song_id,
+            song: null,
+            error: `música não encontrada: ${ap.song_id}`,
+          });
+          continue;
         }
         if (state.deletedFiles.includes(song.file_path)) {
-          throw new Error(`arquivo removido do disco: ${song.file_path}`);
+          results.push({
+            song_id: ap.song_id,
+            song: null,
+            error: `arquivo não encontrado: ${song.file_path}`,
+          });
+          continue;
         }
         if (!ap.title.trim()) {
-          throw new Error("título vazio");
+          results.push({ song_id: ap.song_id, song: null, error: "título vazio" });
+          continue;
         }
         // o lote NUNCA apaga: null/vazio preserva o valor atual do arquivo;
         // NUNCA renomeia (file_path intocado)
@@ -657,10 +692,10 @@ export function createMockBackend(): MockBackend {
             : ap.add_temas;
           song.temas = normalizeTemas(joined);
         }
-        updated.push(toSong(song));
+        results.push({ song_id: ap.song_id, song: toSong(song), error: null });
       }
       save();
-      return updated;
+      return results;
     },
 
     async onScanProgress(cb: (p: ScanProgress) => void): Promise<() => void> {

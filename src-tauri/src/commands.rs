@@ -277,13 +277,15 @@ pub fn enrich_folder_scan(
 }
 
 /// Aplica as propostas aceitas (write_tags por música; nunca renomeia, nunca
-/// apaga dados existentes — só preenche/atualiza o que veio). Devolve as
-/// Songs atualizadas.
+/// apaga dados existentes — só preenche/atualiza o que veio). Devolve um
+/// resultado por música (`song` = gravada e reindexada; `error` = falhou):
+/// falha numa música NÃO aborta o lote, então a UI fica em sincronia com o
+/// que realmente foi para o disco.
 #[tauri::command]
 pub fn enrich_apply(
     state: State<'_, Db>,
     aplicacoes: Vec<crate::enrich::EnrichApply>,
-) -> Result<Vec<Song>> {
+) -> Result<Vec<crate::enrich::EnrichApplyResult>> {
     let conn = state.lock()?;
     crate::enrich::apply(&conn, &aplicacoes)
 }

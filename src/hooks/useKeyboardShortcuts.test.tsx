@@ -2,6 +2,7 @@ import { fireEvent, render } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
 import { useKeyboardShortcuts } from "./useKeyboardShortcuts";
 import { SEARCH_INPUT_ID } from "../components/SearchBar";
+import { useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlayerStore } from "../stores/playerStore";
 import type { Song } from "../lib/types";
@@ -47,6 +48,7 @@ describe("useKeyboardShortcuts (F4 — espaço e navegação)", () => {
       playlistId: null,
       isPlaying: false,
     });
+    useEnrichStore.setState({ status: "idle", folderPrefix: "", proposals: [] });
   });
 
   it("espaço alterna play/pause quando há música e o foco não está na busca", () => {
@@ -126,5 +128,41 @@ describe("useKeyboardShortcuts (F4 — espaço e navegação)", () => {
     useLibraryStore.setState({ query: "algo" });
     fireEvent.keyDown(document.body, { key: "Escape" });
     expect(useLibraryStore.getState().query).toBe("");
+  });
+
+  describe("com o overlay de enriquecimento aberto (modal suspende os atalhos)", () => {
+    it("espaço NÃO alterna play/pause", () => {
+      render(<Harness />);
+      usePlayerStore.getState().playSong(song(1));
+      expect(usePlayerStore.getState().isPlaying).toBe(true);
+
+      useEnrichStore.setState({ status: "review" });
+      fireEvent.keyDown(document.body, { key: " ", code: "Space" });
+      expect(usePlayerStore.getState().isPlaying).toBe(true);
+    });
+
+    it("Esc NÃO limpa a busca (o modal é quem trata o Esc)", () => {
+      render(<Harness />);
+      useLibraryStore.setState({ query: "algo" });
+      useEnrichStore.setState({ status: "review" });
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      expect(useLibraryStore.getState().query).toBe("algo");
+    });
+
+    it("setas, Enter e '/' também ficam suspensos (inclusive durante a varredura)", () => {
+      const { container } = render(<Harness />);
+      useEnrichStore.setState({ status: "scanning" });
+
+      fireEvent.keyDown(document.body, { key: "ArrowDown" });
+      expect(useLibraryStore.getState().selectedSongId).toBeNull();
+
+      fireEvent.keyDown(document.body, { key: "Enter" });
+      expect(usePlayerStore.getState().current).toBeNull();
+
+      fireEvent.keyDown(document.body, { key: "/" });
+      expect(document.activeElement).not.toBe(
+        container.querySelector(`#${SEARCH_INPUT_ID}`),
+      );
+    });
   });
 });

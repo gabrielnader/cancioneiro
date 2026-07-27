@@ -74,9 +74,12 @@ describe("enrichStore (V5 — F13)", () => {
     expect(useEnrichStore.getState().proposals).toEqual([]);
   });
 
-  it("falha da varredura inteira: toast 'Sem conexão…' e volta a idle", async () => {
+  // Caminho DEFENSIVO: o backend real nunca rejeita por rede (erros viram
+  // proposals com error — DECISIONS #47); um invoke rejeitado (infraestrutura)
+  // é testado com um fake injetado que rejeita, não com o _offline do mock.
+  it("invoke rejeitado (defensivo): toast 'Sem conexão…' e volta a idle", async () => {
     const enrichFolderScan = vi.fn(async () => {
-      throw new Error("sem conexão");
+      throw new Error("falha de infraestrutura");
     });
     setBackendForTests({ enrichFolderScan } as unknown as Backend);
 

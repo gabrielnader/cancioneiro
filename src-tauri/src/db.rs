@@ -70,6 +70,27 @@ CREATE TABLE IF NOT EXISTS songs (
 
 CREATE INDEX IF NOT EXISTS idx_songs_folder_id ON songs(folder_id);
 
+CREATE TABLE IF NOT EXISTS playlists (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS playlist_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+    song_id INTEGER NOT NULL REFERENCES songs(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_playlist_items ON playlist_items(playlist_id, position);
+"#;
+
+/// DDL da FTS5 e seus triggers, separada do SCHEMA para a migração poder
+/// recriá-la DENTRO da mesma transação dos ALTERs/repovoamento (o SCHEMA tem
+/// `PRAGMA journal_mode`, que não pode rodar dentro de transação).
+const FTS_SCHEMA: &str = r#"
 CREATE VIRTUAL TABLE IF NOT EXISTS songs_fts USING fts5(
     title, artist, lyrics, temas, pastas,
     content='songs', content_rowid='id',
@@ -92,22 +113,6 @@ CREATE TRIGGER IF NOT EXISTS songs_au AFTER UPDATE ON songs BEGIN
     INSERT INTO songs_fts(rowid, title, artist, lyrics, temas, pastas)
     VALUES (new.id, new.title, new.artist, new.lyrics, new.temas, new.pastas);
 END;
-
-CREATE TABLE IF NOT EXISTS playlists (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE TABLE IF NOT EXISTS playlist_items (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
-    song_id INTEGER NOT NULL REFERENCES songs(id) ON DELETE CASCADE,
-    position INTEGER NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_playlist_items ON playlist_items(playlist_id, position);
 "#;
 
 /// Remove diacríticos latinos comuns (suficiente para ordenação pt-BR).
@@ -143,6 +148,7 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
     conn.create_collation("ptbr", |a, b| fold_pt(a).cmp(&fold_pt(b)))?;
     migrate_if_needed(conn)?;
     conn.execute_batch(SCHEMA)?;
+    conn.execute_batch(FTS_SCHEMA)?;
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
 }
@@ -153,6 +159,12 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
 /// para o próximo rescan reler os arquivos (e popular temas/pastas) —
 /// playlists e demais dados ficam intactos. O mesmo caminho cobre v1→v3 e
 /// v2→v3 (migração encadeada): só as colunas ausentes são adicionadas.
+///
+/// A migração inteira (ALTERs, FTS derrubada+recriada+repovoada, mtime e o
+/// bump de user_version) roda numa ÚNICA transação — DDL de FTS5 é
+/// transacional no SQLite. Um crash no meio desfaz tudo e a migração
+/// recomeça do zero na próxima abertura: user_version só avança junto com a
+/// FTS repovoada, nunca fica um banco "meio migrado" com busca vazia.
 fn migrate_if_needed(conn: &Connection) -> Result<()> {
     let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if version >= SCHEMA_VERSION {
@@ -181,9 +193,8 @@ fn migrate_if_needed(conn: &Connection) -> Result<()> {
     if !has_column("pastas")? {
         alters.push_str("ALTER TABLE songs ADD COLUMN pastas TEXT;\n"); // V3
     }
-    if alters.is_empty() {
-        return Ok(()); // colunas em dia: init_schema só atualiza user_version
-    }
+    // Mesmo sem coluna faltando (ex.: migração antiga interrompida depois dos
+    // ALTERs), version < 3 exige a FTS reconstruída e repovoada.
 
     let tx = conn.unchecked_transaction()?;
     tx.execute_batch(&format!(
@@ -195,15 +206,16 @@ fn migrate_if_needed(conn: &Connection) -> Result<()> {
          -- força releitura dos arquivos no próximo rescan (popula temas/pastas)
          UPDATE songs SET file_mtime = -1;"
     ))?;
-    tx.commit()?;
-    // O SCHEMA (IF NOT EXISTS) recria songs_fts/triggers com as colunas
-    // novas; repovoa o índice FTS com o conteúdo atual.
-    conn.execute_batch(SCHEMA)?;
-    conn.execute(
+    // Recria songs_fts/triggers com as colunas novas e repovoa o índice com
+    // o conteúdo atual — ainda dentro da transação.
+    tx.execute_batch(FTS_SCHEMA)?;
+    tx.execute(
         "INSERT INTO songs_fts(rowid, title, artist, lyrics, temas, pastas)
          SELECT id, title, artist, lyrics, temas, pastas FROM songs",
         [],
     )?;
+    tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -652,6 +664,70 @@ mod tests {
         // idempotente
         init_schema(&conn).unwrap();
         assert_eq!(get_playlist_items(&conn, 1).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn interrupted_v3_migration_recovers_with_populated_fts() {
+        // Simula o estado deixado pela antiga janela de crash da migração
+        // v→3: colunas novas já criadas, FTS/triggers derrubados, mtime
+        // zerado — mas o repovoamento da FTS nunca aconteceu e user_version
+        // segue 2. A reabertura DEVE repovoar a FTS; user_version só pode
+        // avançar junto com a FTS populada (contagem == songs).
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON;
+             CREATE TABLE folders (id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL UNIQUE,
+                 created_at TEXT NOT NULL DEFAULT (datetime('now')), last_scanned_at TEXT);
+             CREATE TABLE songs (id INTEGER PRIMARY KEY AUTOINCREMENT, file_path TEXT NOT NULL UNIQUE,
+                 folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+                 title TEXT NOT NULL, artist TEXT, album TEXT, duration_seconds INTEGER,
+                 has_lyrics INTEGER NOT NULL DEFAULT 0, lyrics TEXT, temas TEXT, pastas TEXT,
+                 file_mtime INTEGER NOT NULL, file_size INTEGER NOT NULL,
+                 available INTEGER NOT NULL DEFAULT 1,
+                 indexed_at TEXT NOT NULL DEFAULT (datetime('now')));
+             CREATE TABLE playlists (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                 updated_at TEXT NOT NULL DEFAULT (datetime('now')));
+             CREATE TABLE playlist_items (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+                 song_id INTEGER NOT NULL REFERENCES songs(id) ON DELETE CASCADE,
+                 position INTEGER NOT NULL);
+             INSERT INTO folders (path) VALUES ('/f');
+             INSERT INTO songs (file_path, folder_id, title, lyrics, temas, has_lyrics, file_mtime, file_size)
+             VALUES ('/f/a.mp3', 1, 'Antiga', 'letra antiga', 'água; cura', 1, -1, 10),
+                    ('/f/b.mp3', 1, 'Outra', NULL, NULL, 0, -1, 10);
+             PRAGMA user_version = 2;",
+        )
+        .unwrap();
+
+        init_schema(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 3);
+
+        // user_version=3 implica FTS repovoada: uma linha por música
+        let songs_count: i64 = conn
+            .query_row("SELECT count(*) FROM songs", [], |r| r.get(0))
+            .unwrap();
+        let fts_count: i64 = conn
+            .query_row("SELECT count(*) FROM songs_fts", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            fts_count, songs_count,
+            "FTS deve ser repovoada mesmo com as colunas já criadas"
+        );
+        for termo in ["\"antiga\"", "\"letra\"", "\"cura\""] {
+            let hits: i64 = conn
+                .query_row(
+                    &format!("SELECT count(*) FROM songs_fts WHERE songs_fts MATCH '{termo}'"),
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(hits, 1, "termo {termo}");
+        }
     }
 
     #[test]
