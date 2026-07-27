@@ -161,3 +161,31 @@ opção mais simples que passa nos Acceptance Checks do PRD.
 44. **Enriquecer (V3.1) pós-teste real**: consulta limpa + track_name/artist_name
     com fallback q= (hífens/pontuação zeravam o full-text do LRCLIB); em BAIXA,
     Enter pula e aceitar exige 'a'; BAIXA nunca sobrescreve tags existentes.
+
+## V0.4 — Quick wins do teste real + busca por pasta (F12) + lote no app (F13)
+
+45. **Tema pendente entra no salvamento**: texto digitado no campo de tema sem
+    Enter é commitado ao salvar/blur (commitTemaInput) — era perda silenciosa
+    de dado na UX real de toque.
+46. **Pastas na FTS, não na Song**: coluna songs.pastas (subpastas entre a
+    pasta importada e o arquivo) indexada na FTS para busca por nome de pasta;
+    o struct Song NÃO expõe o campo (a UI já deriva a árvore dos file_path —
+    decisão 43). Match só em pasta não gera snippet (snippet segue exclusivo
+    da letra, índice 2 da FTS). Migração v1/v2→v3 zera file_mtime (-1) para o
+    próximo scan repopular.
+47. **Proposta do lote carrega a letra**: enrich_scan devolve a letra achada
+    na própria proposta — aplicar não faz segunda rodada de rede. Erro de rede
+    por música vira proposta com `error` (linha desabilitada na UI); o lote
+    nunca aborta.
+48. **Apply do lote nunca apaga**: campos None releem o valor atual do banco e
+    o regravam (letra/artista/temas preservados); reusa writer::write_tags
+    (validação + reindexação únicas). Aplicar usa o lock compartilhado — N
+    gravações seguram a busca por alguns segundos, aceito para lotes de
+    dezenas de músicas (a varredura, que demora minutos, usa conexão dedicada).
+49. **BAIXA marcável, nunca pré-marcada**: no teste real a maioria dos palpites
+    de nome de arquivo estava certa, mas a decisão é humana — ALTA pré-marcada,
+    MÉDIA/BAIXA desmarcadas, checkbox por linha + Marcar/Desmarcar todas.
+50. **Revisão como overlay modal** (não uma View nova): estado em enrichStore
+    com guarda de corrida (fechar durante a varredura descarta o resultado ao
+    chegar); dupla varredura bloqueada; se a música tocando está entre as
+    selecionadas, pausa antes de gravar (regra da decisão 40).
