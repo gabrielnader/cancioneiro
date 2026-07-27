@@ -117,6 +117,63 @@ fn read_tags(path: &Path) -> TagData {
     }
 }
 
+/// Upsert de uma música por file_path (INSERT ... ON CONFLICT preserva o id —
+/// e portanto os itens de playlist que apontam para ela).
+fn upsert_song(
+    conn: &Connection,
+    folder_id: i64,
+    path_str: &str,
+    tags: &TagData,
+    mtime: i64,
+    size: i64,
+) -> Result<()> {
+    let has_lyrics = tags.lyrics.is_some();
+    conn.execute(
+        "INSERT INTO songs
+            (file_path, folder_id, title, artist, album, duration_seconds,
+             has_lyrics, lyrics, temas, file_mtime, file_size, available, indexed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, datetime('now'))
+         ON CONFLICT(file_path) DO UPDATE SET
+            folder_id = excluded.folder_id,
+            title = excluded.title,
+            artist = excluded.artist,
+            album = excluded.album,
+            duration_seconds = excluded.duration_seconds,
+            has_lyrics = excluded.has_lyrics,
+            lyrics = excluded.lyrics,
+            temas = excluded.temas,
+            file_mtime = excluded.file_mtime,
+            file_size = excluded.file_size,
+            available = 1,
+            indexed_at = datetime('now')",
+        params![
+            path_str,
+            folder_id,
+            tags.title,
+            tags.artist,
+            tags.album,
+            tags.duration_seconds,
+            has_lyrics as i64,
+            tags.lyrics,
+            tags.temas,
+            mtime,
+            size
+        ],
+    )?;
+    Ok(())
+}
+
+/// Reindexa um único arquivo (F10): re-stata mtime/size, relê as tags e faz
+/// upsert — usado pelo writer logo após gravar tags, para o banco (e a FTS,
+/// via triggers) refletirem o disco sem esperar um rescan.
+pub(crate) fn index_single_file(conn: &Connection, folder_id: i64, path: &Path) -> Result<()> {
+    let md = std::fs::metadata(path)?;
+    let mtime = file_mtime_epoch(&md);
+    let size = md.len() as i64;
+    let tags = read_tags(path);
+    upsert_song(conn, folder_id, &path.to_string_lossy(), &tags, mtime, size)
+}
+
 fn file_mtime_epoch(md: &std::fs::Metadata) -> i64 {
     // Milissegundos: resolução de segundos deixaria passar um arquivo editado
     // no mesmo segundo da indexação (com o mesmo tamanho).
@@ -211,39 +268,7 @@ pub fn scan_folder<F: FnMut(usize, usize)>(
         if tags.fallback {
             stats.tag_errors += 1;
         }
-        let has_lyrics = tags.lyrics.is_some();
-        conn.execute(
-            "INSERT INTO songs
-                (file_path, folder_id, title, artist, album, duration_seconds,
-                 has_lyrics, lyrics, temas, file_mtime, file_size, available, indexed_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, datetime('now'))
-             ON CONFLICT(file_path) DO UPDATE SET
-                folder_id = excluded.folder_id,
-                title = excluded.title,
-                artist = excluded.artist,
-                album = excluded.album,
-                duration_seconds = excluded.duration_seconds,
-                has_lyrics = excluded.has_lyrics,
-                lyrics = excluded.lyrics,
-                temas = excluded.temas,
-                file_mtime = excluded.file_mtime,
-                file_size = excluded.file_size,
-                available = 1,
-                indexed_at = datetime('now')",
-            params![
-                path_str,
-                folder_id,
-                tags.title,
-                tags.artist,
-                tags.album,
-                tags.duration_seconds,
-                has_lyrics as i64,
-                tags.lyrics,
-                tags.temas,
-                mtime,
-                size
-            ],
-        )?;
+        upsert_song(conn, folder_id, &path_str, &tags, mtime, size)?;
         stats.indexed += 1;
         done += 1;
         progress(done, stats.total);

@@ -188,3 +188,60 @@ pub fn reorder_playlist(
     let conn = state.lock()?;
     db::reorder_playlist(&conn, playlist_id, &item_ids)
 }
+
+// ---------------------------------------------------------------------------
+// Curadoria no player (F10 — PRD V4)
+// ---------------------------------------------------------------------------
+
+/// Grava TIT2/TPE1/USLT/TXXX:TEMAS no MP3 (nunca renomeia, nunca toca o
+/// áudio), reindexa o arquivo e devolve a Song atualizada.
+#[tauri::command]
+pub fn write_tags(
+    state: State<'_, Db>,
+    song_id: i64,
+    title: String,
+    artist: Option<String>,
+    lyrics: Option<String>,
+    temas: Option<String>,
+) -> Result<Song> {
+    let conn = state.lock()?;
+    crate::writer::write_tags(
+        &conn,
+        song_id,
+        &title,
+        artist.as_deref(),
+        lyrics.as_deref(),
+        temas.as_deref(),
+    )
+}
+
+/// Busca a letra no LRCLIB por título+artista+duração.
+///
+/// ESTE COMANDO É O ÚNICO PONTO DE REDE DE TODO O APP (PRD V4): tudo o mais é
+/// 100% offline. GET com timeout de 10 s e User-Agent "Cancioneiro/0.4";
+/// qualquer falha de rede vira Err "sem conexão" (o frontend converte no
+/// aviso "Sem conexão — a busca de letra precisa de internet.").
+#[tauri::command]
+pub fn fetch_lyrics_online(
+    title: String,
+    artist: Option<String>,
+    duration_seconds: f64,
+) -> Result<Option<crate::lyrics_fetch::LyricsMatch>> {
+    crate::lyrics_fetch::fetch_lyrics_online(
+        &title,
+        artist.as_deref().unwrap_or(""),
+        duration_seconds,
+        |url| {
+            let agent = ureq::AgentBuilder::new()
+                .timeout(std::time::Duration::from_secs(10))
+                .user_agent("Cancioneiro/0.4")
+                .build();
+            agent
+                .get(url)
+                .call()
+                .map_err(|_| AppError("sem conexão".into()))?
+                .into_string()
+                .map_err(|_| AppError("sem conexão".into()))
+        },
+    )
+}

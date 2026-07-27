@@ -20,6 +20,8 @@ serde_json = "1"
 lofty = "0.22"
 rusqlite = { version = "0.32", features = ["bundled", "collation"] }
 walkdir = "2"
+# usado SOMENTE pelo comando fetch_lyrics_online (único ponto de rede do app)
+ureq = { version = "2", features = ["tls"] }
 
 [dev-dependencies]
 tempfile = "3"

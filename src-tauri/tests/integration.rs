@@ -435,7 +435,9 @@ fn roundtrip_temas_from_python_script_and_search_by_tema() {
 // ---------------------------------------------------------------------------
 // Seção 8 do PRD: nenhum arquivo de áudio é modificado pelo app — bytes dos
 // MP3s idênticos antes/depois de todos os fluxos de backend (indexar,
-// reindexar, buscar, ler letra, playlists, rescan).
+// reindexar, buscar, ler letra, playlists, rescan). Exclui, por definição
+// (PRD V4), o único fluxo que escreve: writer::write_tags, que tem testes
+// próprios de round-trip/áudio intacto/nome intacto em tests/writer.rs.
 // ---------------------------------------------------------------------------
 #[test]
 fn backend_flows_never_modify_audio_files() {

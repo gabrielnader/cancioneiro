@@ -2,7 +2,9 @@ pub mod commands;
 pub mod db;
 pub mod error;
 pub mod indexer;
+pub mod lyrics_fetch;
 pub mod search;
+pub mod writer;
 
 use tauri::Manager;
 
@@ -35,6 +37,8 @@ pub fn run() {
             commands::add_to_playlist,
             commands::remove_playlist_item,
             commands::reorder_playlist,
+            commands::write_tags,
+            commands::fetch_lyrics_online,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -124,7 +124,9 @@ fn strip_diacritic(c: char) -> char {
     }
 }
 
-fn fold_pt(s: &str) -> String {
+/// Minúsculas + sem acento — chave de comparação/ordenação pt-BR. Reusada
+/// pelo writer (normalização de temas, F10) e pelo lyrics_fetch (similaridade).
+pub(crate) fn fold_pt(s: &str) -> String {
     s.chars()
         .flat_map(char::to_lowercase)
         .map(strip_diacritic)
