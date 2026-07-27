@@ -54,6 +54,9 @@ Para atualizar, instale por cima da versão anterior (no macOS, arraste para
 Aplicativos e confirme "Substituir") — playlists, pastas e preferências são
 preservadas, e os dados das músicas vivem nos próprios MP3s.
 
+Para enviar a quem vai só usar o player (linguagem simples, passo a passo, sem
+jargão): [`docs/GUIA-DE-INSTALACAO.md`](./docs/GUIA-DE-INSTALACAO.md).
+
 Os binários **não são assinados nem notarizados**, então os sistemas avisam:
 
 - **macOS** — a mensagem costuma ser *"Cancioneiro está danificado e não pode ser
@@ -221,7 +224,7 @@ Prepare: `python3 tools/make_fixtures.py` e copie `fixtures/com_letra.mp3`,
    mouse. Abra a playlist e clique "▶ Tocar playlist": a primeira toca (~3s) e a
    segunda **começa sozinha**; ao fim da segunda a reprodução para e o botão volta a ▶.
    Arraste um item para trocar a ordem.
-7. **Persistência**: mude o volume, oculte o painel de letra ("Ocultar letra"),
+7. **Persistência**: mude o volume, oculte o painel de letra ("Ocultar detalhes"),
    aumente a fonte da letra ("Aa") e feche o app. Reabra: volume, painel oculto,
    nível de fonte, a playlist "Culto" e sua ordem devem estar como você deixou.
 8. **Arquivo ausente**: feche o app, apague `sem_letra.mp3` da pasta de teste e
