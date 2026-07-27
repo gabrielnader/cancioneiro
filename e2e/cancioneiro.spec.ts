@@ -357,6 +357,127 @@ test.describe("Playlists (F5)", () => {
   });
 });
 
+test.describe("V4", () => {
+  test("editar metadados no app: salvar grava, toast exato e a busca encontra o novo título", async ({
+    page,
+  }) => {
+    const errors = trackErrors(page);
+    await resetApp(page);
+    await addMockFolder(page);
+
+    // clique único seleciona; painel mostra o botão Editar
+    await page.getByText("sem_tags", { exact: true }).first().click();
+    const panel = page.getByLabel("Painel de letra");
+    await panel.getByRole("button", { name: "Editar" }).click();
+
+    await panel.getByLabel("Título").fill("Canção Editada");
+    await panel.getByLabel("Artista").fill("Artista Editado");
+    const temaInput = panel.getByPlaceholder("Adicionar tema");
+    await temaInput.fill("fé");
+    await temaInput.press("Enter");
+    await expect(
+      panel.getByRole("button", { name: "Remover tema fé" }),
+    ).toBeVisible();
+
+    await panel.getByRole("button", { name: "Salvar no arquivo" }).click();
+    // toast exato com o basename do arquivo
+    await expect(
+      page.getByText("Alterações salvas em sem_tags.mp3."),
+    ).toBeVisible();
+
+    // sai do modo edição e o painel mostra o novo título/artista
+    await expect(panel.getByLabel("Título")).toHaveCount(0);
+    await expect(panel.getByText("Canção Editada")).toBeVisible();
+    await expect(panel.getByText("Artista Editado")).toBeVisible();
+
+    // reindexado: buscar pelo novo título encontra
+    const search = page.getByPlaceholder("Buscar por letra, título ou artista…");
+    await search.fill("Canção Editada");
+    await expect(page.getByText("1 resultados")).toBeVisible();
+    await expect(
+      page.getByRole("option").filter({ hasText: "Canção Editada" }),
+    ).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
+  test("buscar letra na internet: não achou, achou (preenche a textarea) e sem conexão", async ({
+    page,
+  }) => {
+    await resetApp(page);
+    await addMockFolder(page);
+
+    await page.getByText("Instrumental Sem Letra").first().click();
+    const panel = page.getByLabel("Painel de letra");
+    await panel.getByRole("button", { name: "Editar" }).click();
+
+    // título original não casa com o mock → aviso exato de não encontrada
+    await panel.getByRole("button", { name: "Buscar letra na internet" }).click();
+    await expect(
+      page.getByText("Letra não encontrada para este título e artista."),
+    ).toBeVisible();
+
+    // usa o título DIGITADO (não salvo): "Coração Sertanejo" casa com o mock
+    await panel.getByLabel("Título").fill("Coração Sertanejo");
+    await panel.getByRole("button", { name: "Buscar letra na internet" }).click();
+    await expect(panel.getByLabel("Letra", { exact: true })).toHaveValue(
+      /Quando o sol amanhecer/,
+    );
+
+    // sem conexão: o mock rejeita e o app avisa com a copy exata
+    await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__CANCIONEIRO_MOCK__._offline = true;
+    });
+    await panel.getByRole("button", { name: "Buscar letra na internet" }).click();
+    await expect(
+      page.getByText("Sem conexão — a busca de letra precisa de internet."),
+    ).toBeVisible();
+  });
+
+  test("árvore de pastas: subpastas com contadores, clique filtra, chip remove o filtro", async ({
+    page,
+  }) => {
+    await resetApp(page);
+    await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__CANCIONEIRO_MOCK__._seedFolderTree();
+    });
+    await page.reload();
+
+    // árvore: raiz "acervo" e subpastas "1" e "2" com contadores
+    const root = page.getByRole("button", { name: "Pasta acervo" });
+    await expect(root).toBeVisible();
+    await expect(root).toContainText("2");
+    const pasta1 = page.getByRole("button", { name: "Pasta 1", exact: true });
+    const pasta2 = page.getByRole("button", { name: "Pasta 2", exact: true });
+    await expect(pasta1).toContainText("1");
+    await expect(pasta2).toContainText("1");
+
+    // clicar em "1" filtra a lista para a subárvore de 1/
+    await pasta1.click();
+    const list = page.getByRole("listbox", { name: "Músicas" });
+    await expect(list.getByText("Faixa Um")).toBeVisible();
+    await expect(list.getByText("Faixa Dois")).toHaveCount(0);
+
+    // chip removível no topo
+    const chip = page.getByRole("button", { name: "Remover filtro de pasta" });
+    await expect(chip).toBeVisible();
+    await expect(chip).toContainText("📁 1");
+
+    // busca digitada refina DENTRO do filtro
+    const search = page.getByPlaceholder("Buscar por letra, título ou artista…");
+    await search.fill("faixa");
+    await expect(page.getByText("1 resultados")).toBeVisible();
+    await search.fill("");
+
+    // × limpa o filtro e restaura a biblioteca completa
+    await chip.click();
+    await expect(chip).toHaveCount(0);
+    await expect(list.getByText("Faixa Um")).toBeVisible();
+    await expect(list.getByText("Faixa Dois")).toBeVisible();
+  });
+});
+
 test.describe("Escala: 2.000 músicas", () => {
   test("lista virtualizada rola e busca responde rápido", async ({ page }) => {
     await resetApp(page);

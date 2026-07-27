@@ -448,6 +448,172 @@ describe("mockBackend", () => {
     });
   });
 
+  describe("writeTags (V4 — F10)", () => {
+    it("atualiza título, artista, letra e temas e devolve a Song atualizada", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const semTags = songs.find((s) => s.title === "sem_tags")!;
+
+      const saved = await backend.writeTags(
+        semTags.id,
+        "Canção Editada",
+        "Novo Artista",
+        "Primeira linha\nSegunda linha",
+        "fé; Alegria",
+      );
+      expect(saved.id).toBe(semTags.id);
+      expect(saved.title).toBe("Canção Editada");
+      expect(saved.artist).toBe("Novo Artista");
+      expect(saved.has_lyrics).toBe(true);
+      // arquivo NUNCA é renomeado
+      expect(saved.file_path).toBe(semTags.file_path);
+
+      expect(await backend.getLyrics(semTags.id)).toBe(
+        "Primeira linha\nSegunda linha",
+      );
+      const after = (await backend.listSongs()).find((s) => s.id === semTags.id)!;
+      expect(after.title).toBe("Canção Editada");
+    });
+
+    it("normaliza temas: trim, minúsculas, dedup e ordem", async () => {
+      await backend.addFolder("/musicas/teste");
+      const [first] = await backend.listSongs();
+      const saved = await backend.writeTags(
+        first.id,
+        first.title,
+        first.artist,
+        null,
+        " Fé ;alegria; FÉ ; Água",
+      );
+      // trim + minúsculas + dedup + ordem sem acento (espelha a normalização Python)
+      expect(saved.temas).toBe("água; alegria; fé");
+    });
+
+    it("letra vazia remove a letra (has_lyrics false) e temas vazios viram null", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const comLetra = songs.find((s) => s.title === "Coração Sertanejo")!;
+      const saved = await backend.writeTags(
+        comLetra.id,
+        comLetra.title,
+        comLetra.artist,
+        "",
+        "",
+      );
+      expect(saved.has_lyrics).toBe(false);
+      expect(saved.temas).toBeNull();
+      expect(await backend.getLyrics(comLetra.id)).toBeNull();
+    });
+
+    it("rejeita título vazio sem alterar nada", async () => {
+      await backend.addFolder("/musicas/teste");
+      const [first] = await backend.listSongs();
+      await expect(
+        backend.writeTags(first.id, "   ", null, null, null),
+      ).rejects.toThrow("título vazio");
+      const after = (await backend.listSongs()).find((s) => s.id === first.id)!;
+      expect(after.title).toBe(first.title);
+    });
+
+    it("rejeita quando o arquivo foi removido do disco", async () => {
+      await backend.addFolder("/musicas/teste");
+      const [first] = await backend.listSongs();
+      backend._removeFileFromDisk(first.file_path);
+      await expect(
+        backend.writeTags(first.id, "Novo Título", null, null, null),
+      ).rejects.toThrow("removido do disco");
+    });
+
+    it("busca por trecho da letra nova encontra a música (índice atualizado)", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const semTags = songs.find((s) => s.title === "sem_tags")!;
+      await backend.writeTags(
+        semTags.id,
+        "Canção Editada",
+        null,
+        "verso totalmente exclusivo xyzabc",
+        null,
+      );
+      const results = await backend.search("xyzabc");
+      expect(results).toHaveLength(1);
+      expect(results[0].song.title).toBe("Canção Editada");
+    });
+
+    it("persiste a edição em localStorage (sobrevive a restart)", async () => {
+      await backend.addFolder("/musicas/teste");
+      const [first] = await backend.listSongs();
+      await backend.writeTags(first.id, "Persistida Editada", null, null, null);
+      const reborn = createMockBackend();
+      const songs = await reborn.listSongs();
+      expect(songs.find((s) => s.id === first.id)!.title).toBe(
+        "Persistida Editada",
+      );
+    });
+
+    it("rejeita para id inexistente", async () => {
+      await expect(
+        backend.writeTags(99999, "Título", null, null, null),
+      ).rejects.toThrow();
+    });
+  });
+
+  describe("fetchLyricsOnline (V4 — F10)", () => {
+    it("título contendo 'coração sertanejo' (mesmo sem acento) devolve o match fixo", async () => {
+      const match = await backend.fetchLyricsOnline(
+        "coracao sertanejo",
+        "Qualquer Artista",
+        180,
+      );
+      expect(match).not.toBeNull();
+      expect(match!.lyrics).toBe(FIXTURE_LYRICS);
+      expect(match!.confidence).toBe("alta");
+      expect(match!.matched_title).toBe("Coração Sertanejo");
+    });
+
+    it("título sem match devolve null", async () => {
+      expect(await backend.fetchLyricsOnline("Outra Música", "A", 100)).toBeNull();
+    });
+
+    it("_offline = true rejeita com 'sem conexão'", async () => {
+      backend._offline = true;
+      await expect(
+        backend.fetchLyricsOnline("Coração Sertanejo", "Artista Teste", 180),
+      ).rejects.toThrow("sem conexão");
+    });
+  });
+
+  describe("_seedFolderTree (V4 — F11)", () => {
+    it("cria /acervo com músicas em /acervo/1 e /acervo/2", async () => {
+      backend._seedFolderTree();
+      const folders = await backend.listFolders();
+      expect(folders.map((f) => f.path)).toContain("/acervo");
+      const songs = await backend.listSongs();
+      const um = songs.find((s) => s.file_path === "/acervo/1/a.mp3");
+      const dois = songs.find((s) => s.file_path === "/acervo/2/b.mp3");
+      expect(um?.title).toBe("Faixa Um");
+      expect(dois?.title).toBe("Faixa Dois");
+      const acervo = folders.find((f) => f.path === "/acervo")!;
+      expect(um?.folder_id).toBe(acervo.id);
+    });
+
+    it("é idempotente (não duplica ao chamar duas vezes)", async () => {
+      backend._seedFolderTree();
+      backend._seedFolderTree();
+      const songs = await backend.listSongs();
+      expect(songs.filter((s) => s.file_path.startsWith("/acervo/"))).toHaveLength(2);
+      const folders = await backend.listFolders();
+      expect(folders.filter((f) => f.path === "/acervo")).toHaveLength(1);
+    });
+
+    it("persiste em localStorage (sobrevive a reload)", async () => {
+      backend._seedFolderTree();
+      const reborn = createMockBackend();
+      const songs = await reborn.listSongs();
+      expect(songs.some((s) => s.file_path === "/acervo/1/a.mp3")).toBe(true);
+    });
+  });
+
   describe("installMockBackend", () => {
     it("atribui o backend a window.__CANCIONEIRO_MOCK__ e retorna", () => {
       const installed = installMockBackend();

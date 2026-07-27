@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { getBackend } from "../lib/api";
-import type { Playlist, PlaylistItem } from "../lib/types";
+import type { Playlist, PlaylistItem, Song } from "../lib/types";
 import { usePlayerStore } from "./playerStore";
 
 interface PlaylistState {
@@ -9,6 +9,8 @@ interface PlaylistState {
   activePlaylistId: number | null;
   items: PlaylistItem[];
 
+  /** Reflete uma música editada (write_tags) nos itens abertos (V4 F10). */
+  updateSongInItems: (song: Song) => void;
   loadPlaylists: () => Promise<void>;
   openPlaylist: (playlistId: number) => Promise<void>;
   closePlaylist: () => void;
@@ -31,6 +33,11 @@ export const usePlaylistStore = create<PlaylistState>()((set, get) => ({
   playlists: [],
   activePlaylistId: null,
   items: [],
+
+  updateSongInItems: (song) =>
+    set((state) => ({
+      items: state.items.map((i) => (i.song.id === song.id ? { ...i, song } : i)),
+    })),
 
   loadPlaylists: async () => {
     set({ playlists: await getBackend().listPlaylists() });

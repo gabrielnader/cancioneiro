@@ -2,6 +2,7 @@ import type { Backend } from "./api";
 import { HIGHLIGHT_END, HIGHLIGHT_START } from "./highlight";
 import type {
   Folder,
+  LyricsMatch,
   Playlist,
   PlaylistItem,
   ScanProgress,
@@ -26,6 +27,10 @@ export interface MockBackend extends Backend {
   _reset(): void;
   /** Valor devolvido pelo próximo pickFolder(). */
   _nextPickedFolder: string;
+  /** Simula falta de rede: fetchLyricsOnline rejeita com "sem conexão" (V4). */
+  _offline: boolean;
+  /** Popula a pasta /acervo com subpastas 1/ e 2/ para o E2E da árvore (V4 F11). */
+  _seedFolderTree(): void;
 }
 
 const STORAGE_KEY = "cancioneiro-mock-db";
@@ -116,6 +121,25 @@ function matchesAll(words: string[], tokens: string[]): boolean {
       ? words.some((w) => w.startsWith(token))
       : words.includes(token);
   });
+}
+
+/**
+ * Normalização de temas do writer Rust/Python: trim, minúsculas, dedup e
+ * ordem alfabética sem acento. Lista vazia → null (remove o TXXX:TEMAS).
+ */
+function normalizeTemas(raw: string | null): string | null {
+  if (!raw) return null;
+  const seen = new Set<string>();
+  const list: string[] = [];
+  for (const part of raw.split(";")) {
+    const tema = part.trim().toLowerCase();
+    if (!tema || seen.has(tema)) continue;
+    seen.add(tema);
+    list.push(tema);
+  }
+  if (list.length === 0) return null;
+  list.sort((a, b) => normalize(a).localeCompare(normalize(b)));
+  return list.join("; ");
 }
 
 function wordMatchesAnyToken(word: string, tokens: string[]): boolean {
@@ -243,6 +267,7 @@ export function createMockBackend(): MockBackend {
 
   const backend: MockBackend = {
     _nextPickedFolder: "/musicas/mock",
+    _offline: false,
 
     async addFolder(path: string): Promise<ScanResult> {
       let folder = state.folders.find((f) => f.path === path);
@@ -473,6 +498,52 @@ export function createMockBackend(): MockBackend {
       return "/fixtures/sem_letra.mp3";
     },
 
+    async writeTags(
+      songId: number,
+      title: string,
+      artist: string | null,
+      lyrics: string | null,
+      temas: string | null,
+    ): Promise<Song> {
+      const song = state.songs.find((s) => s.id === songId);
+      if (!song) {
+        throw new Error(`Música não encontrada: id ${songId}`);
+      }
+      if (!title.trim()) {
+        throw new Error("título vazio");
+      }
+      if (state.deletedFiles.includes(song.file_path)) {
+        throw new Error(`arquivo removido do disco: ${song.file_path}`);
+      }
+      // grava só as tags — NUNCA renomeia (file_path intocado)
+      song.title = title.trim();
+      song.artist = artist?.trim() ? artist.trim() : null;
+      song.lyrics = lyrics?.trim() ? lyrics : null;
+      song.has_lyrics = song.lyrics !== null;
+      song.temas = normalizeTemas(temas);
+      save();
+      return toSong(song);
+    },
+
+    async fetchLyricsOnline(
+      title: string,
+      artist: string | null,
+      _durationSeconds: number,
+    ): Promise<LyricsMatch | null> {
+      if (backend._offline) {
+        throw new Error("sem conexão");
+      }
+      if (normalize(title).includes("coracao sertanejo")) {
+        return {
+          lyrics: FIXTURE_LYRICS,
+          matched_title: "Coração Sertanejo",
+          matched_artist: artist?.trim() || "Artista Teste",
+          confidence: "alta",
+        };
+      }
+      return null;
+    },
+
     async onScanProgress(cb: (p: ScanProgress) => void): Promise<() => void> {
       progressListeners.add(cb);
       return () => {
@@ -502,6 +573,38 @@ export function createMockBackend(): MockBackend {
           has_lyrics: true,
           available: true,
           lyrics: seedLyrics(i),
+        });
+      }
+      save();
+    },
+
+    _seedFolderTree(): void {
+      let folder = state.folders.find((f) => f.path === "/acervo");
+      if (!folder) {
+        folder = {
+          id: state.nextFolderId++,
+          path: "/acervo",
+          last_scanned_at: new Date().toISOString(),
+        };
+        state.folders.push(folder);
+      }
+      const seeds = [
+        { file_path: "/acervo/1/a.mp3", title: "Faixa Um" },
+        { file_path: "/acervo/2/b.mp3", title: "Faixa Dois" },
+      ];
+      for (const seed of seeds) {
+        if (state.songs.some((s) => s.file_path === seed.file_path)) continue;
+        state.songs.push({
+          id: state.nextSongId++,
+          file_path: seed.file_path,
+          folder_id: folder.id,
+          title: seed.title,
+          artist: null,
+          album: null,
+          duration_seconds: 2,
+          has_lyrics: false,
+          available: true,
+          lyrics: null,
         });
       }
       save();

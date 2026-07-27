@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { SEARCH_INPUT_ID } from "../components/SearchBar";
 import { audioController } from "./playerAudioCore";
+import { filterResultsByFolder } from "../lib/folderTree";
 import { playSelectedOrToggle } from "../lib/playbackActions";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlayerStore } from "../stores/playerStore";
@@ -35,8 +36,10 @@ function visibleSongs(): { songs: Song[]; playlistId: number | null } {
     const { items, activePlaylistId } = usePlaylistStore.getState();
     return { songs: items.map((i) => i.song), playlistId: activePlaylistId };
   }
+  // respeita o filtro de pasta ativo (V4 F11): navega só o que está visível
+  const { results, folderFilter } = useLibraryStore.getState();
   return {
-    songs: useLibraryStore.getState().results.map((r) => r.song),
+    songs: filterResultsByFolder(results, folderFilter).map((r) => r.song),
     playlistId: null,
   };
 }

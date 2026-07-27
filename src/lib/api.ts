@@ -1,5 +1,6 @@
 import type {
   Folder,
+  LyricsMatch,
   Playlist,
   PlaylistItem,
   ScanProgress,
@@ -32,6 +33,20 @@ export interface Backend {
   pickFolder(): Promise<string | null>;
   fileSrc(filePath: string): string;
   onScanProgress(cb: (p: ScanProgress) => void): Promise<() => void>;
+  /** Grava TIT2/TPE1/USLT/TXXX:TEMAS no MP3 e devolve a Song reindexada (V4 F10). */
+  writeTags(
+    songId: number,
+    title: string,
+    artist: string | null,
+    lyrics: string | null,
+    temas: string | null,
+  ): Promise<Song>;
+  /** Busca a letra online por título+artista+duração — único ponto de rede (V4 F10). */
+  fetchLyricsOnline(
+    title: string,
+    artist: string | null,
+    durationSeconds: number,
+  ): Promise<LyricsMatch | null>;
 }
 
 export function isTauri(): boolean {
@@ -114,6 +129,18 @@ function tauriBackend(): Backend {
     async onScanProgress(cb) {
       const { listen } = await import("@tauri-apps/api/event");
       return listen<ScanProgress>("scan:progress", (e) => cb(e.payload));
+    },
+    async writeTags(songId, title, artist, lyrics, temas) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<Song>("write_tags", { songId, title, artist, lyrics, temas });
+    },
+    async fetchLyricsOnline(title, artist, durationSeconds) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<LyricsMatch | null>("fetch_lyrics_online", {
+        title,
+        artist,
+        durationSeconds,
+      });
     },
   };
 }

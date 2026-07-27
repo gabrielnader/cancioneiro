@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
+import { buildFolderTree, type FolderNode } from "../lib/folderTree";
+import { useLibraryStore } from "../stores/libraryStore";
 import { usePlaylistStore } from "../stores/playlistStore";
 import { useUiStore } from "../stores/uiStore";
 import { NewPlaylistDialog } from "./NewPlaylistDialog";
@@ -12,8 +14,17 @@ export function Sidebar() {
   const openPlaylist = usePlaylistStore((s) => s.openPlaylist);
   const closePlaylist = usePlaylistStore((s) => s.closePlaylist);
   const addToPlaylist = usePlaylistStore((s) => s.addToPlaylist);
+  const folders = useLibraryStore((s) => s.folders);
+  const allSongs = useLibraryStore((s) => s.allSongs);
+  const setFolderFilter = useLibraryStore((s) => s.setFolderFilter);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dragOverId, setDragOverId] = useState<number | null>(null);
+
+  // Árvore de pastas do acervo (V4 — F11), derivada dos file_path.
+  const folderTree = useMemo(
+    () => buildFolderTree(allSongs, folders),
+    [allSongs, folders],
+  );
 
   function navClass(active: boolean) {
     return `block w-full rounded-md px-3 py-2 text-left text-[15px] ${
@@ -33,11 +44,19 @@ export function Sidebar() {
         className={navClass(view === "library")}
         onClick={() => {
           closePlaylist();
+          setFolderFilter(null);
           setView("library");
         }}
       >
         Biblioteca
       </button>
+      {folderTree.length > 0 && (
+        <div className="max-h-64 shrink-0 overflow-y-auto">
+          {folderTree.map((node) => (
+            <FolderTreeItem key={node.path} node={node} level={0} />
+          ))}
+        </div>
+      )}
       <button
         type="button"
         className={navClass(view === "settings")}
@@ -101,5 +120,41 @@ export function Sidebar() {
 
       <NewPlaylistDialog open={dialogOpen} onClose={() => setDialogOpen(false)} />
     </nav>
+  );
+}
+
+/** Item recursivo da árvore de pastas (V4 — F11): clique filtra a biblioteca. */
+function FolderTreeItem({ node, level }: { node: FolderNode; level: number }) {
+  const folderFilter = useLibraryStore((s) => s.folderFilter);
+  const setFolderFilter = useLibraryStore((s) => s.setFolderFilter);
+  const setView = useUiStore((s) => s.setView);
+  const closePlaylist = usePlaylistStore((s) => s.closePlaylist);
+  const active = folderFilter === node.path;
+
+  return (
+    <>
+      <button
+        type="button"
+        aria-label={`Pasta ${node.name}`}
+        title={node.path}
+        className={`flex w-full items-center justify-between gap-2 rounded-md py-1 pr-3 text-left text-[14px] ${
+          active
+            ? "bg-[#F0FDFA] font-medium text-[#0F766E]"
+            : "text-[#374151] hover:bg-[#F3F4F6]"
+        }`}
+        style={{ paddingLeft: 20 + level * 14 }}
+        onClick={() => {
+          closePlaylist();
+          setFolderFilter(node.path);
+          setView("library");
+        }}
+      >
+        <span className="truncate">{node.name}</span>
+        <span className="shrink-0 text-[12px] text-[#9CA3AF]">{node.count}</span>
+      </button>
+      {node.children.map((child) => (
+        <FolderTreeItem key={child.path} node={child} level={level + 1} />
+      ))}
+    </>
   );
 }

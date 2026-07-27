@@ -1,5 +1,6 @@
-import { useRef } from "react";
+import { useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { filterResultsByFolder } from "../lib/folderTree";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlayerStore } from "../stores/playerStore";
 import { SongRow } from "./SongRow";
@@ -9,10 +10,17 @@ const ROW_WITH_SNIPPET_HEIGHT = 62;
 
 /** Lista virtualizada de músicas (biblioteca/resultados de busca). */
 export function SongList() {
-  const results = useLibraryStore((s) => s.results);
+  const allResults = useLibraryStore((s) => s.results);
+  const folderFilter = useLibraryStore((s) => s.folderFilter);
   const selectedSongId = useLibraryStore((s) => s.selectedSongId);
   const select = useLibraryStore((s) => s.select);
   const playSong = usePlayerStore((s) => s.playSong);
+
+  // Filtro de pasta ativo (V4 F11) refina a lista exibida.
+  const results = useMemo(
+    () => filterResultsByFolder(allResults, folderFilter),
+    [allResults, folderFilter],
+  );
 
   const parentRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({

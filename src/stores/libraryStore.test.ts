@@ -59,6 +59,8 @@ function fakeBackend(overrides: Partial<Backend> = {}): Backend {
     pickFolder: vi.fn(async () => "/m"),
     fileSrc: (p: string) => p,
     onScanProgress: vi.fn(async () => () => {}),
+    writeTags: vi.fn(async () => song(1, "Aurora")),
+    fetchLyricsOnline: vi.fn(async () => null),
     ...overrides,
   };
 }
@@ -150,5 +152,38 @@ describe("libraryStore", () => {
     await useLibraryStore.getState().removeFolder(1);
     const s = useLibraryStore.getState();
     expect(s.results.length).toBe(2); // fake backend continua devolvendo 2
+  });
+
+  describe("filtro de pasta (V4 — F11)", () => {
+    it("folderFilter começa null e setFolderFilter define/limpa", () => {
+      expect(useLibraryStore.getState().folderFilter).toBeNull();
+      useLibraryStore.getState().setFolderFilter("/acervo/1");
+      expect(useLibraryStore.getState().folderFilter).toBe("/acervo/1");
+      useLibraryStore.getState().setFolderFilter(null);
+      expect(useLibraryStore.getState().folderFilter).toBeNull();
+    });
+
+    it("loadLibrary carrega allSongs (biblioteca inteira, para a árvore)", async () => {
+      await useLibraryStore.getState().loadLibrary();
+      expect(useLibraryStore.getState().allSongs.map((s) => s.title)).toEqual([
+        "Aurora",
+        "Brisa",
+      ]);
+    });
+  });
+
+  describe("updateSong (V4 — F10)", () => {
+    it("substitui a música em results e allSongs preservando o snippet", async () => {
+      await useLibraryStore.getState().loadLibrary();
+      const edited = { ...song(2, "Brisa Editada"), temas: "fé" };
+      useLibraryStore.getState().updateSong(edited);
+      const s = useLibraryStore.getState();
+      expect(s.results.find((r) => r.song.id === 2)!.song.title).toBe(
+        "Brisa Editada",
+      );
+      expect(s.allSongs.find((x) => x.id === 2)!.title).toBe("Brisa Editada");
+      // músicas não editadas ficam intactas
+      expect(s.results.find((r) => r.song.id === 1)!.song.title).toBe("Aurora");
+    });
   });
 });

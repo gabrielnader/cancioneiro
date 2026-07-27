@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { getBackend } from "../lib/api";
-import type { Folder, ScanResult, SearchResult } from "../lib/types";
+import type { Folder, ScanResult, SearchResult, Song } from "../lib/types";
 
 interface ScanningState {
   done: number;
@@ -10,12 +10,16 @@ interface ScanningState {
 interface LibraryState {
   /** Lista exibida na coluna central (busca ou biblioteca completa). */
   results: SearchResult[];
+  /** Biblioteca inteira (independe da busca) — alimenta a árvore de pastas (V4 F11). */
+  allSongs: Song[];
   query: string;
   selectedSongId: number | null;
   folders: Folder[];
   missingFolders: string[];
   scanning: ScanningState | null;
   libraryLoaded: boolean;
+  /** Prefixo de caminho da pasta ativa na árvore; null = sem filtro (V4 F11). */
+  folderFilter: string | null;
 
   setQuery: (q: string) => void;
   select: (songId: number | null) => void;
@@ -27,18 +31,23 @@ interface LibraryState {
   setScanning: (s: ScanningState | null) => void;
   /** Marca visualmente uma música como indisponível (arquivo sumiu no play). */
   markUnavailable: (songId: number) => void;
+  setFolderFilter: (path: string | null) => void;
+  /** Reflete uma música editada (write_tags) em results e allSongs (V4 F10). */
+  updateSong: (song: Song) => void;
 }
 
 let searchSeq = 0;
 
 export const useLibraryStore = create<LibraryState>()((set, get) => ({
   results: [],
+  allSongs: [],
   query: "",
   selectedSongId: null,
   folders: [],
   missingFolders: [],
   scanning: null,
   libraryLoaded: false,
+  folderFilter: null,
 
   setQuery: (q) => set({ query: q }),
 
@@ -46,11 +55,12 @@ export const useLibraryStore = create<LibraryState>()((set, get) => ({
 
   loadLibrary: async () => {
     const backend = getBackend();
-    const [results, folders] = await Promise.all([
+    const [results, folders, allSongs] = await Promise.all([
       backend.search(get().query),
       backend.listFolders(),
+      backend.listSongs(),
     ]);
-    set({ results, folders, libraryLoaded: true });
+    set({ results, folders, allSongs, libraryLoaded: true });
   },
 
   runSearch: async (query) => {
@@ -98,5 +108,15 @@ export const useLibraryStore = create<LibraryState>()((set, get) => ({
           ? { ...r, song: { ...r.song, available: false } }
           : r,
       ),
+    })),
+
+  setFolderFilter: (path) => set({ folderFilter: path }),
+
+  updateSong: (song) =>
+    set((state) => ({
+      results: state.results.map((r) =>
+        r.song.id === song.id ? { ...r, song } : r,
+      ),
+      allSongs: state.allSongs.map((s) => (s.id === song.id ? song : s)),
     })),
 }));

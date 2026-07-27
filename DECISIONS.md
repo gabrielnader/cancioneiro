@@ -142,3 +142,22 @@ opção mais simples que passa nos Acceptance Checks do PRD.
     binários Windows/macOS nascem no workflow release.yml (tauri-action) a cada
     tag v*, publicados em GitHub Releases. CI (ci.yml) roda a suíte completa
     a cada push.
+
+## V4 — Curadoria no player + navegação por pastas
+
+40. **Princípio revisado**: "o player nunca escreve" vira "a REPRODUÇÃO nunca
+    escreve" — gravação só na ação explícita "Salvar no arquivo" do modo de
+    edição, e apenas tags ID3 (nunca o áudio, nunca o nome do arquivo — renomear
+    é proibido em todo o produto). "100% offline" vale para tudo exceto o clique
+    explícito em "Buscar letra na internet" (falha graciosa sem rede).
+41. **USLT/TXXX escritos via frames Id3v2 diretos** (não a Tag genérica do
+    lofty): a conversão genérica gravaria USLT com lang "XXX"; o PRD exige
+    "por" (compat mutagen). Frames alheios (capa etc.) são preservados.
+42. **Editar desabilitado enquanto a letra carrega**: evita a corrida de abrir
+    o formulário com a textarea vazia e o salvar apagar a letra.
+43. **Árvore de pastas derivada dos file_path** (sem mudança de schema);
+    filtro aplicado na exibição (client-side) — busca digitada refina dentro
+    do filtro; navegação por teclado respeita o filtro.
+44. **Enriquecer (V3.1) pós-teste real**: consulta limpa + track_name/artist_name
+    com fallback q= (hífens/pontuação zeravam o full-text do LRCLIB); em BAIXA,
+    Enter pula e aceitar exige 'a'; BAIXA nunca sobrescreve tags existentes.

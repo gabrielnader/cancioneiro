@@ -1,3 +1,5 @@
+import { useMemo } from "react";
+import { filterResultsByFolder, folderName } from "../lib/folderTree";
 import { hasSearchTokens } from "../lib/searchQuery";
 import { useLibraryStore } from "../stores/libraryStore";
 import { useToastStore } from "../stores/toastStore";
@@ -5,7 +7,7 @@ import { SearchBar } from "./SearchBar";
 import { SongList } from "./SongList";
 import { AddFolderButton } from "./AddFolderButton";
 
-/** Coluna central: busca + lista (F1 UI / F2). */
+/** Coluna central: busca + lista (F1 UI / F2 / filtro de pasta V4 F11). */
 export function LibraryView() {
   const results = useLibraryStore((s) => s.results);
   const query = useLibraryStore((s) => s.query);
@@ -13,6 +15,14 @@ export function LibraryView() {
   const missingFolders = useLibraryStore((s) => s.missingFolders);
   const scanning = useLibraryStore((s) => s.scanning);
   const libraryLoaded = useLibraryStore((s) => s.libraryLoaded);
+  const folderFilter = useLibraryStore((s) => s.folderFilter);
+  const setFolderFilter = useLibraryStore((s) => s.setFolderFilter);
+
+  // A busca digitada é refinada pelo filtro de pasta ativo (V4 F11).
+  const visibleResults = useMemo(
+    () => filterResultsByFolder(results, folderFilter),
+    [results, folderFilter],
+  );
 
   const isEmptyLibrary =
     libraryLoaded && folders.length === 0 && results.length === 0;
@@ -25,10 +35,25 @@ export function LibraryView() {
         <SearchBar />
         {isRealSearch && !isEmptyLibrary && (
           <p className="mt-2 text-[13px] text-[#6B7280]">
-            {results.length} resultados
+            {visibleResults.length} resultados
           </p>
         )}
       </div>
+
+      {folderFilter && (
+        <div className="mx-4 mb-2 shrink-0">
+          <button
+            type="button"
+            aria-label="Remover filtro de pasta"
+            title={`Remover o filtro da pasta ${folderFilter}`}
+            onClick={() => setFolderFilter(null)}
+            className="inline-flex items-center gap-1.5 rounded-full bg-[#F0FDFA] px-3 py-1 text-[13px] font-medium text-[#0F766E] hover:bg-[#ccfbf1]"
+          >
+            <span>📁 {folderName(folderFilter)}</span>
+            <span aria-hidden="true">×</span>
+          </button>
+        </div>
+      )}
 
       {missingFolders.map((path) => (
         <MissingFolderBanner key={path} path={path} />
@@ -55,7 +80,7 @@ export function LibraryView() {
 
       {isEmptyLibrary ? (
         <EmptyLibrary />
-      ) : results.length === 0 && isRealSearch ? (
+      ) : visibleResults.length === 0 && isRealSearch ? (
         <div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
           <p className="text-[#6B7280]">
             Nenhuma música encontrada para "{query.trim()}".

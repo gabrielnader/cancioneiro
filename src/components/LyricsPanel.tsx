@@ -3,6 +3,7 @@ import { getBackend } from "../lib/api";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlaylistStore } from "../stores/playlistStore";
 import { FONT_SIZES_PX, useUiStore } from "../stores/uiStore";
+import { EditSongForm } from "./EditSongForm";
 import { TemaChips } from "./TemaChips";
 
 /** Painel lateral direito (F3): letra da música selecionada. */
@@ -19,6 +20,14 @@ export function LyricsPanel() {
     null;
 
   const [lyrics, setLyrics] = useState<string | null>(null);
+  const [editing, setEditing] = useState(false);
+  // Incrementa após salvar para re-buscar a letra exibida (V4 F10).
+  const [lyricsRefresh, setLyricsRefresh] = useState(0);
+
+  // Trocar a seleção descarta um modo de edição aberto.
+  useEffect(() => {
+    setEditing(false);
+  }, [selectedSongId]);
 
   useEffect(() => {
     let cancelled = false;
@@ -37,7 +46,7 @@ export function LyricsPanel() {
     return () => {
       cancelled = true;
     };
-  }, [selectedSongId, selected?.has_lyrics]);
+  }, [selectedSongId, selected?.has_lyrics, lyricsRefresh]);
 
   return (
     <aside
@@ -68,36 +77,69 @@ export function LyricsPanel() {
                 </div>
               )}
             </div>
-            <button
-              type="button"
-              onClick={cycleFontLevel}
-              className="shrink-0 rounded px-2 py-1 text-[15px] font-medium text-[#374151] hover:bg-[#F3F4F6]"
-              aria-label="Tamanho da fonte da letra"
-              title="Tamanho da fonte"
-            >
-              Aa
-            </button>
-          </div>
-          <div className="flex-1 overflow-y-auto p-4">
-            {selected.has_lyrics && lyrics ? (
-              <p
-                data-testid="lyrics-body"
-                className="whitespace-pre-wrap text-[#111827]"
-                style={{ fontSize: FONT_SIZES_PX[fontLevel], lineHeight: 1.7 }}
+            <div className="flex shrink-0 items-center gap-1">
+              {!editing && (
+                <button
+                  type="button"
+                  onClick={() => setEditing(true)}
+                  // aguarda a letra carregar para o formulário não abrir vazio
+                  disabled={
+                    !selected.available || (selected.has_lyrics && lyrics === null)
+                  }
+                  className="rounded px-2 py-1 text-[15px] font-medium text-[#0F766E] hover:bg-[#F0FDFA] disabled:cursor-not-allowed disabled:text-[#9CA3AF] disabled:hover:bg-transparent"
+                  title={
+                    selected.available
+                      ? "Editar título, artista, temas e letra"
+                      : "Música indisponível: arquivo não encontrado"
+                  }
+                >
+                  Editar
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={cycleFontLevel}
+                className="rounded px-2 py-1 text-[15px] font-medium text-[#374151] hover:bg-[#F3F4F6]"
+                aria-label="Tamanho da fonte da letra"
+                title="Tamanho da fonte"
               >
-                {lyrics}
-              </p>
-            ) : selected.has_lyrics ? null : (
-              <div className="pt-4">
-                <p className="text-[#6B7280]">
-                  Esta música ainda não tem letra registrada.
-                </p>
-                <p className="mt-2 text-[#9CA3AF]">
-                  Use a ferramenta de curadoria para adicionar a letra ao arquivo.
-                </p>
-              </div>
-            )}
+                Aa
+              </button>
+            </div>
           </div>
+          {editing ? (
+            <EditSongForm
+              key={selected.id}
+              song={selected}
+              initialLyrics={lyrics ?? ""}
+              onCancel={() => setEditing(false)}
+              onSaved={() => {
+                setEditing(false);
+                setLyricsRefresh((n) => n + 1);
+              }}
+            />
+          ) : (
+            <div className="flex-1 overflow-y-auto p-4">
+              {selected.has_lyrics && lyrics ? (
+                <p
+                  data-testid="lyrics-body"
+                  className="whitespace-pre-wrap text-[#111827]"
+                  style={{ fontSize: FONT_SIZES_PX[fontLevel], lineHeight: 1.7 }}
+                >
+                  {lyrics}
+                </p>
+              ) : selected.has_lyrics ? null : (
+                <div className="pt-4">
+                  <p className="text-[#6B7280]">
+                    Esta música ainda não tem letra registrada.
+                  </p>
+                  <p className="mt-2 text-[#9CA3AF]">
+                    Use a ferramenta de curadoria para adicionar a letra ao arquivo.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
         </>
       )}
     </aside>

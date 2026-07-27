@@ -148,4 +148,15 @@ describe("playlistStore (F5)", () => {
     await usePlaylistStore.getState().deletePlaylist(7);
     expect(usePlaylistStore.getState().activePlaylistId).toBeNull();
   });
+
+  it("updateSongInItems (V4) substitui a música editada nos itens abertos", async () => {
+    await usePlaylistStore.getState().openPlaylist(7);
+    const edited = { ...song(2), title: "Faixa Editada", has_lyrics: true };
+    usePlaylistStore.getState().updateSongInItems(edited);
+    const after = usePlaylistStore.getState().items;
+    expect(after.find((i) => i.song.id === 2)!.song.title).toBe("Faixa Editada");
+    expect(after.find((i) => i.song.id === 1)!.song.title).toBe("Faixa 1");
+    // ids/positions dos itens não mudam
+    expect(after.map((i) => i.id)).toEqual([10, 11, 12]);
+  });
 });

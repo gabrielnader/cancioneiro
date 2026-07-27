@@ -36,6 +36,14 @@ export interface PlaylistItem {
   song: Song;
 }
 
+/** Resultado da busca de letra online (LRCLIB via backend — V4 F10). */
+export interface LyricsMatch {
+  lyrics: string;
+  matched_title: string;
+  matched_artist: string;
+  confidence: "alta" | "media";
+}
+
 export interface ScanResult {
   indexed: number;
   skipped: number;
