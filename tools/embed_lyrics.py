@@ -7,6 +7,7 @@ Spec F6 do PRD do Cancioneiro + F7 do PRD-v2-temas.md.
 Uso:
     python tools/embed_lyrics.py musica.mp3 letra.txt [--title T] [--artist A]
     python tools/embed_lyrics.py musica.mp3 --lyrics "texto inline"
+    python tools/embed_lyrics.py musica.mp3 --title "X" [--artist "Y"]
     python tools/embed_lyrics.py musica.mp3 --temas "água, cura"
     python tools/embed_lyrics.py musica.mp3 --add-tema "esperança" --remove-tema "cura"
     python tools/embed_lyrics.py --check musica.mp3
@@ -55,6 +56,17 @@ def embed_lyrics(path: Path, lyrics: str, title: str | None = None,
     tags = load_tags(path)
     tags.delall("USLT")  # substitui, nunca duplica
     tags.add(USLT(encoding=Encoding.UTF8, lang=LANG, desc="", text=lyrics))
+    if title:
+        tags.setall("TIT2", [TIT2(encoding=Encoding.UTF8, text=[title])])
+    if artist:
+        tags.setall("TPE1", [TPE1(encoding=Encoding.UTF8, text=[artist])])
+    tags.save(str(path), v2_version=4)
+
+
+def write_title_artist(path: Path, title: str | None = None,
+                       artist: str | None = None) -> None:
+    """Grava só TIT2/TPE1 (os informados), sem tocar USLT nem TXXX:TEMAS."""
+    tags = load_tags(path)
     if title:
         tags.setall("TIT2", [TIT2(encoding=Encoding.UTF8, text=[title])])
     if artist:
@@ -194,16 +206,22 @@ def main(argv: list[str] | None = None) -> None:
         if not lyrics_path.is_file():
             die(f"ERRO: arquivo inválido ou não encontrado: {lyrics_path}")
         lyrics = lyrics_path.read_text(encoding="utf-8")
-    elif has_temas_op:
-        lyrics = None  # operação só de temas, sem exigir letra
+    elif has_temas_op or args.title or args.artist:
+        lyrics = None  # operação só de temas e/ou tags, sem exigir letra
     else:
-        parser.error("informe um arquivo de letra ou --lyrics (ou use --check)")
+        parser.error("informe um arquivo de letra, --lyrics, --title/--artist "
+                     "ou --temas (ou use --check)")
 
     if lyrics is not None:
         if not lyrics:
             die("ERRO: letra vazia — nada gravado")
         embed_lyrics(mp3_path, lyrics, title=args.title, artist=args.artist)
         print(f"OK: letra gravada em {mp3_path} ({len(lyrics)} caracteres)")
+    elif args.title or args.artist:
+        # só título/artista (com ou sem operação de temas junto): não toca
+        # USLT nem TXXX:TEMAS existentes
+        write_title_artist(mp3_path, title=args.title, artist=args.artist)
+        print(f"OK: tags gravadas em {mp3_path}")
 
     if has_temas_op:
         n = apply_temas_ops(mp3_path, args.temas, args.add_tema, args.remove_tema)

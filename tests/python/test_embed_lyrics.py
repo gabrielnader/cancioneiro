@@ -106,6 +106,49 @@ class TestGravarLetra:
         assert dur_depois == pytest.approx(dur_antes, abs=0.2)
 
 
+class TestTagsSemLetra:
+    """--title/--artist sozinhos, sem letra e sem temas (standalone)."""
+
+    def test_title_sozinho_grava_tit2(self, mp3_file):
+        result = run_embed(mp3_file, "--title", "Florestal")
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == f"OK: tags gravadas em {mp3_file}"
+        tags = ID3(str(mp3_file))
+        assert str(tags["TIT2"]) == "Florestal"
+        assert tags.getall("USLT") == []  # nenhuma letra criada
+
+    def test_artist_sozinho_grava_tpe1(self, mp3_file):
+        result = run_embed(mp3_file, "--artist", "Martonio Holanda")
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.strip() == f"OK: tags gravadas em {mp3_file}"
+        tags = ID3(str(mp3_file))
+        assert str(tags["TPE1"]) == "Martonio Holanda"
+        assert "TIT2" not in tags
+
+    def test_title_e_artist_juntos(self, mp3_file):
+        result = run_embed(mp3_file, "--title", "Musica Bonita",
+                           "--artist", "Hyldon")
+        assert result.returncode == 0, result.stderr
+        tags = ID3(str(mp3_file))
+        assert str(tags["TIT2"]) == "Musica Bonita"
+        assert str(tags["TPE1"]) == "Hyldon"
+
+    def test_nao_altera_uslt_nem_temas_existentes(self, mp3_file):
+        run_embed(mp3_file, "--lyrics", "letra que fica", "--temas", "cura")
+        result = run_embed(mp3_file, "--title", "Novo Título")
+        assert result.returncode == 0, result.stderr
+        tags = ID3(str(mp3_file))
+        assert str(tags["TIT2"]) == "Novo Título"
+        assert tags.getall("USLT")[0].text == "letra que fica"
+        temas = [f for f in tags.getall("TXXX") if f.desc == "TEMAS"]
+        assert len(temas) == 1
+        assert str(temas[0].text[0]) == "cura"
+
+    def test_salva_id3v24(self, mp3_file):
+        run_embed(mp3_file, "--title", "X")
+        assert ID3(str(mp3_file)).version[:2] == (2, 4)
+
+
 class TestCheck:
     def test_check_imprime_letra(self, mp3_file, tmp_path):
         lyrics_file = write_lyrics_file(tmp_path)

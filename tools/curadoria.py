@@ -18,14 +18,18 @@ Subcomandos:
         (https://lrclib.net/api/get) e relata/grava o plainLyrics.
 
     enriquecer PASTA [--csv proposta.csv] [--interativo | --auto]
-               [--forcar] [--sem-temas-de-pastas]
+               [--forcar] [--sem-temas-de-pastas] [--verboso]
         Identifica cada MP3 sozinho (tags + nome de arquivo + duração vs.
         busca do LRCLIB /api/search), classifica a proposta em ALTA/MÉDIA/
         BAIXA e propõe título/artista/letra + temas das subpastas. Modos:
         padrão gera proposta (stdout e --csv); --interativo pergunta por
-        arquivo ([Enter] aceitar  [p] pular  [t] só temas  [q] sair);
+        arquivo (ALTA/MÉDIA: [Enter] aceitar  [p] pular  [t] só temas
+        [q] sair; BAIXA: [Enter] pular  [a] aceitar  [t] só temas  [q] sair);
         --auto aplica na hora somente as ALTA. --forcar reprocessa arquivos
-        completos e permite sobrescrever letra existente.
+        completos e permite sobrescrever letra existente. --verboso mostra
+        cada consulta enviada, quantos resultados voltaram e o melhor
+        candidato. Proposta BAIXA nunca sobrescreve título/artista
+        existentes — só preenche campos vazios (em qualquer modo).
 
     aplicar-proposta PASTA --csv proposta.csv [--dry-run] [--forcar]
         Aplica as linhas com aceitar=SIM do CSV gerado pelo enriquecer
@@ -72,6 +76,8 @@ ENRIQUECER_COLUNAS = ["arquivo", "titulo_atual", "artista_atual",
                       "duracao_mp3", "duracao_encontrada", "letra",
                       "temas_propostos", "lrclib_id", "aceitar"]
 PROMPT_INTERATIVO = "[Enter] aceitar  [p] pular  [t] só temas  [q] sair "
+# BAIXA é só palpite: aceitar exige gesto explícito; Enter (reflexo) PULA.
+PROMPT_INTERATIVO_BAIXA = "[Enter] pular  [a] aceitar  [t] só temas  [q] sair "
 # Ruído típico de nome de arquivo baixado (dentro de () e []).
 _RE_COLCHETES = re.compile(r"\[[^\]]*\]")
 _RE_PARENTESES = re.compile(r"\([^)]*\)")
@@ -323,11 +329,26 @@ def cmd_buscar_letra(pasta: Path, aplicar: bool = False,
 
 # ---------------------------------------------------------------- enriquecer
 
-def fetch_search(query: str, fetcher=None) -> list:
-    """Busca no LRCLIB (/api/search?q=...); retorna a lista de resultados.
-    Propaga erros de rede para o chamador tratar."""
+def limpar_consulta(texto: str) -> str:
+    """Limpa o texto para a busca q= do LRCLIB: remove pontuação e hífens
+    soltos (a busca full-text é sensível a eles) e colapsa espaços,
+    preservando acentos e caixa."""
+    base = "".join(c if (c.isalnum() or c.isspace()) else " " for c in texto)
+    return " ".join(base.split())
+
+
+def fetch_search(query: str = "", fetcher=None, track_name: str = "",
+                 artist_name: str = "") -> list:
+    """Busca no LRCLIB (/api/search); retorna a lista de resultados.
+    Com track_name/artist_name usa os parâmetros dedicados da API (busca
+    por campo, mais precisa); senão, q= com o texto limpo
+    (limpar_consulta). Propaga erros de rede para o chamador tratar."""
     fetcher = fetcher or default_fetcher
-    qs = urllib.parse.urlencode({"q": query})
+    if track_name or artist_name:
+        qs = urllib.parse.urlencode({"track_name": track_name,
+                                     "artist_name": artist_name})
+    else:
+        qs = urllib.parse.urlencode({"q": limpar_consulta(query)})
     dados = json.loads(fetcher(f"{LRCLIB_SEARCH_URL}?{qs}"))
     return dados if isinstance(dados, list) else []
 
@@ -377,11 +398,18 @@ def limpar_nome_arquivo(nome: str) -> str:
 
 def gerar_palpites(nome_arquivo: str, titulo: str = "",
                    artista: str = "") -> list:
-    """Palpites (título, artista) na ordem do PRD: tags existentes; nome de
-    arquivo dividido em " - " nas duas ordens; nome inteiro como título."""
+    """Palpites (título, artista) na ordem do PRD: tags existentes (título de
+    tag com " - " e artista vazio também é dividido nas duas ordens — caso
+    "Hyldon - Musica Bonita"); nome de arquivo dividido em " - " nas duas
+    ordens; nome inteiro como título."""
     palpites = []
     if titulo:
         palpites.append((titulo, artista))
+        if not artista and " - " in titulo:
+            a, b = (parte.strip() for parte in titulo.split(" - ", 1))
+            if a and b:
+                palpites.append((b, a))  # Artista - Título
+                palpites.append((a, b))  # Título - Artista
     limpo = limpar_nome_arquivo(nome_arquivo)
     if " - " in limpo:
         a, b = (parte.strip() for parte in limpo.split(" - ", 1))
@@ -401,42 +429,67 @@ def gerar_palpites(nome_arquivo: str, titulo: str = "",
 
 def classificar(sim: float, dif_duracao: float | None) -> str:
     """Confiança da proposta a partir da similaridade e da diferença de
-    duração (segundos). Sem duração comparável, nunca passa de BAIXA."""
-    if dif_duracao is not None:
-        if dif_duracao <= 3 and sim >= 0.6:
-            return "ALTA"
-        if dif_duracao <= 8 and sim >= 0.85:
-            return "ALTA"
-        if dif_duracao <= 15 and sim >= 0.5:
-            return "MÉDIA"
+    duração (segundos). Sem duração comparável não há bônus nem
+    desclassificação: similaridade >= 0.85 ainda rende MÉDIA."""
+    if dif_duracao is None:
+        return "MÉDIA" if sim >= 0.85 else "BAIXA"
+    if dif_duracao <= 3 and sim >= 0.6:
+        return "ALTA"
+    if dif_duracao <= 8 and sim >= 0.85:
+        return "ALTA"
+    if dif_duracao <= 15 and sim >= 0.5:
+        return "MÉDIA"
     return "BAIXA"
 
 
-def _identificar(palpites: list, duracao_mp3: float, buscar) -> dict | None:
+def _identificar(palpites: list, duracao_mp3: float, buscar,
+                 log=None) -> dict | None:
     """Consulta o LRCLIB para cada palpite e devolve o melhor candidato
-    ({"sim", "dif", "res"}) ou None. Resultados com duração divergente
-    >15 s são desclassificados; para no primeiro palpite que render ALTA."""
+    ({"sim", "dif", "res"}) ou None. Palpite com artista tenta primeiro a
+    busca por campo (track_name/artist_name, mais precisa) e só cai para
+    q= (texto limpo) se ela voltar vazia. Resultados com duração divergente
+    >15 s são desclassificados; sem duração comparável (do MP3 ou do
+    resultado), sem bônus nem desclassificação. Para no primeiro palpite
+    que render ALTA. log (opcional) recebe as linhas do modo verboso."""
+    log = log or (lambda _msg: None)
     melhor = None
     for titulo, artista in palpites:
         alvo = f"{titulo} {artista}".strip()
-        for res in buscar(alvo):
-            if artista:
-                candidato = (f"{res.get('trackName') or ''} "
-                             f"{res.get('artistName') or ''}")
+        consultas = []
+        if artista:
+            consultas.append({"track_name": titulo, "artist_name": artista})
+        consultas.append({"query": alvo})
+        for kwargs in consultas:
+            if "track_name" in kwargs:
+                log(f'  busca: track="{titulo}" artista="{artista}"')
             else:
-                candidato = res.get("trackName") or ""
-            sim = similaridade(alvo if artista else titulo, candidato)
-            duracao = res.get("duration")
-            dif = (abs(duracao_mp3 - float(duracao))
-                   if duracao is not None else None)
-            if dif is not None and dif > 15:
-                continue  # homônimo/versão errada: desclassificado
-            bonus = 0.0
-            if dif is not None:
-                bonus = 0.3 if dif <= 3 else (0.15 if dif <= 8 else 0.0)
-            if melhor is None or sim + bonus > melhor["score"]:
-                melhor = {"score": sim + bonus, "sim": sim, "dif": dif,
-                          "res": res}
+                log(f'  busca: "{limpar_consulta(alvo)}"')
+            try:
+                resultados = buscar(**kwargs)
+            except Exception as exc:
+                log(f"  erro: {exc}")
+                raise
+            log(f"  {len(resultados)} resultados")
+            for res in resultados:
+                if artista:
+                    candidato = (f"{res.get('trackName') or ''} "
+                                 f"{res.get('artistName') or ''}")
+                else:
+                    candidato = res.get("trackName") or ""
+                sim = similaridade(alvo if artista else titulo, candidato)
+                duracao = res.get("duration")
+                dif = (abs(duracao_mp3 - float(duracao))
+                       if duracao is not None and duracao_mp3 else None)
+                if dif is not None and dif > 15:
+                    continue  # homônimo/versão errada: desclassificado
+                bonus = 0.0
+                if dif is not None:
+                    bonus = 0.3 if dif <= 3 else (0.15 if dif <= 8 else 0.0)
+                if melhor is None or sim + bonus > melhor["score"]:
+                    melhor = {"score": sim + bonus, "sim": sim, "dif": dif,
+                              "res": res}
+            if resultados:
+                break  # a forma precisa achou algo: sem fallback q=
         if melhor is not None and classificar(melhor["sim"],
                                               melhor["dif"]) == "ALTA":
             break
@@ -475,17 +528,20 @@ def _gravar_enriquecimento(path: Path, info: dict, titulo: str, artista: str,
 def cmd_enriquecer(pasta: Path, csv_out: Path | None = None,
                    interativo: bool = False, auto: bool = False,
                    forcar: bool = False, temas_pastas: bool = True,
-                   fetcher=None, pausa: float = PAUSA_S) -> None:
+                   fetcher=None, pausa: float = PAUSA_S,
+                   verboso: bool = False) -> None:
     contagem = {"ALTA": 0, "MÉDIA": 0, "BAIXA": 0}
     aplicados = erros = 0
     linhas_csv = []
     estado = {"primeira": True}
+    log = print if verboso else None
 
-    def buscar(consulta):
+    def buscar(query="", track_name="", artist_name=""):
         if not estado["primeira"] and pausa:
             time.sleep(pausa)  # cortesia com a API entre buscas
         estado["primeira"] = False
-        return fetch_search(consulta, fetcher=fetcher)
+        return fetch_search(query, fetcher=fetcher, track_name=track_name,
+                            artist_name=artist_name)
 
     for p in listar_mp3s(pasta):
         rel = p.relative_to(pasta).as_posix()
@@ -499,18 +555,31 @@ def cmd_enriquecer(pasta: Path, csv_out: Path | None = None,
         temas_novos = temas_da_pasta(rel) if temas_pastas else []
         palpites = gerar_palpites(p.name, info["titulo"], info["artista"])
         try:
-            melhor = _identificar(palpites, info["duracao"], buscar)
+            melhor = _identificar(palpites, info["duracao"], buscar, log=log)
         except Exception:
             print(f"ERRO DE REDE: {rel}")
             erros += 1
             continue
         dur_mp3 = f"{info['duracao']:.0f}"
+        if verboso and melhor is not None:
+            res_v = melhor["res"]
+            dur_v = (f"{float(res_v.get('duration')):.0f}"
+                     if res_v.get("duration") is not None else "?")
+            print(f'  melhor: "{res_v.get("trackName") or ""}" / '
+                  f'"{res_v.get("artistName") or ""}" '
+                  f'(sim {melhor["sim"]:.2f}, dur mp3 {dur_mp3}s '
+                  f'vs {dur_v}s)')
         conf = (classificar(melhor["sim"], melhor["dif"])
                 if melhor is not None else "BAIXA")
         if conf == "BAIXA":
-            # nada é proposto além do palpite de nome de arquivo
+            # nada é proposto além do palpite de nome de arquivo; BAIXA
+            # nunca sobrescreve tag existente — só preenche campos vazios
             do_nome = gerar_palpites(p.name)
             titulo_prop, artista_prop = do_nome[0] if do_nome else ("", "")
+            if info["titulo"]:
+                titulo_prop = info["titulo"]
+            if info["artista"]:
+                artista_prop = info["artista"]
             letra_prop = lrclib_id = dur_enc = ""
             print(f"BAIXA: {rel} → {titulo_prop} / {artista_prop} "
                   "(palpite de nome de arquivo)")
@@ -538,13 +607,23 @@ def cmd_enriquecer(pasta: Path, csv_out: Path | None = None,
         elif interativo:
             if temas_novos:
                 print(f"  temas de pasta: {'; '.join(temas_novos)}")
-            resposta = input(PROMPT_INTERATIVO).strip().lower()
-            if resposta == "":
-                aplicar_agora = True
-            elif resposta == "t":
-                so_temas = True
-            elif resposta == "q":
-                sair = True
+            if conf == "BAIXA":
+                # palpite fraco: Enter (reflexo) pula; aceitar exige "a"
+                resposta = input(PROMPT_INTERATIVO_BAIXA).strip().lower()
+                if resposta == "a":
+                    aplicar_agora = True
+                elif resposta == "t":
+                    so_temas = True
+                elif resposta == "q":
+                    sair = True
+            else:
+                resposta = input(PROMPT_INTERATIVO).strip().lower()
+                if resposta == "":
+                    aplicar_agora = True
+                elif resposta == "t":
+                    so_temas = True
+                elif resposta == "q":
+                    sair = True
         if aplicar_agora or so_temas:
             _gravar_enriquecimento(p, info, titulo_prop, artista_prop,
                                    letra_prop, temas_novos, forcar,
@@ -588,6 +667,12 @@ def cmd_aplicar_proposta(pasta: Path, csv_path: Path, dry_run: bool = False,
             temas_raw = (row.get("temas_propostos") or "").strip()
             lrclib_id = (row.get("lrclib_id") or "").strip()
             info = ler_info(alvo)
+            if (row.get("confianca") or "").strip().upper() == "BAIXA":
+                # BAIXA nunca sobrescreve: só preenche campos vazios
+                if info["titulo"]:
+                    titulo = ""
+                if info["artista"]:
+                    artista = ""
             temas_novos = (el.normalize_temas(el.split_temas_input(temas_raw))
                            if temas_raw else [])
             # letra re-buscada na hora de aplicar; nunca sobrescreve letra
@@ -708,6 +793,9 @@ def main(argv: list[str] | None = None) -> None:
     p_enr.add_argument("--sem-temas-de-pastas", action="store_true",
                        dest="sem_temas",
                        help="não propõe temas a partir das subpastas")
+    p_enr.add_argument("--verboso", action="store_true",
+                       help="mostra cada consulta enviada, quantos "
+                            "resultados voltaram e o melhor candidato")
 
     p_apr = sub.add_parser("aplicar-proposta",
                            help="aplica as linhas aceitar=SIM de uma "
@@ -740,7 +828,8 @@ def main(argv: list[str] | None = None) -> None:
     elif args.comando == "enriquecer":
         cmd_enriquecer(pasta, csv_out=Path(args.csv) if args.csv else None,
                        interativo=args.interativo, auto=args.auto,
-                       forcar=args.forcar, temas_pastas=not args.sem_temas)
+                       forcar=args.forcar, temas_pastas=not args.sem_temas,
+                       verboso=args.verboso)
     elif args.comando == "aplicar-proposta":
         cmd_aplicar_proposta(pasta, Path(args.csv), dry_run=args.dry_run,
                              forcar=args.forcar)

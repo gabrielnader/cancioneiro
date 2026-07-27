@@ -211,6 +211,21 @@ class TestGerarPalpites:
     def test_sem_divisor_so_nome_inteiro(self):
         assert curadoria.gerar_palpites("Só Nome.mp3") == [("Só Nome", "")]
 
+    def test_titulo_de_tag_com_divisor_sem_artista_gera_split(self):
+        # caso real: TIT2 "Hyldon - Musica Bonita" com TPE1 vazio — o split
+        # nas duas ordens vem ANTES dos palpites de nome de arquivo
+        palpites = curadoria.gerar_palpites("arquivo qualquer.mp3",
+                                            "Hyldon - Musica Bonita", "")
+        assert palpites[0] == ("Hyldon - Musica Bonita", "")
+        assert palpites[1] == ("Musica Bonita", "Hyldon")   # Artista - Título
+        assert palpites[2] == ("Hyldon", "Musica Bonita")   # Título - Artista
+        assert palpites[3] == ("arquivo qualquer", "")      # nome vem depois
+
+    def test_titulo_de_tag_com_divisor_e_artista_nao_gera_split(self):
+        palpites = curadoria.gerar_palpites("x.mp3", "A - B", "Artista")
+        assert palpites[0] == ("A - B", "Artista")
+        assert ("B", "A") not in palpites
+
 
 class TestSimilaridade:
     def test_ignora_acento_caixa_e_pontuacao(self):
@@ -236,8 +251,26 @@ class TestClassificar:
     def test_similaridade_fraca_e_baixa(self):
         assert curadoria.classificar(0.4, 1.0) == "BAIXA"
 
-    def test_sem_duracao_e_baixa(self):
-        assert curadoria.classificar(0.95, None) == "BAIXA"
+    def test_sem_duracao_similaridade_forte_e_media(self):
+        # resultado sem duration comparável: sem bônus, mas não é
+        # desclassificado — similaridade >= 0.85 vira MÉDIA
+        assert curadoria.classificar(0.95, None) == "MÉDIA"
+        assert curadoria.classificar(0.85, None) == "MÉDIA"
+
+    def test_sem_duracao_similaridade_fraca_e_baixa(self):
+        assert curadoria.classificar(0.7, None) == "BAIXA"
+
+
+class TestLimparConsulta:
+    def test_remove_hifen_solto(self):
+        assert (curadoria.limpar_consulta("Hyldon - Musica Bonita")
+                == "Hyldon Musica Bonita")
+
+    def test_remove_pontuacao_e_colapsa_espacos(self):
+        assert curadoria.limpar_consulta("Oh!   Chuva ") == "Oh Chuva"
+
+    def test_preserva_acentos_e_caixa(self):
+        assert curadoria.limpar_consulta("Água Viva") == "Água Viva"
 
 
 class TestFetchSearch:
@@ -253,6 +286,33 @@ class TestFetchSearch:
         assert len(urls) == 1
         assert urls[0].startswith("https://lrclib.net/api/search?")
         assert "q=%C3%81gua+Viva" in urls[0]
+
+    def test_q_e_limpo_antes_de_enviar(self):
+        urls = []
+
+        def espiao(url):
+            urls.append(url)
+            return json.dumps([])
+
+        curadoria.fetch_search("Hyldon - Musica Bonita!", fetcher=espiao)
+        assert urls == \
+            ["https://lrclib.net/api/search?q=Hyldon+Musica+Bonita"]
+
+    def test_monta_url_com_track_name_e_artist_name(self):
+        urls = []
+
+        def espiao(url):
+            urls.append(url)
+            return json.dumps([RES_CHUVA])
+
+        resultados = curadoria.fetch_search(
+            track_name="Oh! Chuva", artist_name="Falamansa", fetcher=espiao)
+        assert resultados == [RES_CHUVA]
+        assert len(urls) == 1
+        assert urls[0].startswith("https://lrclib.net/api/search?")
+        assert "track_name=Oh%21+Chuva" in urls[0]
+        assert "artist_name=Falamansa" in urls[0]
+        assert "q=" not in urls[0]
 
     def test_erro_de_rede_propaga(self):
         def caiu(url):
@@ -451,6 +511,106 @@ class TestEnriquecerCsv:
                 "0 aplicados | 1 erros de rede") in out
 
 
+class TestBuscaDuasFormas:
+    def test_palpite_com_artista_tenta_track_name_primeiro(self, tmp_path,
+                                                           base_mp3):
+        pasta = tmp_path / "acervo"
+        pasta.mkdir()
+        shutil.copyfile(base_mp3, pasta / "Falamansa - Oh! Chuva.mp3")
+        urls = []
+
+        def espiao(url):
+            urls.append(url)
+            if "track_name=" in url:
+                return json.dumps([RES_CHUVA])
+            return json.dumps([])
+
+        curadoria.cmd_enriquecer(pasta, fetcher=espiao, pausa=0)
+        assert "track_name=Oh%21+Chuva" in urls[0]
+        assert "artist_name=Falamansa" in urls[0]
+        assert len(urls) == 1  # achou na forma precisa: sem fallback
+
+    def test_fallback_para_q_limpo_quando_track_name_nao_acha(self, tmp_path,
+                                                              base_mp3):
+        pasta = tmp_path / "acervo"
+        pasta.mkdir()
+        shutil.copyfile(base_mp3, pasta / "Falamansa - Oh! Chuva.mp3")
+        urls = []
+
+        def espiao(url):
+            urls.append(url)
+            return json.dumps([])
+
+        curadoria.cmd_enriquecer(pasta, fetcher=espiao, pausa=0)
+        # palpite 1: track_name → fallback q; palpite 2: idem; palpite 3: q
+        assert len(urls) == 5
+        assert "track_name=Oh%21+Chuva" in urls[0]
+        assert "track_name" not in urls[1]
+        assert "q=Oh+Chuva+Falamansa" in urls[1]  # texto limpo, sem "!"
+        assert "track_name=Falamansa" in urls[2]
+        assert "q=Falamansa+Oh+Chuva" in urls[3]
+        assert "q=Falamansa+Oh+Chuva" in urls[4]  # nome inteiro, sem " - "
+
+    def test_titulo_de_tag_com_artista_embutido_acha_via_split(self, tmp_path,
+                                                               base_mp3):
+        # caso real "Hyldon - Musica Bonita" em TIT2, TPE1 vazio
+        pasta = tmp_path / "acervo"
+        pasta.mkdir()
+        alvo = pasta / "faixa01.mp3"
+        shutil.copyfile(base_mp3, alvo)
+        tag(alvo, title="Hyldon - Musica Bonita")
+
+        def fetcher(url):
+            if ("/api/search" in url and "track_name=Musica+Bonita" in url
+                    and "artist_name=Hyldon" in url):
+                return json.dumps([resultado(id=9, track="Musica Bonita",
+                                             artist="Hyldon", duration=2.0)])
+            if "/api/search" in url:
+                return json.dumps([])
+            raise AssertionError("url inesperada: " + url)
+
+        saida = tmp_path / "proposta.csv"
+        curadoria.cmd_enriquecer(pasta, csv_out=saida, fetcher=fetcher,
+                                 pausa=0)
+        row = read_csv(saida)[0]
+        assert row["confianca"] == "ALTA"
+        assert row["titulo_proposto"] == "Musica Bonita"
+        assert row["artista_proposto"] == "Hyldon"
+
+
+class TestBaixaNaoSobrescreve:
+    def test_csv_baixa_repete_tags_existentes(self, tmp_path, base_mp3):
+        # BAIXA com tag existente: *_proposto repete o valor atual (nunca o
+        # palpite invertido do nome de arquivo), aceitar continua vazio
+        pasta = tmp_path / "acervo"
+        pasta.mkdir()
+        alvo = pasta / "Florestal - Martonio Holanda.mp3"  # nome invertido
+        shutil.copyfile(base_mp3, alvo)
+        tag(alvo, title="Florestal", artist="Martonio Holanda")
+        saida = tmp_path / "proposta.csv"
+        curadoria.cmd_enriquecer(pasta, csv_out=saida, fetcher=fetcher_vazio,
+                                 pausa=0)
+        row = read_csv(saida)[0]
+        assert row["confianca"] == "BAIXA"
+        assert row["titulo_proposto"] == "Florestal"
+        assert row["artista_proposto"] == "Martonio Holanda"
+        assert row["aceitar"] == ""
+
+    def test_csv_baixa_preenche_so_campo_vazio(self, tmp_path, base_mp3):
+        pasta = tmp_path / "acervo"
+        pasta.mkdir()
+        alvo = pasta / "Hyldon - Musica Bonita.mp3"
+        shutil.copyfile(base_mp3, alvo)
+        tag(alvo, title="Musica Bonita")  # artista vazio
+        saida = tmp_path / "proposta.csv"
+        curadoria.cmd_enriquecer(pasta, csv_out=saida, fetcher=fetcher_vazio,
+                                 pausa=0)
+        row = read_csv(saida)[0]
+        assert row["confianca"] == "BAIXA"
+        assert row["titulo_proposto"] == "Musica Bonita"  # tag preservada
+        assert row["artista_proposto"] == "Hyldon"        # vazio: preenche
+
+
 class TestEnriquecerAuto:
     def test_auto_aplica_so_alta(self, tmp_path, base_mp3, capsys):
         pasta = tmp_path / "acervo"
@@ -561,6 +721,150 @@ class TestEnriquecerInterativo:
         assert "Zeca - Outra.mp3" not in out  # segundo arquivo nem processado
         assert ("Resumo: 1 confiança alta | 0 média | 0 baixa | "
                 "0 aplicados | 0 erros de rede") in out
+
+
+class TestEnriquecerInterativoBaixa:
+    @pytest.fixture
+    def pasta_baixa(self, tmp_path: Path, base_mp3: Path) -> Path:
+        pasta = tmp_path / "acervo"
+        pasta.mkdir()
+        shutil.copyfile(base_mp3, pasta / "Martonio Holanda - Florestal.mp3")
+        return pasta
+
+    def test_baixa_tem_prompt_proprio_e_enter_pula(self, pasta_baixa,
+                                                   monkeypatch, capsys):
+        prompts = []
+
+        def fake_input(prompt=""):
+            prompts.append(prompt)
+            return ""  # Enter
+
+        monkeypatch.setattr("builtins.input", fake_input)
+        antes = shas_mp3(pasta_baixa)
+        curadoria.cmd_enriquecer(pasta_baixa, interativo=True,
+                                 fetcher=fetcher_vazio, pausa=0)
+        assert len(prompts) == 1
+        assert ("[Enter] pular  [a] aceitar  [t] só temas  [q] sair"
+                in prompts[0])
+        assert shas_mp3(pasta_baixa) == antes  # Enter em BAIXA NÃO grava
+        assert "0 aplicados" in capsys.readouterr().out
+
+    def test_baixa_a_aceita_e_preenche_campos_vazios(self, pasta_baixa,
+                                                     monkeypatch, capsys):
+        monkeypatch.setattr("builtins.input", lambda prompt="": "a")
+        curadoria.cmd_enriquecer(pasta_baixa, interativo=True,
+                                 fetcher=fetcher_vazio, pausa=0)
+        alvo = pasta_baixa / "Martonio Holanda - Florestal.mp3"
+        assert titulo_de(alvo) == "Florestal"
+        assert artista_de(alvo) == "Martonio Holanda"
+        assert "1 aplicados" in capsys.readouterr().out
+
+    def test_baixa_a_nao_sobrescreve_tags_existentes(self, tmp_path, base_mp3,
+                                                     monkeypatch, capsys):
+        # cenário do teste real: TIT2/TPE1 corretos, nome de arquivo invertido
+        pasta = tmp_path / "acervo"
+        pasta.mkdir()
+        alvo = pasta / "Florestal - Martonio Holanda.mp3"
+        shutil.copyfile(base_mp3, alvo)
+        tag(alvo, title="Florestal", artist="Martonio Holanda")
+        monkeypatch.setattr("builtins.input", lambda prompt="": "a")
+        curadoria.cmd_enriquecer(pasta, interativo=True,
+                                 fetcher=fetcher_vazio, pausa=0)
+        assert titulo_de(alvo) == "Florestal"            # intocado
+        assert artista_de(alvo) == "Martonio Holanda"    # intocado
+
+    def test_baixa_a_preenche_so_artista_vazio(self, tmp_path, base_mp3,
+                                               monkeypatch):
+        pasta = tmp_path / "acervo"
+        pasta.mkdir()
+        alvo = pasta / "Hyldon - Musica Bonita.mp3"
+        shutil.copyfile(base_mp3, alvo)
+        tag(alvo, title="Hyldon - Musica Bonita")  # artista vazio
+        monkeypatch.setattr("builtins.input", lambda prompt="": "a")
+        curadoria.cmd_enriquecer(pasta, interativo=True,
+                                 fetcher=fetcher_vazio, pausa=0)
+        assert titulo_de(alvo) == "Hyldon - Musica Bonita"  # não sobrescreve
+        assert artista_de(alvo) == "Hyldon"                 # vazio: preenche
+
+    def test_baixa_q_sai(self, pasta_baixa, monkeypatch, capsys):
+        monkeypatch.setattr("builtins.input", lambda prompt="": "q")
+        antes = shas_mp3(pasta_baixa)
+        curadoria.cmd_enriquecer(pasta_baixa, interativo=True,
+                                 fetcher=fetcher_vazio, pausa=0)
+        assert shas_mp3(pasta_baixa) == antes
+        out = capsys.readouterr().out
+        assert ("Resumo: 0 confiança alta | 0 média | 1 baixa | "
+                "0 aplicados | 0 erros de rede") in out
+
+    def test_alta_mantem_enter_aceita(self, pasta_chuva, monkeypatch):
+        prompts = []
+
+        def fake_input(prompt=""):
+            prompts.append(prompt)
+            return ""
+
+        monkeypatch.setattr("builtins.input", fake_input)
+        curadoria.cmd_enriquecer(pasta_chuva, interativo=True,
+                                 fetcher=fetcher_chuva, pausa=0)
+        assert ("[Enter] aceitar  [p] pular  [t] só temas  [q] sair"
+                in prompts[0])
+        alvo = pasta_chuva / "Falamansa - Oh! Chuva.mp3"
+        assert titulo_de(alvo) == "Oh! Chuva"
+
+
+class TestVerboso:
+    def test_verboso_imprime_busca_resultados_e_melhor(self, pasta_chuva,
+                                                       capsys):
+        curadoria.cmd_enriquecer(pasta_chuva, fetcher=fetcher_chuva, pausa=0,
+                                 verboso=True)
+        out = capsys.readouterr().out
+        assert '  busca: track="Oh! Chuva" artista="Falamansa"' in out
+        assert "  1 resultados" in out
+        assert '  melhor: "Oh! Chuva" / "Falamansa" (sim 1.00, dur mp3 ' in out
+        assert "s vs 2s)" in out
+
+    def test_verboso_zero_resultados_e_q_limpo(self, tmp_path, base_mp3,
+                                               capsys):
+        pasta = tmp_path / "acervo"
+        pasta.mkdir()
+        shutil.copyfile(base_mp3, pasta / "Hyldon - Musica Bonita.mp3")
+        curadoria.cmd_enriquecer(pasta, fetcher=fetcher_vazio, pausa=0,
+                                 verboso=True)
+        out = capsys.readouterr().out
+        assert '  busca: track="Musica Bonita" artista="Hyldon"' in out
+        assert '  busca: "Musica Bonita Hyldon"' in out   # fallback q limpo
+        assert '  busca: "Hyldon Musica Bonita"' in out   # nome inteiro limpo
+        assert "  0 resultados" in out
+
+    def test_verboso_imprime_erro_da_busca(self, tmp_path, base_mp3, capsys):
+        pasta = tmp_path / "acervo"
+        pasta.mkdir()
+        shutil.copyfile(base_mp3, pasta / "Qualquer.mp3")
+
+        def caiu(url):
+            raise urllib.error.URLError("caiu na rede")
+
+        curadoria.cmd_enriquecer(pasta, fetcher=caiu, pausa=0, verboso=True)
+        out = capsys.readouterr().out
+        assert "  erro: " in out
+        assert "caiu na rede" in out
+        assert "ERRO DE REDE: Qualquer.mp3" in out
+
+    def test_sem_verboso_nao_imprime_busca(self, pasta_chuva, capsys):
+        curadoria.cmd_enriquecer(pasta_chuva, fetcher=fetcher_chuva, pausa=0)
+        out = capsys.readouterr().out
+        assert "  busca:" not in out
+        assert "  melhor:" not in out
+
+    def test_cli_aceita_flag_verboso(self, tmp_path, base_mp3):
+        pasta = tmp_path / "acervo"
+        pasta.mkdir()
+        alvo = pasta / "completa.mp3"
+        shutil.copyfile(base_mp3, alvo)
+        tag(alvo, title="Completa", artist="Coral", letra="tem letra")
+        result = run_curadoria("enriquecer", pasta, "--verboso")
+        assert result.returncode == 0, result.stderr
+        assert "PULADO: completa.mp3" in result.stdout
 
 
 class TestPausaEntreBuscas:
@@ -791,6 +1095,60 @@ class TestAplicarProposta:
         assert titulo_de(pasta / "a.mp3") is None      # nada aplicado no erro
         assert titulo_de(pasta / "b.mp3") == "Oh! Chuva"  # lote continuou
         assert "Resumo: 1 aplicados | 0 pulados | 1 erros de rede" in out
+
+    def test_baixa_nao_sobrescreve_tags_existentes(self, tmp_path, base_mp3,
+                                                   capsys):
+        # linha BAIXA com aceitar=SIM (editada à mão): só PREENCHE vazios
+        pasta = tmp_path / "acervo"
+        pasta.mkdir()
+        alvo = pasta / "a.mp3"
+        shutil.copyfile(base_mp3, alvo)
+        tag(alvo, title="Florestal")  # artista vazio
+        proposta = tmp_path / "proposta.csv"
+        write_proposta(proposta, [
+            linha_proposta(arquivo="a.mp3",
+                           titulo_proposto="Martonio Holanda",  # invertido
+                           artista_proposto="Martonio Holanda",
+                           confianca="BAIXA", aceitar="SIM"),
+        ])
+        curadoria.cmd_aplicar_proposta(pasta, proposta, pausa=0)
+        assert titulo_de(alvo) == "Florestal"           # tag preservada
+        assert artista_de(alvo) == "Martonio Holanda"   # vazio: preenchido
+        out = capsys.readouterr().out
+        assert "Resumo: 1 aplicados | 0 pulados | 0 erros de rede" in out
+
+    def test_baixa_com_tudo_preenchido_e_pulada(self, tmp_path, base_mp3,
+                                                capsys):
+        pasta = tmp_path / "acervo"
+        pasta.mkdir()
+        alvo = pasta / "a.mp3"
+        shutil.copyfile(base_mp3, alvo)
+        tag(alvo, title="Florestal", artist="Martonio Holanda")
+        proposta = tmp_path / "proposta.csv"
+        write_proposta(proposta, [
+            linha_proposta(arquivo="a.mp3", titulo_proposto="Outro",
+                           artista_proposto="Alguém",
+                           confianca="BAIXA", aceitar="SIM"),
+        ])
+        antes = sha256(alvo)
+        curadoria.cmd_aplicar_proposta(pasta, proposta, pausa=0)
+        assert sha256(alvo) == antes  # nenhum byte alterado
+        out = capsys.readouterr().out
+        assert "Resumo: 0 aplicados | 1 pulados | 0 erros de rede" in out
+
+    def test_media_continua_podendo_sobrescrever(self, tmp_path, base_mp3):
+        pasta = tmp_path / "acervo"
+        pasta.mkdir()
+        alvo = pasta / "a.mp3"
+        shutil.copyfile(base_mp3, alvo)
+        tag(alvo, title="Errado")
+        proposta = tmp_path / "proposta.csv"
+        write_proposta(proposta, [
+            linha_proposta(arquivo="a.mp3", titulo_proposto="Certo",
+                           confianca="MÉDIA", aceitar="SIM"),
+        ])
+        curadoria.cmd_aplicar_proposta(pasta, proposta, pausa=0)
+        assert titulo_de(alvo) == "Certo"
 
     def test_arquivo_inexistente_avisa_e_continua(self, tmp_path, base_mp3,
                                                   capsys):
