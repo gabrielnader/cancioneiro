@@ -52,6 +52,7 @@ import json
 import re
 import sys
 import time
+import unicodedata
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -332,8 +333,15 @@ def cmd_buscar_letra(pasta: Path, aplicar: bool = False,
 def limpar_consulta(texto: str) -> str:
     """Limpa o texto para a busca q= do LRCLIB: remove pontuação e hífens
     soltos (a busca full-text é sensível a eles) e colapsa espaços,
-    preservando acentos e caixa."""
-    base = "".join(c if (c.isalnum() or c.isspace()) else " " for c in texto)
+    preservando acentos e caixa. Trabalha em NFC: texto NFD (nomes de
+    arquivo do macOS) é recomposto antes, para o combining char não virar
+    espaço e PARTIR a palavra ("Música" NFD ficava "Mu sica"); combining
+    char que sobrar sem recompor é removido SEM inserir espaço."""
+    texto = unicodedata.normalize("NFC", texto)
+    base = "".join(
+        "" if unicodedata.combining(c)
+        else (c if (c.isalnum() or c.isspace()) else " ")
+        for c in texto)
     return " ".join(base.split())
 
 
@@ -381,13 +389,47 @@ def similaridade(a: str, b: str) -> float:
                                    _norm_comparacao(b)).ratio()
 
 
+# Placeholders de ripador/CDDB ("AudioTrack 02", "Faixa 8", "no artist"...):
+# não identificam nada. Comparação sobre a chave _norm_comparacao (minúscula,
+# sem acento, sem pontuação — "[Unknown Artist]" vira "unknown artist").
+_RE_PLACEHOLDER_FAIXA = re.compile(
+    r"^(?:\d+\s+)?(?:audio\s?track|faixa|track|pista)(?:\s?\d+)?$")
+_PLACEHOLDERS_EXATOS = frozenset({
+    "artist", "no artist", "unknown artist", "artista desconhecido",
+    "artista desconhecida", "unknown", "desconhecido", "desconhecida",
+    "no title", "sem titulo", "untitled", "unknown title",
+    "titulo desconhecido",
+})
+
+
+def eh_placeholder(texto: str) -> bool:
+    """True se o texto é placeholder (tag-lixo ou entrada-lixo do LRCLIB):
+    vazio, só dígitos/pontuação, "AudioTrack N"/"Faixa N"/"Track N"/
+    "Pista N" (com ou sem prefixo numérico), "no artist", "[Unknown
+    Artist]", "Artista Desconhecido", "sem título", "untitled" etc.
+    Case/acento-insensitive."""
+    chave = _norm_comparacao(texto)
+    if not chave or chave.isdigit():
+        return True  # vazio, só pontuação/# ou só dígitos
+    if chave in _PLACEHOLDERS_EXATOS:
+        return True
+    return bool(_RE_PLACEHOLDER_FAIXA.match(chave))
+
+
+def _sem_placeholder(texto: str) -> str:
+    """Tag placeholder é tratada como campo VAZIO em todos os pontos:
+    não vira palpite, não bloqueia proposta BAIXA, não pula arquivo."""
+    return "" if eh_placeholder(texto) else texto
+
+
 def limpar_nome_arquivo(nome: str) -> str:
     """Limpa um nome de arquivo para virar palpite: remove a extensão e o
     número de faixa inicial; remove TODO conteúdo entre colchetes e entre
     parênteses (regra simples — cobre "(ao vivo)", "[official]" etc.),
     exceto quando remover os parênteses deixaria o nome vazio;
-    underscores viram espaço e espaços são colapsados."""
-    s = Path(nome).stem.replace("_", " ")
+    underscores viram espaço e espaços são colapsados. O resultado sai em
+    NFC (nomes do macOS chegam NFD) para o palpite nunca partir palavra."""
+    s = unicodedata.normalize("NFC", Path(nome).stem).replace("_", " ")
     s = _RE_COLCHETES.sub(" ", s)
     sem_parenteses = _RE_PARENTESES.sub(" ", s)
     if sem_parenteses.strip():
@@ -400,8 +442,13 @@ def gerar_palpites(nome_arquivo: str, titulo: str = "",
                    artista: str = "") -> list:
     """Palpites (título, artista) na ordem do PRD: tags existentes (título de
     tag com " - " e artista vazio também é dividido nas duas ordens — caso
-    "Hyldon - Musica Bonita"); nome de arquivo dividido em " - " nas duas
-    ordens; nome inteiro como título."""
+    "Hyldon - Musica Bonita"); nome de arquivo dividido no primeiro " - "
+    nas duas ordens (com 3+ segmentos — prefixo de pasta/coleção — também
+    os DOIS ÚLTIMOS segmentos nas duas ordens); nome inteiro como título.
+    Tag placeholder ("02 AudioTrack 02", "no artist"...) é tratada como
+    vazia: NUNCA vira palpite — vale o nome do arquivo."""
+    titulo = _sem_placeholder(titulo)
+    artista = _sem_placeholder(artista)
     palpites = []
     if titulo:
         palpites.append((titulo, artista))
@@ -416,6 +463,11 @@ def gerar_palpites(nome_arquivo: str, titulo: str = "",
         if a and b:
             palpites.append((b, a))  # Artista - Título
             palpites.append((a, b))  # Título - Artista
+        segmentos = [s.strip() for s in limpo.split(" - ") if s.strip()]
+        if len(segmentos) >= 3:  # "coleção - Título - Artista"
+            penultimo, ultimo = segmentos[-2], segmentos[-1]
+            palpites.append((penultimo, ultimo))  # Título - Artista
+            palpites.append((ultimo, penultimo))  # Artista - Título
     if limpo:
         palpites.append((limpo, ""))
     vistos = set()
@@ -447,10 +499,14 @@ def _identificar(palpites: list, duracao_mp3: float, buscar,
     """Consulta o LRCLIB para cada palpite e devolve o melhor candidato
     ({"sim", "dif", "res"}) ou None. Palpite com artista tenta primeiro a
     busca por campo (track_name/artist_name, mais precisa) e só cai para
-    q= (texto limpo) se ela voltar vazia. Resultados com duração divergente
-    >15 s são desclassificados; sem duração comparável (do MP3 ou do
-    resultado), sem bônus nem desclassificação. Para no primeiro palpite
-    que render ALTA. log (opcional) recebe as linhas do modo verboso."""
+    q= (texto limpo) se ela voltar vazia. Resultado com trackName OU
+    artistName placeholder ("AudioTrack 02"/"Faixa 8"/"Artista
+    Desconhecido") é DESCARTADO antes do score — e busca precisa que só
+    devolveu lixo não conta como achado (o fallback q= ainda roda).
+    Resultados com duração divergente >15 s são desclassificados; sem
+    duração comparável (do MP3 ou do resultado), sem bônus nem
+    desclassificação. Para no primeiro palpite que render ALTA.
+    log (opcional) recebe as linhas do modo verboso."""
     log = log or (lambda _msg: None)
     melhor = None
     for titulo, artista in palpites:
@@ -470,7 +526,14 @@ def _identificar(palpites: list, duracao_mp3: float, buscar,
                 log(f"  erro: {exc}")
                 raise
             log(f"  {len(resultados)} resultados")
-            for res in resultados:
+            validos = [res for res in resultados
+                       if not (eh_placeholder(res.get("trackName") or "")
+                               or eh_placeholder(res.get("artistName")
+                                                 or ""))]
+            if len(validos) < len(resultados):
+                log(f"  {len(resultados) - len(validos)} "
+                    "descartados (placeholder)")
+            for res in validos:
                 if artista:
                     candidato = (f"{res.get('trackName') or ''} "
                                  f"{res.get('artistName') or ''}")
@@ -488,8 +551,8 @@ def _identificar(palpites: list, duracao_mp3: float, buscar,
                 if melhor is None or sim + bonus > melhor["score"]:
                     melhor = {"score": sim + bonus, "sim": sim, "dif": dif,
                               "res": res}
-            if resultados:
-                break  # a forma precisa achou algo: sem fallback q=
+            if validos:
+                break  # a forma precisa achou algo (válido): sem fallback q=
         if melhor is not None and classificar(melhor["sim"],
                                               melhor["dif"]) == "ALTA":
             break
@@ -548,12 +611,15 @@ def cmd_enriquecer(pasta: Path, csv_out: Path | None = None,
         info = ler_info(p)
         if info["ilegivel"]:
             continue
-        if (info["titulo"] and info["artista"] and info["letra"]
-                and not forcar):
+        # tag placeholder ("AudioTrack 17", "no artist"...) conta como vazia:
+        # não pula o arquivo, não vira palpite e não bloqueia a BAIXA
+        titulo_tag = _sem_placeholder(info["titulo"])
+        artista_tag = _sem_placeholder(info["artista"])
+        if titulo_tag and artista_tag and info["letra"] and not forcar:
             print(f"PULADO: {rel} (já tem título, artista e letra)")
             continue
         temas_novos = temas_da_pasta(rel) if temas_pastas else []
-        palpites = gerar_palpites(p.name, info["titulo"], info["artista"])
+        palpites = gerar_palpites(p.name, titulo_tag, artista_tag)
         try:
             melhor = _identificar(palpites, info["duracao"], buscar, log=log)
         except Exception:
@@ -573,13 +639,14 @@ def cmd_enriquecer(pasta: Path, csv_out: Path | None = None,
                 if melhor is not None else "BAIXA")
         if conf == "BAIXA":
             # nada é proposto além do palpite de nome de arquivo; BAIXA
-            # nunca sobrescreve tag existente — só preenche campos vazios
+            # nunca sobrescreve tag REAL — só preenche campos vazios
+            # (tag placeholder conta como vazia e PODE ser sobrescrita)
             do_nome = gerar_palpites(p.name)
             titulo_prop, artista_prop = do_nome[0] if do_nome else ("", "")
-            if info["titulo"]:
-                titulo_prop = info["titulo"]
-            if info["artista"]:
-                artista_prop = info["artista"]
+            if titulo_tag:
+                titulo_prop = titulo_tag
+            if artista_tag:
+                artista_prop = artista_tag
             letra_prop = lrclib_id = dur_enc = ""
             print(f"BAIXA: {rel} → {titulo_prop} / {artista_prop} "
                   "(palpite de nome de arquivo)")
@@ -668,10 +735,11 @@ def cmd_aplicar_proposta(pasta: Path, csv_path: Path, dry_run: bool = False,
             lrclib_id = (row.get("lrclib_id") or "").strip()
             info = ler_info(alvo)
             if (row.get("confianca") or "").strip().upper() == "BAIXA":
-                # BAIXA nunca sobrescreve: só preenche campos vazios
-                if info["titulo"]:
+                # BAIXA nunca sobrescreve tag REAL: só preenche campos
+                # vazios (tag placeholder conta como vazia e cede lugar)
+                if _sem_placeholder(info["titulo"]):
                     titulo = ""
-                if info["artista"]:
+                if _sem_placeholder(info["artista"]):
                     artista = ""
             temas_novos = (el.normalize_temas(el.split_temas_input(temas_raw))
                            if temas_raw else [])

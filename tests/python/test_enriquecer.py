@@ -12,6 +12,7 @@ import json
 import shutil
 import subprocess
 import sys
+import unicodedata
 import urllib.error
 from pathlib import Path
 
@@ -193,6 +194,14 @@ class TestLimparNomeArquivo:
     def test_nome_so_numerico_nao_vira_vazio(self):
         assert curadoria.limpar_nome_arquivo("12.mp3") == "12"
 
+    def test_nome_nfd_vira_nfc_sem_partir_palavra(self):
+        # macOS entrega nomes de arquivo decompostos (NFD); o palpite deve
+        # sair recomposto (NFC), nunca com a palavra partida
+        nfd = unicodedata.normalize("NFD", "adventício - Chegança.mp3")
+        limpo = curadoria.limpar_nome_arquivo(nfd)
+        assert limpo == "adventício - Chegança"
+        assert unicodedata.is_normalized("NFC", limpo)
+
 
 class TestGerarPalpites:
     def test_tags_vem_primeiro(self):
@@ -225,6 +234,41 @@ class TestGerarPalpites:
         palpites = curadoria.gerar_palpites("x.mp3", "A - B", "Artista")
         assert palpites[0] == ("A - B", "Artista")
         assert ("B", "A") not in palpites
+
+    def test_tag_placeholder_nunca_vira_palpite(self):
+        # caso real: TIT2 "02 AudioTrack 02", TPE1 "no artist" — tags-lixo
+        # de ripador não identificam nada; palpites saem do NOME do arquivo
+        palpites = curadoria.gerar_palpites(
+            "adventício - Cheganca - Antonio Nobrega.mp3",
+            "02 AudioTrack 02", "no artist")
+        assert palpites[0] == ("Cheganca - Antonio Nobrega", "adventício")
+        for titulo, artista in palpites:
+            assert "AudioTrack" not in titulo
+            assert artista != "no artist"
+
+    def test_so_artista_placeholder_e_tratado_como_vazio(self):
+        # título real + artista placeholder: vira o caso "artista vazio"
+        # (inclusive o split do título com " - " nas duas ordens)
+        palpites = curadoria.gerar_palpites("x.mp3", "Hyldon - Musica Bonita",
+                                            "[Unknown Artist]")
+        assert palpites[0] == ("Hyldon - Musica Bonita", "")
+        assert ("Musica Bonita", "Hyldon") in palpites
+
+    def test_nome_com_tres_segmentos_combina_os_dois_ultimos(self):
+        # "coleção - Título - Artista": além dos palpites atuais (split no
+        # PRIMEIRO " - "), os dois últimos segmentos nas duas ordens
+        palpites = curadoria.gerar_palpites(
+            "adventício - Cheganca - Antonio Nobrega.mp3")
+        assert ("Cheganca", "Antonio Nobrega") in palpites   # Título, Artista
+        assert ("Antonio Nobrega", "Cheganca") in palpites   # Artista, Título
+        # os palpites atuais continuam presentes, na frente
+        assert palpites[0] == ("Cheganca - Antonio Nobrega", "adventício")
+        assert palpites[1] == ("adventício", "Cheganca - Antonio Nobrega")
+        assert ("adventício - Cheganca - Antonio Nobrega", "") in palpites
+
+    def test_nome_com_dois_segmentos_nao_ganha_combinacoes_extras(self):
+        palpites = curadoria.gerar_palpites("Falamansa - Oh! Chuva.mp3")
+        assert len(palpites) == 3  # sem duplicar os palpites do split simples
 
 
 class TestSimilaridade:
@@ -271,6 +315,47 @@ class TestLimparConsulta:
 
     def test_preserva_acentos_e_caixa(self):
         assert curadoria.limpar_consulta("Água Viva") == "Água Viva"
+
+    # BUG real: nome de arquivo NFD (macOS) fazia o combining char virar
+    # espaço e PARTIA a palavra ("Música" → "Mu sica"). Contrato: a consulta
+    # sai em NFC, acentos preservados, palavra NUNCA partida.
+    @pytest.mark.parametrize("original", [
+        "Música Espírita",
+        "É cedo ainda",
+        "Na dança das Folhas",
+        "adventício",
+        "Berço de Deus",
+        "Apreço ao meu lugar",
+        "Lembrança cósmica",
+    ])
+    def test_nfd_nao_parte_palavra_acentuada(self, original):
+        nfd = unicodedata.normalize("NFD", original)
+        assert curadoria.limpar_consulta(nfd) == original
+
+    def test_nfd_com_pontuacao_continua_limpando(self):
+        nfd = unicodedata.normalize("NFD", "É cedo, ainda!")
+        assert curadoria.limpar_consulta(nfd) == "É cedo ainda"
+
+
+class TestEhPlaceholder:
+    @pytest.mark.parametrize("texto", [
+        "", "   ", "12", "#", "###", "02",
+        "AudioTrack 02", "02 AudioTrack 02", "Audio Track 5", "audiotrack",
+        "Faixa 8", "faixa 2", "Faixa", "Track 10", "track", "Pista 3",
+        "no artist", "No Artist", "unknown artist", "[Unknown Artist]",
+        "Artista Desconhecido", "artista desconhecido", "artist",
+        "no title", "Sem Título", "sem titulo", "untitled", "Unknown",
+    ])
+    def test_placeholder_e_detectado(self, texto):
+        assert curadoria.eh_placeholder(texto) is True
+
+    @pytest.mark.parametrize("texto", [
+        "Oh! Chuva", "Chegança", "Antonio Nobrega", "Cali",
+        "Faixa de Gaza", "12 Horas", "Música Espírita", "O Artista",
+        "Princesa Goiana", "É cedo ainda",
+    ])
+    def test_nome_real_nao_e_placeholder(self, texto):
+        assert curadoria.eh_placeholder(texto) is False
 
 
 class TestFetchSearch:
@@ -609,6 +694,151 @@ class TestBaixaNaoSobrescreve:
         assert row["confianca"] == "BAIXA"
         assert row["titulo_proposto"] == "Musica Bonita"  # tag preservada
         assert row["artista_proposto"] == "Hyldon"        # vazio: preenche
+
+
+class TestPlaceholderDoLrclib:
+    """Resultados do LRCLIB com trackName OU artistName placeholder são
+    descartados ANTES do score: nunca ALTA/MÉDIA, nunca propostos nem
+    aplicados (caso real: "AudioTrack 02"/"Cali" com sim 0.90 aplicado
+    por cima de um arquivo com tags-lixo)."""
+
+    @pytest.fixture
+    def pasta_lixo(self, tmp_path: Path, base_mp3: Path) -> Path:
+        pasta = tmp_path / "acervo"
+        pasta.mkdir()
+        alvo = pasta / "adventício - Cheganca - Antonio Nobrega.mp3"
+        shutil.copyfile(base_mp3, alvo)
+        tag(alvo, title="02 AudioTrack 02", artist="no artist")
+        return pasta
+
+    def test_track_name_placeholder_e_descartado_nunca_aplicado(
+            self, pasta_lixo, tmp_path, capsys):
+        def fetcher(url):
+            if "/api/search" in url:
+                return json.dumps([resultado(id=13, track="AudioTrack 02",
+                                             artist="Cali", duration=2.0)])
+            raise AssertionError("url inesperada: " + url)
+
+        saida = tmp_path / "proposta.csv"
+        antes = shas_mp3(pasta_lixo)
+        curadoria.cmd_enriquecer(pasta_lixo, auto=True, csv_out=saida,
+                                 fetcher=fetcher, pausa=0, verboso=True)
+        assert shas_mp3(pasta_lixo) == antes  # nada aplicado
+        row = read_csv(saida)[0]
+        assert row["confianca"] == "BAIXA"
+        assert "AudioTrack" not in row["titulo_proposto"]
+        assert row["artista_proposto"] != "Cali"
+        assert row["lrclib_id"] == ""
+        out = capsys.readouterr().out
+        assert "descartado" in out  # verboso relata o descarte
+
+    def test_artist_name_placeholder_tambem_descarta(self, tmp_path,
+                                                     base_mp3):
+        pasta = tmp_path / "acervo"
+        pasta.mkdir()
+        shutil.copyfile(base_mp3, pasta / "barquinha - Princesa Goiana.mp3")
+
+        def fetcher(url):
+            if "/api/search" in url:
+                return json.dumps([resultado(
+                    id=8, track="Faixa 8", artist="Artista Desconhecido",
+                    duration=2.0)])
+            raise AssertionError("url inesperada: " + url)
+
+        saida = tmp_path / "proposta.csv"
+        curadoria.cmd_enriquecer(pasta, csv_out=saida, fetcher=fetcher,
+                                 pausa=0)
+        row = read_csv(saida)[0]
+        assert row["confianca"] == "BAIXA"
+        assert row["titulo_proposto"] != "Faixa 8"
+        assert row["artista_proposto"] != "Artista Desconhecido"
+        assert row["lrclib_id"] == ""
+
+    def test_busca_precisa_so_com_placeholder_cai_para_q(self, tmp_path,
+                                                         base_mp3):
+        # a busca por campo "achou" só lixo: NÃO conta como achado — o
+        # fallback q= (e os demais palpites) ainda rodam
+        pasta = tmp_path / "acervo"
+        pasta.mkdir()
+        shutil.copyfile(base_mp3, pasta / "Falamansa - Oh! Chuva.mp3")
+        urls = []
+
+        def fetcher(url):
+            urls.append(url)
+            if "track_name=" in url:
+                return json.dumps([resultado(track="Faixa 1",
+                                             artist="[Unknown Artist]")])
+            return json.dumps([])
+
+        curadoria.cmd_enriquecer(pasta, fetcher=fetcher, pausa=0)
+        assert len(urls) == 5  # mesmas 5 consultas do caso "nada achado"
+        assert "q=Oh+Chuva+Falamansa" in urls[1]
+
+
+class TestPlaceholderNasTags:
+    """Tag placeholder é tratada como campo VAZIO em todos os pontos:
+    não vira palpite, não bloqueia o preenchimento por proposta BAIXA
+    (interativo/auto/csv/aplicar-proposta) e não faz o arquivo ser pulado."""
+
+    @pytest.fixture
+    def pasta_sessao(self, tmp_path: Path, base_mp3: Path) -> Path:
+        pasta = tmp_path / "acervo"
+        pasta.mkdir()
+        alvo = pasta / "adventício - Abrir a sessão.mp3"
+        shutil.copyfile(base_mp3, alvo)
+        tag(alvo, title="AudioTrack 17", artist="no artist")
+        return pasta
+
+    def test_csv_baixa_propoe_nome_de_arquivo_sobre_placeholder(
+            self, pasta_sessao, tmp_path):
+        saida = tmp_path / "proposta.csv"
+        curadoria.cmd_enriquecer(pasta_sessao, csv_out=saida,
+                                 fetcher=fetcher_vazio, pausa=0)
+        row = read_csv(saida)[0]
+        assert row["confianca"] == "BAIXA"
+        assert row["titulo_atual"] == "AudioTrack 17"    # informativo, cru
+        assert row["artista_atual"] == "no artist"
+        assert row["titulo_proposto"] == "Abrir a sessão"
+        assert row["artista_proposto"] == "adventício"
+
+    def test_interativo_a_sobrescreve_tags_placeholder(self, pasta_sessao,
+                                                       monkeypatch):
+        monkeypatch.setattr("builtins.input", lambda prompt="": "a")
+        curadoria.cmd_enriquecer(pasta_sessao, interativo=True,
+                                 fetcher=fetcher_vazio, pausa=0)
+        alvo = pasta_sessao / "adventício - Abrir a sessão.mp3"
+        assert titulo_de(alvo) == "Abrir a sessão"
+        assert artista_de(alvo) == "adventício"
+
+    def test_tags_placeholder_com_letra_nao_e_pulado(self, pasta_sessao,
+                                                     tmp_path, capsys):
+        alvo = pasta_sessao / "adventício - Abrir a sessão.mp3"
+        tag(alvo, letra="já tem letra")
+        saida = tmp_path / "proposta.csv"
+        curadoria.cmd_enriquecer(pasta_sessao, csv_out=saida,
+                                 fetcher=fetcher_vazio, pausa=0)
+        assert "PULADO" not in capsys.readouterr().out
+        assert len(read_csv(saida)) == 1
+
+    def test_aplicar_proposta_baixa_preenche_sobre_placeholder(
+            self, tmp_path, base_mp3, capsys):
+        pasta = tmp_path / "acervo"
+        pasta.mkdir()
+        alvo = pasta / "a.mp3"
+        shutil.copyfile(base_mp3, alvo)
+        tag(alvo, title="Faixa 5", artist="Artista Desconhecido")
+        proposta = tmp_path / "proposta.csv"
+        write_proposta(proposta, [
+            linha_proposta(arquivo="a.mp3",
+                           titulo_proposto="Abrir a sessão",
+                           artista_proposto="adventício",
+                           confianca="BAIXA", aceitar="SIM"),
+        ])
+        curadoria.cmd_aplicar_proposta(pasta, proposta, pausa=0)
+        assert titulo_de(alvo) == "Abrir a sessão"       # placeholder cedeu
+        assert artista_de(alvo) == "adventício"
+        out = capsys.readouterr().out
+        assert "Resumo: 1 aplicados | 0 pulados | 0 erros de rede" in out
 
 
 class TestEnriquecerAuto:
