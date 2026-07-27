@@ -1,5 +1,33 @@
 # REPORT — Cancioneiro
 
+> **Atualização V4/V5 (0.4.0):** o teste em acervo real (94 MP3s de repertório de
+> nicho, Mac M2) guiou duas rodadas de evolução.
+> **V4 — Curadoria no player** (`PRD-v4-curadoria-no-player.md`): edição de
+> título/artista/letra/temas gravando direto no MP3, "Buscar letra na internet"
+> (LRCLIB) e **árvore de subpastas** na lateral. O princípio "o player nunca
+> escreve" foi revisado para **"a reprodução nunca escreve"** — gravação só em
+> ação explícita, só tags ID3, nunca o áudio e **nunca o nome do arquivo**.
+> **V3 — Enriquecimento** (`tools/curadoria.py enriquecer`/`temas-de-pastas`):
+> identifica a música pelo nome do arquivo confirmando no LRCLIB pela duração
+> (±3s = alta), trata valores de ripador ("Faixa 8", "no artist") como campo
+> vazio dos dois lados, e transforma nome de pasta em tema.
+> **v0.4** (`PRD-v5-backlog.md`): **busca por nome de pasta** (F12 — coluna
+> `pastas` na FTS, migração de schema v1/v2→v3 atômica) e **"Completar dados
+> desta pasta"** (F13 — identificação em lote dentro do app, com revisão por
+> checkbox, ALTA pré-marcada, aplicação que nunca apaga nem aborta no meio),
+> além de ajustes de UX vindos do uso real (tema pendente entrava perdido ao
+> salvar, botão × na busca, ordem da linha, estado de carregamento).
+> Suítes na 0.4.0: **237 pytest + 78 cargo + 252 vitest + 17 E2E — todas verdes.**
+> QA cético independente reprovou a primeira volta da v0.4 (varredura da pasta
+> "1" alcançava a pasta "10"; lote abortado dessincronizava tela e disco;
+> atalhos globais vazavam sob o modal) — os três defeitos foram corrigidos com
+> teste de regressão antes da release.
+>
+> **Descoberta que define a v0.5:** no acervo real o LRCLIB cobriu ~3% do
+> repertório (música de nicho não existe nas bases públicas). Por isso a próxima
+> versão traz **transcrição local de áudio** (Whisper) como fonte de letra e de
+> identificação para o restante do acervo.
+
 > **Atualização V2 (0.2.0):** após a entrega V1 abaixo, o projeto ganhou:
 > **V2.1 — Temas** (tags temáticas embutidas no MP3 via TXXX:TEMAS, busca sem
 > acento e chips clicáveis; spec em `PRD-v2-temas.md`), **V2.2 — Curadoria em

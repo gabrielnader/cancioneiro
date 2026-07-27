@@ -177,11 +177,15 @@ opção mais simples que passa nos Acceptance Checks do PRD.
     na própria proposta — aplicar não faz segunda rodada de rede. Erro de rede
     por música vira proposta com `error` (linha desabilitada na UI); o lote
     nunca aborta.
-48. **Apply do lote nunca apaga**: campos None releem o valor atual do banco e
-    o regravam (letra/artista/temas preservados); reusa writer::write_tags
-    (validação + reindexação únicas). Aplicar usa o lock compartilhado — N
-    gravações seguram a busca por alguns segundos, aceito para lotes de
-    dezenas de músicas (a varredura, que demora minutos, usa conexão dedicada).
+48. **Apply do lote nunca apaga nem aborta**: campos None releem o valor atual
+    do banco e o regravam (letra/artista/temas preservados); reusa
+    writer::write_tags (validação + reindexação únicas). Falha em uma música
+    não derruba o lote — cada uma devolve EnrichApplyResult (song gravada ou
+    error), e a UI sincroniza as que gravaram mesmo quando outras falham
+    (achado do QA: abortar deixava disco e tela divergentes). Aplicar usa o
+    lock compartilhado — N gravações seguram a busca por alguns segundos,
+    aceito para lotes de dezenas de músicas (a varredura, que demora minutos,
+    usa conexão dedicada).
 49. **BAIXA marcável, nunca pré-marcada**: no teste real a maioria dos palpites
     de nome de arquivo estava certa, mas a decisão é humana — ALTA pré-marcada,
     MÉDIA/BAIXA desmarcadas, checkbox por linha + Marcar/Desmarcar todas.
