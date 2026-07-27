@@ -59,6 +59,7 @@ function fakeBackend(overrides: Partial<Backend> = {}): Backend {
     pickFolder: vi.fn(async () => "/m"),
     fileSrc: (p: string) => p,
     onScanProgress: vi.fn(async () => () => {}),
+    onEnrichProgress: vi.fn(async () => () => {}),
     writeTags: vi.fn(async () => song(1, "Aurora")),
     fetchLyricsOnline: vi.fn(async () => null),
     enrichFolderScan: vi.fn(async () => []),

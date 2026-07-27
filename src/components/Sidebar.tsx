@@ -119,8 +119,46 @@ export function Sidebar() {
         Nova playlist
       </button>
 
+      <EnrichBackgroundIndicator />
+
       <NewPlaylistDialog open={dialogOpen} onClose={() => setDialogOpen(false)} />
     </nav>
+  );
+}
+
+/**
+ * Rodapé da sidebar com a varredura F13 que roda em segundo plano: mostra a
+ * contagem enquanto busca e vira "Revisar N propostas" quando termina sem o
+ * overlay na tela (o toast desta base não carrega ação de clique). Clicar
+ * reabre o overlay.
+ */
+function EnrichBackgroundIndicator() {
+  const status = useEnrichStore((s) => s.status);
+  const overlayOpen = useEnrichStore((s) => s.overlayOpen);
+  const progress = useEnrichStore((s) => s.progress);
+  const proposals = useEnrichStore((s) => s.proposals);
+  const openOverlay = useEnrichStore((s) => s.openOverlay);
+
+  if (status === "idle" || overlayOpen) return null;
+
+  const label =
+    status === "scanning"
+      ? progress
+        ? `Buscando dados… ${progress.done} de ${progress.total}`
+        : "Buscando dados…"
+      : proposals.length === 1
+        ? "Revisar 1 proposta"
+        : `Revisar ${proposals.length} propostas`;
+
+  return (
+    <button
+      type="button"
+      onClick={openOverlay}
+      title="Abrir a revisão de dados"
+      className="mt-2 truncate rounded-md bg-[#F0FDFA] px-3 py-2 text-left text-[13px] font-medium text-[#0F766E] hover:bg-[#CCFBF1]"
+    >
+      {label}
+    </button>
   );
 }
 
@@ -135,6 +173,9 @@ function FolderTreeItem({ node, level }: { node: FolderNode; level: number }) {
   const setView = useUiStore((s) => s.setView);
   const closePlaylist = usePlaylistStore((s) => s.closePlaylist);
   const startScan = useEnrichStore((s) => s.startScan);
+  // só UMA varredura por vez: com uma rodando (inclusive em segundo plano, de
+  // outra pasta) o ✎ de todas as pastas fica desabilitado
+  const scanning = useEnrichStore((s) => s.status === "scanning");
   const isRoot = level === 0;
   const active = !isRoot && folderFilter === node.path;
   // raiz = Biblioteca (Q2): conta como "selecionada" quando não há filtro
@@ -172,10 +213,15 @@ function FolderTreeItem({ node, level }: { node: FolderNode; level: number }) {
               ? "Completar dados da biblioteca"
               : `Completar dados da pasta ${node.name}`
           }
+          disabled={scanning}
           title={
-            isRoot ? "Completar dados da biblioteca" : "Completar dados desta pasta"
+            scanning
+              ? "Uma busca de dados já está em andamento"
+              : isRoot
+                ? "Completar dados da biblioteca"
+                : "Completar dados desta pasta"
           }
-          className={`h-6 w-6 shrink-0 rounded text-[13px] text-[#374151] hover:bg-[#E5E7EB] group-hover:block ${
+          className={`h-6 w-6 shrink-0 rounded text-[13px] text-[#374151] hover:bg-[#E5E7EB] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent group-hover:block ${
             enrichVisible ? "block" : "hidden"
           }`}
           onClick={() => void startScan(isRoot ? "" : node.path)}

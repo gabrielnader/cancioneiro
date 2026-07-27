@@ -28,6 +28,19 @@ export interface EnrichProposal {
 }
 
 /**
+ * Progresso da varredura do "Completar dados" (F13): o backend emite o evento
+ * Tauri `enrich:progress` a cada música (chaves snake_case, como o serde do
+ * struct Rust). O PRIMEIRO evento chega com done=0, antes de o trabalho
+ * começar — é o que troca o spinner indeterminado pela barra determinada.
+ */
+export interface EnrichProgress {
+  done: number;
+  total: number;
+  /** Nome-base do arquivo em processamento (sem diretório). */
+  atual: string;
+}
+
+/**
  * Aplicação aceita pelo usuário (F13). `null` em artist/lyrics/add_temas =
  * "não mexer" — o lote nunca apaga dados existentes.
  */
@@ -95,6 +108,11 @@ export interface Backend {
    * biblioteca inteira) — ponto de rede EXPLÍCITO, pode levar minutos (F13).
    */
   enrichFolderScan(folderPrefix: string): Promise<EnrichProposal[]>;
+  /**
+   * Progresso da varredura F13 (evento `enrich:progress`) — mesmo contrato do
+   * onScanProgress: devolve a função de cancelar a assinatura.
+   */
+  onEnrichProgress(cb: (p: EnrichProgress) => void): Promise<() => void>;
   /**
    * Aplica as propostas aceitas (nunca renomeia, nunca apaga) — F13. Devolve
    * um resultado por música e NUNCA aborta o lote no meio: falhas viram
@@ -199,6 +217,10 @@ function tauriBackend(): Backend {
     async enrichFolderScan(folderPrefix) {
       const { invoke } = await import("@tauri-apps/api/core");
       return invoke<EnrichProposal[]>("enrich_folder_scan", { folderPrefix });
+    },
+    async onEnrichProgress(cb) {
+      const { listen } = await import("@tauri-apps/api/event");
+      return listen<EnrichProgress>("enrich:progress", (e) => cb(e.payload));
     },
     async enrichApply(aplicacoes) {
       const { invoke } = await import("@tauri-apps/api/core");

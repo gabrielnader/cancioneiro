@@ -620,6 +620,61 @@ test.describe("V5 — Completar dados em lote (F13)", () => {
     ).toBeVisible();
     expect(errors).toEqual([]);
   });
+
+  test("progresso determinado, segundo plano e reabrir pelo indicador", async ({
+    page,
+  }) => {
+    const errors = trackErrors(page);
+    await resetApp(page);
+    await addMockFolder(page);
+    // varredura lenta o bastante para a barra e o segundo plano existirem
+    await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__CANCIONEIRO_MOCK__._enrichDelayMs = 1500;
+    });
+
+    await page
+      .getByRole("button", { name: "Completar dados da biblioteca" })
+      .click();
+
+    const dialog = page.getByRole("dialog", { name: "Completar dados" });
+    // barra determinada com "n de total" (2 músicas incompletas)
+    await expect(dialog.getByText("Buscando dados… 0 de 2")).toBeVisible();
+    await expect(dialog.getByRole("progressbar")).toHaveAttribute(
+      "aria-valuemax",
+      "2",
+    );
+    // com uma varredura rodando, disparar outra fica bloqueado
+    await expect(
+      page.getByRole("button", { name: "Completar dados da biblioteca" }),
+    ).toBeDisabled();
+
+    // some da frente sem cancelar: o app continua usável
+    await dialog
+      .getByRole("button", { name: "Deixar rodando em segundo plano" })
+      .click();
+    await expect(dialog).toHaveCount(0);
+    const indicador = page.getByRole("button", { name: /Buscando dados/ });
+    await expect(indicador).toBeVisible();
+
+    // busca (atalho global) responde durante a varredura em segundo plano
+    await page.keyboard.press("/");
+    const search = page.getByPlaceholder("Buscar por letra, título ou artista…");
+    await expect(search).toBeFocused();
+    await search.fill(LETRA_TRECHO);
+    await expect(page.getByText("1 resultados")).toBeVisible();
+    await search.fill("");
+
+    // ao terminar, o toast avisa e o indicador vira o convite à revisão
+    await expect(
+      page.getByText("Dados encontrados para 2 músicas — abra a revisão para conferir."),
+    ).toBeVisible({ timeout: 15000 });
+    await page.getByRole("button", { name: "Revisar 2 propostas" }).click();
+    await expect(
+      dialog.getByText("2 propostas — 0 alta, 1 média, 1 baixa"),
+    ).toBeVisible();
+    expect(errors).toEqual([]);
+  });
 });
 
 test.describe("Escala: 2.000 músicas", () => {

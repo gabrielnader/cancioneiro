@@ -41,8 +41,11 @@ function nomeCompleto(title: string, artist: string | null): string {
  */
 export function EnrichReview() {
   const status = useEnrichStore((s) => s.status);
+  const overlayOpen = useEnrichStore((s) => s.overlayOpen);
+  const progress = useEnrichStore((s) => s.progress);
   const proposals = useEnrichStore((s) => s.proposals);
   const close = useEnrichStore((s) => s.close);
+  const hideOverlay = useEnrichStore((s) => s.hideOverlay);
   const push = useToastStore((s) => s.push);
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [busy, setBusy] = useState(false);
@@ -57,23 +60,31 @@ export function EnrichReview() {
     setApplyErrors(new Map());
   }, [proposals]);
 
-  // foco inicial entra no diálogo (botão Fechar existe em todos os estados)
-  useEffect(() => {
-    if (status !== "idle") closeButtonRef.current?.focus();
-  }, [status]);
+  const visible = status !== "idle" && overlayOpen;
 
-  // Esc SEMPRE fecha (durante a varredura o resultado é descartado — mesma
-  // semântica do botão Fechar); exceto no meio de uma gravação (busy)
+  // foco inicial entra no diálogo (a primeira ação existe em todos os estados)
   useEffect(() => {
-    if (status === "idle") return;
+    if (visible) closeButtonRef.current?.focus();
+  }, [visible, status]);
+
+  // Esc SAI do overlay; exceto no meio de uma gravação (busy). Durante a
+  // varredura sair é MANDAR PARA SEGUNDO PLANO (a busca é somente leitura —
+  // cancelar exige o botão explícito); na revisão descarta as propostas.
+  useEffect(() => {
+    if (!visible) return;
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape" && !busy) close();
+      if (e.key !== "Escape" || busy) return;
+      if (useEnrichStore.getState().status === "scanning") {
+        hideOverlay();
+      } else {
+        close();
+      }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [status, busy, close]);
+  }, [visible, busy, close, hideOverlay]);
 
-  if (status === "idle") return null;
+  if (!visible) return null;
 
   /** Erro da linha: o da proposta (varredura) ou o devolvido pelo apply. */
   function rowError(p: EnrichProposal): string | null {
@@ -227,21 +238,71 @@ export function EnrichReview() {
       <div className="flex max-h-[calc(100vh-4rem)] w-[640px] max-w-[calc(100vw-2rem)] flex-col rounded-lg bg-white p-5 shadow-xl">
         {status === "scanning" ? (
           <>
-            <div className="flex items-center gap-3 py-4" role="status">
-              <span
-                aria-hidden="true"
-                className="h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-[#0F766E] border-t-transparent"
-              />
-              <p className="text-[15px] text-[#111827]">
-                Buscando dados… isso pode demorar alguns minutos.
-              </p>
+            {progress === null ? (
+              // antes do primeiro evento não dá para estimar nada
+              <div className="flex items-center gap-3 py-4" role="status">
+                <span
+                  aria-hidden="true"
+                  className="h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-[#0F766E] border-t-transparent"
+                />
+                <p className="text-[15px] text-[#111827]">
+                  Buscando dados… isso pode demorar alguns minutos.
+                </p>
+              </div>
+            ) : (
+              <div className="py-4" role="status">
+                <p className="mb-1 text-[15px] text-[#111827]">
+                  Buscando dados… {progress.done} de {progress.total}
+                </p>
+                <div
+                  role="progressbar"
+                  aria-valuemin={0}
+                  aria-valuemax={progress.total}
+                  aria-valuenow={progress.done}
+                  className="h-1.5 w-full overflow-hidden rounded bg-[#E5E7EB]"
+                >
+                  <div
+                    className="h-full bg-[#0F766E] transition-[width]"
+                    style={{
+                      width:
+                        progress.total > 0
+                          ? `${(progress.done / progress.total) * 100}%`
+                          : "0%",
+                    }}
+                  />
+                </div>
+                {/* nome do arquivo pode ser enorme: trunca em uma linha */}
+                <p
+                  title={progress.atual}
+                  className="mt-1 truncate text-[13px] text-[#6B7280]"
+                >
+                  {progress.atual}
+                </p>
+              </div>
+            )}
+            {/* a varredura é somente leitura: sair dela NÃO é cancelar */}
+            <div className="mt-2 flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                ref={closeButtonRef}
+                onClick={hideOverlay}
+                className="rounded-md px-4 py-2 text-[15px] font-medium text-[#0F766E] hover:bg-[#F0FDFA]"
+              >
+                Deixar rodando em segundo plano
+              </button>
+              <button
+                type="button"
+                onClick={close}
+                className="rounded-md px-4 py-2 text-[15px] font-medium text-[#374151] hover:bg-[#F3F4F6]"
+              >
+                Cancelar
+              </button>
             </div>
-            <div className="mt-2 flex justify-end">{closeButton}</div>
           </>
         ) : proposals.length === 0 ? (
           <>
             <p className="py-4 text-[15px] text-[#111827]">
-              Nenhuma música incompleta nesta pasta.
+              Nada a ajustar nesta pasta.
             </p>
             <div className="mt-2 flex justify-end">{closeButton}</div>
           </>

@@ -7,6 +7,7 @@ import {
   type Backend,
   type EnrichApply,
   type EnrichApplyResult,
+  type EnrichProgress,
   type EnrichProposal,
 } from "../lib/api";
 import type { Song } from "../lib/types";
@@ -92,14 +93,37 @@ function failed(songId: number, error: string): EnrichApplyResult {
 }
 
 function renderReview(proposals: EnrichProposal[]) {
-  useEnrichStore.setState({ status: "review", folderPrefix: "", proposals });
+  useEnrichStore.setState({
+    status: "review",
+    overlayOpen: true,
+    folderPrefix: "",
+    proposals,
+    progress: null,
+  });
+  return render(<EnrichReview />);
+}
+
+function renderScanning(progress: EnrichProgress | null = null) {
+  useEnrichStore.setState({
+    status: "scanning",
+    overlayOpen: true,
+    folderPrefix: "/x",
+    proposals: [],
+    progress,
+  });
   return render(<EnrichReview />);
 }
 
 describe("EnrichReview (V5 — F13)", () => {
   beforeEach(() => {
     setBackendForTests(null);
-    useEnrichStore.setState({ status: "idle", folderPrefix: "", proposals: [] });
+    useEnrichStore.setState({
+      status: "idle",
+      overlayOpen: false,
+      folderPrefix: "",
+      proposals: [],
+      progress: null,
+    });
     useToastStore.setState({ toasts: [] });
     useLibraryStore.setState({ allSongs: [], results: [] });
     usePlaylistStore.setState({ playlists: [], activePlaylistId: null, items: [] });
@@ -118,21 +142,63 @@ describe("EnrichReview (V5 — F13)", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("durante a varredura mostra o aviso de demora e permite Fechar", () => {
-    useEnrichStore.setState({ status: "scanning", folderPrefix: "/x", proposals: [] });
-    render(<EnrichReview />);
+  it("não renderiza nada quando a revisão está em segundo plano (overlay fechado)", () => {
+    useEnrichStore.setState({
+      status: "review",
+      overlayOpen: false,
+      folderPrefix: "",
+      proposals: [ALTA],
+      progress: null,
+    });
+    const { container } = render(<EnrichReview />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("antes do primeiro evento de progresso mantém o aviso indeterminado", () => {
+    renderScanning(null);
     expect(
       screen.getByText("Buscando dados… isso pode demorar alguns minutos."),
     ).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Fechar" }));
-    expect(useEnrichStore.getState().status).toBe("idle");
+    expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
   });
 
-  it("resultado vazio: 'Nenhuma música incompleta nesta pasta.' com Fechar", () => {
-    renderReview([]);
+  it("com progresso mostra barra determinada, contagem e o arquivo atual", () => {
+    renderScanning({ done: 12, total: 94, atual: "Fulano - Canção.mp3" });
+    expect(screen.getByText("Buscando dados… 12 de 94")).toBeInTheDocument();
+    expect(screen.getByText("Fulano - Canção.mp3")).toBeInTheDocument();
+    const bar = screen.getByRole("progressbar");
+    expect(bar).toHaveAttribute("aria-valuenow", "12");
+    expect(bar).toHaveAttribute("aria-valuemax", "94");
     expect(
-      screen.getByText("Nenhuma música incompleta nesta pasta."),
-    ).toBeInTheDocument();
+      screen.queryByText("Buscando dados… isso pode demorar alguns minutos."),
+    ).not.toBeInTheDocument();
+  });
+
+  it("nome de arquivo comprido é truncado (não quebra o layout)", () => {
+    const atual = `${"nome muito comprido ".repeat(20)}.mp3`;
+    renderScanning({ done: 1, total: 2, atual });
+    expect(screen.getByText(atual).className).toContain("truncate");
+  });
+
+  it("'Deixar rodando em segundo plano' esconde o overlay e NÃO cancela a varredura", () => {
+    renderScanning({ done: 3, total: 10, atual: "a.mp3" });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Deixar rodando em segundo plano" }),
+    );
+    expect(useEnrichStore.getState().overlayOpen).toBe(false);
+    expect(useEnrichStore.getState().status).toBe("scanning");
+  });
+
+  it("'Cancelar' durante a varredura descarta tudo e volta a idle", () => {
+    renderScanning({ done: 3, total: 10, atual: "a.mp3" });
+    fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+    expect(useEnrichStore.getState().status).toBe("idle");
+    expect(useEnrichStore.getState().overlayOpen).toBe(false);
+  });
+
+  it("resultado vazio: 'Nada a ajustar nesta pasta.' com Fechar", () => {
+    renderReview([]);
+    expect(screen.getByText("Nada a ajustar nesta pasta.")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Fechar" }));
     expect(useEnrichStore.getState().status).toBe("idle");
   });
@@ -433,11 +499,11 @@ describe("EnrichReview (V5 — F13)", () => {
       expect(useEnrichStore.getState().status).toBe("idle");
     });
 
-    it("Esc fecha DURANTE a varredura (descarta o resultado)", () => {
-      useEnrichStore.setState({ status: "scanning", folderPrefix: "", proposals: [] });
-      render(<EnrichReview />);
+    it("Esc DURANTE a varredura manda para segundo plano (não cancela)", () => {
+      renderScanning({ done: 1, total: 5, atual: "a.mp3" });
       fireEvent.keyDown(window, { key: "Escape" });
-      expect(useEnrichStore.getState().status).toBe("idle");
+      expect(useEnrichStore.getState().overlayOpen).toBe(false);
+      expect(useEnrichStore.getState().status).toBe("scanning");
     });
 
     it("o foco inicial entra no diálogo (botão Fechar) ao abrir", () => {

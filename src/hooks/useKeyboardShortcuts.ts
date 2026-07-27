@@ -18,13 +18,18 @@ function isTextInput(target: EventTarget | null): boolean {
 }
 
 /**
- * True enquanto um modal está aberto — TODOS os atalhos globais ficam
+ * True enquanto um modal está VISÍVEL — TODOS os atalhos globais ficam
  * suspensos (mesma ideia do guard de inputs acima): o modal é quem trata o
  * teclado (Esc fecha, Tab cicla dentro dele). Outros modais que precisem
  * suspender os atalhos entram neste OR.
+ *
+ * O que suspende é o overlay NA TELA, não a varredura: mandada para segundo
+ * plano ela roda somente-leitura e o app precisa continuar inteiro (foi o que
+ * dissemos ao usuário ao oferecer "Deixar rodando em segundo plano").
  */
 function isModalOpen(): boolean {
-  return useEnrichStore.getState().status !== "idle";
+  const { status, overlayOpen } = useEnrichStore.getState();
+  return status !== "idle" && overlayOpen;
 }
 
 /** Foca a busca de qualquer tela: volta para a Biblioteca se preciso. */

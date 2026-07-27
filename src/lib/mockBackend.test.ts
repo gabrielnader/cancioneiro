@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import type { EnrichProgress } from "./api";
 import { createMockBackend, installMockBackend, type MockBackend } from "./mockBackend";
 import { HIGHLIGHT_END, HIGHLIGHT_START } from "./highlight";
 import type { ScanProgress } from "./types";
@@ -706,6 +707,61 @@ describe("mockBackend", () => {
       expect(proposals).toHaveLength(2);
       expect(proposals.every((p) => p.error === "sem conexão")).toBe(true);
       expect(proposals.every((p) => p.lyrics === null)).toBe(true);
+    });
+
+    it("descarta proposta no-op (proposto == atual e sem letra): não há o que decidir", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const semTags = songs.find((s) => s.title === "sem_tags")!;
+      // título já idêntico ao palpite do nome do arquivo, sem artista e sem
+      // letra: a linha "atual → proposto" seria igual dos dois lados
+      await backend.writeTags(semTags.id, "sem tags", null, null, null);
+
+      const proposals = await backend.enrichFolderScan("");
+      expect(proposals.some((p) => p.song_id === semTags.id)).toBe(false);
+      // a MÉDIA (mesmo título/artista) SOBREVIVE porque carrega letra
+      expect(proposals.map((p) => p.file_path)).toEqual([
+        "/musicas/teste/sem_letra.mp3",
+      ]);
+    });
+
+    it("no-op COM erro continua na lista (linha desabilitada, o usuário precisa ver)", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const semTags = songs.find((s) => s.title === "sem_tags")!;
+      await backend.writeTags(semTags.id, "sem tags", null, null, null);
+      backend._offline = true;
+
+      const proposals = await backend.enrichFolderScan("");
+      const noop = proposals.find((p) => p.song_id === semTags.id)!;
+      expect(noop.error).toBe("sem conexão");
+      expect(noop.proposed_title).toBe(noop.current_title);
+      expect(noop.proposed_artist).toBe(noop.current_artist);
+      expect(noop.lyrics).toBeNull();
+    });
+  });
+
+  describe("onEnrichProgress (V5 — F13)", () => {
+    it("emite progresso por música durante enrichFolderScan e devolve unsubscribe", async () => {
+      await backend.addFolder("/musicas/teste");
+      const events: EnrichProgress[] = [];
+      const unsub = await backend.onEnrichProgress((p) => events.push(p));
+
+      await backend.enrichFolderScan("");
+      expect(events.length).toBeGreaterThan(0);
+      // primeiro evento chega ANTES do trabalho começar
+      expect(events[0].done).toBe(0);
+      const last = events[events.length - 1];
+      expect(last.done).toBe(last.total);
+      expect(events.every((e) => e.done <= e.total)).toBe(true);
+      // "atual" é o nome do arquivo em processamento
+      expect(events.some((e) => e.atual.endsWith(".mp3"))).toBe(true);
+      expect(events.every((e) => !e.atual.includes("/"))).toBe(true);
+
+      unsub();
+      const count = events.length;
+      await backend.enrichFolderScan("");
+      expect(events.length).toBe(count);
     });
   });
 

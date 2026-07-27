@@ -2,6 +2,7 @@ import type {
   Backend,
   EnrichApply,
   EnrichApplyResult,
+  EnrichProgress,
   EnrichProposal,
 } from "./api";
 import { isUnderFolder } from "./folderTree";
@@ -39,6 +40,12 @@ export interface MockBackend extends Backend {
    * conexão" (V5, DECISIONS #47 — mesma semântica do backend real).
    */
   _offline: boolean;
+  /**
+   * Atraso artificial POR MÚSICA na varredura F13 (0 = instantâneo). Só o E2E
+   * usa: sem ele a varredura mockada termina no mesmo tick e não dá para ver a
+   * barra de progresso nem o modo "segundo plano".
+   */
+  _enrichDelayMs: number;
   /** Popula a pasta /acervo com subpastas 1/ e 2/ para o E2E da árvore (V4 F11). */
   _seedFolderTree(): void;
 }
@@ -226,9 +233,31 @@ function seedLyrics(songIndex: number): string {
   return lines.join("\n");
 }
 
+/** Nome-base do arquivo (sem diretório) — o que o progresso F13 exibe. */
+function nomeArquivo(song: { file_path: string }): string {
+  return song.file_path.split(/[\\/]/).pop() ?? "";
+}
+
+/**
+ * Proposta que não pede decisão nenhuma: proposto idêntico ao atual e sem
+ * letra para acrescentar. O teste real (acervo de 94 músicas) mostrou linhas
+ * "atual → proposto" iguais, sem nada a decidir — o backend Rust as descarta
+ * na origem e o mock espelha. Propostas COM letra ou COM erro continuam: a
+ * letra é o ganho e a linha com erro precisa ficar visível (desabilitada).
+ */
+function propostaNoOp(p: EnrichProposal): boolean {
+  return (
+    p.error === null &&
+    p.lyrics === null &&
+    p.proposed_title === p.current_title &&
+    p.proposed_artist === p.current_artist
+  );
+}
+
 export function createMockBackend(): MockBackend {
   let state = loadState();
   const progressListeners = new Set<(p: ScanProgress) => void>();
+  const enrichProgressListeners = new Set<(p: EnrichProgress) => void>();
 
   function save(): void {
     try {
@@ -243,6 +272,11 @@ export function createMockBackend(): MockBackend {
       const payload: ScanProgress = { done, total };
       progressListeners.forEach((cb) => cb(payload));
     }
+  }
+
+  function emitEnrichProgress(done: number, total: number, atual: string): void {
+    const payload: EnrichProgress = { done, total, atual };
+    enrichProgressListeners.forEach((cb) => cb(payload));
   }
 
   function renumber(playlistId: number): void {
@@ -278,6 +312,7 @@ export function createMockBackend(): MockBackend {
   const backend: MockBackend = {
     _nextPickedFolder: "/musicas/mock",
     _offline: false,
+    _enrichDelayMs: 0,
 
     async addFolder(path: string): Promise<ScanResult> {
       let folder = state.folders.find((f) => f.path === path);
@@ -555,15 +590,34 @@ export function createMockBackend(): MockBackend {
     },
 
     async enrichFolderScan(folderPrefix: string): Promise<EnrichProposal[]> {
-      const proposals: EnrichProposal[] = [];
-      for (const song of state.songs) {
-        if (!song.available) continue;
-        // prefixo casa na FRONTEIRA de separador ("/m/1" não casa "/m/10/a.mp3"),
-        // como o filtro da árvore de pastas (isUnderFolder) e o backend Rust
-        if (folderPrefix && !isUnderFolder(song.file_path, folderPrefix)) continue;
+      // candidatas pré-contadas ANTES do trabalho (como o scan_all): o total
+      // do progresso não muda no meio da varredura
+      const candidatas = state.songs.filter((song) => {
+        if (!song.available) return false;
+        // prefixo casa na FRONTEIRA de separador ("/m/1" não casa
+        // "/m/10/a.mp3"), como isUnderFolder e o backend Rust
+        if (folderPrefix && !isUnderFolder(song.file_path, folderPrefix)) {
+          return false;
+        }
         // incompleta = sem letra OU sem artista (regra simplificada do Rust)
-        const completa = song.has_lyrics && song.artist !== null;
-        if (completa) continue;
+        return !(song.has_lyrics && song.artist !== null);
+      });
+
+      const total = candidatas.length;
+      const proposals: EnrichProposal[] = [];
+      // primeiro evento com done=0 antes de começar: só o total na tela
+      // (mesmo contrato do Rust — `atual` vazio nesse evento)
+      emitEnrichProgress(0, total, "");
+
+      for (let i = 0; i < total; i++) {
+        const song = candidatas[i];
+        // no app real cada música é uma ida ao LRCLIB (segundos)
+        if (backend._enrichDelayMs > 0) {
+          await new Promise((r) => setTimeout(r, backend._enrichDelayMs));
+        }
+        // emitido DEPOIS de cada música, com o nome da que acabou de sair
+        // (mesmo ponto do on_progress do Rust)
+        const avanca = () => emitEnrichProgress(i + 1, total, nomeArquivo(song));
 
         const base = {
           song_id: song.id,
@@ -582,6 +636,7 @@ export function createMockBackend(): MockBackend {
             confidence: "baixa",
             error: `arquivo não encontrado: ${song.file_path}`,
           });
+          avanca();
           continue;
         }
 
@@ -596,6 +651,7 @@ export function createMockBackend(): MockBackend {
             confidence: "baixa",
             error: "sem conexão",
           });
+          avanca();
           continue;
         }
 
@@ -610,6 +666,7 @@ export function createMockBackend(): MockBackend {
             confidence: "alta",
             error: null,
           });
+          avanca();
           continue;
         }
 
@@ -623,11 +680,12 @@ export function createMockBackend(): MockBackend {
             confidence: "media",
             error: null,
           });
+          avanca();
           continue;
         }
 
         // resto: BAIXA — palpite do nome do arquivo, sem letra
-        const stem = (song.file_path.split(/[\\/]/).pop() ?? "")
+        const stem = nomeArquivo(song)
           .replace(/\.mp3$/i, "")
           .replace(/_/g, " ")
           .replace(/\s+/g, " ")
@@ -645,8 +703,17 @@ export function createMockBackend(): MockBackend {
           confidence: "baixa",
           error: null,
         });
+        avanca();
       }
-      return proposals;
+      // propostas sem nada a decidir não chegam à UI (mesmo corte do Rust)
+      return proposals.filter((p) => !propostaNoOp(p));
+    },
+
+    async onEnrichProgress(cb: (p: EnrichProgress) => void): Promise<() => void> {
+      enrichProgressListeners.add(cb);
+      return () => {
+        enrichProgressListeners.delete(cb);
+      };
     },
 
     async enrichApply(aplicacoes: EnrichApply[]): Promise<EnrichApplyResult[]> {

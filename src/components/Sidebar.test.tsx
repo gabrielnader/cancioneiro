@@ -114,7 +114,13 @@ describe("Sidebar — Completar dados (V5 F13)", () => {
       allSongs: [song(1, "/acervo/1/a.mp3"), song(2, "/acervo/2/b.mp3")],
       folderFilter: null,
     });
-    useEnrichStore.setState({ status: "idle", folderPrefix: "", proposals: [] });
+    useEnrichStore.setState({
+      status: "idle",
+      overlayOpen: false,
+      folderPrefix: "",
+      proposals: [],
+      progress: null,
+    });
   });
 
   it("SUBPASTA tem o botão 'Completar dados desta pasta' que dispara com o caminho da pasta", () => {
@@ -159,5 +165,113 @@ describe("Sidebar — Completar dados (V5 F13)", () => {
       name: "Completar dados da pasta 2",
     });
     expect(outra.className).toContain("hidden");
+  });
+
+  it("uma varredura em andamento desabilita o ✎ de TODAS as pastas (só uma por vez)", () => {
+    useEnrichStore.setState({ status: "scanning" });
+    render(<Sidebar />);
+    for (const name of [
+      "Completar dados da biblioteca",
+      "Completar dados da pasta 1",
+      "Completar dados da pasta 2",
+    ]) {
+      const botao = screen.getByRole("button", { name });
+      expect(botao).toBeDisabled();
+      expect(botao).toHaveAttribute(
+        "title",
+        "Uma busca de dados já está em andamento",
+      );
+    }
+  });
+});
+
+describe("Sidebar — indicador de varredura em segundo plano (V5 F13)", () => {
+  beforeEach(() => {
+    setBackendForTests({
+      listPlaylists: vi.fn(async () => []),
+      getPlaylistItems: vi.fn(async () => []),
+    } as unknown as Backend);
+    useUiStore.setState({ view: "library" });
+    usePlaylistStore.setState({ playlists: [], activePlaylistId: null, items: [] });
+    useLibraryStore.setState({
+      folders: [{ id: 1, path: "/acervo", last_scanned_at: null }],
+      allSongs: [song(1, "/acervo/1/a.mp3")],
+      folderFilter: null,
+    });
+    useEnrichStore.setState({
+      status: "idle",
+      overlayOpen: false,
+      folderPrefix: "",
+      proposals: [],
+      progress: null,
+    });
+  });
+
+  it("não aparece quando o overlay está aberto (o overlay já mostra o progresso)", () => {
+    useEnrichStore.setState({
+      status: "scanning",
+      overlayOpen: true,
+      progress: { done: 2, total: 9, atual: "a.mp3" },
+    });
+    render(<Sidebar />);
+    expect(
+      screen.queryByRole("button", { name: /Buscando dados/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("varrendo em segundo plano: mostra a contagem e reabre o overlay no clique", () => {
+    useEnrichStore.setState({
+      status: "scanning",
+      overlayOpen: false,
+      progress: { done: 2, total: 9, atual: "a.mp3" },
+    });
+    render(<Sidebar />);
+    const indicador = screen.getByRole("button", {
+      name: "Buscando dados… 2 de 9",
+    });
+    fireEvent.click(indicador);
+    expect(useEnrichStore.getState().overlayOpen).toBe(true);
+  });
+
+  it("sem progresso ainda: indicador sem contagem", () => {
+    useEnrichStore.setState({ status: "scanning", overlayOpen: false });
+    render(<Sidebar />);
+    expect(
+      screen.getByRole("button", { name: "Buscando dados…" }),
+    ).toBeInTheDocument();
+  });
+
+  it("varredura terminada em segundo plano: botão 'Revisar N propostas' reabre a revisão", () => {
+    useEnrichStore.setState({
+      status: "review",
+      overlayOpen: false,
+      proposals: [
+        { song_id: 1 } as never,
+        { song_id: 2 } as never,
+        { song_id: 3 } as never,
+      ],
+    });
+    render(<Sidebar />);
+    fireEvent.click(screen.getByRole("button", { name: "Revisar 3 propostas" }));
+    expect(useEnrichStore.getState().overlayOpen).toBe(true);
+  });
+
+  it("uma proposta só: singular", () => {
+    useEnrichStore.setState({
+      status: "review",
+      overlayOpen: false,
+      proposals: [{ song_id: 1 } as never],
+    });
+    render(<Sidebar />);
+    expect(
+      screen.getByRole("button", { name: "Revisar 1 proposta" }),
+    ).toBeInTheDocument();
+  });
+
+  it("idle: nenhum indicador", () => {
+    render(<Sidebar />);
+    expect(
+      screen.queryByRole("button", { name: /Buscando dados|Revisar/ }),
+    ).not.toBeInTheDocument();
   });
 });

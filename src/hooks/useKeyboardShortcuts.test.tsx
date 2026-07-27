@@ -48,7 +48,13 @@ describe("useKeyboardShortcuts (F4 — espaço e navegação)", () => {
       playlistId: null,
       isPlaying: false,
     });
-    useEnrichStore.setState({ status: "idle", folderPrefix: "", proposals: [] });
+    useEnrichStore.setState({
+      status: "idle",
+      overlayOpen: false,
+      folderPrefix: "",
+      proposals: [],
+      progress: null,
+    });
   });
 
   it("espaço alterna play/pause quando há música e o foco não está na busca", () => {
@@ -130,13 +136,13 @@ describe("useKeyboardShortcuts (F4 — espaço e navegação)", () => {
     expect(useLibraryStore.getState().query).toBe("");
   });
 
-  describe("com o overlay de enriquecimento aberto (modal suspende os atalhos)", () => {
+  describe("com o overlay de enriquecimento VISÍVEL (modal suspende os atalhos)", () => {
     it("espaço NÃO alterna play/pause", () => {
       render(<Harness />);
       usePlayerStore.getState().playSong(song(1));
       expect(usePlayerStore.getState().isPlaying).toBe(true);
 
-      useEnrichStore.setState({ status: "review" });
+      useEnrichStore.setState({ status: "review", overlayOpen: true });
       fireEvent.keyDown(document.body, { key: " ", code: "Space" });
       expect(usePlayerStore.getState().isPlaying).toBe(true);
     });
@@ -144,14 +150,14 @@ describe("useKeyboardShortcuts (F4 — espaço e navegação)", () => {
     it("Esc NÃO limpa a busca (o modal é quem trata o Esc)", () => {
       render(<Harness />);
       useLibraryStore.setState({ query: "algo" });
-      useEnrichStore.setState({ status: "review" });
+      useEnrichStore.setState({ status: "review", overlayOpen: true });
       fireEvent.keyDown(document.body, { key: "Escape" });
       expect(useLibraryStore.getState().query).toBe("algo");
     });
 
     it("setas, Enter e '/' também ficam suspensos (inclusive durante a varredura)", () => {
       const { container } = render(<Harness />);
-      useEnrichStore.setState({ status: "scanning" });
+      useEnrichStore.setState({ status: "scanning", overlayOpen: true });
 
       fireEvent.keyDown(document.body, { key: "ArrowDown" });
       expect(useLibraryStore.getState().selectedSongId).toBeNull();
@@ -163,6 +169,38 @@ describe("useKeyboardShortcuts (F4 — espaço e navegação)", () => {
       expect(document.activeElement).not.toBe(
         container.querySelector(`#${SEARCH_INPUT_ID}`),
       );
+    });
+  });
+
+  describe("com a varredura em SEGUNDO PLANO (overlay escondido: o app segue usável)", () => {
+    it("espaço continua alternando play/pause", () => {
+      render(<Harness />);
+      usePlayerStore.getState().playSong(song(1));
+      useEnrichStore.setState({ status: "scanning", overlayOpen: false });
+
+      fireEvent.keyDown(document.body, { key: " ", code: "Space" });
+      expect(usePlayerStore.getState().isPlaying).toBe(false);
+    });
+
+    it("setas continuam navegando e Esc continua limpando a busca", () => {
+      render(<Harness />);
+      useLibraryStore.setState({ query: "algo" });
+      useEnrichStore.setState({ status: "scanning", overlayOpen: false });
+
+      fireEvent.keyDown(document.body, { key: "ArrowDown" });
+      expect(useLibraryStore.getState().selectedSongId).toBe(1);
+
+      fireEvent.keyDown(document.body, { key: "Escape" });
+      expect(useLibraryStore.getState().query).toBe("");
+    });
+
+    it("revisão pendente em segundo plano também não suspende os atalhos", () => {
+      render(<Harness />);
+      usePlayerStore.getState().playSong(song(1));
+      useEnrichStore.setState({ status: "review", overlayOpen: false });
+
+      fireEvent.keyDown(document.body, { key: " ", code: "Space" });
+      expect(usePlayerStore.getState().isPlaying).toBe(false);
     });
   });
 });
