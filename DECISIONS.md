@@ -193,3 +193,54 @@ opção mais simples que passa nos Acceptance Checks do PRD.
     com guarda de corrida (fechar durante a varredura descarta o resultado ao
     chegar); dupla varredura bloqueada; se a música tocando está entre as
     selecionadas, pausa antes de gravar (regra da decisão 40).
+
+## V0.5 — Transcrição, e as travas que o QA exigiu
+
+51. **Transcrição fica no script, não no player**: o instalador segue com ~5 MB
+    e sem modelo embutido, não há whisper.cpp para compilar nas 4 plataformas do
+    release, e o trabalho pesado fica na máquina de quem cura. Quem recebe o
+    acervo pronto não precisa de nada disso — os dados viajam no MP3.
+52. **Identificação pelo refrão**: o LRCLIB não pesquisa conteúdo de letra e
+    buscador web genérico exigiria chave paga; como o título de uma canção quase
+    sempre é a frase mais repetida, transcrever um trecho e consultar essa frase
+    como título (confirmando pela duração) cobre o mesmo objetivo de graça.
+53. **Palpite vindo do áudio não prova nada** (achado CRÍTICO do QA): ao
+    contrário do `enriquecer`, cujo palpite nasce da própria tag — casar ali
+    implica consistência —, o refrão vem do áudio e pode ser alucinação do
+    motor. Daí quatro travas: lista de alucinações conhecidas descartadas antes
+    da consulta; candidato precisa de 2 palavras, 8 caracteres e repetição real;
+    tag real nunca sobrescrita em nenhuma confiança (`--sobrescrever-tags` é a
+    exceção explícita); divergência vira `CONFLITO` sem gravar.
+54. **A marca de origem descreve a letra ATUAL, não a história do arquivo**:
+    qualquer gravação de letra sem origem informada limpa `TXXX:LETRA_ORIGEM`,
+    nos dois stacks. No Rust, o writer compara a letra nova com a do arquivo —
+    assim o repasse de letra inalterada (caminho do lote) preserva a marca
+    legítima de graça.
+55. **`--forcar` seletivo**: reprocessa só letra vinda de transcrição (trocar de
+    modelo é o caso real); apagar letra oficial exige `--forcar-tudo`.
+56. **Gravação de tag atômica**: cópia temporária na mesma pasta, gravação nela,
+    troca de lugar. `ID3.save()` do mutagen redimensiona no lugar, e escrever
+    letra em 81 arquivos que não tinham nenhuma é justamente o caso de
+    crescimento — crash ou disco cheio truncaria o MP3.
+57. **Relatório e CSV registram o aplicado, não o sugerido**, com coluna de
+    confiança: um arquivo de conferência que mostra o que *não* foi feito é pior
+    que não ter arquivo.
+58. **Proposta do lote é validada contra o banco na hora de aplicar**: a
+    varredura em segundo plano convida a editar a música no meio do caminho, e
+    aplicar a proposta antiga apagaria a edição. A proposta ecoa o estado que
+    viu; divergiu, não grava e explica.
+59. **Cancelar cancela**: `enrich:progress` carrega `scan_id` e existe comando de
+    cancelamento com flag por varredura viva. Sem isso o backend seguia
+    consultando por minutos e os eventos da varredura zumbi bagunçavam a barra
+    da seguinte.
+60. **"Nada a ajustar" é mentira perigosa em acervo real**: com ~3% de cobertura
+    o coordenador leria isso como "pasta completa". O aviso diz quantas foram
+    conferidas, que não estão na internet, e aponta a transcrição.
+
+## V6 (especificada, não implementada)
+
+61. **Funil de identificação por custo crescente**: tags/nome de arquivo →
+    LRCLIB → impressão digital acústica (~1-2 s) → transcrição (~30-80 s). Cada
+    etapa recebe só o que a anterior não resolveu; a 30x de diferença entre as
+    duas últimas é o que decide se um acervo de 10 mil arquivos é viável.
+    Spec em `PRD-v6-impressao-digital.md`.
