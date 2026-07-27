@@ -14,6 +14,19 @@ use std::time::Duration;
 
 const ZERO: Duration = Duration::ZERO;
 
+/// Callback de progresso ignorado pelos testes que não o exercitam.
+const SEM_PROGRESSO: fn(usize, usize, &str) = |_, _, _| {};
+
+/// `enrich_scan` sem pausa de cortesia nem progresso — a forma usada pela
+/// maioria dos testes, que exercitam só as propostas.
+fn scan_props(
+    conn: &Connection,
+    prefixo: &str,
+    fetch: impl Fn(&str) -> Result<String, AppError>,
+) -> Vec<enrich::EnrichProposal> {
+    enrich::enrich_scan(conn, prefixo, fetch, ZERO, SEM_PROGRESSO).unwrap()
+}
+
 fn fixtures_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -72,6 +85,7 @@ fn enrich_scan_proposes_and_apply_writes_full_flow() {
             Ok(body.clone())
         },
         ZERO,
+        SEM_PROGRESSO,
     )
     .unwrap();
 
@@ -127,38 +141,51 @@ fn enrich_scan_proposes_and_apply_writes_full_flow() {
     assert_eq!(db::get_lyrics(&conn, reread.id).unwrap().as_deref(), Some(letra));
 
     // agora completa: um novo enrich_scan não a propõe mais
-    let props = enrich::enrich_scan(&conn, "", |_: &str| Ok("[]".into()), ZERO).unwrap();
+    let props = scan_props(&conn, "", |_: &str| Ok("[]".into()));
     assert!(props.iter().all(|q| q.song_id != chuva.id));
 }
 
 // ---------------------------------------------------------------------------
 // F13 — seleção: só músicas incompletas (sem letra OU título/artista
 // placeholder) e só sob o prefixo de pasta pedido (vazio = todas).
+// `sem_letra.mp3` tem tags reais e nenhum resultado do LRCLIB: o palpite
+// reproduz exatamente as tags atuais, então a proposta seria um NO-OP e é
+// descartada (ver no_op_proposal_is_never_produced).
 // ---------------------------------------------------------------------------
 #[test]
 fn enrich_scan_selects_only_incomplete_songs_under_prefix() {
     let (dir, conn, _folder_id) = setup_with(&[
-        ("com_letra.mp3", "com_letra.mp3"),   // completa
-        ("sem_letra.mp3", "sem_letra.mp3"),   // tags reais, sem letra
-        ("sem_tags.mp3", "Sub/faixa_sem_tags.mp3"), // nada
+        ("com_letra.mp3", "com_letra.mp3"), // completa
+        ("sem_letra.mp3", "sem_letra.mp3"), // tags reais, sem letra: no-op
+        ("sem_tags.mp3", "Falamansa - Oh! Chuva.mp3"), // sem tags, raiz
+        ("sem_tags.mp3", "Sub/Zeca - Camarão.mp3"), // sem tags, subpasta
     ]);
 
     // sem resultados do LRCLIB: tudo vira BAIXA (palpite de nome de arquivo)
-    let props = enrich::enrich_scan(&conn, "", |_: &str| Ok("[]".into()), ZERO).unwrap();
+    let props = scan_props(&conn, "", |_: &str| Ok("[]".into()));
     let mut paths: Vec<&str> = props.iter().map(|p| p.file_path.as_str()).collect();
     paths.sort();
-    assert_eq!(props.len(), 2, "só as 2 incompletas: {paths:?}");
+    assert_eq!(props.len(), 2, "só as 2 que mudam algo: {paths:?}");
     assert!(props.iter().all(|p| p.confidence == "baixa"));
     assert!(props.iter().all(|p| p.lyrics.is_none()), "BAIXA nunca traz letra");
     assert!(props.iter().all(|p| p.error.is_none()));
+    assert!(
+        props.iter().all(|p| !p.file_path.ends_with("com_letra.mp3")),
+        "música completa não entra no lote"
+    );
+    assert!(
+        props.iter().all(|p| !p.file_path.ends_with("sem_letra.mp3")),
+        "proposta que não mudaria nada não é produzida"
+    );
 
-    // BAIXA com tag real: preserva a tag no palpite (nunca propõe apagar)
-    let sem_letra = props
+    // BAIXA com título real: preserva o título no palpite (nunca propõe
+    // apagar) e acrescenta o artista que o nome do arquivo revela
+    let chuva = props
         .iter()
-        .find(|p| p.file_path.ends_with("sem_letra.mp3"))
+        .find(|p| p.file_path.ends_with("Oh! Chuva.mp3"))
         .unwrap();
-    assert_eq!(sem_letra.proposed_title, "Instrumental Sem Letra");
-    assert_eq!(sem_letra.proposed_artist.as_deref(), Some("Banda Fixture"));
+    assert_eq!(chuva.proposed_title, "Falamansa - Oh! Chuva");
+    assert_eq!(chuva.proposed_artist.as_deref(), Some("Falamansa"));
 
     // prefixo de pasta: só a da subpasta
     let prefix = dir
@@ -168,9 +195,9 @@ fn enrich_scan_selects_only_incomplete_songs_under_prefix() {
         .join("Sub")
         .to_string_lossy()
         .into_owned();
-    let props = enrich::enrich_scan(&conn, &prefix, |_: &str| Ok("[]".into()), ZERO).unwrap();
+    let props = scan_props(&conn, &prefix, |_: &str| Ok("[]".into()));
     assert_eq!(props.len(), 1);
-    assert!(props[0].file_path.ends_with("faixa_sem_tags.mp3"));
+    assert!(props[0].file_path.ends_with("Camarão.mp3"));
 }
 
 // ---------------------------------------------------------------------------
@@ -181,29 +208,29 @@ fn enrich_scan_selects_only_incomplete_songs_under_prefix() {
 #[test]
 fn folder_prefix_matches_whole_path_segments_only() {
     let (dir, conn, _folder_id) = setup_with(&[
-        ("sem_tags.mp3", "1/um_sem_tags.mp3"),
-        ("sem_tags.mp3", "10/dez_sem_tags.mp3"),
+        ("sem_tags.mp3", "1/Falamansa - Um.mp3"),
+        ("sem_tags.mp3", "10/Falamansa - Dez.mp3"),
     ]);
     let raiz = dir.path().canonicalize().unwrap();
 
     // prefixo ".../1" sem barra final: só a música da pasta "1"
     let prefixo = raiz.join("1").to_string_lossy().into_owned();
-    let props = enrich::enrich_scan(&conn, &prefixo, |_: &str| Ok("[]".into()), ZERO).unwrap();
+    let props = scan_props(&conn, &prefixo, |_: &str| Ok("[]".into()));
     let paths: Vec<&str> = props.iter().map(|p| p.file_path.as_str()).collect();
     assert_eq!(props.len(), 1, "prefixo .../1 não casa .../10: {paths:?}");
-    assert!(props[0].file_path.ends_with("um_sem_tags.mp3"));
+    assert!(props[0].file_path.ends_with("Falamansa - Um.mp3"));
 
     // prefixo com separador no fim: mesmo resultado
     let com_barra = format!("{prefixo}{}", std::path::MAIN_SEPARATOR);
-    let props = enrich::enrich_scan(&conn, &com_barra, |_: &str| Ok("[]".into()), ZERO).unwrap();
+    let props = scan_props(&conn, &com_barra, |_: &str| Ok("[]".into()));
     assert_eq!(props.len(), 1);
-    assert!(props[0].file_path.ends_with("um_sem_tags.mp3"));
+    assert!(props[0].file_path.ends_with("Falamansa - Um.mp3"));
 
     // e a pasta "10" continua alcançável pelo próprio prefixo
     let prefixo10 = raiz.join("10").to_string_lossy().into_owned();
-    let props = enrich::enrich_scan(&conn, &prefixo10, |_: &str| Ok("[]".into()), ZERO).unwrap();
+    let props = scan_props(&conn, &prefixo10, |_: &str| Ok("[]".into()));
     assert_eq!(props.len(), 1);
-    assert!(props[0].file_path.ends_with("dez_sem_tags.mp3"));
+    assert!(props[0].file_path.ends_with("Falamansa - Dez.mp3"));
 }
 
 // ---------------------------------------------------------------------------
@@ -228,6 +255,7 @@ fn placeholder_tags_are_treated_as_empty_and_never_queried() {
             Ok("[]".into())
         },
         ZERO,
+        SEM_PROGRESSO,
     )
     .unwrap();
 
@@ -250,6 +278,109 @@ fn placeholder_tags_are_treated_as_empty_and_never_queried() {
 }
 
 // ---------------------------------------------------------------------------
+// F13 (V0.5, teste real) — proposta que NÃO MUDA NADA nunca é produzida: no
+// acervo de 94 músicas o usuário viu linhas do tipo "Abrição de portas —
+// Antônio Nóbrega" → "Abrição de portas — Antônio Nóbrega" (BAIXA, sem letra)
+// e perdeu tempo tentando descobrir o que estava sendo sugerido.
+// ---------------------------------------------------------------------------
+#[test]
+fn no_op_proposal_is_never_produced() {
+    let (_dir, conn, _folder_id) = setup_with(&[
+        // tags reais + nome de arquivo que reproduz exatamente as tags:
+        // o palpite BAIXA seria idêntico ao atual — nada a revisar
+        ("sem_letra.mp3", "Banda Fixture - Instrumental Sem Letra.mp3"),
+        // sem tags: o nome revela o artista — muda algo, continua na lista
+        ("sem_tags.mp3", "Falamansa - Oh! Chuva.mp3"),
+    ]);
+
+    let props = scan_props(&conn, "", |_: &str| Ok("[]".into()));
+
+    let paths: Vec<&str> = props.iter().map(|p| p.file_path.as_str()).collect();
+    assert_eq!(props.len(), 1, "só a que muda algo: {paths:?}");
+    assert!(props[0].file_path.ends_with("Oh! Chuva.mp3"));
+    assert_eq!(props[0].proposed_artist.as_deref(), Some("Falamansa"));
+
+    // nenhuma proposta sobrevivente é um no-op
+    for p in &props {
+        let mudou_titulo = p.proposed_title.trim() != p.current_title.trim();
+        let mudou_artista = p.proposed_artist.as_deref().unwrap_or("").trim()
+            != p.current_artist.as_deref().unwrap_or("").trim();
+        assert!(
+            mudou_titulo || mudou_artista || p.lyrics.is_some() || p.error.is_some(),
+            "proposta sem mudança alguma: {p:?}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// F13 (V0.5) — o no-op NÃO pode engolir os casos úteis: título placeholder com
+// palpite diferente continua sendo proposto (é o motivo do lote existir).
+// ---------------------------------------------------------------------------
+#[test]
+fn placeholder_title_still_produces_proposal() {
+    let (_dir, conn, _folder_id) =
+        setup_with(&[("sem_letra.mp3", "Cheganca - Antonio Nobrega.mp3")]);
+    let song = song_by_suffix(&conn, "Cheganca - Antonio Nobrega.mp3");
+    writer::write_tags(&conn, song.id, "Faixa 5", Some("Banda Fixture"), None, None).unwrap();
+
+    let props = scan_props(&conn, "", |_: &str| Ok("[]".into()));
+    assert_eq!(props.len(), 1, "placeholder com palpite diferente é proposta");
+    assert_eq!(props[0].current_title, "Faixa 5");
+    assert_eq!(props[0].proposed_title, "Antonio Nobrega");
+    assert_eq!(props[0].proposed_artist.as_deref(), Some("Banda Fixture"));
+}
+
+// ---------------------------------------------------------------------------
+// F13 (V0.5) — proposta com LETRA sobrevive mesmo com título/artista iguais:
+// a letra É a mudança.
+// ---------------------------------------------------------------------------
+#[test]
+fn proposal_with_lyrics_survives_identical_title_and_artist() {
+    let (_dir, conn, _folder_id) =
+        setup_with(&[("sem_letra.mp3", "Banda Fixture - Instrumental Sem Letra.mp3")]);
+    let song = song_by_suffix(&conn, "Instrumental Sem Letra.mp3");
+    let dur = song.duration_seconds.unwrap() as f64;
+    let body = format!(
+        r#"[{{"trackName": "Instrumental Sem Letra", "artistName": "Banda Fixture",
+             "duration": {dur}, "plainLyrics": "agora tem letra"}}]"#
+    );
+
+    let props = scan_props(&conn, "", move |_: &str| Ok(body.clone()));
+
+    assert_eq!(props.len(), 1, "a letra é a mudança");
+    assert_eq!(props[0].confidence, "alta");
+    assert_eq!(props[0].proposed_title, props[0].current_title);
+    assert_eq!(props[0].proposed_artist, props[0].current_artist);
+    assert_eq!(props[0].lyrics.as_deref(), Some("agora tem letra"));
+}
+
+// ---------------------------------------------------------------------------
+// F13 (V0.5) — proposta com ERRO sobrevive mesmo sem mudar nada: a UI mostra a
+// linha desabilitada para o usuário saber que aquela música foi tentada e
+// falhou (decisão 47).
+// ---------------------------------------------------------------------------
+#[test]
+fn error_proposal_survives_even_when_it_changes_nothing() {
+    let (_dir, conn, _folder_id) =
+        setup_with(&[("sem_letra.mp3", "Banda Fixture - Instrumental Sem Letra.mp3")]);
+
+    let props = enrich::enrich_scan(
+        &conn,
+        "",
+        |_: &str| -> Result<String, AppError> { Err(AppError("sem conexão".into())) },
+        ZERO,
+        SEM_PROGRESSO,
+    )
+    .unwrap();
+
+    assert_eq!(props.len(), 1, "linha de erro nunca é descartada como no-op");
+    assert_eq!(props[0].error.as_deref(), Some("sem conexão"));
+    assert_eq!(props[0].proposed_title, props[0].current_title);
+    assert_eq!(props[0].proposed_artist, props[0].current_artist);
+    assert!(props[0].lyrics.is_none());
+}
+
+// ---------------------------------------------------------------------------
 // F13 — resultado do LRCLIB com trackName/artistName placeholder é descartado
 // antes do score (nunca vira proposta).
 // ---------------------------------------------------------------------------
@@ -266,8 +397,7 @@ fn placeholder_results_from_lrclib_are_discarded() {
              "duration": {dur}, "plainLyrics": "letra lixo"}}]"#
     );
 
-    let props =
-        enrich::enrich_scan(&conn, "", move |_: &str| Ok(body.clone()), ZERO).unwrap();
+    let props = scan_props(&conn, "", move |_: &str| Ok(body.clone()));
     assert_eq!(props.len(), 1);
     assert_eq!(props[0].confidence, "baixa");
     assert!(props[0].lyrics.is_none(), "resultado placeholder não vira proposta");
@@ -287,11 +417,113 @@ fn media_confidence_proposal_still_carries_lyrics() {
              "duration": {dur}, "plainLyrics": "letra"}}]"#
     );
 
-    let props =
-        enrich::enrich_scan(&conn, "", move |_: &str| Ok(body.clone()), ZERO).unwrap();
+    let props = scan_props(&conn, "", move |_: &str| Ok(body.clone()));
     assert_eq!(props.len(), 1);
     assert_eq!(props[0].confidence, "media");
     assert_eq!(props[0].lyrics.as_deref(), Some("letra"));
+}
+
+// ---------------------------------------------------------------------------
+// F13 (V0.5, teste real) — progresso por música: no acervo de 94 músicas a
+// varredura roda por minutos sem nenhum sinal de vida. `enrich_scan` avisa
+// depois de CADA música, espelhando o callback |done, total| do indexer.
+// ---------------------------------------------------------------------------
+#[test]
+fn enrich_scan_reports_progress_per_candidate_song() {
+    let (_dir, conn, _folder_id) = setup_with(&[
+        ("com_letra.mp3", "com_letra.mp3"), // completa: NÃO é candidata
+        ("sem_tags.mp3", "Falamansa - Oh! Chuva.mp3"),
+        ("sem_tags.mp3", "Sub/Zeca - Camarão.mp3"),
+        ("sem_letra.mp3", "sem_letra.mp3"),
+    ]);
+
+    let eventos: RefCell<Vec<(usize, usize, String)>> = RefCell::new(Vec::new());
+    enrich::enrich_scan(
+        &conn,
+        "",
+        |_: &str| Ok("[]".into()),
+        ZERO,
+        |done, total, atual| eventos.borrow_mut().push((done, total, atual.to_string())),
+    )
+    .unwrap();
+
+    let ev = eventos.borrow();
+    // 3 candidatas (a completa fica fora) + o evento inicial com done=0
+    assert_eq!(ev.len(), 4, "1 evento inicial + 1 por candidata: {ev:?}");
+    assert_eq!(ev[0].0, 0, "primeiro evento anuncia o total antes de começar");
+    assert!(ev.iter().all(|e| e.1 == 3), "total = candidatas: {ev:?}");
+    assert_eq!(
+        ev.iter().map(|e| e.0).collect::<Vec<_>>(),
+        vec![0, 1, 2, 3],
+        "done cresce de 1 em 1"
+    );
+
+    // `atual` é o NOME BASE do arquivo, nunca o caminho completo
+    let mut nomes: Vec<&str> = ev[1..].iter().map(|e| e.2.as_str()).collect();
+    nomes.sort();
+    assert_eq!(
+        nomes,
+        vec!["Falamansa - Oh! Chuva.mp3", "Zeca - Camarão.mp3", "sem_letra.mp3"]
+    );
+    assert!(
+        ev.iter().all(|e| !e.2.contains(std::path::MAIN_SEPARATOR)),
+        "nome base, não caminho: {ev:?}"
+    );
+    assert!(
+        ev.iter().all(|e| e.2 != "com_letra.mp3"),
+        "música completa nunca entra no progresso"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// F13 (V0.5) — o progresso mede TRABALHO, não resultado: continua avançando
+// nas músicas cuja proposta é descartada por ser no-op, nas que falham na rede
+// e nas que sumiram do disco. A barra nunca trava nem termina antes do fim.
+// ---------------------------------------------------------------------------
+#[test]
+fn progress_advances_for_dropped_failed_and_missing_songs() {
+    let (_dir, conn, _folder_id) = setup_with(&[
+        // tags reais + nome idêntico às tags: proposta descartada (no-op)
+        ("sem_letra.mp3", "Banda Fixture - Instrumental Sem Letra.mp3"),
+        ("sem_tags.mp3", "Falha.mp3"),   // erro de rede
+        ("sem_tags.mp3", "Sumida.mp3"),  // arquivo apagado do disco
+    ]);
+    fs::remove_file(&song_by_suffix(&conn, "Sumida.mp3").file_path).unwrap();
+
+    let eventos: RefCell<Vec<(usize, usize, String)>> = RefCell::new(Vec::new());
+    let props = enrich::enrich_scan(
+        &conn,
+        "",
+        |url: &str| {
+            if url.contains("Instrumental") {
+                Ok("[]".into()) // acha nada ⇒ palpite igual às tags ⇒ no-op
+            } else {
+                Err(AppError("sem conexão".into()))
+            }
+        },
+        ZERO,
+        |done, total, atual| eventos.borrow_mut().push((done, total, atual.to_string())),
+    )
+    .unwrap();
+
+    // resultado: a no-op sumiu, as duas com erro ficaram
+    assert_eq!(props.len(), 2, "só a no-op é descartada");
+    assert!(props.iter().all(|p| p.error.is_some()));
+
+    // progresso: as TRÊS candidatas contam, inclusive a descartada
+    let ev = eventos.borrow();
+    assert_eq!(
+        ev.iter().map(|e| e.0).collect::<Vec<_>>(),
+        vec![0, 1, 2, 3],
+        "progresso não trava na descartada nem na que falhou: {ev:?}"
+    );
+    assert!(ev.iter().all(|e| e.1 == 3), "total conta trabalho, não resultado");
+    assert!(
+        ev[1..]
+            .iter()
+            .any(|e| e.2 == "Banda Fixture - Instrumental Sem Letra.mp3"),
+        "a música descartada também emite progresso: {ev:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -371,6 +603,7 @@ fn missing_file_becomes_proposal_with_error_without_network() {
             Ok("[]".into())
         },
         ZERO,
+        SEM_PROGRESSO,
     )
     .unwrap();
     assert_eq!(props.len(), 1);
@@ -493,6 +726,7 @@ fn network_error_yields_baixa_proposal_and_never_aborts_batch() {
         "",
         |_: &str| -> Result<String, AppError> { Err(AppError("sem conexão".into())) },
         ZERO,
+        SEM_PROGRESSO,
     )
     .unwrap();
 
@@ -535,6 +769,7 @@ fn network_error_keeps_candidate_found_by_earlier_guess() {
             }
         },
         ZERO,
+        SEM_PROGRESSO,
     )
     .unwrap();
 

@@ -128,6 +128,40 @@ fn sem_placeholder(texto: &str) -> &str {
     }
 }
 
+/// Valor EFETIVO de um campo para a comparação de no-op: espaços das pontas
+/// removidos e placeholder tratado como VAZIO — exatamente a noção que o resto
+/// do módulo usa (`sem_placeholder`), aplicada aos DOIS lados da comparação.
+///
+/// Aplicar a normalização também ao lado PROPOSTO é o que impede o caso
+/// "placeholder atual + palpite também placeholder" de passar por mudança:
+/// tag "AudioTrack 17" com arquivo "17 Faixa.mp3" proporia "Faixa" — texto
+/// diferente, valor igual a nada. Os dois viram "" e a proposta cai.
+fn campo_efetivo(texto: &str) -> &str {
+    sem_placeholder(texto.trim())
+}
+
+/// True se a proposta não muda NADA e portanto não deve nem ser produzida:
+/// título e artista efetivos iguais aos atuais e sem letra. No teste real
+/// (acervo de 94 músicas) essas linhas — "Abrição de portas — Antônio Nóbrega"
+/// → "Abrição de portas — Antônio Nóbrega", BAIXA, sem letra — só faziam o
+/// usuário perder tempo procurando qual era a sugestão.
+///
+/// Duas exceções, nesta ordem:
+/// - `error` presente: a linha (desabilitada na UI) É a informação — o usuário
+///   precisa saber que a música foi tentada e falhou (decisão 47);
+/// - `lyrics` presente: a letra é a mudança, mesmo com título/artista iguais.
+///
+/// A comparação usa `current_title`/`current_artist` da própria proposta — os
+/// mesmos textos que a UI exibe na coluna "atual" —, normalizados por
+/// `campo_efetivo`.
+fn e_no_op(p: &EnrichProposal) -> bool {
+    p.error.is_none()
+        && p.lyrics.is_none()
+        && campo_efetivo(&p.proposed_title) == campo_efetivo(&p.current_title)
+        && campo_efetivo(p.proposed_artist.as_deref().unwrap_or(""))
+            == campo_efetivo(p.current_artist.as_deref().unwrap_or(""))
+}
+
 // ---------------------------------------------------------------------------
 // Nome de arquivo → palpites (porte simplificado do curadoria.py)
 // ---------------------------------------------------------------------------
@@ -309,21 +343,39 @@ fn proposta_baixa(
     }
 }
 
+/// Acrescenta a proposta ao lote, a menos que ela não mude nada (`e_no_op`).
+fn registrar(propostas: &mut Vec<EnrichProposal>, proposta: EnrichProposal) {
+    if !e_no_op(&proposta) {
+        propostas.push(proposta);
+    }
+}
+
 /// Varre as músicas available sob `folder_prefix` (vazio = todas), consulta
 /// o LRCLIB para as incompletas e devolve as propostas. `pausa` é a cortesia
 /// entre consultas (300 ms no comando real; zero nos testes). Erro de rede
 /// por música vira proposta BAIXA com `error` — nunca aborta o lote.
-pub fn enrich_scan<F>(
+///
+/// `on_progress(done, total, nome_do_arquivo)` é chamado DEPOIS de cada música
+/// processada, espelhando o `|done, total|` do indexer (evento `scan:progress`).
+/// Um primeiro evento com `done = 0` sai antes de qualquer processamento, para
+/// a UI já mostrar o total. `total` é o número de CANDIDATAS (depois do filtro
+/// de músicas completas, antes do descarte de no-op): mede trabalho, não
+/// resultado — o progresso avança mesmo quando a proposta é descartada, quando
+/// a rede falha ou quando o arquivo sumiu do disco.
+pub fn enrich_scan<F, P>(
     conn: &Connection,
     folder_prefix: &str,
     fetch: F,
     pausa: Duration,
+    on_progress: P,
 ) -> Result<Vec<EnrichProposal>>
 where
     F: Fn(&str) -> Result<String>,
+    P: Fn(usize, usize, &str),
 {
-    let mut propostas = Vec::new();
-    let mut primeira = true;
+    // 1ª passada (sem rede): seleciona as candidatas para o total do progresso
+    // ser conhecido antes da primeira consulta.
+    let mut candidatas: Vec<(Song, String, String, String)> = Vec::new();
     for song in db::list_songs(conn)? {
         if !song.available {
             continue;
@@ -341,16 +393,28 @@ where
             .file_name()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
+        candidatas.push((song, titulo_tag, artista_tag, nome));
+    }
 
+    let total = candidatas.len();
+    on_progress(0, total, ""); // total na tela antes da primeira consulta
+
+    let mut propostas = Vec::new();
+    let mut primeira = true;
+    for (feitas, (song, titulo_tag, artista_tag, nome)) in candidatas.into_iter().enumerate() {
         // arquivo sumido do disco: reporta sem gastar rede
         if !Path::new(&song.file_path).is_file() {
-            propostas.push(proposta_baixa(
-                &song,
-                &titulo_tag,
-                &artista_tag,
-                &nome,
-                Some(format!("arquivo não encontrado: {}", song.file_path)),
-            ));
+            registrar(
+                &mut propostas,
+                proposta_baixa(
+                    &song,
+                    &titulo_tag,
+                    &artista_tag,
+                    &nome,
+                    Some(format!("arquivo não encontrado: {}", song.file_path)),
+                ),
+            );
+            on_progress(feitas + 1, total, &nome);
             continue;
         }
 
@@ -398,8 +462,8 @@ where
         let confianca = best
             .as_ref()
             .and_then(|b| lyrics_fetch::classify(b.sim, b.dif));
-        match (erro, best, confianca) {
-            (None, Some(b), Some(conf)) => propostas.push(EnrichProposal {
+        let proposta = match (erro, best, confianca) {
+            (None, Some(b), Some(conf)) => EnrichProposal {
                 song_id: song.id,
                 file_path: song.file_path.clone(),
                 current_title: song.title.clone(),
@@ -409,11 +473,11 @@ where
                 lyrics: Some(b.lyrics),
                 confidence: conf.to_string(),
                 error: None,
-            }),
-            (erro, _, _) => {
-                propostas.push(proposta_baixa(&song, &titulo_tag, &artista_tag, &nome, erro))
-            }
-        }
+            },
+            (erro, _, _) => proposta_baixa(&song, &titulo_tag, &artista_tag, &nome, erro),
+        };
+        registrar(&mut propostas, proposta);
+        on_progress(feitas + 1, total, &nome);
     }
     Ok(propostas)
 }
@@ -574,6 +638,58 @@ mod tests {
         let p = gerar_palpites("x.mp3", "A - B", "Artista");
         assert_eq!(p[0], ("A - B".into(), "Artista".into()));
         assert!(!p.contains(&("B".to_string(), "A".to_string())));
+    }
+
+    fn proposta(
+        current_title: &str,
+        current_artist: Option<&str>,
+        proposed_title: &str,
+        proposed_artist: Option<&str>,
+    ) -> EnrichProposal {
+        EnrichProposal {
+            song_id: 1,
+            file_path: "/m/a.mp3".into(),
+            current_title: current_title.into(),
+            current_artist: current_artist.map(str::to_string),
+            proposed_title: proposed_title.into(),
+            proposed_artist: proposed_artist.map(str::to_string),
+            lyrics: None,
+            confidence: "baixa".into(),
+            error: None,
+        }
+    }
+
+    #[test]
+    fn e_no_op_uses_the_same_placeholder_notion_as_the_rest_of_the_module() {
+        // idêntico em título e artista, sem letra: nada a revisar
+        assert!(e_no_op(&proposta(
+            "Abrição de portas",
+            Some("Antônio Nóbrega"),
+            "Abrição de portas",
+            Some("Antônio Nóbrega"),
+        )));
+        // espaços das pontas não contam como mudança
+        assert!(e_no_op(&proposta("  Abrição  ", None, "Abrição", None)));
+        // None e "" são o mesmo artista (ausente)
+        assert!(e_no_op(&proposta("T", None, "T", Some(""))));
+        // placeholder ATUAL + palpite também placeholder: os dois valem VAZIO,
+        // texto diferente não é mudança
+        assert!(e_no_op(&proposta("AudioTrack 17", Some("no artist"), "Faixa", None)));
+        // placeholder atual com palpite REAL: é exatamente o que o lote existe
+        // para propor
+        assert!(!e_no_op(&proposta("Faixa 5", None, "Chegança", Some("Nóbrega"))));
+        // só o artista muda: ainda é mudança
+        assert!(!e_no_op(&proposta("Abrição", None, "Abrição", Some("Nóbrega"))));
+
+        // letra é a mudança, mesmo com título/artista iguais
+        let mut com_letra = proposta("T", Some("A"), "T", Some("A"));
+        com_letra.lyrics = Some("letra".into());
+        assert!(!e_no_op(&com_letra));
+
+        // linha de erro nunca é descartada (a UI a mostra desabilitada)
+        let mut com_erro = proposta("T", Some("A"), "T", Some("A"));
+        com_erro.error = Some("sem conexão".into());
+        assert!(!e_no_op(&com_erro));
     }
 
     #[test]

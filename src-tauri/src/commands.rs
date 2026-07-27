@@ -61,6 +61,16 @@ pub struct ScanProgress {
     pub total: usize,
 }
 
+/// Progresso da varredura de enriquecimento (evento `enrich:progress`):
+/// `atual` é o NOME BASE do arquivo em processamento (vazio no evento inicial
+/// com `done = 0`, emitido só para a UI já mostrar o total).
+#[derive(Debug, Clone, Serialize)]
+pub struct EnrichProgress {
+    pub done: usize,
+    pub total: usize,
+    pub atual: String,
+}
+
 #[derive(Debug, Serialize)]
 pub struct ScanResult {
     pub indexed: usize,
@@ -262,8 +272,13 @@ pub fn fetch_lyrics_online(
 /// pasta"); pausa de cortesia de 300 ms entre consultas. Erro de rede por
 /// música vira proposta BAIXA com `error` — o lote nunca aborta. Usa conexão
 /// dedicada (scan_conn) para não travar busca/listagem durante a varredura.
+///
+/// Emite `enrich:progress` (EnrichProgress) a cada música processada — no
+/// acervo real são minutos de varredura, e o invoke sozinho não dá sinal de
+/// vida. Mesmo padrão do `scan:progress` da indexação.
 #[tauri::command]
 pub fn enrich_folder_scan(
+    app: AppHandle,
     state: State<'_, Db>,
     folder_prefix: String,
 ) -> Result<Vec<crate::enrich::EnrichProposal>> {
@@ -273,6 +288,16 @@ pub fn enrich_folder_scan(
         &folder_prefix,
         lrclib_fetcher,
         std::time::Duration::from_millis(300),
+        |done, total, atual| {
+            let _ = app.emit(
+                "enrich:progress",
+                EnrichProgress {
+                    done,
+                    total,
+                    atual: atual.to_string(),
+                },
+            );
+        },
     )
 }
 
