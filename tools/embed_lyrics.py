@@ -25,6 +25,12 @@ from mutagen.mp3 import MP3
 LANG = "por"
 TEMAS_DESC = "TEMAS"
 TEMAS_KEY = f"TXXX:{TEMAS_DESC}"  # HashKey do mutagen: "TXXX:" + desc
+# V5/F14: procedência da letra. Vazio/ausente = letra oficial (LRCLIB ou
+# digitada); "transcricao" = saiu do áudio pelo transcrever do curadoria.
+LETRA_ORIGEM_DESC = "LETRA_ORIGEM"
+LETRA_ORIGEM_KEY = f"TXXX:{LETRA_ORIGEM_DESC}"
+ORIGEM_TRANSCRICAO = "transcricao"
+ORIGEM_ROTULOS = {ORIGEM_TRANSCRICAO: "transcrição automática"}
 
 
 def die(message: str) -> None:
@@ -51,8 +57,12 @@ def load_tags(path: Path) -> ID3:
 
 
 def embed_lyrics(path: Path, lyrics: str, title: str | None = None,
-                 artist: str | None = None) -> None:
-    """Grava/substitui o frame USLT (UTF-8, lang 'por') e salva como ID3v2.4."""
+                 artist: str | None = None, origem: str | None = None) -> None:
+    """Grava/substitui o frame USLT (UTF-8, lang 'por') e salva como ID3v2.4.
+
+    origem (V5/F14) marca a procedência da letra em TXXX:LETRA_ORIGEM:
+    None não mexe no frame existente, "" o remove (letra oficial) e
+    "transcricao" o grava. Tudo numa gravação só, com a letra."""
     tags = load_tags(path)
     tags.delall("USLT")  # substitui, nunca duplica
     tags.add(USLT(encoding=Encoding.UTF8, lang=LANG, desc="", text=lyrics))
@@ -60,7 +70,20 @@ def embed_lyrics(path: Path, lyrics: str, title: str | None = None,
         tags.setall("TIT2", [TIT2(encoding=Encoding.UTF8, text=[title])])
     if artist:
         tags.setall("TPE1", [TPE1(encoding=Encoding.UTF8, text=[artist])])
+    if origem is not None:
+        tags.delall(LETRA_ORIGEM_KEY)
+        if origem:
+            tags.add(TXXX(encoding=Encoding.UTF8, desc=LETRA_ORIGEM_DESC,
+                          text=[origem]))
     tags.save(str(path), v2_version=4)
+
+
+def read_letra_origem(tags: ID3) -> str:
+    """Lê TXXX:LETRA_ORIGEM (ou "" se ausente)."""
+    frames = [f for f in tags.getall("TXXX") if f.desc == LETRA_ORIGEM_DESC]
+    if not frames or not frames[0].text:
+        return ""
+    return str(frames[0].text[0]).strip()
 
 
 def write_title_artist(path: Path, title: str | None = None,
@@ -150,12 +173,15 @@ def check(path: Path) -> None:
     artist = str(tags["TPE1"]) if "TPE1" in tags else "(sem artista)"
     uslt = tags.getall("USLT")
     temas = read_temas(tags)
+    origem = read_letra_origem(tags)
     print(f"Título: {title}")
     print(f"Artista: {artist}")
     if temas:
         print(f"Temas: {'; '.join(temas)}")
     else:
         print("Temas: (nenhum)")
+    if origem:  # letra oficial não imprime linha: só marca o que tem origem
+        print(f"Origem da letra: {ORIGEM_ROTULOS.get(origem, origem)}")
     if uslt:
         print("Letra:")
         print(uslt[0].text)

@@ -36,6 +36,18 @@ Subcomandos:
         (título/artista/temas; letra re-buscada por /api/get/{lrclib_id}
         na hora). --dry-run só relata (bytes intactos, sem rede).
 
+    transcrever PASTA [--modelo M] [--idioma pt] [--trecho SEGUNDOS]
+                [--so-identificar | --so-transcrever] [--forcar]
+                [--csv saida.csv] [--verboso]
+        V5/F14. Transcreve um trecho (90 s a partir de 20 s) com o
+        faster-whisper (dependência OPCIONAL, na CPU), extrai o refrão —
+        as frases curtas mais repetidas — e tenta identificar a música no
+        LRCLIB por track_name + duração (F14.1); casando, grava título,
+        artista e letra OFICIAIS. Sem casar, transcreve a música inteira e
+        grava o texto no USLT com TXXX:LETRA_ORIGEM="transcricao" (F14.2).
+        Nunca sobrescreve letra existente sem --forcar e nunca inventa
+        título/artista a partir da transcrição.
+
     temas-de-pastas PASTA [--aplicar]
         Cada subpasta do caminho relativo vira um tema (normalizado, V2),
         SOMADO aos existentes; MP3 na raiz não ganha tema. Sem --aplicar,
@@ -76,6 +88,8 @@ ENRIQUECER_COLUNAS = ["arquivo", "titulo_atual", "artista_atual",
                       "titulo_proposto", "artista_proposto", "confianca",
                       "duracao_mp3", "duracao_encontrada", "letra",
                       "temas_propostos", "lrclib_id", "aceitar"]
+TRANSCREVER_COLUNAS = ["arquivo", "acao", "titulo", "artista", "candidatos",
+                       "caracteres", "detalhe"]
 PROMPT_INTERATIVO = "[Enter] aceitar  [p] pular  [t] só temas  [q] sair "
 # BAIXA é só palpite: aceitar exige gesto explícito; Enter (reflexo) PULA.
 PROMPT_INTERATIVO_BAIXA = "[Enter] pular  [a] aceitar  [t] só temas  [q] sair "
@@ -111,7 +125,7 @@ def ler_info(path: Path) -> dict:
         tags = el.load_tags(path)
     except Exception:
         return {"ilegivel": True, "titulo": "", "artista": "",
-                "letra": "", "temas": [], "duracao": 0.0}
+                "letra": "", "temas": [], "duracao": 0.0, "letra_origem": ""}
     uslt = tags.getall("USLT")
     return {
         "ilegivel": False,
@@ -120,7 +134,18 @@ def ler_info(path: Path) -> dict:
         "letra": str(uslt[0].text) if uslt and uslt[0].text else "",
         "temas": el.read_temas(tags),
         "duracao": float(audio.info.length or 0.0),
+        "letra_origem": el.read_letra_origem(tags),
     }
+
+
+def rotulo_letra(info: dict) -> str:
+    """Coluna "letra" do relatório: NÃO, SIM ou SIM (transcrição) — o selo
+    de procedência da V5/F14 (TXXX:LETRA_ORIGEM)."""
+    if not info["letra"]:
+        return "NÃO"
+    if info.get("letra_origem") == el.ORIGEM_TRANSCRICAO:
+        return "SIM (transcrição)"
+    return "SIM"
 
 
 def gravar_csv(path: Path, colunas: list[str], linhas: list[list]) -> None:
@@ -148,7 +173,7 @@ def cmd_relatorio(pasta: Path, csv_out: Path | None = None) -> None:
         else:
             titulo = info["titulo"] or "—"
         artista = info["artista"] or "—"
-        letra = "SIM" if info["letra"] else "NÃO"
+        letra = rotulo_letra(info)
         temas = "; ".join(info["temas"]) or "—"
         if info["letra"]:
             com_letra += 1
@@ -174,7 +199,7 @@ def cmd_relatorio(pasta: Path, csv_out: Path | None = None) -> None:
                 rel,
                 info["titulo"],  # ilegível fica vazio: seguro p/ round-trip
                 info["artista"],
-                "SIM" if info["letra"] else "NÃO",
+                rotulo_letra(info),
                 "; ".join(info["temas"]),
                 "",  # letra_arquivo: o usuário preenche no fluxo de aplicar
             ])
@@ -812,6 +837,306 @@ def cmd_temas_de_pastas(pasta: Path, aplicar: bool = False) -> None:
           f"{aplicados} aplicados")
 
 
+# ---------------------------------------------------------------- transcrever
+
+TRECHO_PADRAO_S = 90.0   # duração do trecho de identificação (F14.1)
+TRECHO_INICIO_S = 20.0   # começa depois da introdução instrumental
+MAX_CANDIDATOS = 5       # no máximo 5 consultas ao LRCLIB por música
+MAX_PALAVRAS_REFRAO = 6  # título de canção é frase curta
+MAX_PALAVRAS_PRIMEIRA = 8
+MSG_SEM_WHISPER = ("ERRO: faster-whisper não instalado — instale com: "
+                   "pip3 install faster-whisper")
+# Quebra o trecho transcrito em frases: linhas e pontuação forte. Hífen NÃO
+# divide (partiria palavras compostas).
+_RE_FRASE = re.compile(r"[\n\r.,;:!?…]+")
+
+
+def _frases_do_trecho(texto: str) -> list:
+    """Frases do texto transcrito, em NFC (o motor pode devolver NFD, como
+    o macOS faz com nomes de arquivo), sem pontuação e em minúsculas —
+    acentos preservados, que o LRCLIB busca melhor com eles."""
+    frases = []
+    for bruto in _RE_FRASE.split(unicodedata.normalize("NFC", texto)):
+        frase = limpar_consulta(bruto).lower()
+        if frase:
+            frases.append(frase)
+    return frases
+
+
+def extrair_candidatos(texto: str, maximo: int = MAX_CANDIDATOS) -> list:
+    """Candidatos a título a partir do trecho transcrito (F14.1): as frases
+    curtas MAIS REPETIDAS (o refrão — e o título de uma canção é, quase
+    sempre, a frase mais repetida dela), seguidas da primeira linha cantada.
+
+    A contagem usa a chave normalizada (_norm_comparacao: minúscula, sem
+    acento, sem pontuação), então "Me apresento!", "ME APRESENTO," e
+    "me apresentó" são a MESMA frase. Placeholders e números soltos
+    ("faixa 5", "12") nunca viram candidato."""
+    frases = _frases_do_trecho(texto)
+    if not frases:
+        return []
+    contagem = {}  # chave -> [ocorrências, ordem de aparição, frase]
+    for ordem, frase in enumerate(frases):
+        chave = _norm_comparacao(frase)
+        if len(chave) < 4 or eh_placeholder(frase):
+            continue
+        if chave in contagem:
+            contagem[chave][0] += 1
+        else:
+            contagem[chave] = [1, ordem, frase]
+    repetidas = [v for v in contagem.values()
+                 if v[0] >= 2 and len(v[2].split()) <= MAX_PALAVRAS_REFRAO]
+    repetidas.sort(key=lambda v: (-v[0], v[1]))
+    candidatos = [v[2] for v in repetidas]
+    primeira = frases[0]
+    if (len(primeira.split()) <= MAX_PALAVRAS_PRIMEIRA
+            and not eh_placeholder(primeira)
+            and len(_norm_comparacao(primeira)) >= 4):
+        candidatos.append(primeira)
+    vistos = set()
+    unicos = []
+    for frase in candidatos:
+        chave = _norm_comparacao(frase)
+        if chave not in vistos:
+            vistos.add(chave)
+            unicos.append(frase)
+    return unicos[:maximo]
+
+
+def _identificar_por_refrao(candidatos: list, duracao_mp3: float, buscar,
+                            log=None) -> dict | None:
+    """Consulta o LRCLIB com cada candidato como track_name e devolve o
+    melhor casamento ({"sim", "dif", "res", "candidato", "confianca"}) ou
+    None. Confirmação pela duração com as MESMAS regras da V3 (classificar:
+    ±3s ALTA, ≤8s ALTA com texto quase idêntico, ≤15s MÉDIA, >15s
+    desqualifica); BAIXA não é identificação. Para no primeiro ALTA."""
+    log = log or (lambda _msg: None)
+    melhor = None
+    for candidato in candidatos:
+        log(f'  busca: track="{candidato}"')
+        resultados = buscar(track_name=candidato)
+        validos = [res for res in resultados
+                   if not (eh_placeholder(res.get("trackName") or "")
+                           or eh_placeholder(res.get("artistName") or ""))]
+        log(f"  {len(resultados)} resultados"
+            + (f" ({len(resultados) - len(validos)} descartados: placeholder)"
+               if len(validos) < len(resultados) else ""))
+        for res in validos:
+            sim = similaridade(candidato, res.get("trackName") or "")
+            duracao = res.get("duration")
+            dif = (abs(duracao_mp3 - float(duracao))
+                   if duracao is not None and duracao_mp3 else None)
+            if dif is not None and dif > 15:
+                continue  # homônimo/versão errada: desqualificado
+            bonus = 0.0
+            if dif is not None:
+                bonus = 0.3 if dif <= 3 else (0.15 if dif <= 8 else 0.0)
+            if melhor is None or sim + bonus > melhor["score"]:
+                melhor = {"score": sim + bonus, "sim": sim, "dif": dif,
+                          "res": res, "candidato": candidato}
+        if melhor is not None and classificar(melhor["sim"],
+                                              melhor["dif"]) == "ALTA":
+            break
+    if melhor is None:
+        return None
+    melhor["confianca"] = classificar(melhor["sim"], melhor["dif"])
+    return None if melhor["confianca"] == "BAIXA" else melhor
+
+
+def criar_transcritor(modelo: str = "small", idioma: str = "pt"):
+    """Fábrica do transcritor real (faster-whisper na CPU). O import é
+    PREGUIÇOSO: a biblioteca é dependência opcional; sem ela, explica em uma
+    linha como instalar e sai com código 1 — sem tocar em arquivo nenhum, e
+    com todos os outros subcomandos seguindo normais.
+
+    O transcritor devolvido tem a assinatura injetável usada pelos testes:
+    (caminho, inicio, duracao) -> texto puro. Com inicio/duracao transcreve
+    só o trecho (F14.1); sem eles, o arquivo inteiro (F14.2)."""
+    try:
+        from faster_whisper import WhisperModel  # dependência opcional
+    except ImportError:
+        die(MSG_SEM_WHISPER)
+    print(f"Carregando modelo {modelo}… (na primeira vez baixa o modelo, "
+          "~500 MB, só desta vez)")
+    model = WhisperModel(modelo, device="cpu", compute_type="int8")
+
+    def transcritor(caminho: str, inicio=None, duracao=None) -> str:
+        kwargs = {"language": idioma, "vad_filter": True}
+        if inicio is not None and duracao is not None:
+            kwargs["clip_timestamps"] = f"{inicio:.0f},{inicio + duracao:.0f}"
+        segmentos, _info = model.transcribe(str(caminho), **kwargs)
+        return "\n".join(s.text.strip() for s in segmentos if s.text.strip())
+
+    return transcritor
+
+
+def _fmt_milhar(n: int) -> str:
+    """1842 -> "1.842" (padrão pt-BR, sem depender de locale)."""
+    return "{:,}".format(n).replace(",", ".")
+
+
+def _fmt_dur(segundos: float) -> str:
+    """252.4 -> "4m12s"; 38.2 -> "38s"."""
+    total = int(round(segundos or 0))
+    if total >= 60:
+        return f"{total // 60}m{total % 60:02d}s"
+    return f"{total}s"
+
+
+def cmd_transcrever(pasta: Path, transcritor=None, fetcher=None,
+                    modelo: str = "small", idioma: str = "pt",
+                    trecho: float = TRECHO_PADRAO_S,
+                    inicio: float = TRECHO_INICIO_S,
+                    so_identificar: bool = False,
+                    so_transcrever: bool = False, forcar: bool = False,
+                    csv_out: Path | None = None, verboso: bool = False,
+                    pausa: float = PAUSA_S) -> None:
+    """F14: identifica pelo refrão (F14.1) e, falhando, grava a transcrição
+    completa como letra (F14.2). Nunca renomeia, nunca toca no áudio, nunca
+    sobrescreve letra existente sem --forcar e nunca inventa título/artista
+    a partir da transcrição."""
+    if transcritor is None:
+        transcritor = criar_transcritor(modelo, idioma)
+    log = print if verboso else None
+    estado = {"primeira": True}
+
+    def buscar(track_name=""):
+        if not estado["primeira"] and pausa:
+            time.sleep(pausa)  # cortesia com a API entre buscas
+        estado["primeira"] = False
+        return fetch_search(fetcher=fetcher, track_name=track_name)
+
+    mp3s = listar_mp3s(pasta)
+    total = len(mp3s)
+    identificadas = transcritas = pulados = erros = 0
+    linhas_csv = []
+
+    for indice, p in enumerate(mp3s, 1):
+        rel = p.relative_to(pasta).as_posix()
+        prefixo = f"[{indice}/{total}] "
+        info = ler_info(p)
+        if info["ilegivel"]:
+            print(f"{prefixo}ERRO: {rel} — áudio ilegível")
+            erros += 1
+            linhas_csv.append([rel, "ERRO", "", "", "", "", "áudio ilegível"])
+            continue
+        if info["letra"] and not forcar:
+            print(f"{prefixo}PULADO: {rel} (já tem letra)")
+            pulados += 1
+            linhas_csv.append([rel, "PULADO", info["titulo"], info["artista"],
+                               "", len(info["letra"]), "já tem letra"])
+            continue
+
+        candidatos = []
+        melhor = None
+        try:
+            if not so_transcrever:
+                texto_trecho = transcritor(str(p), inicio, trecho)
+                if verboso:
+                    print("  trecho transcrito:")
+                    for linha in (texto_trecho or "").strip().splitlines():
+                        print(f"    {linha}")
+                candidatos = extrair_candidatos(texto_trecho or "")
+                if verboso:
+                    print("  candidatos: "
+                          + (", ".join(candidatos) or "(nenhum)"))
+                try:
+                    melhor = _identificar_por_refrao(candidatos,
+                                                     info["duracao"], buscar,
+                                                     log=log)
+                except KeyboardInterrupt:
+                    raise
+                except Exception:
+                    # o trecho já custou CPU: erro de rede não descarta o
+                    # arquivo, só desiste da identificação e segue p/ F14.2
+                    print(f"{prefixo}AVISO: {rel} — erro de rede na "
+                          "identificação")
+
+            if melhor is not None:
+                res = melhor["res"]
+                titulo = res.get("trackName") or ""
+                artista = res.get("artistName") or ""
+                letra = res.get("plainLyrics") or ""
+                if melhor["confianca"] != "ALTA":
+                    # confirmação mais fraca (regra da V3.1): só preenche
+                    # campo vazio, nunca sobrescreve tag real existente
+                    if _sem_placeholder(info["titulo"]):
+                        titulo = ""
+                    if _sem_placeholder(info["artista"]):
+                        artista = ""
+                if letra:
+                    # letra OFICIAL: sai limpa e sem marca de transcrição
+                    el.embed_lyrics(p, letra, title=titulo or None,
+                                    artist=artista or None, origem="")
+                elif titulo or artista:
+                    el.write_title_artist(p, title=titulo or None,
+                                          artist=artista or None)
+                # nesta linha a duração sai em segundos puros (padrão do
+                # enriquecer: "mp3 214s, lrclib 216s")
+                dur_mp3 = f"{info['duracao']:.0f}s"
+                duracao_res = res.get("duration")
+                dur_res = (f"{float(duracao_res):.0f}s"
+                           if duracao_res is not None else "?")
+                print(f"{prefixo}IDENTIFICADA: {rel} → "
+                      f"{res.get('trackName') or ''} / "
+                      f"{res.get('artistName') or ''} "
+                      f'(refrão "{melhor["candidato"]}", '
+                      f"mp3 {dur_mp3}, lrclib {dur_res})")
+                identificadas += 1
+                linhas_csv.append([rel, "IDENTIFICADA",
+                                   res.get("trackName") or "",
+                                   res.get("artistName") or "",
+                                   "; ".join(candidatos), len(letra),
+                                   f"mp3 {dur_mp3}, lrclib {dur_res}"])
+                continue
+
+            if so_identificar:
+                print(f"{prefixo}PULADO: {rel} (não identificada)")
+                pulados += 1
+                linhas_csv.append([rel, "PULADO", info["titulo"],
+                                   info["artista"], "; ".join(candidatos), "",
+                                   "não identificada"])
+                continue
+
+            comeco = time.monotonic()
+            texto = unicodedata.normalize(
+                "NFC", transcritor(str(p), None, None) or "")
+            gasto = time.monotonic() - comeco
+        except KeyboardInterrupt:
+            # Ctrl-C: a gravação só acontece DEPOIS da transcrição completa,
+            # então o arquivo em andamento fica exatamente como estava.
+            print(f"{prefixo}INTERROMPIDO: {rel} (nada gravado)")
+            break
+        except Exception as exc:
+            print(f"{prefixo}ERRO: {rel} — falha na transcrição: {exc}")
+            erros += 1
+            linhas_csv.append([rel, "ERRO", info["titulo"], info["artista"],
+                               "; ".join(candidatos), "",
+                               f"falha na transcrição: {exc}"])
+            continue
+
+        if not texto.strip():
+            print(f"{prefixo}ERRO: {rel} — transcrição vazia")
+            erros += 1
+            linhas_csv.append([rel, "ERRO", info["titulo"], info["artista"],
+                               "; ".join(candidatos), "", "transcrição vazia"])
+            continue
+        # letra limpa (sem cabeçalho, que poluiria a busca por trecho) e
+        # título/artista intocados: transcrição não inventa identificação
+        el.embed_lyrics(p, texto, origem=el.ORIGEM_TRANSCRICAO)
+        print(f"{prefixo}TRANSCRITA: {rel} "
+              f"({_fmt_milhar(len(texto))} caracteres, "
+              f"{_fmt_dur(info['duracao'])} de áudio em {_fmt_dur(gasto)})")
+        transcritas += 1
+        linhas_csv.append([rel, "TRANSCRITA", info["titulo"], info["artista"],
+                           "; ".join(candidatos), len(texto), "transcricao"])
+
+    print(f"Resumo: {total} arquivos | {identificadas} identificadas | "
+          f"{transcritas} transcritas | {pulados} puladas | {erros} erros")
+    if csv_out is not None:
+        gravar_csv(csv_out, TRANSCREVER_COLUNAS, linhas_csv)
+
+
 # ---------------------------------------------------------------- main
 
 def main(argv: list[str] | None = None) -> None:
@@ -876,6 +1201,34 @@ def main(argv: list[str] | None = None) -> None:
     p_apr.add_argument("--forcar", action="store_true",
                        help="permite sobrescrever letra existente")
 
+    p_trs = sub.add_parser("transcrever",
+                           help="transcreve o áudio localmente (F14): "
+                                "identifica pelo refrão no LRCLIB e, "
+                                "falhando, grava a transcrição como letra")
+    p_trs.add_argument("pasta", help="pasta do acervo")
+    p_trs.add_argument("--modelo", default="small",
+                       choices=["tiny", "base", "small", "medium"],
+                       help="modelo do faster-whisper (padrão: small)")
+    p_trs.add_argument("--idioma", default="pt",
+                       help="idioma do áudio (padrão: pt)")
+    p_trs.add_argument("--trecho", type=float, default=TRECHO_PADRAO_S,
+                       metavar="SEGUNDOS",
+                       help="duração do trecho de identificação "
+                            "(padrão: 90, a partir de 20s)")
+    gate = p_trs.add_mutually_exclusive_group()
+    gate.add_argument("--so-identificar", action="store_true",
+                      dest="so_identificar",
+                      help="só F14.1; nunca transcreve a música inteira")
+    gate.add_argument("--so-transcrever", action="store_true",
+                      dest="so_transcrever",
+                      help="pula a identificação; transcreve direto")
+    p_trs.add_argument("--forcar", action="store_true",
+                       help="reprocessa quem já tem letra (sobrescreve)")
+    p_trs.add_argument("--csv", default=None, metavar="SAIDA",
+                       help="registra o que foi feito, para conferência")
+    p_trs.add_argument("--verboso", action="store_true",
+                       help="mostra o trecho transcrito e os candidatos")
+
     p_tdp = sub.add_parser("temas-de-pastas",
                            help="soma às tags os temas vindos das subpastas")
     p_tdp.add_argument("pasta", help="pasta do acervo")
@@ -901,6 +1254,13 @@ def main(argv: list[str] | None = None) -> None:
     elif args.comando == "aplicar-proposta":
         cmd_aplicar_proposta(pasta, Path(args.csv), dry_run=args.dry_run,
                              forcar=args.forcar)
+    elif args.comando == "transcrever":
+        cmd_transcrever(pasta, modelo=args.modelo, idioma=args.idioma,
+                        trecho=args.trecho,
+                        so_identificar=args.so_identificar,
+                        so_transcrever=args.so_transcrever,
+                        forcar=args.forcar, verboso=args.verboso,
+                        csv_out=Path(args.csv) if args.csv else None)
     elif args.comando == "temas-de-pastas":
         cmd_temas_de_pastas(pasta, aplicar=args.aplicar)
 
