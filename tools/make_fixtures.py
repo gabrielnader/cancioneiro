@@ -8,6 +8,8 @@ Reprodutível e idempotente (sobrescreve). Gera:
   - sem_tags.mp3    tom 330Hz ~2s, sem nenhuma tag ID3
   - corrompido.mp3  4096 bytes pseudo-aleatórios (seed 42), não é MP3
 """
+
+from __future__ import annotations
 import math
 import random
 import shutil

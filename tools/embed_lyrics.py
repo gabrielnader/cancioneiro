@@ -11,6 +11,8 @@ Uso:
     python tools/embed_lyrics.py musica.mp3 --add-tema "esperança" --remove-tema "cura"
     python tools/embed_lyrics.py --check musica.mp3
 """
+
+from __future__ import annotations
 import argparse
 import sys
 import unicodedata
