@@ -44,9 +44,34 @@ npm run tauri build
 npm run tauri build
 ```
 
-O V1 não assina/notariza os binários. No macOS, na primeira abertura use
-botão direito → "Abrir" para aceitar o aviso de desenvolvedor não identificado;
-no Windows, "Mais informações" → "Executar assim mesmo" no SmartScreen.
+## Instalar (e o aviso de app não identificado)
+
+Baixe o instalador da sua plataforma em
+[Releases](https://github.com/gabrielnader/cancioneiro/releases):
+`.dmg` **aarch64** para Mac com Apple Silicon (M1/M2/M3), `.dmg` **x64** para Mac
+Intel, `.msi` ou `.exe` para Windows, `.deb`/`.rpm`/`.AppImage` para Linux.
+Para atualizar, instale por cima da versão anterior (no macOS, arraste para
+Aplicativos e confirme "Substituir") — playlists, pastas e preferências são
+preservadas, e os dados das músicas vivem nos próprios MP3s.
+
+Os binários **não são assinados nem notarizados**, então os sistemas avisam:
+
+- **macOS** — a mensagem costuma ser *"Cancioneiro está danificado e não pode ser
+  aberto"*. O arquivo **não** está corrompido: é a quarentena que o macOS aplica a
+  apps baixados de desenvolvedor não identificado. Remova a marca de quarentena uma
+  vez por versão instalada:
+
+  ```bash
+  xattr -cr /Applications/Cancioneiro.app
+  ```
+
+  Depois abra normalmente. (O clássico botão direito → "Abrir" resolve só o aviso
+  mais brando de "desenvolvedor não identificado", não o de "danificado".)
+- **Windows** — no SmartScreen: "Mais informações" → "Executar assim mesmo".
+
+Para distribuir a usuários leigos, a saída definitiva é assinar os binários
+(Apple Developer ID + notarização; certificado de code signing no Windows) — sem
+isso, esse passo manual é inevitável.
 
 ## Curadoria dentro do player (V4/V5)
 
