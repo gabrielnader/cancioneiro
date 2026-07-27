@@ -83,6 +83,71 @@ fn multi_token_search_matches_across_temas_and_title() {
 }
 
 // ---------------------------------------------------------------------------
+// V5 (F12): busca encontra músicas pelo NOME DA PASTA (coluna pastas),
+// ignorando acentos; match apenas em pasta NUNCA gera snippet de letra;
+// música na raiz (pastas NULL) não é encontrada pelo termo da pasta.
+// ---------------------------------------------------------------------------
+#[test]
+fn search_finds_songs_by_folder_name_without_snippet() {
+    let conn = db::open_in_memory().unwrap();
+    conn.execute("INSERT INTO folders (path) VALUES ('/f')", [])
+        .unwrap();
+    conn.execute(
+        "INSERT INTO songs (file_path, folder_id, title, lyrics, has_lyrics, pastas, file_mtime, file_size)
+         VALUES ('/f/Barco/x.mp3', 1, 'Vento Norte', 'letra sem o termo', 1, 'Barco', 0, 0),
+                ('/f/y.mp3', 1, 'Na Raiz', 'nada aqui', 1, NULL, 0, 0),
+                ('/f/Canções/z.mp3', 1, 'Terceira', 'letra qualquer', 1, 'Canções', 0, 0)",
+        [],
+    )
+    .unwrap();
+
+    // "barco" só existe no nome da pasta — encontra, sem snippet de letra
+    for q in ["barco", "Barco", "BARCO"] {
+        let results = search::search(&conn, q, 50).unwrap();
+        assert_eq!(results.len(), 1, "query {q:?}");
+        assert_eq!(results[0].song.title, "Vento Norte");
+        assert!(
+            results[0].snippet.is_none(),
+            "match só de pasta não pode gerar snippet de letra"
+        );
+    }
+
+    // sem acento encontra pasta acentuada
+    let results = search::search(&conn, "cancoes", 50).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].song.title, "Terceira");
+    assert!(results[0].snippet.is_none());
+}
+
+// ---------------------------------------------------------------------------
+// V5 (F12): com a coluna pastas na FTS, o snippet continua vindo da coluna
+// de LETRA (índice de coluna do snippet() não pode escorregar).
+// ---------------------------------------------------------------------------
+#[test]
+fn lyrics_snippet_column_index_survives_pastas_column() {
+    let conn = db::open_in_memory().unwrap();
+    conn.execute("INSERT INTO folders (path) VALUES ('/f')", [])
+        .unwrap();
+    conn.execute(
+        "INSERT INTO songs (file_path, folder_id, title, lyrics, has_lyrics, pastas, file_mtime, file_size)
+         VALUES ('/f/Barco/x.mp3', 1, 'Vento Norte', 'a segunda linha fala de esperança viva', 1, 'Barco', 0, 0)",
+        [],
+    )
+    .unwrap();
+
+    // match na letra: snippet destacado, mesmo com pastas preenchida
+    let results = search::search(&conn, "esperança", 50).unwrap();
+    assert_eq!(results.len(), 1);
+    let snippet = results[0].snippet.as_deref().expect("snippet presente");
+    assert!(snippet.contains(&format!("{HIGHLIGHT_START}esperança{HIGHLIGHT_END}")));
+
+    // pasta + letra na mesma query (AND por linha) também mantém o snippet
+    let results = search::search(&conn, "barco esperanca", 50).unwrap();
+    assert_eq!(results.len(), 1);
+    assert!(results[0].snippet.is_some());
+}
+
+// ---------------------------------------------------------------------------
 // Acceptance: trecho existente apenas na letra de 1 música retorna essa
 // música em primeiro.
 // ---------------------------------------------------------------------------

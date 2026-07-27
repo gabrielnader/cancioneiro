@@ -215,12 +215,28 @@ pub fn write_tags(
     )
 }
 
+/// Fetcher real (ureq) do LRCLIB, compartilhado por fetch_lyrics_online e
+/// enrich_folder_scan — os ÚNICOS pontos de rede de todo o app, ambos
+/// acionados por cliques explícitos do usuário. GET com timeout de 10 s e
+/// User-Agent "Cancioneiro/0.4"; qualquer falha de rede vira "sem conexão".
+fn lrclib_fetcher(url: &str) -> Result<String> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout(std::time::Duration::from_secs(10))
+        .user_agent("Cancioneiro/0.4")
+        .build();
+    agent
+        .get(url)
+        .call()
+        .map_err(|_| AppError("sem conexão".into()))?
+        .into_string()
+        .map_err(|_| AppError("sem conexão".into()))
+}
+
 /// Busca a letra no LRCLIB por título+artista+duração.
 ///
-/// ESTE COMANDO É O ÚNICO PONTO DE REDE DE TODO O APP (PRD V4): tudo o mais é
-/// 100% offline. GET com timeout de 10 s e User-Agent "Cancioneiro/0.4";
-/// qualquer falha de rede vira Err "sem conexão" (o frontend converte no
-/// aviso "Sem conexão — a busca de letra precisa de internet.").
+/// Ponto de rede EXPLÍCITO (PRD V4): tudo o mais é 100% offline; qualquer
+/// falha de rede vira Err "sem conexão" (o frontend converte no aviso
+/// "Sem conexão — a busca de letra precisa de internet.").
 #[tauri::command]
 pub fn fetch_lyrics_online(
     title: String,
@@ -231,17 +247,43 @@ pub fn fetch_lyrics_online(
         &title,
         artist.as_deref().unwrap_or(""),
         duration_seconds,
-        |url| {
-            let agent = ureq::AgentBuilder::new()
-                .timeout(std::time::Duration::from_secs(10))
-                .user_agent("Cancioneiro/0.4")
-                .build();
-            agent
-                .get(url)
-                .call()
-                .map_err(|_| AppError("sem conexão".into()))?
-                .into_string()
-                .map_err(|_| AppError("sem conexão".into()))
-        },
+        lrclib_fetcher,
     )
+}
+
+// ---------------------------------------------------------------------------
+// Enriquecimento em lote (F13 — PRD V5)
+// ---------------------------------------------------------------------------
+
+/// Identifica no LRCLIB as músicas incompletas sob `folder_prefix` (vazio =
+/// biblioteca inteira) e devolve as propostas para a UI de revisão.
+///
+/// Ponto de rede EXPLÍCITO acionado pelo usuário ("Completar dados desta
+/// pasta"); pausa de cortesia de 300 ms entre consultas. Erro de rede por
+/// música vira proposta BAIXA com `error` — o lote nunca aborta. Usa conexão
+/// dedicada (scan_conn) para não travar busca/listagem durante a varredura.
+#[tauri::command]
+pub fn enrich_folder_scan(
+    state: State<'_, Db>,
+    folder_prefix: String,
+) -> Result<Vec<crate::enrich::EnrichProposal>> {
+    let conn = state.scan_conn()?;
+    crate::enrich::enrich_scan(
+        &conn,
+        &folder_prefix,
+        lrclib_fetcher,
+        std::time::Duration::from_millis(300),
+    )
+}
+
+/// Aplica as propostas aceitas (write_tags por música; nunca renomeia, nunca
+/// apaga dados existentes — só preenche/atualiza o que veio). Devolve as
+/// Songs atualizadas.
+#[tauri::command]
+pub fn enrich_apply(
+    state: State<'_, Db>,
+    aplicacoes: Vec<crate::enrich::EnrichApply>,
+) -> Result<Vec<Song>> {
+    let conn = state.lock()?;
+    crate::enrich::apply(&conn, &aplicacoes)
 }

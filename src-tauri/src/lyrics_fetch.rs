@@ -42,8 +42,8 @@ fn percent_encode(s: &str) -> String {
 
 /// Normalização de comparação (igual à _norm_comparacao do curadoria.py):
 /// minúsculas + sem acento (fold_pt), pontuação vira espaço, espaços
-/// colapsados.
-fn norm(s: &str) -> String {
+/// colapsados. Reusada pelo enrich (F13) na detecção de placeholders.
+pub(crate) fn norm(s: &str) -> String {
     fold_pt(s)
         .chars()
         .map(|c| if c.is_alphanumeric() { c } else { ' ' })
@@ -82,21 +82,50 @@ fn similarity(a: &str, b: &str) -> f64 {
     (2.0 * inter as f64) / ((na + nb) as f64)
 }
 
-/// Busca no LRCLIB e escolhe o melhor candidato pelas regras da V3:
+/// Melhor candidato bruto de UMA consulta ao LRCLIB, antes do corte de
+/// confiança. Reutilizado pelo enriquecimento em lote (F13), que itera vários
+/// palpites e compara os scores entre eles.
+#[derive(Debug, Clone)]
+pub(crate) struct ScoredCandidate {
+    pub lyrics: String,
+    pub matched_title: String,
+    pub matched_artist: String,
+    pub sim: f64,
+    pub dif: f64,
+    pub score: f64,
+}
+
+/// Confiança pelas regras da V3: ALTA se (dif ≤ 3 e sim ≥ 0.6) ou
+/// (sim ≥ 0.85 e dif ≤ 8); MÉDIA se sim ≥ 0.5 e dif ≤ 15; senão None
+/// (nada confiável — vira BAIXA no enriquecimento em lote).
+pub(crate) fn classify(sim: f64, dif: f64) -> Option<&'static str> {
+    if (dif <= 3.0 && sim >= 0.6) || (sim >= 0.85 && dif <= 8.0) {
+        Some("alta")
+    } else if sim >= 0.5 && dif <= 15.0 {
+        Some("media")
+    } else {
+        None
+    }
+}
+
+/// Consulta o LRCLIB por "titulo artista" e escolhe o melhor candidato pelas
+/// regras da V3 (sem aplicar o corte de confiança — use `classify`):
 /// - candidato sem plainLyrics (vazio/nulo) ou sem duração: descartado;
+/// - candidato reprovado no filtro `keep(trackName, artistName)`: descartado
+///   (o enriquecimento em lote descarta resultados placeholder por aqui);
 /// - diferença de duração > 15 s: descartado (homônimo/versão errada);
 /// - score = similaridade("titulo artista", "trackName artistName")
-///   + 0.3 se dif ≤ 3 s, + 0.15 se dif ≤ 8 s;
-/// - confiança ALTA: (dif ≤ 3 e sim ≥ 0.6) ou (sim ≥ 0.85 e dif ≤ 8);
-///   MÉDIA: sim ≥ 0.5 e dif ≤ 15; abaixo disso devolve Ok(None).
-pub fn fetch_lyrics_online<F>(
+///   + 0.3 se dif ≤ 3 s, + 0.15 se dif ≤ 8 s.
+pub(crate) fn query_best<F, K>(
     title: &str,
     artist: &str,
     duration_seconds: f64,
-    fetch: F,
-) -> Result<Option<LyricsMatch>>
+    fetch: &F,
+    keep: K,
+) -> Result<Option<ScoredCandidate>>
 where
     F: Fn(&str) -> Result<String>,
+    K: Fn(&str, &str) -> bool,
 {
     let alvo = format!("{} {}", title.trim(), artist.trim());
     let alvo = alvo.trim();
@@ -106,8 +135,7 @@ where
     let results: Vec<serde_json::Value> = serde_json::from_str(&body)
         .map_err(|e| AppError(format!("resposta inválida do LRCLIB: {e}")))?;
 
-    // melhor candidato: (score, sim, dif, letra, título, artista)
-    let mut best: Option<(f64, f64, f64, String, String, String)> = None;
+    let mut best: Option<ScoredCandidate> = None;
     for res in &results {
         let lyrics = res
             .get("plainLyrics")
@@ -128,6 +156,9 @@ where
             .get("artistName")
             .and_then(|v| v.as_str())
             .unwrap_or("");
+        if !keep(track, artist_name) {
+            continue; // ex.: resultado placeholder do LRCLIB (F13)
+        }
         let candidato = format!("{track} {artist_name}");
         let sim = similarity(alvo, candidato.trim());
         let bonus = if dif <= 3.0 {
@@ -138,32 +169,42 @@ where
             0.0
         };
         let score = sim + bonus;
-        if best.as_ref().is_none_or(|(s, ..)| score > *s) {
-            best = Some((
-                score,
+        if best.as_ref().is_none_or(|b| score > b.score) {
+            best = Some(ScoredCandidate {
+                lyrics: lyrics.to_string(),
+                matched_title: track.to_string(),
+                matched_artist: artist_name.to_string(),
                 sim,
                 dif,
-                lyrics.to_string(),
-                track.to_string(),
-                artist_name.to_string(),
-            ));
+                score,
+            });
         }
     }
+    Ok(best)
+}
 
-    let Some((_, sim, dif, lyrics, matched_title, matched_artist)) = best else {
+/// Busca no LRCLIB e escolhe o melhor candidato pelas regras da V3 (ver
+/// `query_best`); confiança ALTA/MÉDIA por `classify` — abaixo do corte
+/// devolve Ok(None).
+pub fn fetch_lyrics_online<F>(
+    title: &str,
+    artist: &str,
+    duration_seconds: f64,
+    fetch: F,
+) -> Result<Option<LyricsMatch>>
+where
+    F: Fn(&str) -> Result<String>,
+{
+    let Some(best) = query_best(title, artist, duration_seconds, &fetch, |_, _| true)? else {
         return Ok(None);
     };
-    let confidence = if (dif <= 3.0 && sim >= 0.6) || (sim >= 0.85 && dif <= 8.0) {
-        "alta"
-    } else if sim >= 0.5 && dif <= 15.0 {
-        "media"
-    } else {
+    let Some(confidence) = classify(best.sim, best.dif) else {
         return Ok(None); // nada confiável
     };
     Ok(Some(LyricsMatch {
-        lyrics,
-        matched_title,
-        matched_artist,
+        lyrics: best.lyrics,
+        matched_title: best.matched_title,
+        matched_artist: best.matched_artist,
         confidence: confidence.to_string(),
     }))
 }

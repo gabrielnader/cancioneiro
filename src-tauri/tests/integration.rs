@@ -433,6 +433,58 @@ fn roundtrip_temas_from_python_script_and_search_by_tema() {
 }
 
 // ---------------------------------------------------------------------------
+// V5 (F12) — o scan preenche songs.pastas com os nomes das subpastas do
+// arquivo relativos à pasta registrada (separados por espaço); arquivo na
+// raiz fica NULL; a busca encontra pelo nome da pasta sem a palavra em
+// título/letra/temas e sem snippet de letra.
+// ---------------------------------------------------------------------------
+#[test]
+fn scan_fills_pastas_and_search_finds_by_folder_name() {
+    use cancioneiro_lib::search;
+    use rusqlite::params;
+
+    let dir = setup_music_dir(false);
+    let sub = dir.path().join("Barco").join("aninhada");
+    fs::create_dir_all(&sub).unwrap();
+    fs::rename(dir.path().join("sem_letra.mp3"), sub.join("sem_letra.mp3")).unwrap();
+
+    let conn = test_conn();
+    let folder_id = db::add_folder(&conn, dir.path().to_str().unwrap()).unwrap();
+    indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
+
+    // subpastas relativas, separadas por espaço
+    let pastas: Option<String> = conn
+        .query_row(
+            "SELECT pastas FROM songs WHERE file_path LIKE ?1",
+            params!["%sem_letra.mp3"],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(pastas.as_deref(), Some("Barco aninhada"));
+
+    // arquivo na raiz da pasta registrada: sem pasta (NULL)
+    let pastas_raiz: Option<String> = conn
+        .query_row(
+            "SELECT pastas FROM songs WHERE file_path LIKE ?1",
+            params!["%com_letra.mp3"],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(pastas_raiz, None);
+
+    // busca por nome de pasta (sem a palavra em título/letra/temas)
+    let results = search::search(&conn, "barco", 50).unwrap();
+    assert_eq!(results.len(), 1);
+    assert!(results[0].song.file_path.ends_with("sem_letra.mp3"));
+    assert!(results[0].snippet.is_none(), "match de pasta não gera snippet");
+
+    // rescan sem mudanças não perde as pastas
+    indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
+    let results = search::search(&conn, "aninhada", 50).unwrap();
+    assert_eq!(results.len(), 1);
+}
+
+// ---------------------------------------------------------------------------
 // Seção 8 do PRD: nenhum arquivo de áudio é modificado pelo app — bytes dos
 // MP3s idênticos antes/depois de todos os fluxos de backend (indexar,
 // reindexar, buscar, ler letra, playlists, rescan). Exclui, por definição

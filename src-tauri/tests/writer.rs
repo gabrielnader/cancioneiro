@@ -236,6 +236,44 @@ fn write_tags_updates_fts_immediately() {
 }
 
 // ---------------------------------------------------------------------------
+// V5 (F12) — write_tags (via index_single_file) preserva/preenche a coluna
+// pastas de arquivo em subpasta: a busca por nome de pasta continua achando
+// a música logo após a edição, sem esperar rescan.
+// ---------------------------------------------------------------------------
+#[test]
+fn write_tags_preserves_pastas_for_file_in_subfolder() {
+    use rusqlite::params;
+
+    let dir = tempfile::tempdir().unwrap();
+    let sub = dir.path().join("Barco");
+    fs::create_dir_all(&sub).unwrap();
+    fs::copy(fixtures_dir().join("com_letra.mp3"), sub.join("com_letra.mp3")).unwrap();
+
+    let conn = db::open_in_memory().unwrap();
+    let folder_id = db::add_folder(&conn, dir.path().to_str().unwrap()).unwrap();
+    indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
+    let song = song_by_suffix(&conn, "com_letra.mp3");
+
+    writer::write_tags(&conn, song.id, "Título Editado", None, Some("letra nova"), None)
+        .unwrap();
+
+    let pastas: Option<String> = conn
+        .query_row(
+            "SELECT pastas FROM songs WHERE id = ?1",
+            params![song.id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(pastas.as_deref(), Some("Barco"));
+
+    // FTS em sincronia: busca por pasta acha imediatamente após a edição
+    let results = search::search(&conn, "barco", 50).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].song.id, song.id);
+    assert!(results[0].snippet.is_none());
+}
+
+// ---------------------------------------------------------------------------
 // F10 — MP3 sem nenhuma tag ID3 ganha uma tag nova (não falha) e o
 // round-trip lê de volta idêntico, com acentos.
 // ---------------------------------------------------------------------------

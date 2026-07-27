@@ -1,5 +1,6 @@
 pub mod commands;
 pub mod db;
+pub mod enrich;
 pub mod error;
 pub mod indexer;
 pub mod lyrics_fetch;
@@ -39,6 +40,8 @@ pub fn run() {
             commands::reorder_playlist,
             commands::write_tags,
             commands::fetch_lyrics_online,
+            commands::enrich_folder_scan,
+            commands::enrich_apply,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

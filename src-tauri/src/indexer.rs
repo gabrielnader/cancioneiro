@@ -117,6 +117,23 @@ fn read_tags(path: &Path) -> TagData {
     }
 }
 
+/// Nomes das subpastas do arquivo relativos à pasta registrada, separados
+/// por espaço (F12): /acervo/Barco/sub/x.mp3 com folder /acervo → "Barco
+/// sub"; arquivo na raiz da pasta registrada → None. Só alimenta o índice de
+/// busca (coluna songs.pastas na FTS) — a Song não expõe o valor.
+fn pastas_for(folder_path: &str, file_path: &Path) -> Option<String> {
+    let rel = file_path.parent()?.strip_prefix(folder_path).ok()?;
+    let parts: Vec<String> = rel
+        .components()
+        .map(|c| c.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join(" "))
+    }
+}
+
 /// Upsert de uma música por file_path (INSERT ... ON CONFLICT preserva o id —
 /// e portanto os itens de playlist que apontam para ela).
 fn upsert_song(
@@ -124,6 +141,7 @@ fn upsert_song(
     folder_id: i64,
     path_str: &str,
     tags: &TagData,
+    pastas: Option<&str>,
     mtime: i64,
     size: i64,
 ) -> Result<()> {
@@ -131,8 +149,8 @@ fn upsert_song(
     conn.execute(
         "INSERT INTO songs
             (file_path, folder_id, title, artist, album, duration_seconds,
-             has_lyrics, lyrics, temas, file_mtime, file_size, available, indexed_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 1, datetime('now'))
+             has_lyrics, lyrics, temas, pastas, file_mtime, file_size, available, indexed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, datetime('now'))
          ON CONFLICT(file_path) DO UPDATE SET
             folder_id = excluded.folder_id,
             title = excluded.title,
@@ -142,6 +160,7 @@ fn upsert_song(
             has_lyrics = excluded.has_lyrics,
             lyrics = excluded.lyrics,
             temas = excluded.temas,
+            pastas = excluded.pastas,
             file_mtime = excluded.file_mtime,
             file_size = excluded.file_size,
             available = 1,
@@ -156,6 +175,7 @@ fn upsert_song(
             has_lyrics as i64,
             tags.lyrics,
             tags.temas,
+            pastas,
             mtime,
             size
         ],
@@ -165,13 +185,31 @@ fn upsert_song(
 
 /// Reindexa um único arquivo (F10): re-stata mtime/size, relê as tags e faz
 /// upsert — usado pelo writer logo após gravar tags, para o banco (e a FTS,
-/// via triggers) refletirem o disco sem esperar um rescan.
+/// via triggers) refletirem o disco sem esperar um rescan. As pastas (F12)
+/// são derivadas do caminho da pasta registrada, lido do banco.
 pub(crate) fn index_single_file(conn: &Connection, folder_id: i64, path: &Path) -> Result<()> {
+    let folder_path: String = conn
+        .query_row(
+            "SELECT path FROM folders WHERE id = ?1",
+            params![folder_id],
+            |r| r.get(0),
+        )
+        .optional()?
+        .ok_or_else(|| AppError(format!("pasta não registrada: {folder_id}")))?;
     let md = std::fs::metadata(path)?;
     let mtime = file_mtime_epoch(&md);
     let size = md.len() as i64;
     let tags = read_tags(path);
-    upsert_song(conn, folder_id, &path.to_string_lossy(), &tags, mtime, size)
+    let pastas = pastas_for(&folder_path, path);
+    upsert_song(
+        conn,
+        folder_id,
+        &path.to_string_lossy(),
+        &tags,
+        pastas.as_deref(),
+        mtime,
+        size,
+    )
 }
 
 fn file_mtime_epoch(md: &std::fs::Metadata) -> i64 {
@@ -268,7 +306,8 @@ pub fn scan_folder<F: FnMut(usize, usize)>(
         if tags.fallback {
             stats.tag_errors += 1;
         }
-        upsert_song(conn, folder_id, &path_str, &tags, mtime, size)?;
+        let pastas = pastas_for(&folder_path, path);
+        upsert_song(conn, folder_id, &path_str, &tags, pastas.as_deref(), mtime, size)?;
         stats.indexed += 1;
         done += 1;
         progress(done, stats.total);
@@ -348,4 +387,27 @@ fn count_mp3s(folder_path: &str) -> usize {
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().is_file() && is_mp3(e.path()))
         .count()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pastas_for;
+    use std::path::Path;
+
+    #[test]
+    fn pastas_for_derives_relative_subfolder_names() {
+        // subpastas relativas à pasta registrada, separadas por espaço
+        assert_eq!(
+            pastas_for("/acervo", Path::new("/acervo/Barco/sub/x.mp3")).as_deref(),
+            Some("Barco sub")
+        );
+        assert_eq!(
+            pastas_for("/acervo", Path::new("/acervo/Canções/y.mp3")).as_deref(),
+            Some("Canções")
+        );
+        // arquivo na raiz da pasta registrada: sem pasta
+        assert_eq!(pastas_for("/acervo", Path::new("/acervo/x.mp3")), None);
+        // caminho fora da pasta registrada (defensivo): sem pasta
+        assert_eq!(pastas_for("/acervo", Path::new("/outro/x.mp3")), None);
+    }
 }

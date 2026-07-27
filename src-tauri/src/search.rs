@@ -32,9 +32,14 @@ pub fn sanitize_fts_query(input: &str) -> Option<String> {
     Some(parts.join(" "))
 }
 
-/// Busca em título, artista e letra. Query vazia/só-especiais devolve a
-/// biblioteca completa em ordem alfabética (comportamento do PRD para campo
-/// limpo), sem snippets.
+/// Busca em título, artista, letra, temas e pastas (F12). Query vazia/só-
+/// especiais devolve a biblioteca completa em ordem alfabética
+/// (comportamento do PRD para campo limpo), sem snippets.
+///
+/// O snippet vem SEMPRE da coluna de letra: `snippet(songs_fts, 2, ...)` —
+/// índice 2 = lyrics na FTS (title, artist, lyrics, temas, pastas). Match só
+/// em tema/pasta portanto nunca gera snippet (o marcador de destaque não
+/// aparece e o filter abaixo descarta).
 pub fn search(conn: &Connection, input: &str, limit: usize) -> Result<Vec<SearchResult>> {
     let Some(fts_query) = sanitize_fts_query(input) else {
         return Ok(db::list_songs(conn)?
