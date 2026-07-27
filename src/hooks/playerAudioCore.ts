@@ -68,8 +68,12 @@ export const audioController: {
   seekTo: (seconds: number) => void;
   seekBy: (delta: number) => void;
   getCurrentTime: () => number;
+  /** Pausa o elemento imediatamente (sem esperar re-render) — usado antes de
+   * gravar tags no arquivo em reprodução (lock de arquivo no Windows). */
+  pause: () => void;
 } = {
   seekTo: () => {},
   seekBy: () => {},
   getCurrentTime: () => 0,
+  pause: () => {},
 };

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { audioController } from "../hooks/playerAudioCore";
 import { getBackend } from "../lib/api";
 import type { Song } from "../lib/types";
 import { useLibraryStore } from "../stores/libraryStore";
@@ -89,9 +90,12 @@ export function EditSongForm({
 
     // Se a música em edição está tocando, pausa ANTES de gravar (o arquivo
     // pode estar em uso no Windows) e mantém pausado depois (PRD V4).
+    // audioController.pause age direto no elemento — sem esperar re-render,
+    // fechando a janela de corrida entre o pause e o write no disco.
     const player = usePlayerStore.getState();
     if (player.current?.id === song.id && player.isPlaying) {
       player.setPlaying(false);
+      audioController.pause();
     }
 
     setBusy(true);
@@ -105,6 +109,7 @@ export function EditSongForm({
       );
       useLibraryStore.getState().updateSong(saved);
       usePlaylistStore.getState().updateSongInItems(saved);
+      usePlayerStore.getState().updateSongRefs(saved);
       push(`Alterações salvas em ${basename(song.file_path)}.`, "success");
       onSaved();
     } catch {

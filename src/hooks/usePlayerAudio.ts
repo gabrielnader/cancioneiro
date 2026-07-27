@@ -68,6 +68,7 @@ export function usePlayerAudio(audioRef: RefObject<HTMLAudioElement | null>) {
       audio.currentTime = Math.max(0, audio.currentTime + delta);
     };
     audioController.getCurrentTime = () => audio.currentTime;
+    audioController.pause = () => audio.pause();
 
     return () => {
       audio.removeEventListener("ended", onEnded);
@@ -75,6 +76,7 @@ export function usePlayerAudio(audioRef: RefObject<HTMLAudioElement | null>) {
       audioController.seekTo = () => {};
       audioController.seekBy = () => {};
       audioController.getCurrentTime = () => 0;
+      audioController.pause = () => {};
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

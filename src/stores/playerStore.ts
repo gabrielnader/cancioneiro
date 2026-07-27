@@ -35,6 +35,8 @@ interface PlayerState {
   skipCurrent: () => boolean;
   /** Reflete mudanças na playlist em reprodução sem interromper o áudio. */
   syncQueue: (songs: Song[]) => void;
+  /** Metadados editados (F10): atualiza current/fila sem tocar na reprodução. */
+  updateSongRefs: (song: Song) => void;
   setVolume: (v: number) => void;
 }
 
@@ -159,6 +161,12 @@ export function createPlayerStore() {
           }
           set({ queue: songs, queueIndex: nextIndex, detached: true });
         },
+
+        updateSongRefs: (song) =>
+          set((s) => ({
+            current: s.current?.id === song.id ? song : s.current,
+            queue: s.queue.map((q) => (q.id === song.id ? song : q)),
+          })),
 
         setVolume: (v) => set({ volume: Math.min(1, Math.max(0, v)) }),
       }),

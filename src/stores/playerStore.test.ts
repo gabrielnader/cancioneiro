@@ -171,6 +171,21 @@ describe("playerStore (F4/F5)", () => {
     expect(usePlayerStore.getState().isPlaying).toBe(false);
   });
 
+  it("updateSongRefs atualiza current e fila após edição (F10) sem mexer na reprodução", () => {
+    usePlayerStore.getState().playQueue([S1, S2], 0, 7);
+    const edited = { ...S1, title: "Faixa 1 Editada", temas: "fé" };
+    usePlayerStore.getState().updateSongRefs(edited);
+    const s = usePlayerStore.getState();
+    expect(s.current?.title).toBe("Faixa 1 Editada");
+    expect(s.queue[0].title).toBe("Faixa 1 Editada");
+    expect(s.queue[1].title).toBe("Faixa 2");
+    expect(s.isPlaying).toBe(true);
+
+    // música que não está no player: nada muda
+    usePlayerStore.getState().updateSongRefs({ ...S3, title: "X" });
+    expect(usePlayerStore.getState().current?.title).toBe("Faixa 1 Editada");
+  });
+
   it("volume persiste no localStorage (nova instância hidrata)", async () => {
     usePlayerStore.getState().setVolume(0.37);
     expect(usePlayerStore.getState().volume).toBeCloseTo(0.37);
