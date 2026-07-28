@@ -103,9 +103,20 @@ function App() {
           ) : (
             <LibraryView />
           )}
+          {/*
+            Flutuante porque precisa existir em TODAS as views (decisão 25):
+            escondido o painel, é o único caminho de volta. Mas as medidas
+            têm de casar com a linha da busca da LibraryView — antes ficava
+            4px acima e mais baixo que o campo, e o espaço reservado lá
+            (pr-*) era menor que a largura do texto "Ocultar detalhes", então
+            o botão montava em cima do campo. top-4/right-4 alinham com o
+            p-4 do cabeçalho e py-2/text-[15px] igualam a altura do input; o
+            E2E mede as duas caixas e falha se voltarem a se sobrepor.
+          */}
           <button
             type="button"
-            className="absolute right-3 top-3 z-10 rounded-md bg-white/90 px-3 py-1.5 text-[14px] font-medium text-[#0F766E] shadow-sm ring-1 ring-[#E5E7EB] hover:bg-[#F0FDFA]"
+            data-testid="toggle-detalhes"
+            className="absolute right-4 top-4 z-10 whitespace-nowrap rounded-md bg-white/90 px-3 py-2 text-[15px] font-medium text-[#0F766E] shadow-sm ring-1 ring-[#E5E7EB] hover:bg-[#F0FDFA]"
             onClick={toggleLyricsPanel}
           >
             {/* o painel virou ficha completa (título, artista, temas, letra,

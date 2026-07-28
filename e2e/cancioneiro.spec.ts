@@ -312,6 +312,37 @@ test.describe("Fluxo crítico: indexar → buscar → ver letra → tocar", () =
   });
 });
 
+test.describe("Cabeçalho: botão de detalhes x campo de busca", () => {
+  // Relato de uso real: o botão "Ocultar/Mostrar detalhes" montava em cima do
+  // campo de busca e ficava desalinhado. Ele é flutuante (precisa existir em
+  // todas as views), então a única garantia real é medir as duas caixas.
+  test("o botão não invade o campo de busca, com o painel aberto ou fechado", async ({
+    page,
+  }) => {
+    await resetApp(page);
+    await addMockFolder(page);
+
+    const busca = page.getByPlaceholder("Buscar por letra, título ou artista…");
+    const botao = page.getByTestId("toggle-detalhes");
+
+    for (const estado of ["aberto", "fechado"]) {
+      const b = (await busca.boundingBox())!;
+      const t = (await botao.boundingBox())!;
+      expect(
+        t.x,
+        `[${estado}] botão invade o campo de busca`,
+      ).toBeGreaterThanOrEqual(b.x + b.width);
+      // alinhados na mesma linha: topos coincidem e alturas batem
+      expect(Math.abs(t.y - b.y), `[${estado}] topos desalinhados`).toBeLessThanOrEqual(2);
+      expect(
+        Math.abs(t.height - b.height),
+        `[${estado}] alturas diferentes`,
+      ).toBeLessThanOrEqual(2);
+      if (estado === "aberto") await botao.click();
+    }
+  });
+});
+
 test.describe("Persistência entre sessões (reload)", () => {
   test("volume, painel de letra e nível de fonte persistem", async ({ page }) => {
     await resetApp(page);
@@ -859,6 +890,48 @@ test.describe("V5 — Aviso de transcrição automática (F14)", () => {
       "Letra conferida à mão",
     );
     await expect(panel.getByTestId("lyrics-origem")).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+});
+
+test.describe("V8 — Marca de instrumental (F17)", () => {
+  test("selo 'Instrumental' substitui 'Sem letra' e o editor marca à mão", async ({
+    page,
+  }) => {
+    const errors = trackErrors(page);
+    await resetApp(page);
+    await addMockFolder(page);
+
+    // a curadoria marcou uma música sem voz (TXXX:INSTRUMENTAL)
+    await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__CANCIONEIRO_MOCK__._markAsInstrumental(
+        "/musicas/mock/sem_letra.mp3",
+      );
+    });
+    await page.reload();
+
+    const lista = page.getByRole("listbox");
+    // das duas sem letra, a marcada troca a cobrança pela informação
+    await expect(lista.getByText("Instrumental", { exact: true })).toHaveCount(1);
+    await expect(lista.getByText("Sem letra", { exact: true })).toHaveCount(1);
+
+    // painel: informação, não pedido de curadoria
+    const panel = page.getByLabel("Painel de letra");
+    await page.getByText("Instrumental Sem Letra").first().click();
+    await expect(panel.getByText("Música instrumental — sem letra.")).toBeVisible();
+
+    // e a marca manual, no editor, muda o selo da lista na hora
+    await page.getByText("sem_tags").first().click();
+    await panel.getByRole("button", { name: "Editar" }).click();
+    await panel
+      .getByRole("checkbox", { name: "Esta música é instrumental" })
+      .check();
+    await panel.getByRole("button", { name: "Salvar no arquivo" }).click();
+    await expect(page.getByText("Alterações salvas em sem_tags.mp3.")).toBeVisible();
+
+    await expect(lista.getByText("Instrumental", { exact: true })).toHaveCount(2);
+    await expect(lista.getByText("Sem letra", { exact: true })).toHaveCount(0);
     expect(errors).toEqual([]);
   });
 });
