@@ -161,6 +161,41 @@ fn pastas_for(folder_path: &str, file_path: &Path) -> Option<String> {
     }
 }
 
+/// Nome do arquivo a INDEXAR na busca (V8), ou None quando não há o que
+/// indexar. Só alimenta o índice (coluna songs.arquivo na FTS) — a Song não
+/// expõe o valor, como acontece com `pastas` (DECISIONS #46): a lista e o
+/// painel já derivam o nome do file_path no frontend (songFileName).
+///
+/// Duas decisões deliberadas:
+///
+/// 1. SEM a extensão. Ninguém procura uma música digitando "mp3", e como todo
+///    arquivo indexado é .mp3 (is_mp3), indexá-la daria ao token "mp3" o
+///    acervo inteiro como resultado. `file_stem` já resolve o `.MP3` em caixa
+///    alta e o ponto no meio do nome ("vol.2.mp3" → "vol.2").
+///
+/// 2. NADA quando o nome é o próprio título. Música sem tag entra com o nome
+///    do arquivo COMO título (read_tags), e aí as duas colunas guardariam o
+///    mesmo texto: recall idêntico, mas o bm25 soma as ocorrências das duas
+///    e empurraria o acervo mal etiquetado para cima do bem etiquetado em
+///    toda busca. A comparação ignora caixa e acento (fold_pt) porque o
+///    tokenizador da FTS também ignora — para o ÍNDICE, "Coracao.mp3" sob o
+///    título "Coração" é o mesmo texto. Na EXIBIÇÃO é o contrário (DECISIONS
+///    #67: acento é diferença que se quer ver na tela), e é por isso que esta
+///    regra vive aqui e não é a mesma do songFileName().
+///
+/// Nome que vira só pontuação ("-.mp3") não tem token nenhum a oferecer e sai
+/// como None em vez de ocupar uma linha do índice.
+fn arquivo_para_busca(path: &Path, title: &str) -> Option<String> {
+    let stem = path.file_stem()?.to_string_lossy().trim().to_string();
+    if stem.is_empty() || !stem.chars().any(char::is_alphanumeric) {
+        return None;
+    }
+    if db::fold_pt(&stem) == db::fold_pt(title.trim()) {
+        return None;
+    }
+    Some(stem)
+}
+
 /// Upsert de uma música por file_path (INSERT ... ON CONFLICT preserva o id —
 /// e portanto os itens de playlist que apontam para ela).
 fn upsert_song(
@@ -173,12 +208,16 @@ fn upsert_song(
     size: i64,
 ) -> Result<()> {
     let has_lyrics = tags.lyrics.is_some();
+    // V8 — nome do arquivo buscável, derivado aqui (e não pelo chamador) para
+    // que o scan e a reindexação de um arquivo só nunca divirjam. Depende do
+    // título final, então é recalculado sempre que as tags mudam.
+    let arquivo = arquivo_para_busca(Path::new(path_str), &tags.title);
     conn.execute(
         "INSERT INTO songs
             (file_path, folder_id, title, artist, album, duration_seconds,
-             has_lyrics, lyrics, temas, letra_origem, instrumental, pastas,
+             has_lyrics, lyrics, temas, letra_origem, instrumental, pastas, arquivo,
              file_mtime, file_size, available, indexed_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, 1, datetime('now'))
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 1, datetime('now'))
          ON CONFLICT(file_path) DO UPDATE SET
             folder_id = excluded.folder_id,
             title = excluded.title,
@@ -191,6 +230,7 @@ fn upsert_song(
             letra_origem = excluded.letra_origem,
             instrumental = excluded.instrumental,
             pastas = excluded.pastas,
+            arquivo = excluded.arquivo,
             file_mtime = excluded.file_mtime,
             file_size = excluded.file_size,
             available = 1,
@@ -208,6 +248,7 @@ fn upsert_song(
             tags.letra_origem,
             tags.instrumental as i64,
             pastas,
+            arquivo,
             mtime,
             size
         ],
@@ -423,8 +464,57 @@ fn count_mp3s(folder_path: &str) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::pastas_for;
+    use super::{arquivo_para_busca, pastas_for};
     use std::path::Path;
+
+    #[test]
+    fn arquivo_para_busca_uses_stem_without_extension() {
+        // nome real do acervo: o que a coordenadora digitaria está aqui
+        assert_eq!(
+            arquivo_para_busca(
+                Path::new("/acervo/Barco/barco - Marinheiro só (Capoeira).mp3"),
+                "Marinheiro Só"
+            )
+            .as_deref(),
+            Some("barco - Marinheiro só (Capoeira)")
+        );
+        // extensão em CAIXA ALTA também sai (é extensão, não conteúdo)
+        assert_eq!(
+            arquivo_para_busca(Path::new("/acervo/Abrir a sessão ####.MP3"), "Abertura")
+                .as_deref(),
+            Some("Abrir a sessão ####")
+        );
+        // nome que é só pontuação depois de tirar a extensão: nada a indexar
+        assert_eq!(arquivo_para_busca(Path::new("/acervo/-.mp3"), "Sem Nome"), None);
+        // ponto no meio do nome: só a ÚLTIMA parte é extensão
+        assert_eq!(
+            arquivo_para_busca(Path::new("/acervo/canto pra iemanja vol.2.mp3"), "Canto")
+                .as_deref(),
+            Some("canto pra iemanja vol.2")
+        );
+    }
+
+    #[test]
+    fn arquivo_para_busca_skips_name_already_equal_to_title() {
+        // Música sem tag: o indexer usa o nome do arquivo COMO título. Indexar
+        // o mesmo texto duas vezes não acrescenta recall nenhum e só distorce
+        // o rank (bm25 soma as ocorrências das duas colunas), empurrando o
+        // acervo mal etiquetado para cima do bem etiquetado. Mesma ideia do
+        // songFileName() da lista (DECISIONS #67): nome é soma, não repetição.
+        assert_eq!(arquivo_para_busca(Path::new("/acervo/sem_tags.mp3"), "sem_tags"), None);
+        // caixa e acento não fazem diferença para o ÍNDICE (o tokenizador da
+        // FTS já ignora os dois) — ao contrário da EXIBIÇÃO, onde "Coracao.mp3"
+        // sob "Coração" é justamente a diferença que se quer ver na tela.
+        assert_eq!(
+            arquivo_para_busca(Path::new("/acervo/Coracao.mp3"), "coração"),
+            None
+        );
+        // diferença de verdade continua entrando
+        assert_eq!(
+            arquivo_para_busca(Path::new("/acervo/barco - coração.mp3"), "Coração").as_deref(),
+            Some("barco - coração")
+        );
+    }
 
     #[test]
     fn pastas_for_derives_relative_subfolder_names() {

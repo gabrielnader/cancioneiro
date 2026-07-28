@@ -187,6 +187,29 @@ test.describe("Fluxo crítico: indexar → buscar → ver letra → tocar", () =
     await expect(page.getByText("Instrumental Sem Letra")).toBeVisible();
   });
 
+  // V8 — a outra metade do nome do arquivo: depois de VISÍVEL (V6), BUSCÁVEL.
+  // "com_letra" só existe no nome do arquivo — as tags dizem "Coração
+  // Sertanejo" / "Artista Teste" —, e um match assim não inventa snippet: o
+  // trecho destacado continua sendo exclusividade da letra.
+  test("buscar pelo nome do arquivo encontra a música, sem trecho destacado", async ({
+    page,
+  }) => {
+    await resetApp(page);
+    await addMockFolder(page);
+
+    const search = page.getByPlaceholder("Buscar por letra, título ou artista…");
+    await search.fill("com_letra");
+    await expect(page.getByText("1 resultados")).toBeVisible();
+    await expect(page.getByText("Coração Sertanejo")).toBeVisible();
+    await expect(page.locator("mark")).toHaveCount(0);
+
+    // a extensão não é conteúdo: digitar "mp3" não devolve o acervo inteiro
+    await search.fill("mp3");
+    await expect(
+      page.getByText('Nenhuma música encontrada para "mp3".'),
+    ).toBeVisible();
+  });
+
   test("temas (V2): chips na lista, clique busca pelo tema e busca sem acento encontra", async ({
     page,
   }) => {

@@ -222,6 +222,22 @@ describe("mockBackend", () => {
       expect(results[2].song.title).toBe("Coração Sertanejo");
     });
 
+    // V8 — o nome do arquivo também é buscável (as coordenadoras se organizam
+    // por ele há anos): "com_letra" só existe no NOME de com_letra.mp3, cujas
+    // tags dizem "Coração Sertanejo" / "Artista Teste".
+    it("encontra pelo nome do arquivo, sem snippet de letra", async () => {
+      const results = await backend.search("com_letra");
+      expect(results).toHaveLength(1);
+      expect(results[0].song.title).toBe("Coração Sertanejo");
+      expect(results[0].song.file_path).toContain("com_letra.mp3");
+      expect(results[0].snippet).toBeNull();
+    });
+
+    it("a extensão não é buscável: 'mp3' não devolve o acervo inteiro", async () => {
+      const results = await backend.search("mp3");
+      expect(results).toHaveLength(0);
+    });
+
     it("não retorna músicas sem match", async () => {
       const results = await backend.search("estrela");
       expect(results).toHaveLength(1);

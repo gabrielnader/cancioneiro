@@ -37,6 +37,37 @@ fn conn_with_songs_temas(
     conn
 }
 
+/// Insere músicas com file_path de verdade, preenchendo a coluna `arquivo`
+/// com o nome-base SEM extensão — a mesma derivação que o indexer grava
+/// (indexer::arquivo_para_busca). (file_path, title, artist, lyrics, temas)
+fn conn_with_files(
+    songs: &[(&str, &str, Option<&str>, Option<&str>, Option<&str>)],
+) -> Connection {
+    let conn = db::open_in_memory().unwrap();
+    conn.execute("INSERT INTO folders (path) VALUES ('/f')", [])
+        .unwrap();
+    for (file_path, title, artist, lyrics, temas) in songs {
+        let base = file_path.rsplit('/').next().unwrap();
+        let arquivo = base.rsplit_once('.').map(|(stem, _)| stem).unwrap_or(base);
+        conn.execute(
+            "INSERT INTO songs (file_path, folder_id, title, artist, lyrics, temas, arquivo,
+                                has_lyrics, file_mtime, file_size)
+             VALUES (?1, 1, ?2, ?3, ?4, ?5, ?6, ?7, 0, 0)",
+            params![
+                file_path,
+                title,
+                artist,
+                lyrics,
+                temas,
+                arquivo,
+                lyrics.map(|l| !l.is_empty()).unwrap_or(false) as i64
+            ],
+        )
+        .unwrap();
+    }
+    conn
+}
+
 // ---------------------------------------------------------------------------
 // V2 (F8): busca encontra músicas por TEMA, ignorando acentos; match apenas
 // em tema não gera snippet de letra.
@@ -143,6 +174,143 @@ fn lyrics_snippet_column_index_survives_pastas_column() {
 
     // pasta + letra na mesma query (AND por linha) também mantém o snippet
     let results = search::search(&conn, "barco esperanca", 50).unwrap();
+    assert_eq!(results.len(), 1);
+    assert!(results[0].snippet.is_some());
+}
+
+// ---------------------------------------------------------------------------
+// V8 — busca encontra músicas pelo NOME DO ARQUIVO (coluna `arquivo` na FTS).
+// As coordenadoras se organizam por nome de arquivo há anos (DECISIONS #67):
+// depois de o nome ficar VISÍVEL na V6, torná-lo BUSCÁVEL é a outra metade.
+// Match só no nome NUNCA gera snippet — o snippet segue exclusivo da letra.
+// ---------------------------------------------------------------------------
+#[test]
+fn search_finds_songs_by_file_name_without_snippet() {
+    let conn = conn_with_files(&[
+        // nome de arquivo real do acervo: o "Capoeira" só existe no nome
+        (
+            "/f/barco - Marinheiro só (Capoeira).mp3",
+            "Marinheiro Só",
+            Some("Trio do Norte"),
+            Some("eu não sou daqui, marinheiro"),
+            Some("mar"),
+        ),
+        ("/f/outra.mp3", "Outra Canção", None, Some("nada aqui"), None),
+    ]);
+
+    for q in ["capoeira", "Capoeira", "CAPOEIRA"] {
+        let results = search::search(&conn, q, 50).unwrap();
+        assert_eq!(results.len(), 1, "query {q:?}");
+        assert_eq!(results[0].song.title, "Marinheiro Só");
+        assert!(
+            results[0].snippet.is_none(),
+            "match só de nome de arquivo não pode gerar snippet de letra"
+        );
+    }
+
+    // token do nome + token da letra na mesma query (AND por linha)
+    let results = search::search(&conn, "capoeira marinheiro", 50).unwrap();
+    assert_eq!(results.len(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// V8 — o nome do arquivo entra no índice com a mesma indiferença a acento e
+// caixa do resto da busca, e a pontuação/ruído real dos nomes ("##", " - ",
+// parênteses) não quebra nem a indexação nem a query.
+// ---------------------------------------------------------------------------
+#[test]
+fn file_name_search_ignores_diacritics_and_survives_punctuation_noise() {
+    let conn = conn_with_files(&[
+        (
+            "/f/Barco/barquinha - canto pra iemanja - Tincoãs ##.mp3",
+            "Canto Pra Iemanjá",
+            None,
+            Some("odoya minha mãe"),
+            None,
+        ),
+        (
+            "/f/adventício - Abrir a sessão ####.mp3",
+            "Abertura",
+            None,
+            Some("letra qualquer"),
+            None,
+        ),
+    ]);
+
+    // sem acento acha nome acentuado e vice-versa
+    for q in ["tincoas", "Tincoãs", "iemanja", "iemanjá"] {
+        let results = search::search(&conn, q, 50).unwrap();
+        assert_eq!(results.len(), 1, "query {q:?}");
+        assert_eq!(results[0].song.title, "Canto Pra Iemanjá");
+    }
+    let results = search::search(&conn, "adventicio", 50).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].song.title, "Abertura");
+
+    // o ruído digitado junto não quebra a query nem some com o resultado
+    for q in [
+        "Tincoãs ##",
+        "barquinha - canto",
+        "(iemanja)",
+        "adventício - Abrir",
+    ] {
+        let r = search::search(&conn, q, 50).unwrap();
+        assert_eq!(r.len(), 1, "query {q:?} deve achar exatamente 1");
+    }
+
+    // só ruído: nenhum token útil => biblioteca inteira, sem erro
+    let results = search::search(&conn, "##", 50).unwrap();
+    assert_eq!(results.len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// V8 — a EXTENSÃO fica fora do índice: ninguém procura "mp3", e indexá-la
+// devolveria o acervo inteiro para esse token (todo arquivo é .mp3).
+// ---------------------------------------------------------------------------
+#[test]
+fn file_extension_is_not_searchable() {
+    let conn = conn_with_files(&[
+        ("/f/barco - Marinheiro só.mp3", "Marinheiro Só", None, Some("letra"), None),
+        ("/f/OUTRA.MP3", "Outra", None, Some("outra letra"), None),
+    ]);
+
+    let results = search::search(&conn, "mp3", 50).unwrap();
+    assert!(
+        results.is_empty(),
+        "extensão não é conteúdo: {:?}",
+        results.iter().map(|r| r.song.title.as_str()).collect::<Vec<_>>()
+    );
+
+    // e o nome (sem extensão) continua achável nos dois arquivos
+    assert_eq!(search::search(&conn, "barco", 50).unwrap().len(), 1);
+    assert_eq!(search::search(&conn, "outra", 50).unwrap().len(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// V8: com a coluna `arquivo` na FTS, o snippet continua vindo da coluna de
+// LETRA (índice 2). Coluna nova entra no FIM da FTS justamente por isso.
+// ---------------------------------------------------------------------------
+#[test]
+fn lyrics_snippet_column_index_survives_arquivo_column() {
+    let conn = conn_with_files(&[(
+        "/f/Barco/barco - Marinheiro só (Capoeira).mp3",
+        "Marinheiro Só",
+        Some("Trio do Norte"),
+        Some("a segunda linha fala de esperança viva"),
+        Some("mar"),
+    )]);
+
+    // match na letra: snippet destacado, com todas as colunas preenchidas
+    let results = search::search(&conn, "esperança", 50).unwrap();
+    assert_eq!(results.len(), 1);
+    let snippet = results[0].snippet.as_deref().expect("snippet presente");
+    assert!(
+        snippet.contains(&format!("{HIGHLIGHT_START}esperança{HIGHLIGHT_END}")),
+        "snippet deve citar a LETRA: {snippet:?}"
+    );
+
+    // nome do arquivo + letra na mesma query mantém o snippet da letra
+    let results = search::search(&conn, "capoeira esperanca", 50).unwrap();
     assert_eq!(results.len(), 1);
     assert!(results[0].snippet.is_some());
 }

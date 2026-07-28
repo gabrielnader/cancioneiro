@@ -590,6 +590,65 @@ fn scan_fills_pastas_and_search_finds_by_folder_name() {
 }
 
 // ---------------------------------------------------------------------------
+// V8 — o scan preenche songs.arquivo com o nome-base SEM extensão e a busca
+// encontra a música por uma palavra que só existe no NOME DO ARQUIVO (tags
+// dizendo outra coisa), sem snippet de letra. Música sem tag — cujo título JÁ
+// É o nome do arquivo — não repete o texto no índice (coluna NULL).
+// ---------------------------------------------------------------------------
+#[test]
+fn scan_fills_arquivo_and_search_finds_by_file_name() {
+    use cancioneiro_lib::search;
+    use rusqlite::params;
+
+    let dir = setup_music_dir(false);
+    // nome no estilo do acervo real: prefixo, hífens, parênteses e ruído "##"
+    let renomeada = dir.path().join("barco - Marinheiro só (Capoeira) ##.mp3");
+    fs::rename(dir.path().join("com_letra.mp3"), &renomeada).unwrap();
+
+    let conn = test_conn();
+    let folder_id = db::add_folder(&conn, dir.path().to_str().unwrap()).unwrap();
+    indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
+
+    // coluna preenchida com o nome sem extensão
+    let arquivo: Option<String> = conn
+        .query_row(
+            "SELECT arquivo FROM songs WHERE file_path LIKE ?1",
+            params!["%Capoeira) ##.mp3"],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(arquivo.as_deref(), Some("barco - Marinheiro só (Capoeira) ##"));
+
+    // sem tags: título já é o nome do arquivo => nada a repetir no índice
+    let arquivo_sem_tags: Option<String> = conn
+        .query_row(
+            "SELECT arquivo FROM songs WHERE file_path LIKE ?1",
+            params!["%sem_tags.mp3"],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(arquivo_sem_tags, None);
+    // ...e continua achável pelo título (que É o nome do arquivo)
+    assert_eq!(search::search(&conn, "sem_tags", 50).unwrap().len(), 1);
+
+    // "capoeira" só existe no nome do arquivo (a tag diz "Coração Sertanejo")
+    let results = search::search(&conn, "capoeira", 50).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].song.title, "Coração Sertanejo");
+    assert!(
+        results[0].snippet.is_none(),
+        "match de nome de arquivo não gera snippet"
+    );
+
+    // a extensão não entrou no índice
+    assert!(search::search(&conn, "mp3", 50).unwrap().is_empty());
+
+    // rescan sem mudanças não perde o nome indexado
+    indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
+    assert_eq!(search::search(&conn, "capoeira", 50).unwrap().len(), 1);
+}
+
+// ---------------------------------------------------------------------------
 // Seção 8 do PRD: nenhum arquivo de áudio é modificado pelo app — bytes dos
 // MP3s idênticos antes/depois de todos os fluxos de backend (indexar,
 // reindexar, buscar, ler letra, playlists, rescan). Exclui, por definição

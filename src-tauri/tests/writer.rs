@@ -370,6 +370,52 @@ fn write_tags_preserves_pastas_for_file_in_subfolder() {
 }
 
 // ---------------------------------------------------------------------------
+// V8 — a coluna `arquivo` (nome buscável) é RECALCULADA na edição, porque a
+// regra depende do título: música sem tag entra com o nome como título e o
+// nome fica fora do índice (não se indexa o mesmo texto duas vezes); assim
+// que a pessoa dá um título de verdade, o nome antigo passa a valer como
+// busca — é justamente por ele que a coordenadora ainda procura a música.
+// ---------------------------------------------------------------------------
+#[test]
+fn write_tags_makes_the_file_name_searchable_once_the_title_differs() {
+    use rusqlite::params;
+
+    let (_dir, conn, _folder_id) = setup();
+    let song = song_by_suffix(&conn, "sem_tags.mp3");
+    assert_eq!(song.title, "sem_tags", "sem tag: título é o nome do arquivo");
+
+    // antes: nome == título, nada a repetir no índice
+    let arquivo: Option<String> = conn
+        .query_row(
+            "SELECT arquivo FROM songs WHERE id = ?1",
+            params![song.id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(arquivo, None);
+    // ...e a música é achável assim mesmo, pelo título
+    assert_eq!(search::search(&conn, "sem_tags", 50).unwrap().len(), 1);
+
+    writer::write_tags(&conn, song.id, "Ponto de Ogum", None, None, None, None).unwrap();
+
+    let arquivo: Option<String> = conn
+        .query_row(
+            "SELECT arquivo FROM songs WHERE id = ?1",
+            params![song.id],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(arquivo.as_deref(), Some("sem_tags"));
+
+    // FTS em sincronia: o nome antigo ainda acha a música, sem snippet
+    let results = search::search(&conn, "sem_tags", 50).unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0].song.id, song.id);
+    assert_eq!(results[0].song.title, "Ponto de Ogum");
+    assert!(results[0].snippet.is_none());
+}
+
+// ---------------------------------------------------------------------------
 // F10 — MP3 sem nenhuma tag ID3 ganha uma tag nova (não falha) e o
 // round-trip lê de volta idêntico, com acentos.
 // ---------------------------------------------------------------------------

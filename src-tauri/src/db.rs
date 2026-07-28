@@ -87,6 +87,17 @@ CREATE TABLE IF NOT EXISTS songs (
     -- Instrumental" receberia o acervo instrumental inteiro por cima do que
     -- pediu. Quem quiser filtrar por marca usa a coluna, não a busca.
     instrumental INTEGER NOT NULL DEFAULT 0,
+    -- V8: nome do arquivo SEM extensão, só para a busca. As coordenadoras se
+    -- organizam por nome de arquivo há anos (DECISIONS #67) e muita música
+    -- tem tag ruim: o nome é como a dona do acervo pensa nela. Fica na FTS,
+    -- ao contrário de letra_origem/instrumental, porque É texto que alguém
+    -- escreveu para achar a música — exatamente o caso de `temas`/`pastas`.
+    -- A extensão fica de fora (ninguém procura "mp3", e todo arquivo é .mp3).
+    -- NULL quando o nome é redundante com o título (música sem tag): repetir
+    -- o mesmo texto em duas colunas não acrescenta recall e distorce o rank.
+    -- Derivada do file_path e populada pelo indexer; a Song NÃO expõe o campo
+    -- (a UI já deriva o nome do file_path — decisões #43 e #46).
+    arquivo TEXT,
     file_mtime INTEGER NOT NULL,
     file_size INTEGER NOT NULL,
     available INTEGER NOT NULL DEFAULT 1,
@@ -115,28 +126,32 @@ CREATE INDEX IF NOT EXISTS idx_playlist_items ON playlist_items(playlist_id, pos
 /// DDL da FTS5 e seus triggers, separada do SCHEMA para a migração poder
 /// recriá-la DENTRO da mesma transação dos ALTERs/repovoamento (o SCHEMA tem
 /// `PRAGMA journal_mode`, que não pode rodar dentro de transação).
+/// A ORDEM das colunas é contrato: o snippet da busca é
+/// `snippet(songs_fts, 2, …)` (search.rs), com 2 = lyrics. Coluna nova entra
+/// sempre no FIM — se entrar antes, o snippet passa a citar o campo errado em
+/// silêncio. `fts_column_order_pins_lyrics_at_index_2` é o alarme.
 const FTS_SCHEMA: &str = r#"
 CREATE VIRTUAL TABLE IF NOT EXISTS songs_fts USING fts5(
-    title, artist, lyrics, temas, pastas,
+    title, artist, lyrics, temas, pastas, arquivo,
     content='songs', content_rowid='id',
     tokenize='unicode61 remove_diacritics 2'
 );
 
 CREATE TRIGGER IF NOT EXISTS songs_ai AFTER INSERT ON songs BEGIN
-    INSERT INTO songs_fts(rowid, title, artist, lyrics, temas, pastas)
-    VALUES (new.id, new.title, new.artist, new.lyrics, new.temas, new.pastas);
+    INSERT INTO songs_fts(rowid, title, artist, lyrics, temas, pastas, arquivo)
+    VALUES (new.id, new.title, new.artist, new.lyrics, new.temas, new.pastas, new.arquivo);
 END;
 
 CREATE TRIGGER IF NOT EXISTS songs_ad AFTER DELETE ON songs BEGIN
-    INSERT INTO songs_fts(songs_fts, rowid, title, artist, lyrics, temas, pastas)
-    VALUES ('delete', old.id, old.title, old.artist, old.lyrics, old.temas, old.pastas);
+    INSERT INTO songs_fts(songs_fts, rowid, title, artist, lyrics, temas, pastas, arquivo)
+    VALUES ('delete', old.id, old.title, old.artist, old.lyrics, old.temas, old.pastas, old.arquivo);
 END;
 
 CREATE TRIGGER IF NOT EXISTS songs_au AFTER UPDATE ON songs BEGIN
-    INSERT INTO songs_fts(songs_fts, rowid, title, artist, lyrics, temas, pastas)
-    VALUES ('delete', old.id, old.title, old.artist, old.lyrics, old.temas, old.pastas);
-    INSERT INTO songs_fts(rowid, title, artist, lyrics, temas, pastas)
-    VALUES (new.id, new.title, new.artist, new.lyrics, new.temas, new.pastas);
+    INSERT INTO songs_fts(songs_fts, rowid, title, artist, lyrics, temas, pastas, arquivo)
+    VALUES ('delete', old.id, old.title, old.artist, old.lyrics, old.temas, old.pastas, old.arquivo);
+    INSERT INTO songs_fts(rowid, title, artist, lyrics, temas, pastas, arquivo)
+    VALUES (new.id, new.title, new.artist, new.lyrics, new.temas, new.pastas, new.arquivo);
 END;
 "#;
 
@@ -164,7 +179,7 @@ pub(crate) fn fold_pt(s: &str) -> String {
         .collect()
 }
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 pub fn init_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch("PRAGMA foreign_keys = ON;")?;
@@ -178,13 +193,13 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// Migra bancos antigos para o schema atual (V5). O banco é reconstruível
+/// Migra bancos antigos para o schema atual (V6). O banco é reconstruível
 /// por reindexação, então a migração é simples: colunas novas (`temas` na
-/// V2, `pastas` na V3, `letra_origem` na V4, `instrumental` na V5), FTS
-/// recriada e mtime zerado para o próximo rescan reler os arquivos (e popular
-/// as colunas novas) — playlists e demais dados ficam intactos. O mesmo
-/// caminho cobre v1→v5, v2→v5, v3→v5 e v4→v5 (migração encadeada): só as
-/// colunas ausentes são adicionadas.
+/// V2, `pastas` na V3, `letra_origem` na V4, `instrumental` na V5, `arquivo`
+/// na V6), FTS recriada e mtime zerado para o próximo rescan reler os
+/// arquivos (e popular as colunas novas) — playlists e demais dados ficam
+/// intactos. O mesmo caminho cobre v1→v6, v2→v6, v3→v6, v4→v6 e v5→v6
+/// (migração encadeada): só as colunas ausentes são adicionadas.
 ///
 /// A migração inteira (ALTERs, FTS derrubada+recriada+repovoada, mtime e o
 /// bump de user_version) roda numa ÚNICA transação — DDL de FTS5 é
@@ -227,6 +242,13 @@ fn migrate_if_needed(conn: &Connection) -> Result<()> {
         // aceito pelo SQLite e nasce desmarcado para todas as linhas antigas.
         alters.push_str("ALTER TABLE songs ADD COLUMN instrumental INTEGER NOT NULL DEFAULT 0;\n");
     }
+    if !has_column("arquivo")? {
+        // V6 — nome do arquivo buscável. Nasce NULL de propósito: o valor é
+        // derivado do file_path, mas quem deriva é o indexer (uma única
+        // implementação de "nome-base", que também sabe pular o nome
+        // redundante com o título). O rescan forçado logo abaixo preenche.
+        alters.push_str("ALTER TABLE songs ADD COLUMN arquivo TEXT;\n");
+    }
     // Mesmo sem coluna faltando (ex.: migração antiga interrompida depois dos
     // ALTERs), version < SCHEMA_VERSION exige a FTS reconstruída e repovoada.
 
@@ -239,15 +261,15 @@ fn migrate_if_needed(conn: &Connection) -> Result<()> {
          DROP TABLE IF EXISTS songs_fts;
          -- força releitura dos arquivos no próximo rescan (popula
          -- temas/pastas/letra_origem/instrumental, que só existem nas tags
-         -- do MP3)
+         -- do MP3, e `arquivo`, que o indexer deriva do caminho)
          UPDATE songs SET file_mtime = -1;"
     ))?;
     // Recria songs_fts/triggers com as colunas novas e repovoa o índice com
     // o conteúdo atual — ainda dentro da transação.
     tx.execute_batch(FTS_SCHEMA)?;
     tx.execute(
-        "INSERT INTO songs_fts(rowid, title, artist, lyrics, temas, pastas)
-         SELECT id, title, artist, lyrics, temas, pastas FROM songs",
+        "INSERT INTO songs_fts(rowid, title, artist, lyrics, temas, pastas, arquivo)
+         SELECT id, title, artist, lyrics, temas, pastas, arquivo FROM songs",
         [],
     )?;
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -565,10 +587,10 @@ mod tests {
     }
 
     #[test]
-    fn v1_database_migrates_chained_to_v5_keeping_playlists() {
+    fn v1_database_migrates_chained_to_v6_keeping_playlists() {
         // Cria um banco no schema V1 (sem temas/pastas/letra_origem/
         // instrumental), com dados e playlist — a migração encadeada
-        // v1→v2→v3→v4→v5 num passo só.
+        // v1→v2→v3→v4→v5→v6 num passo só.
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "PRAGMA foreign_keys = ON;
@@ -608,11 +630,12 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
         assert!(column_exists(&conn, "temas"));
         assert!(column_exists(&conn, "pastas"));
         assert!(column_exists(&conn, "letra_origem"));
         assert!(column_exists(&conn, "instrumental"));
+        assert!(column_exists(&conn, "arquivo"));
 
         // playlist intacta
         let items = get_playlist_items(&conn, 1).unwrap();
@@ -644,7 +667,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_database_migrates_to_v5_keeping_playlists_and_temas() {
+    fn v2_database_migrates_to_v6_keeping_playlists_and_temas() {
         // Banco no schema V2 (com temas, sem pastas), user_version = 2
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
@@ -685,10 +708,11 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
         assert!(column_exists(&conn, "pastas"));
         assert!(column_exists(&conn, "letra_origem"));
         assert!(column_exists(&conn, "instrumental"));
+        assert!(column_exists(&conn, "arquivo"));
 
         // playlist e temas intactos
         let items = get_playlist_items(&conn, 1).unwrap();
@@ -758,7 +782,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
 
         // user_version atual implica FTS repovoada: uma linha por música
         let songs_count: i64 = conn
@@ -864,7 +888,7 @@ mod tests {
     }
 
     #[test]
-    fn v4_database_migrates_to_v5_keeping_data_and_forcing_rescan() {
+    fn v4_database_migrates_to_v6_keeping_data_and_forcing_rescan() {
         // V8/F17: a coluna instrumental entra desmarcada e só o próximo rescan
         // a preenche (a marca mora no TXXX:INSTRUMENTAL do MP3) — por isso o
         // mtime é zerado, exatamente como nas migrações anteriores.
@@ -874,8 +898,9 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
         assert!(column_exists(&conn, "instrumental"));
+        assert!(column_exists(&conn, "arquivo"));
 
         // dados existentes intactos (playlist, temas, letra, procedência)
         let items = get_playlist_items(&conn, 1).unwrap();
@@ -918,8 +943,149 @@ mod tests {
         );
     }
 
+    /// Banco no schema V5 (temas + pastas + letra_origem + instrumental, FTS
+    /// de 5 colunas), user_version = 5 — o estado de quem instalou a v0.7.x.
+    fn v5_database() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON;
+             CREATE TABLE folders (id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL UNIQUE,
+                 created_at TEXT NOT NULL DEFAULT (datetime('now')), last_scanned_at TEXT);
+             CREATE TABLE songs (id INTEGER PRIMARY KEY AUTOINCREMENT, file_path TEXT NOT NULL UNIQUE,
+                 folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+                 title TEXT NOT NULL, artist TEXT, album TEXT, duration_seconds INTEGER,
+                 has_lyrics INTEGER NOT NULL DEFAULT 0, lyrics TEXT, temas TEXT, pastas TEXT,
+                 letra_origem TEXT, instrumental INTEGER NOT NULL DEFAULT 0,
+                 file_mtime INTEGER NOT NULL, file_size INTEGER NOT NULL,
+                 available INTEGER NOT NULL DEFAULT 1,
+                 indexed_at TEXT NOT NULL DEFAULT (datetime('now')));
+             CREATE VIRTUAL TABLE songs_fts USING fts5(title, artist, lyrics, temas, pastas,
+                 content='songs', content_rowid='id',
+                 tokenize='unicode61 remove_diacritics 2');
+             CREATE TRIGGER songs_ai AFTER INSERT ON songs BEGIN
+                 INSERT INTO songs_fts(rowid, title, artist, lyrics, temas, pastas)
+                 VALUES (new.id, new.title, new.artist, new.lyrics, new.temas, new.pastas); END;
+             CREATE TABLE playlists (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                 updated_at TEXT NOT NULL DEFAULT (datetime('now')));
+             CREATE TABLE playlist_items (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+                 song_id INTEGER NOT NULL REFERENCES songs(id) ON DELETE CASCADE,
+                 position INTEGER NOT NULL);
+             INSERT INTO folders (path) VALUES ('/f');
+             INSERT INTO songs (file_path, folder_id, title, lyrics, temas, pastas, letra_origem,
+                                instrumental, has_lyrics, file_mtime, file_size)
+             VALUES ('/f/sub/barco - Marinheiro só (Capoeira).mp3', 1, 'Antiga', 'letra antiga',
+                     'água; cura', 'sub', 'transcricao', 1, 1, 12345, 10);
+             INSERT INTO playlists (name) VALUES ('Reunião');
+             INSERT INTO playlist_items (playlist_id, song_id, position) VALUES (1, 1, 0);
+             PRAGMA user_version = 5;",
+        )
+        .unwrap();
+        conn
+    }
+
     #[test]
-    fn v3_database_migrates_to_v5_keeping_data_and_forcing_rescan() {
+    fn v5_database_migrates_to_v6_keeping_data_and_forcing_rescan() {
+        // V8: a coluna `arquivo` (nome do arquivo sem extensão, buscável)
+        // entra vazia e só o próximo rescan a preenche — o indexer é o único
+        // lugar que deriva o nome, então o mtime é zerado como nas migrações
+        // anteriores em vez de o SQL da migração inventar uma segunda
+        // implementação de "basename".
+        let conn = v5_database();
+        init_schema(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 6);
+        assert!(column_exists(&conn, "arquivo"));
+
+        // dados existentes intactos (playlist, temas, letra, procedência, marca)
+        let items = get_playlist_items(&conn, 1).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].song.title, "Antiga");
+        assert_eq!(items[0].song.temas.as_deref(), Some("água; cura"));
+        assert_eq!(items[0].song.letra_origem.as_deref(), Some("transcricao"));
+        assert!(items[0].song.instrumental);
+        assert_eq!(
+            get_lyrics(&conn, 1).unwrap().as_deref(),
+            Some("letra antiga")
+        );
+
+        // FTS repovoada e funcional (título, letra, tema e pasta)
+        for termo in ["\"antiga\"", "\"letra\"", "\"cura\"", "\"sub\""] {
+            let hits: i64 = conn
+                .query_row(
+                    &format!("SELECT count(*) FROM songs_fts WHERE songs_fts MATCH '{termo}'"),
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(hits, 1, "termo {termo}");
+        }
+
+        // coluna nova nasce vazia: o nome só entra no índice depois do rescan
+        let arquivo: Option<String> = conn
+            .query_row("SELECT arquivo FROM songs WHERE id = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(arquivo, None);
+
+        // ... e o rescan (simulado aqui pelo UPDATE que ele faria) repovoa o
+        // índice pelos triggers: buscar o nome do arquivo passa a achar.
+        conn.execute(
+            "UPDATE songs SET arquivo = 'barco - Marinheiro só (Capoeira)' WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        let hits: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM songs_fts WHERE songs_fts MATCH '\"capoeira\"'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hits, 1, "nome do arquivo buscável depois do rescan");
+
+        // mtime zerado força a releitura que popula `arquivo`
+        let mtime: i64 = conn
+            .query_row("SELECT file_mtime FROM songs WHERE id = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(mtime, -1);
+
+        // idempotente: reabrir de novo não erra nem perde dados
+        init_schema(&conn).unwrap();
+        assert_eq!(get_playlist_items(&conn, 1).unwrap().len(), 1);
+        assert_eq!(
+            get_song(&conn, 1).unwrap().unwrap().letra_origem.as_deref(),
+            Some("transcricao")
+        );
+    }
+
+    #[test]
+    fn fts_column_order_pins_lyrics_at_index_2() {
+        // O snippet da busca é `snippet(songs_fts, 2, …)` (search.rs): a
+        // coluna 2 TEM de ser lyrics. Colunas novas entram sempre no FIM da
+        // FTS — se alguma entrar antes, o snippet passa a citar o campo
+        // errado em silêncio. Este teste é o alarme.
+        let conn = open_in_memory().unwrap();
+        let mut stmt = conn
+            .prepare("SELECT name FROM pragma_table_info('songs_fts') ORDER BY cid")
+            .unwrap();
+        let cols: Vec<String> = stmt
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<std::result::Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            cols,
+            vec!["title", "artist", "lyrics", "temas", "pastas", "arquivo"]
+        );
+        assert_eq!(cols[2], "lyrics", "índice do snippet em search.rs");
+    }
+
+    #[test]
+    fn v3_database_migrates_to_v6_keeping_data_and_forcing_rescan() {
         // V5/F14: a coluna letra_origem entra vazia e só o próximo rescan a
         // preenche — por isso o mtime é zerado, como nas migrações anteriores.
         let conn = v3_database();
@@ -928,9 +1094,10 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 5);
+        assert_eq!(version, 6);
         assert!(column_exists(&conn, "letra_origem"));
         assert!(column_exists(&conn, "instrumental"));
+        assert!(column_exists(&conn, "arquivo"));
 
         // dados existentes intactos (playlist, temas, letra)
         let items = get_playlist_items(&conn, 1).unwrap();

@@ -254,6 +254,17 @@ function nomeArquivo(song: { file_path: string }): string {
 }
 
 /**
+ * Nome do arquivo que ENTRA NA BUSCA (V8) — espelha songs.arquivo do backend
+ * (indexer::arquivo_para_busca): nome-base SEM a extensão, e vazio quando ele
+ * é o próprio título (música sem tag), para o mesmo texto não pesar duas vezes
+ * no índice. O snippet continua saindo só da letra, aqui como lá.
+ */
+function arquivoParaBusca(song: SongRecord): string {
+  const stem = nomeArquivo(song).replace(/\.[^.]+$/, "");
+  return normalize(stem) === normalize(song.title.trim()) ? "" : stem;
+}
+
+/**
  * Proposta que não pede decisão nenhuma: proposto idêntico ao atual e sem
  * letra para acrescentar. O teste real (acervo de 94 músicas) mostrou linhas
  * "atual → proposto" iguais, sem nada a decidir — o backend Rust as descarta
@@ -329,7 +340,7 @@ export function createMockBackend(): MockBackend {
 
   function songWords(song: SongRecord): string[] {
     return tokenize(
-      `${song.title} ${song.artist ?? ""} ${song.lyrics ?? ""} ${song.temas ?? ""}`,
+      `${song.title} ${song.artist ?? ""} ${song.lyrics ?? ""} ${song.temas ?? ""} ${arquivoParaBusca(song)}`,
     );
   }
 
