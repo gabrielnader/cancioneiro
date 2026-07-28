@@ -358,6 +358,52 @@ class TestEhPlaceholder:
         assert curadoria.eh_placeholder(texto) is False
 
 
+class TestRuidoDeArquivoNaoEngoleTituloReal:
+    """Regressão do 86e6e94 (achado ALTO do QA): a regra "só dígitos e
+    palavras de maquinário ⇒ placeholder" passou a engolir título de
+    verdade. Placeholder é tratado como campo VAZIO — ou seja, o título
+    real era SILENCIOSAMENTE sobrescrito pelo identificado, sem
+    --sobrescrever-tags, sem linha de CONFLITO e sem nota no CSV. Este é
+    o pior modo de falha do projeto, e é a direção perigosa."""
+
+    @pytest.mark.parametrize("texto", [
+        "Pista", "Gravação", "gravacao", "Sem Nome", "Nome",
+        "Recording", "Cópia", "Novo", "Convertido",
+    ])
+    def test_palavra_comum_sozinha_nunca_e_lixo(self, texto):
+        assert curadoria.eh_placeholder(texto) is False
+
+    @pytest.mark.parametrize("texto", [
+        "04 Faixa 4 Artista Desconheci",     # truncado pelo ID3
+        "1-2010 22-17-23)_converted",        # nome de ripador
+        "audiotrack 03 converted",
+        "faixa 12 mp3",
+    ])
+    def test_lixo_de_ripador_de_verdade_continua_lixo(self, texto):
+        assert curadoria.eh_placeholder(texto) is True
+
+    def test_a_marca_de_ripador_e_o_que_habilita_a_regra(self):
+        # a MESMA palavra: sozinha é título, com marca de ripador é lixo
+        assert curadoria.eh_placeholder("Gravação") is False
+        assert curadoria.eh_placeholder("Gravação 04 converted") is True
+
+    def test_titulo_real_nao_e_sobrescrito_pela_identificacao(self, tmp_path):
+        """Ponta a ponta: com "Gravação" virando placeholder, o
+        `identificar` gravava o título identificado por cima."""
+        pasta = tmp_path / "acervo"
+        pasta.mkdir()
+        alvo = pasta / "musica.mp3"
+        make_mp3(alvo)
+        tags = ID3()
+        tags.add(TIT2(encoding=3, text=["Gravação"]))
+        tags.add(TPE1(encoding=3, text=["Coral do Bairro"]))
+        tags.save(str(alvo), v2_version=4)
+        assert curadoria._sem_placeholder("Gravação") == "Gravação"
+        # e o guarda de conflito volta a enxergar a divergência
+        assert curadoria._discorda(
+            curadoria._sem_placeholder("Gravação"), "Timoneiro") is True
+
+
 class TestFetchSearch:
     def test_monta_url_com_q_escapado(self):
         urls = []

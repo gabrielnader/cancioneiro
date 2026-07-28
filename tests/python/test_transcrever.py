@@ -1322,6 +1322,46 @@ class TestLacoDeRepeticao:
                  "E me põe a cantar")
         assert curadoria.limpar_transcricao(letra) == letra
 
+    # Achado MÉDIO do QA: o piso de 20 caracteres é ~10x menor que um laço
+    # de verdade (200+), e este repertório é FEITO de repetição legítima.
+    # A medição do QA dentro dos MP3s do dono: o limpador estava causando
+    # dano permanente em letra boa. Os dois lados ficam pinados aqui.
+    @pytest.mark.parametrize("legitimo", [
+        "Ta ta ta ta ta ta ta ta ta ta tambor",
+        "vem vem vem vem vem vem vem vem cá",
+        "Ai ai ai ai ai ai ai ai",
+        "Adeus adeus adeus adeus adeus adeus Bahia",
+        "água água água água água",
+        "Ô ô ô ô ô ô ô",
+        "lá lá lá lá lá lá lá",
+    ])
+    def test_repeticao_legitima_do_pt_br_sai_intacta(self, legitimo):
+        assert curadoria.limpar_transcricao(legitimo) == legitimo
+
+    @pytest.mark.parametrize("laco", [
+        "Vala" + "la" * 200,
+        "La" * 300,
+        "tchu" * 80,
+        "Adeus " * 60,
+    ])
+    def test_laco_de_verdade_continua_colapsado(self, laco):
+        limpo = curadoria.limpar_transcricao(laco)
+        assert len(limpo) < len(laco) / 4
+
+    def test_o_piso_do_laco_e_da_ordem_de_um_laco_de_verdade(self):
+        """O comentário do próprio código diz "por 200 caracteres"; o piso
+        tem de estar nessa ordem, não uma ordem de grandeza abaixo."""
+        assert curadoria._MIN_LACO >= 100
+
+    def test_a_linha_boa_sobrevive_dentro_de_um_texto_com_laco(self):
+        sujo = ("Ai ai ai ai ai ai ai ai\n"
+                + "Vala" + "la" * 200 + "\n"
+                + "água água água água água")
+        limpo = curadoria.limpar_transcricao(sujo)
+        assert "Ai ai ai ai ai ai ai ai" in limpo
+        assert "água água água água água" in limpo
+        assert "la" * 50 not in limpo
+
     def test_transcricao_gravada_ja_vem_limpa(self, pasta):
         alvo = pasta / "Faixa 5.mp3"
         t = FakeTranscritor(completo="Verso bom\n" + "La" * 300)

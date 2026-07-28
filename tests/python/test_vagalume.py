@@ -883,3 +883,356 @@ class TestCompatibilidade:
             capture_output=True, text=True, encoding="utf-8")
         assert r.returncode == 0, r.stderr
         assert "Origem da letra: Vagalume" in r.stdout
+
+
+# ------------------------------------------------- V6.2: o casamento estrito
+#
+# Achados CRÍTICO/ALTO do QA sobre a V6.1. O Vagalume NÃO tem duração: a
+# tolerância de grafia do _discorda (similaridade ≥ 0,85 + contenção de 5
+# caracteres) foi calibrada para um contexto em que a DURAÇÃO confirmava o
+# casamento. Aqui não há essa prova, e a tolerância deixava passar música
+# errada com a marca de letra OFICIAL.
+
+# Letra visivelmente de OUTRA música, para provar qual entrada foi aceita.
+LETRA_OUTRA = "Verso de outra canção inventada\nsegunda linha de outra"
+
+
+def resposta_vagalume_mus(mus, artista="Coral Novo", tipo="exact"):
+    """Resposta com VÁRIAS músicas em `mus` (a API devolve uma lista)."""
+    return {"type": tipo,
+            "art": {"id": "a1", "name": artista, "url": "coral-novo"},
+            "mus": mus}
+
+
+class TestTipoDaResposta:
+    """`type` é a própria API dizendo se achou o que foi pedido."""
+
+    def test_aprox_e_a_api_dizendo_que_nao_e_a_musica_pedida(self):
+        # repro do QA: "Ponto de Oxum" pedido, "Ponto de Ogum" devolvido
+        assert curadoria.buscar_letra_vagalume(
+            "Ponto de Oxum", "Grupo Ilú", CHAVE_VG,
+            fetcher=fetcher_de(vagalume=resposta_vagalume(
+                titulo="Ponto de Ogum", artista="Grupo Ilú",
+                tipo="aprox"))) is None
+
+    def test_aprox_e_recusado_mesmo_com_o_titulo_batendo(self):
+        """"aprox" significa "não é esta"; nem título idêntico salva."""
+        assert curadoria.buscar_letra_vagalume(
+            "Água Viva", "Coral Novo", CHAVE_VG,
+            fetcher=fetcher_de(vagalume=resposta_vagalume(
+                tipo="aprox"))) is None
+
+    def test_resposta_sem_campo_type_e_recusada(self):
+        corpo = resposta_vagalume()
+        corpo.pop("type")
+        assert curadoria.buscar_letra_vagalume(
+            "Água Viva", "Coral Novo", CHAVE_VG,
+            fetcher=fetcher_de(vagalume=corpo)) is None
+
+    def test_tipo_desconhecido_e_recusado(self):
+        for tipo in ("aprox", "redirect", "disambig", ""):
+            assert curadoria.buscar_letra_vagalume(
+                "Água Viva", "Coral Novo", CHAVE_VG,
+                fetcher=fetcher_de(vagalume=resposta_vagalume(
+                    tipo=tipo))) is None, tipo
+
+    def test_exact_continua_passando(self):
+        assert curadoria.buscar_letra_vagalume(
+            "Água Viva", "Coral Novo", CHAVE_VG,
+            fetcher=fetcher_de(vagalume=resposta_vagalume())) == LETRA_VG
+
+    def test_verboso_explica_a_recusa_por_tipo(self, capsys):
+        curadoria.buscar_letra_vagalume(
+            "Água Viva", "Coral Novo", CHAVE_VG,
+            fetcher=fetcher_de(vagalume=resposta_vagalume(tipo="aprox")),
+            log=print)
+        assert "aprox" in capsys.readouterr().out
+
+
+class TestCasamentoEstritoDoVagalume:
+    """Colisões MEDIDAS pelo QA que a régua do _discorda deixava passar."""
+
+    @pytest.mark.parametrize("pedido, devolvido", [
+        ("Ponto de Oxum", "Ponto de Ogum"),        # similaridade 0,923
+        ("Ponto de Iansã", "Ponto de Iemanjá"),    # similaridade 0,867
+        ("Cantiga", "Cantigas"),                   # similaridade 0,933
+        ("Asa Branca", "A Volta da Asa Branca"),   # contenção
+        ("Canoeiro", "Canoeiro II"),               # contenção
+        ("Aquarela", "Aquarela do Brasil"),        # contenção
+    ])
+    def test_titulo_parecido_nao_e_o_titulo_pedido(self, pedido, devolvido):
+        assert curadoria.buscar_letra_vagalume(
+            pedido, "Coral Novo", CHAVE_VG,
+            fetcher=fetcher_de(vagalume=resposta_vagalume(
+                titulo=devolvido))) is None
+
+    @pytest.mark.parametrize("pedido, devolvido", [
+        ("Grupo Ilú", "Grupo Ilê"),
+        ("Os Tincoãs", "Os Tincoãs e Convidados"),
+        ("Zé", "Zeca"),
+    ])
+    def test_artista_parecido_nao_e_o_artista_pedido(self, pedido, devolvido):
+        assert curadoria.buscar_letra_vagalume(
+            "Água Viva", pedido, CHAVE_VG,
+            fetcher=fetcher_de(vagalume=resposta_vagalume(
+                artista=devolvido))) is None
+
+    @pytest.mark.parametrize("pedido, devolvido", [
+        ("Água Viva", "agua viva"),                 # acento/caixa
+        ("Água Viva", "Água  Viva!"),               # pontuação/espaço
+        ("Ponto de Oxum", "ponto de oxum"),
+    ])
+    def test_grafia_do_titulo_continua_passando(self, pedido, devolvido):
+        """O que muda é a grafia, não a música: isto tem de continuar."""
+        assert curadoria.buscar_letra_vagalume(
+            pedido, "Coral Novo", CHAVE_VG,
+            fetcher=fetcher_de(vagalume=resposta_vagalume(
+                titulo=devolvido))) == LETRA_VG
+
+    @pytest.mark.parametrize("pedido, devolvido", [
+        ("Milionário y José Rico", "Milionário & José Rico"),
+        ("Sandy e Junior", "Sandy & Junior"),
+        ("Os Tincoãs", "os tincoas"),
+    ])
+    def test_grafia_do_artista_continua_passando(self, pedido, devolvido):
+        assert curadoria.buscar_letra_vagalume(
+            "Água Viva", pedido, CHAVE_VG,
+            fetcher=fetcher_de(vagalume=resposta_vagalume(
+                artista=devolvido))) == LETRA_VG
+
+    def test_artista_dentro_do_titulo_da_tag_ainda_casa(self):
+        """"Adventício - Lampejo" na tag de título é o acervo real: cada
+        segmento do traço vale como pedido inteiro, mas por IGUALDADE."""
+        assert curadoria.buscar_letra_vagalume(
+            "Adventício - Lampejo", "Coral Novo", CHAVE_VG,
+            fetcher=fetcher_de(vagalume=resposta_vagalume(
+                titulo="Lampejo"))) == LETRA_VG
+
+    def test_discorda_continua_frouxo_onde_existe_duracao(self):
+        """A régua do LRCLIB/AcoustID NÃO muda: lá a duração confirma."""
+        assert curadoria._discorda("Asa Branca",
+                                   "A Volta da Asa Branca") is False
+        assert curadoria._discorda("Adventício - Lampejo",
+                                   "Lampejo") is False
+        assert curadoria._discorda("Milionário y José Rico",
+                                   "Milionário & José Rico") is False
+
+    def test_repro_do_qa_ponto_de_oxum_ponta_a_ponta(self, tmp_path,
+                                                     base_mp3, capsys):
+        """O achado CRÍTICO: MP3 com tag real, Vagalume devolvendo `aprox`
+        de outra música. Nada pode ser gravado."""
+        pasta = tmp_path / "acervo"
+        pasta.mkdir()
+        alvo = pasta / "ponto.mp3"
+        shutil.copyfile(base_mp3, alvo)
+        tag(alvo, title="Ponto de Oxum", artist="Grupo Ilú")
+        antes = sha256(alvo)
+        buscar_letra(pasta, aplicar=True, fetcher=fetcher_de(
+            vagalume=resposta_vagalume(titulo="Ponto de Ogum",
+                                       artista="Grupo Ilú",
+                                       letra=LETRA_OUTRA, tipo="aprox")))
+        assert uslt_text(alvo) is None
+        assert origem_de(alvo) == ""
+        assert sha256(alvo) == antes
+        out = capsys.readouterr().out
+        assert "NÃO ENCONTRADA: ponto.mp3" in out
+        # e o relatório não pode chamar isso de letra oficial
+        curadoria.cmd_relatorio(pasta)
+        assert "SIM" not in capsys.readouterr().out.split("Resumo")[0]
+
+
+class TestMelhorEntradaDoVagalume:
+    """`mus` é uma LISTA: a exata pode não ser a primeira."""
+
+    def test_pega_a_entrada_exata_e_nao_a_primeira_que_passa(self):
+        corpo = resposta_vagalume_mus([
+            {"id": "m1", "name": "Canoeiro II", "text": LETRA_OUTRA},
+            {"id": "m2", "name": "Canoeiro", "text": LETRA_VG},
+        ])
+        assert curadoria.buscar_letra_vagalume(
+            "Canoeiro", "Coral Novo", CHAVE_VG,
+            fetcher=fetcher_de(vagalume=corpo)) == LETRA_VG
+
+    def test_entrada_exata_no_fim_da_lista_ainda_ganha(self):
+        corpo = resposta_vagalume_mus([
+            {"id": "m1", "name": "Água Viva (ao vivo)", "text": LETRA_OUTRA},
+            {"id": "m2", "name": "Água Viva - Parte 2", "text": LETRA_OUTRA},
+            {"id": "m3", "name": "Água Viva", "text": LETRA_VG},
+        ])
+        assert curadoria.buscar_letra_vagalume(
+            "Água Viva", "Coral Novo", CHAVE_VG,
+            fetcher=fetcher_de(vagalume=corpo)) == LETRA_VG
+
+    def test_nenhuma_entrada_confere_nao_devolve_nada(self):
+        corpo = resposta_vagalume_mus([
+            {"id": "m1", "name": "Canoeiro II", "text": LETRA_OUTRA},
+            {"id": "m2", "name": "Canoeiro III", "text": LETRA_OUTRA},
+        ])
+        assert curadoria.buscar_letra_vagalume(
+            "Canoeiro", "Coral Novo", CHAVE_VG,
+            fetcher=fetcher_de(vagalume=corpo)) is None
+
+    def test_mus_como_dicionario_e_registrado_no_verboso(self, capsys):
+        corpo = {"type": "exact", "art": {"id": "a1", "name": "Coral Novo"},
+                 "mus": {"id": "m1", "name": "Água Viva", "text": LETRA_VG}}
+        assert curadoria.buscar_letra_vagalume(
+            "Água Viva", "Coral Novo", CHAVE_VG,
+            fetcher=fetcher_de(vagalume=corpo), log=print) is None
+        # BAIXO do QA: hoje devolve None calado, mesmo com --verboso
+        out = capsys.readouterr().out
+        assert "lista" in out
+
+
+class TestRecadoNoLugarDaLetra:
+    """Frases de "ainda não temos esta letra" que o QA viu passando."""
+
+    @pytest.mark.parametrize("recado", [
+        "Esta música ainda não possui letra cadastrada.",
+        "Ainda não possuímos a letra desta canção",
+        "Seja o primeiro a enviar a letra!",
+        "Letra em breve",
+        "Contribua enviando a letra desta música",
+        "Ainda não temos a letra desta música.",
+        "Letra não disponível",
+    ])
+    def test_recado_da_base_nunca_vira_letra(self, recado):
+        assert curadoria.buscar_letra_vagalume(
+            "Água Viva", "Coral Novo", CHAVE_VG,
+            fetcher=fetcher_de(vagalume=resposta_vagalume(
+                letra=recado))) is None
+
+    def test_letra_de_verdade_que_fala_em_letra_nao_e_recado(self):
+        boa = ("Escrevi a letra dessa canção à mão\n"
+               "e mandei pro meu amor de longe")
+        assert curadoria.buscar_letra_vagalume(
+            "Água Viva", "Coral Novo", CHAVE_VG,
+            fetcher=fetcher_de(vagalume=resposta_vagalume(letra=boa))) == boa
+
+
+class TestEntidadesHtml:
+    def test_entidades_html_sao_desescapadas(self):
+        cru = "&quot;vem&quot; &amp; eu fui &#39;embora&#39;"
+        assert curadoria.buscar_letra_vagalume(
+            "Água Viva", "Coral Novo", CHAVE_VG,
+            fetcher=fetcher_de(vagalume=resposta_vagalume(letra=cru))
+        ) == "\"vem\" & eu fui 'embora'"
+
+    def test_o_mp3_recebe_o_texto_ja_desescapado(self, acervo):
+        cru = "linha com &amp; e &lt;coisa&gt;"
+        buscar_letra(acervo, aplicar=True, fetcher=fetcher_de(
+            vagalume=resposta_vagalume(letra=cru)))
+        assert uslt_text(acervo / "sem_letra.mp3") == "linha com & e <coisa>"
+
+
+class TestBuscarLetraForcar:
+    """ALTO: o dono já transcreveu os 94 arquivos; sem isto o Vagalume não
+    alcança nenhum deles. Mesma semântica do `transcrever --forcar`."""
+
+    @pytest.fixture
+    def transcrito(self, tmp_path, base_mp3):
+        pasta = tmp_path / "acervo"
+        pasta.mkdir()
+        alvo = pasta / "transcrito.mp3"
+        shutil.copyfile(base_mp3, alvo)
+        tag(alvo, title="Água Viva", artist="Coral Novo",
+            letra="transcricao ruim do whisper",
+            origem=el.ORIGEM_TRANSCRICAO)
+        return pasta
+
+    def test_sem_forcar_a_transcricao_bloqueia_a_busca(self, transcrito):
+        urls = []
+        buscar_letra(transcrito, aplicar=True,
+                     fetcher=fetcher_de(vagalume=resposta_vagalume(),
+                                        urls=urls))
+        assert uslt_text(transcrito / "transcrito.mp3") == \
+            "transcricao ruim do whisper"
+        assert urls == []
+
+    def test_forcar_substitui_a_transcricao_pela_letra_oficial(self,
+                                                               transcrito):
+        alvo = transcrito / "transcrito.mp3"
+        buscar_letra(transcrito, aplicar=True, forcar=True)
+        assert uslt_text(alvo) == LETRA_VG
+        assert origem_de(alvo) == el.ORIGEM_VAGALUME
+
+    def test_forcar_limpa_a_marca_de_transcricao_na_letra_do_lrclib(
+            self, transcrito):
+        alvo = transcrito / "transcrito.mp3"
+        buscar_letra(transcrito, aplicar=True, forcar=True,
+                     fetcher=fetcher_de(lrclib=lrclib_get()))
+        assert uslt_text(alvo) == LETRA_LRCLIB
+        assert origem_de(alvo) == ""      # não é mais transcrição
+
+    def test_forcar_nao_toca_em_letra_oficial(self, transcrito, base_mp3,
+                                              capsys):
+        oficial = transcrito / "oficial.mp3"
+        shutil.copyfile(base_mp3, oficial)
+        tag(oficial, title="Água Viva", artist="Coral Novo",
+            letra="letra oficial conferida à mão")
+        antes = sha256(oficial)
+        buscar_letra(transcrito, aplicar=True, forcar=True)
+        assert uslt_text(oficial) == "letra oficial conferida à mão"
+        assert sha256(oficial) == antes
+        assert "PULADO: oficial.mp3" in capsys.readouterr().out
+
+    def test_forcar_sem_achar_nada_preserva_a_transcricao(self, transcrito):
+        alvo = transcrito / "transcrito.mp3"
+        buscar_letra(transcrito, aplicar=True, forcar=True,
+                     fetcher=fetcher_de())
+        assert uslt_text(alvo) == "transcricao ruim do whisper"
+        assert origem_de(alvo) == el.ORIGEM_TRANSCRICAO
+
+    def test_a_marca_do_vagalume_tambem_e_reprocessavel(self, tmp_path,
+                                                        base_mp3):
+        """Letra do Vagalume é OFICIAL: --forcar não a substitui."""
+        pasta = tmp_path / "acervo"
+        pasta.mkdir()
+        alvo = pasta / "vg.mp3"
+        shutil.copyfile(base_mp3, alvo)
+        tag(alvo, title="Água Viva", artist="Coral Novo",
+            letra="letra que veio do vagalume", origem=el.ORIGEM_VAGALUME)
+        buscar_letra(pasta, aplicar=True, forcar=True)
+        assert uslt_text(alvo) == "letra que veio do vagalume"
+
+    def test_cli_documenta_o_forcar(self):
+        r = run_curadoria("buscar-letra", "--help")
+        assert r.returncode == 0, r.stderr
+        assert "--forcar" in r.stdout
+        assert "transcri" in r.stdout
+
+
+class TestAvisoDeChaveNaoAtrapalha:
+    """BAIXO: o aviso é sobre uma consulta que existiu, não sobre a vida."""
+
+    def test_pasta_vazia_nao_fala_de_vagalume(self, tmp_path, capsys):
+        pasta = tmp_path / "vazia"
+        pasta.mkdir()
+        curadoria.cmd_buscar_letra(pasta, chave_vagalume="", pausa=0)
+        # o resumo sempre tem o balde "pelo Vagalume"; o AVISO é que não sai
+        assert "pulado" not in capsys.readouterr().out
+
+    def test_lrclib_resolvendo_tudo_nao_fala_de_vagalume(self, acervo,
+                                                         capsys):
+        curadoria.cmd_buscar_letra(acervo, aplicar=True, chave_vagalume="",
+                                   pausa=0,
+                                   fetcher=fetcher_de(lrclib=lrclib_get()))
+        assert "pulado" not in capsys.readouterr().out
+
+    def test_o_aviso_aparece_quando_o_vagalume_faria_falta(self, acervo,
+                                                           capsys):
+        curadoria.cmd_buscar_letra(acervo, aplicar=True, chave_vagalume="",
+                                   pausa=0, fetcher=fetcher_de())
+        linhas = [ln for ln in capsys.readouterr().out.splitlines()
+                  if "pulado" in ln]
+        assert len(linhas) == 1
+
+    def test_o_aviso_sai_uma_vez_so_para_varios_arquivos(self, acervo,
+                                                         base_mp3, capsys):
+        outro = acervo / "outra.mp3"
+        shutil.copyfile(base_mp3, outro)
+        tag(outro, title="Outra Canção", artist="Coral Novo")
+        curadoria.cmd_buscar_letra(acervo, aplicar=True, chave_vagalume="",
+                                   pausa=0, fetcher=fetcher_de())
+        linhas = [ln for ln in capsys.readouterr().out.splitlines()
+                  if "pulado" in ln]
+        assert len(linhas) == 1

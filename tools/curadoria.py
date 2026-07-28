@@ -13,18 +13,23 @@ Subcomandos:
         (TXXX:TEMAS, normalizados) e letra (USLT, lida de letra_arquivo).
         Campos vazios nunca são tocados. --dry-run só relata, não grava.
 
-    buscar-letra PASTA [--aplicar] [--chave-vagalume CHAVE] [--csv saida.csv]
-                 [--verboso]
+    buscar-letra PASTA [--aplicar] [--chave-vagalume CHAVE] [--forcar]
+                 [--csv saida.csv] [--verboso]
         Para cada MP3 sem letra com título E artista, consulta o LRCLIB
         (https://lrclib.net/api/get) e relata/grava o plainLyrics. V6.1:
         no que o LRCLIB não tiver, consulta o Vagalume (chave gratuita em
         --chave-vagalume ou VAGALUME_API_KEY, nunca gravada em disco) —
         base comunitária brasileira, que cobre o repertório de nicho onde
         o LRCLIB ficou em ~3%. Sem a chave, o Vagalume é pulado com uma
-        linha e o comando roda exatamente como antes. A letra do Vagalume
-        é OFICIAL (nada de marcador de transcrição), mas leva
-        TXXX:LETRA_ORIGEM="vagalume", porque essa API não tem duração e
-        portanto não pode ser confirmada como a do LRCLIB.
+        linha (que só sai quando ele teria mesmo entrado) e o comando roda
+        exatamente como antes. A letra do Vagalume é OFICIAL (nada de
+        marcador de transcrição), mas leva TXXX:LETRA_ORIGEM="vagalume",
+        porque essa API não tem duração e portanto não pode ser confirmada
+        como a do LRCLIB — daí o casamento estrito da V6.2 (só type
+        "exact", e as MESMAS palavras de título e artista). --forcar
+        reprocessa SÓ a letra que veio de transcrição (mesma semântica do
+        transcrever --forcar): sem ele, quem já transcreveu o acervo
+        inteiro nunca alcança as fontes oficiais.
 
     enriquecer PASTA [--csv proposta.csv] [--interativo | --auto]
                [--forcar] [--sem-temas-de-pastas] [--verboso]
@@ -101,6 +106,7 @@ from __future__ import annotations
 import argparse
 import csv
 import difflib
+import html
 import json
 import os
 import re
@@ -369,21 +375,37 @@ def fetch_lyrics(artist: str, title: str, fetcher=None) -> str | None:
 def cmd_buscar_letra(pasta: Path, aplicar: bool = False,
                      csv_out: Path | None = None, fetcher=None,
                      chave_vagalume: str = "", pausa: float = PAUSA_S,
-                     verboso: bool = False) -> None:
+                     forcar: bool = False, verboso: bool = False) -> None:
     """Busca a letra de cada MP3 sem letra que tenha título E artista.
 
     Duas fontes, nesta ordem: o LRCLIB (confirmável, etapa 2 do funil) e,
     só no que ele não tiver, o Vagalume (V6.1 — ver buscar_letra_vagalume,
     inclusive por que ele NÃO pode ser confirmado pela duração). Sem chave
     do Vagalume, o comando roda exatamente como antes, com uma linha
-    dizendo o que foi pulado. Arquivo que já tem letra nunca é tocado nem
-    consultado: preencher o vazio é o trabalho, trocar letra curada não."""
+    dizendo o que foi pulado — e essa linha só sai quando houve mesmo um
+    arquivo em que o Vagalume teria entrado.
+
+    Arquivo que já tem letra nunca é tocado nem consultado: preencher o
+    vazio é o trabalho, trocar letra curada não. --forcar abre a exceção
+    que o acervo real exigiu (V6.2): quem já rodou o `transcrever` em tudo
+    tem letra de MÁQUINA em cada arquivo, e sem isto a segunda fonte não
+    alcança justamente o repertório para o qual foi ligada. A semântica é
+    a mesma já estabelecida no `transcrever --forcar` — reprocessa SÓ o que
+    veio de transcrição; letra OFICIAL (inclusive a do Vagalume) não é
+    tocada. Achando letra oficial, o marcador de transcrição some junto."""
     encontradas = nao_encontradas = erros = por_vagalume = 0
     linhas_csv = []
     log = print if verboso else None
     chave_vagalume = (chave_vagalume or "").strip()
-    if not chave_vagalume:
-        print(MSG_VAGALUME_PULADO)
+    estado_aviso = {"dito": False}
+
+    def avisar_sem_chave():
+        """O aviso é sobre uma consulta que teria acontecido — não sai em
+        pasta vazia nem para quem nunca precisou do Vagalume."""
+        if not estado_aviso["dito"]:
+            print(MSG_VAGALUME_PULADO)
+            estado_aviso["dito"] = True
+
     estado = {"primeira": True}
 
     def cortesia():
@@ -396,8 +418,17 @@ def cmd_buscar_letra(pasta: Path, aplicar: bool = False,
     for p in listar_mp3s(pasta):
         rel = p.relative_to(pasta).as_posix()
         info = ler_info(p)
-        if info["ilegivel"] or info["letra"]:
+        if info["ilegivel"]:
             continue
+        if info["letra"]:
+            # com --forcar, letra de MÁQUINA volta para a fila; letra
+            # oficial (sem marca ou marcada como Vagalume) nunca
+            if not forcar:
+                continue
+            if info["letra_origem"] != el.ORIGEM_TRANSCRICAO:
+                print(f"PULADO: {rel} (letra oficial — --forcar reprocessa "
+                      "só transcrição)")
+                continue
         if not (info["titulo"] and info["artista"]):
             continue
         try:
@@ -410,6 +441,8 @@ def cmd_buscar_letra(pasta: Path, aplicar: bool = False,
                                "erro de rede", ""])
             continue
         fonte = "lrclib"
+        if not letra and not chave_vagalume:
+            avisar_sem_chave()
         if not letra and chave_vagalume:
             # o LRCLIB não tem: segunda fonte, com a disciplina de
             # casamento de buscar_letra_vagalume
@@ -524,7 +557,7 @@ def similaridade(a: str, b: str) -> float:
 # não identificam nada. Comparação sobre a chave _norm_comparacao (minúscula,
 # sem acento, sem pontuação — "[Unknown Artist]" vira "unknown artist").
 _RE_PLACEHOLDER_FAIXA = re.compile(
-    r"^(?:\d+\s+)?(?:audio\s?track|faixa|track|pista)(?:\s?\d+)?$")
+    r"^(?:\d+\s+)?(?:(?:audio\s?track|faixa|track)(?:\s?\d+)?|pista\s?\d+)$")
 _PLACEHOLDERS_EXATOS = frozenset({
     "artist", "no artist", "unknown artist", "artista desconhecido",
     "artista desconhecida", "unknown", "desconhecido", "desconhecida",
@@ -538,12 +571,37 @@ _PLACEHOLDERS_TRECHO = (
     "artista desconheci", "artista desconhecida", "unknown artist",
     "no artist", "titulo desconheci", "unknown title",
 )
-# Palavras de maquinário: sozinhas (ou só com números) não identificam nada.
+# Palavras de maquinário: NÃO identificam a música, mas várias delas são
+# título de verdade quando aparecem sozinhas ("Pista", "Gravação", "Nome",
+# "Sem Nome" existem no repertório). Por isso esta lista sozinha NUNCA
+# condena um texto — ver _MARCA_DE_RIPADOR abaixo.
 _RUIDO_DE_ARQUIVO = frozenset({
     "audiotrack", "audio", "track", "faixa", "pista", "converted",
     "convertido", "copia", "copy", "mp3", "wav", "untitled", "new",
     "recording", "gravacao", "sem", "titulo", "nome",
 })
+# Marca de ripador: só ELA habilita a regra do _RUIDO_DE_ARQUIVO. Vale um
+# número solto ("04", "2010"), uma corrida com cara de horário/data
+# ("22-17-23") ou uma palavra que nenhuma canção usa como título.
+#
+# Regressão do 86e6e94 (achado ALTO do QA): sem esta exigência, "Gravação",
+# "Nome" e "Sem Nome" viravam placeholder — ou seja, campo VAZIO — e o
+# título REAL do curador era sobrescrito em silêncio pelo identificado, sem
+# --sobrescrever-tags, sem CONFLITO e sem nota no CSV. Uma palavra comum
+# sozinha nunca é lixo; precisa da companhia da marca.
+_MARCA_DE_RIPADOR = frozenset({
+    "audiotrack", "converted", "convertido", "mp3", "wav", "untitled",
+})
+_RE_CARA_DE_HORARIO = re.compile(r"^\d{1,4}(?:[-:.]\d{1,2}){1,}$")
+
+
+def _tem_marca_de_ripador(chave: str, bruto: str) -> bool:
+    """True quando o texto traz prova de que saiu de uma máquina."""
+    if any(p.isdigit() or p in _MARCA_DE_RIPADOR for p in chave.split()):
+        return True
+    # "1-2010 22-17-23)_converted": a pontuação some no _norm_comparacao,
+    # então a cara de horário é conferida no texto original
+    return any(_RE_CARA_DE_HORARIO.match(p) for p in bruto.split())
 
 
 def eh_placeholder(texto: str) -> bool:
@@ -565,9 +623,15 @@ def eh_placeholder(texto: str) -> bool:
     # contém estas expressões, então a busca por trecho é segura.
     if any(marca in chave for marca in _PLACEHOLDERS_TRECHO):
         return True
-    # Só números e palavras de maquinário ("converted", "faixa", "track"…):
-    # não sobra nenhuma palavra que identifique a música.
-    palavras = [p for p in chave.split()
+    # Só números e palavras de maquinário ("converted", "faixa", "track"…)
+    # E com marca de ripador junto: não sobra nada que identifique a música.
+    # Sem a marca, uma palavra comum sozinha ("Gravação", "Nome") é TÍTULO.
+    partes = chave.split()
+    if len(partes) < 2 or not _tem_marca_de_ripador(chave, texto):
+        # uma palavra sozinha é TÍTULO, sempre. "Convertido", "Gravação",
+        # "Nome", "Pista" viram lixo só acompanhadas da marca da máquina.
+        return False
+    palavras = [p for p in partes
                 if not p.isdigit() and p not in _RUIDO_DE_ARQUIVO]
     return not palavras
 
@@ -1142,9 +1206,16 @@ def _identificar_por_refrao(candidatos: list, duracao_mp3: float, buscar,
 # acervo real). Colapsa para duas ocorrências — refrão que repete de verdade
 # continua legível, e o lixo para de poluir a letra e o índice de busca.
 _RE_LACO_SILABA = re.compile(r"(.{1,10}?)\1{2,}", re.DOTALL)
-# Só é laço quando a repetição é longa. Sem este piso, "111" viraria "11" e
-# "aaa" viraria "aa" — repetição curta é texto legítimo, não defeito.
-_MIN_LACO = 20
+# Só é laço quando a repetição é LONGA — da ordem do defeito de verdade
+# (200+ caracteres), não uma ordem de grandeza abaixo dele.
+#
+# Achado MÉDIO do QA: com o piso em 20 o limpador causava dano permanente
+# dentro dos MP3s do acervo. Repetição é a matéria-prima deste repertório
+# (ponto, coco, ciranda, canto de trabalho): sequências de 20 a 40
+# caracteres — dez sílabas percussivas antes da palavra, uma interjeição
+# repetida, uma despedida em série — são letra legítima, e o corte as
+# transformava em outra coisa. O laço do Whisper mede 200 a 600.
+_MIN_LACO = 200
 # Linha inteira repetida em série; duas bastam para o leitor entender.
 _MAX_LINHAS_IGUAIS = 2
 
@@ -1717,19 +1788,33 @@ def buscar_letra_oficial(titulo: str, artista: str, duracao_mp3: float,
 # repertório brasileiro regional/devocional) o LRCLIB cobriu ~3%; o
 # Vagalume é base comunitária brasileira e cobre justamente esse buraco.
 VAGALUME_URL = "https://api.vagalume.com.br/search.php"
-# A API responde por tipo: "exact"/"aprox" trazem art+mus; "notfound" e
-# "song_notfound" não trazem letra nenhuma.
-_VAGALUME_SEM_LETRA = frozenset({"notfound", "song_notfound"})
+# A API responde por tipo. "exact" é a ÚNICA resposta aproveitável:
+# "aprox" é literalmente a API dizendo "isto NÃO é a música que você pediu,
+# é a mais parecida que eu tenho", e "notfound"/"song_notfound" não trazem
+# letra nenhuma. Achado CRÍTICO do QA: tratar "aprox" como "exact" gravou a
+# letra de OUTRA música ("Ponto de Ogum" no lugar de "Ponto de Oxum") com a
+# marca de letra oficial. Resposta sem campo `type` também é recusada — sem
+# o veredito da API não há em que se apoiar.
+_VAGALUME_TIPO_EXATO = "exact"
 MSG_VAGALUME_PULADO = (
     "Vagalume: pulado (sem chave) — a chave é gratuita em "
     "https://auth.vagalume.com.br/settings/api/; informe em "
     "--chave-vagalume ou na variável de ambiente VAGALUME_API_KEY (o "
     "Cancioneiro nunca grava a chave em disco)")
 # Texto de "não temos esta letra" que a base comunitária às vezes devolve
-# no lugar da letra. Comparado sobre a chave normalizada do módulo.
+# no lugar da letra. Comparado sobre a chave normalizada do módulo (sem
+# acento, sem pontuação, minúsculas), então cobre as variações de acento.
+# A lista cresceu com o que o QA viu passando: são convites para o visitante
+# CONTRIBUIR com a letra, não a letra. Todos falam de "a letra" no singular
+# e em posição de objeto — texto de canção de verdade que menciona "letra"
+# ("escrevi a letra dessa canção") não bate com nenhum destes.
 _VAGALUME_INDISPONIVEL = (
-    "ainda nao temos a letra", "letra nao disponivel",
-    "letra indisponivel", "aguardando revisao", "envie a letra",
+    "ainda nao temos a letra", "nao temos a letra",
+    "nao possui letra", "nao possuimos a letra", "sem letra cadastrada",
+    "letra nao cadastrada", "letra nao disponivel", "letra indisponivel",
+    "letra em breve", "aguardando revisao", "envie a letra",
+    "enviar a letra", "enviando a letra", "adicione a letra",
+    "cadastre a letra", "colabore com a letra",
 )
 
 
@@ -1761,6 +1846,47 @@ def _letra_indisponivel(letra: str) -> bool:
     return any(marca in chave for marca in _VAGALUME_INDISPONIVEL)
 
 
+# Conectivos que só mudam a GRAFIA de um nome composto: "Milionário y José
+# Rico" x "Milionário & José Rico" x "Sandy e Junior" são o mesmo artista.
+# ("&" já vira espaço no _norm_comparacao.) A lista é curta de propósito:
+# tudo que não estiver aqui é palavra que distingue.
+_CONECTIVOS = frozenset({"e", "y", "and", "feat", "ft", "featuring"})
+_RE_TRACO = re.compile(r"\s+[-–—]\s+")
+
+
+def _palavras_significativas(texto: str) -> list:
+    return [p for p in _norm_comparacao(texto).split() if p not in _CONECTIVOS]
+
+
+def _confere_estrito(pedido: str, devolvido: str) -> bool:
+    """Casamento do VAGALUME: as MESMAS palavras, na mesma ordem.
+
+    Por que não reusa o _discorda: aquela régua (similaridade ≥ 0,85 e
+    contenção de 5 caracteres) foi afrouxada para o LRCLIB/AcoustID, onde a
+    DURAÇÃO confirma o casamento — um homônimo com duração errada já caiu
+    antes de chegar lá. O Vagalume não tem campo de duração: a prova
+    textual é a ÚNICA que existe, e sob essa régua o QA mediu colisões
+    graves — "Ponto de Oxum" x "Ponto de Ogum" (0,923), "Ponto de Iansã" x
+    "Ponto de Iemanjá" (0,867), "Cantiga" x "Cantigas" (0,933) — e a
+    contenção aceitava "A Volta da Asa Branca" para "Asa Branca",
+    "Canoeiro II" para "Canoeiro", "Aquarela do Brasil" para "Aquarela".
+    O _discorda segue como está para quem tem duração; aqui a régua é esta.
+
+    Passa: acento, caixa, pontuação e conectivo ("&" x "y" x "e").
+    Não passa: qualquer palavra a mais, a menos ou trocada.
+
+    Única flexibilidade, e do lado do PEDIDO: tag de título no formato
+    "Artista - Título" (visto no acervo real) vale também por cada segmento
+    do traço — mas por IGUALDADE de palavras, nunca por contenção."""
+    alvo = _palavras_significativas(devolvido)
+    if not alvo:
+        return False
+    if _palavras_significativas(pedido) == alvo:
+        return True
+    return any(_palavras_significativas(parte) == alvo
+               for parte in _RE_TRACO.split(pedido))
+
+
 def buscar_letra_vagalume(titulo: str, artista: str, chave: str,
                           fetcher=None, log=None) -> str | None:
     """Letra do Vagalume para um título+artista JÁ conhecidos (tag real ou
@@ -1770,12 +1896,16 @@ def buscar_letra_vagalume(titulo: str, artista: str, chave: str,
     Vagalume não tem campo de duração, então a trava que sustenta todo o
     resto do funil (±3s = ALTA, >15s desqualifica) simplesmente não existe
     aqui. A única prova disponível é textual, e por isso ela é exigida dos
-    DOIS lados: o artista E o título devolvidos têm de ser consistentes com
-    o que foi pedido, pelas MESMAS regras do _discorda (variação de grafia
-    passa, música diferente não). Sem artista para conferir, não se
-    consulta — foi um casamento sem prova ("Lampejo" com uma faixa do
+    DOIS lados, e por uma régua PRÓPRIA e estrita (_confere_estrito — as
+    mesmas palavras, na mesma ordem), NÃO pela do _discorda: aquela foi
+    afrouxada para o caminho em que a duração confirma o casamento, e aqui
+    ela deixava passar música errada. Só o tipo "exact" é aceito: "aprox" é
+    a API dizendo que NÃO é a música pedida. Sem artista para conferir, não
+    se consulta — foi um casamento sem prova ("Lampejo" com uma faixa do
     Roberto Carlos) que ensinou isso ao projeto. Placeholder dos dois lados
     e recado de "ainda não temos a letra" são descartados antes de tudo.
+    Entre as entradas que passam, vence a MELHOR (igualdade literal do
+    título primeiro), não a primeira da lista.
 
     Sem chave, devolve None sem tocar na rede — o chamador avisa uma vez."""
     log = log or (lambda _msg: None)
@@ -1792,19 +1922,30 @@ def buscar_letra_vagalume(titulo: str, artista: str, chave: str,
         return None
     log(f'  vagalume: mus="{titulo}" art="{artista}"')
     dados = consultar_vagalume(titulo, artista, chave, fetcher=fetcher)
+    if not dados:
+        log("  vagalume: sem letra (resposta vazia)")
+        return None
     tipo = str(dados.get("type") or "")
-    if not dados or tipo in _VAGALUME_SEM_LETRA:
-        log(f"  vagalume: sem letra ({tipo or 'resposta vazia'})")
+    if tipo != _VAGALUME_TIPO_EXATO:
+        # "aprox" é a própria API avisando que devolveu OUTRA música;
+        # resposta sem `type` não traz veredito nenhum.
+        log(f"  vagalume: descartado (type={tipo or 'ausente'} — só "
+            f'"{_VAGALUME_TIPO_EXATO}" é aceito)')
         return None
     artista_res = _nfc(str((dados.get("art") or {}).get("name") or "")).strip()
     musicas = dados.get("mus")
     if not isinstance(musicas, list):
+        log("  vagalume: descartado (campo mus não veio como lista: "
+            f"{type(musicas).__name__})")
         return None
+    melhor = None
     for musica in musicas:
         if not isinstance(musica, dict):
             continue
         titulo_res = _nfc(str(musica.get("name") or "")).strip()
-        letra = _nfc(str(musica.get("text") or "")).strip()
+        # a base devolve entidades HTML no texto ("&quot;", "&#39;"); sem
+        # desescapar, elas entram no MP3 e no índice de busca do player
+        letra = _nfc(html.unescape(str(musica.get("text") or ""))).strip()
         if not letra or _letra_indisponivel(letra):
             log(f'  vagalume: descartado (sem letra útil): "{titulo_res}"')
             continue
@@ -1812,13 +1953,22 @@ def buscar_letra_vagalume(titulo: str, artista: str, chave: str,
             log(f'  vagalume: descartado (placeholder): '
                 f'"{titulo_res} / {artista_res}"')
             continue
-        if _discorda(titulo, titulo_res) or _discorda(artista, artista_res):
+        if not (_confere_estrito(titulo, titulo_res)
+                and _confere_estrito(artista, artista_res)):
             log(f'  vagalume: descartado (não confere com o pedido): '
                 f'"{titulo_res} / {artista_res}"')
             continue
-        log(f'  vagalume: encontrada ({tipo}) "{titulo_res} / {artista_res}"')
-        return letra
-    return None
+        # `mus` é uma LISTA: a exata pode estar depois de uma variação que
+        # também passou ("Canoeiro" atrás de "Canoeiro II"). Vence a melhor,
+        # não a primeira — mesma disciplina do buscar_letra_oficial.
+        nota = (1 if _norm_comparacao(titulo) == _norm_comparacao(titulo_res)
+                else 0, similaridade(titulo, titulo_res))
+        if melhor is None or nota > melhor[0]:
+            melhor = (nota, letra, titulo_res)
+    if melhor is None:
+        return None
+    log(f'  vagalume: encontrada ({tipo}) "{melhor[2]} / {artista_res}"')
+    return melhor[1]
 
 
 def resolver_chave_vagalume(chave: str | None) -> str:
@@ -2255,6 +2405,12 @@ def main(argv: list[str] | None = None) -> None:
                             "https://auth.vagalume.com.br/settings/api/; "
                             "nunca é gravada em disco pelo projeto. Sem "
                             "ela, o Vagalume é simplesmente pulado")
+    p_bus.add_argument("--forcar", action="store_true",
+                       help="reprocessa SOMENTE as músicas cuja letra veio "
+                            "de transcrição automática (quem já rodou o "
+                            "transcrever em todo o acervo precisa disto "
+                            "para as fontes oficiais alcançarem os "
+                            "arquivos); letra oficial não é tocada")
     p_bus.add_argument("--csv", default=None, metavar="SAIDA",
                        help="grava CSV com o resultado da busca")
     p_bus.add_argument("--verboso", action="store_true",
@@ -2396,7 +2552,7 @@ def main(argv: list[str] | None = None) -> None:
         cmd_buscar_letra(pasta, aplicar=args.aplicar,
                          chave_vagalume=resolver_chave_vagalume(
                              args.chave_vagalume),
-                         verboso=args.verboso,
+                         forcar=args.forcar, verboso=args.verboso,
                          csv_out=Path(args.csv) if args.csv else None)
     elif args.comando == "enriquecer":
         cmd_enriquecer(pasta, csv_out=Path(args.csv) if args.csv else None,
