@@ -1,5 +1,36 @@
 # REPORT — Cancioneiro
 
+> **Atualização V6.1 (0.6.0):** rodada guiada inteiramente por medição no
+> acervo real do usuário, não por especulação.
+> **Vagalume** entra como segunda fonte de letra depois do LRCLIB — comunitária
+> e brasileira, cobre o repertório regional que o LRCLIB não tem.
+> **Nome do arquivo visível** na lista e no painel: as coordenadoras se
+> organizam por nome de arquivo há anos, então é soma, não troca — e serve de
+> rede de segurança quando a identificação automática erra o título.
+> Suítes na 0.6.0: **557 pytest + 106 cargo + 369 vitest + 22 E2E**, `tsc` e
+> `cargo check` sem avisos.
+>
+> **Três defeitos que só o acervo real revelou**, e que resumem o que este
+> projeto aprendeu:
+> 1. `vad_filter=True` na transcrição destruía 35% dos arquivos em silêncio —
+>    o VAD é detector de *fala* e, sobre canto com instrumentação, descartava o
+>    áudio antes de o modelo ouvir. Não era o modelo: era configuração errada.
+>    Corrigido, a transcrição saltou de 42 para 71 arquivos, e de 33 vazios
+>    para 2 (justamente os instrumentais).
+> 2. Identificação pelo refrão casava com confiança e errado ("Lampejo" virou
+>    "Vou Chegar Mais Cedo em Casa / Roberto Carlos"). Título parecido com
+>    duração próxima não prova nada; a prova passou a ser objetiva — **o refrão
+>    ouvido tem de estar na letra devolvida**.
+> 3. O Vagalume gravou a letra de "Ponto de Ogum" numa música "Ponto de Oxum",
+>    rotulada como oficial. A causa raiz foi transferência indevida de
+>    contexto: a tolerância de grafia fora afrouxada para o LRCLIB, **onde a
+>    duração confirma o casamento**, e foi reusada numa fonte que não tem
+>    duração. Cada fonte passou a ter a rigidez que suas próprias provas
+>    sustentam.
+>
+> A conclusão que atravessa as três: **um palpite automático vale o que vale a
+> prova que o confirma** — e a prova não viaja junto quando o código é reusado.
+
 > **Atualização V5/V6/V7 (0.5.0):** três frentes fechadas depois do teste em
 > acervo real.
 > **V5 — Transcrição local** (`PRD-v5-transcricao.md`): `curadoria.py

@@ -244,3 +244,41 @@ opção mais simples que passa nos Acceptance Checks do PRD.
     etapa recebe só o que a anterior não resolveu; a 30x de diferença entre as
     duas últimas é o que decide se um acervo de 10 mil arquivos é viável.
     Spec em `PRD-v6-impressao-digital.md`.
+
+## V6.1 — Vagalume, nome do arquivo e o que o acervo real ensinou
+
+62. **VAD nunca sobre canto**: `vad_filter` é detector de FALA; sobre música
+    com instrumentação descarta quase tudo antes de o modelo ouvir (35% do
+    acervo real voltou vazio, com músicas inteiras em 51 caracteres).
+    Desligado, mais `condition_on_previous_text=False` contra os laços.
+63. **Cada fonte tem a rigidez que suas provas sustentam.** A tolerância de
+    grafia do `_discorda` existe porque a DURAÇÃO confirma o casamento no
+    LRCLIB/AcoustID. Reusá-la no Vagalume, que não tem duração, gravou a letra
+    de "Ponto de Ogum" numa música "Ponto de Oxum". O Vagalume tem comparação
+    própria e estrita (mesmas palavras, mesma ordem, sem contenção) e só aceita
+    resposta `type: "exact"` — `aprox` é a API dizendo que achou outra.
+64. **Palpite do áudio precisa de prova objetiva**: o refrão transcrito só
+    identifica a música se ele estiver na letra devolvida. Título parecido com
+    duração próxima casou "Lampejo" com Roberto Carlos.
+65. **Palavra comum sozinha nunca é tag-lixo**: a regra de ruído exige mais de
+    uma palavra E marca de ripador. Sem isso, "Pista", "Gravação" e "Sem Nome"
+    viravam campo vazio e eram sobrescritos em silêncio — campo vazio não gera
+    conflito, e é aí que o dado morre.
+66. **Piso do limpador de repetição na ordem do defeito real** (200 caracteres):
+    a maior repetição legítima medida no repertório tem 32 ("Adeus adeus adeus
+    adeus adeus Bahia"); os laços do Whisper têm 402 a 600. Piso baixo demais
+    mutila letra de verdade, dentro do arquivo do usuário, para sempre.
+67. **Nome do arquivo é soma, não troca**: segunda linha na lista, secundária
+    ao título, e por extenso no painel. As pessoas se organizam por nome de
+    arquivo há anos, e ele é rede de segurança quando a identificação erra.
+    Não é impresso quando o título JÁ é o nome (música sem tag), comparando sem
+    caixa mas COM acento e normalizando NFC — "Coracao.mp3" sob "Coração"
+    continua aparecendo, que é a diferença que alguém quer ver.
+68. **Altura de linha variável exige chave estável**: com a segunda linha, as
+    linhas deixaram de ter altura uniforme, e o virtual-core memoiza medidas
+    sem observar `estimateSize`. `getItemKey` pelo id da música invalida o
+    cache na hora certa — sem isso, trocar entre pastas de mesma contagem
+    posicionava linhas com as alturas da pasta anterior.
+69. **Contraste mínimo vale para texto secundário também**: a linha do nome
+    nasceu com 2,54:1 e foi para 5,98:1. O produto é lido em tela de notebook,
+    em sala mal iluminada, por quem está conduzindo uma reunião.
