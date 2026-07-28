@@ -13,9 +13,18 @@ Subcomandos:
         (TXXX:TEMAS, normalizados) e letra (USLT, lida de letra_arquivo).
         Campos vazios nunca são tocados. --dry-run só relata, não grava.
 
-    buscar-letra PASTA [--aplicar] [--csv saida.csv]
+    buscar-letra PASTA [--aplicar] [--chave-vagalume CHAVE] [--csv saida.csv]
+                 [--verboso]
         Para cada MP3 sem letra com título E artista, consulta o LRCLIB
-        (https://lrclib.net/api/get) e relata/grava o plainLyrics.
+        (https://lrclib.net/api/get) e relata/grava o plainLyrics. V6.1:
+        no que o LRCLIB não tiver, consulta o Vagalume (chave gratuita em
+        --chave-vagalume ou VAGALUME_API_KEY, nunca gravada em disco) —
+        base comunitária brasileira, que cobre o repertório de nicho onde
+        o LRCLIB ficou em ~3%. Sem a chave, o Vagalume é pulado com uma
+        linha e o comando roda exatamente como antes. A letra do Vagalume
+        é OFICIAL (nada de marcador de transcrição), mas leva
+        TXXX:LETRA_ORIGEM="vagalume", porque essa API não tem duração e
+        portanto não pode ser confirmada como a do LRCLIB.
 
     enriquecer PASTA [--csv proposta.csv] [--interativo | --auto]
                [--forcar] [--sem-temas-de-pastas] [--verboso]
@@ -69,7 +78,8 @@ Subcomandos:
         CONFLITO sem gravar nada, e resultado com título/artista de
         placeholder é descartado. --com-letra encadeia a busca da letra
         OFICIAL no LRCLIB com o título/artista confirmados (sem marcador
-        de transcrição, e sem tocar em letra existente).
+        de transcrição, e sem tocar em letra existente) e, no que ele não
+        tiver, no Vagalume (--chave-vagalume ou VAGALUME_API_KEY).
 
     estimar PASTA [--amostra N] [--verboso]
         V6/F15.1. Conta os arquivos, quantos estão incompletos, mede uma
@@ -173,12 +183,21 @@ def ler_info(path: Path) -> dict:
 
 
 def rotulo_letra(info: dict) -> str:
-    """Coluna "letra" do relatório: NÃO, SIM ou SIM (transcrição) — o selo
-    de procedência da V5/F14 (TXXX:LETRA_ORIGEM)."""
+    """Coluna "letra" do relatório: NÃO, SIM, SIM (transcrição) ou
+    SIM (Vagalume) — o selo de procedência (TXXX:LETRA_ORIGEM).
+
+    "(transcrição)" continua EXCLUSIVO da letra saída do áudio (V5/F14):
+    é o rótulo que o curador aprendeu a ler como "isto pode estar errado".
+    "(Vagalume)" é letra OFICIAL, mas de uma fonte que não pôde ser
+    confirmada pela duração (V6.1). Origem desconhecida (arquivo gravado
+    por uma versão futura) cai no SIM genérico, nunca em transcrição."""
     if not info["letra"]:
         return "NÃO"
-    if info.get("letra_origem") == el.ORIGEM_TRANSCRICAO:
+    origem = info.get("letra_origem") or ""
+    if origem == el.ORIGEM_TRANSCRICAO:
         return "SIM (transcrição)"
+    if origem == el.ORIGEM_VAGALUME:
+        return "SIM (Vagalume)"
     return "SIM"
 
 
@@ -348,9 +367,32 @@ def fetch_lyrics(artist: str, title: str, fetcher=None) -> str | None:
 
 
 def cmd_buscar_letra(pasta: Path, aplicar: bool = False,
-                     csv_out: Path | None = None, fetcher=None) -> None:
-    encontradas = nao_encontradas = erros = 0
+                     csv_out: Path | None = None, fetcher=None,
+                     chave_vagalume: str = "", pausa: float = PAUSA_S,
+                     verboso: bool = False) -> None:
+    """Busca a letra de cada MP3 sem letra que tenha título E artista.
+
+    Duas fontes, nesta ordem: o LRCLIB (confirmável, etapa 2 do funil) e,
+    só no que ele não tiver, o Vagalume (V6.1 — ver buscar_letra_vagalume,
+    inclusive por que ele NÃO pode ser confirmado pela duração). Sem chave
+    do Vagalume, o comando roda exatamente como antes, com uma linha
+    dizendo o que foi pulado. Arquivo que já tem letra nunca é tocado nem
+    consultado: preencher o vazio é o trabalho, trocar letra curada não."""
+    encontradas = nao_encontradas = erros = por_vagalume = 0
     linhas_csv = []
+    log = print if verboso else None
+    chave_vagalume = (chave_vagalume or "").strip()
+    if not chave_vagalume:
+        print(MSG_VAGALUME_PULADO)
+    estado = {"primeira": True}
+
+    def cortesia():
+        """Pausa entre consultas ao Vagalume (a leg nova); a do LRCLIB
+        segue como sempre foi."""
+        if not estado["primeira"] and pausa:
+            time.sleep(pausa)
+        estado["primeira"] = False
+
     for p in listar_mp3s(pasta):
         rel = p.relative_to(pasta).as_posix()
         info = ler_info(p)
@@ -367,21 +409,51 @@ def cmd_buscar_letra(pasta: Path, aplicar: bool = False,
             linhas_csv.append([rel, info["titulo"], info["artista"],
                                "erro de rede", ""])
             continue
+        fonte = "lrclib"
+        if not letra and chave_vagalume:
+            # o LRCLIB não tem: segunda fonte, com a disciplina de
+            # casamento de buscar_letra_vagalume
+            try:
+                cortesia()
+                letra = buscar_letra_vagalume(
+                    info["titulo"], info["artista"], chave_vagalume,
+                    fetcher=fetcher, log=log)
+            except KeyboardInterrupt:
+                raise
+            except Exception:
+                print(f"ERRO DE REDE: {rel} (Vagalume)")
+                erros += 1
+                linhas_csv.append([rel, info["titulo"], info["artista"],
+                                   "erro de rede (vagalume)", ""])
+                continue
+            fonte = "vagalume"
         if letra:
-            print(f"ENCONTRADA: {rel} ({len(letra)} caracteres)")
+            marca = "" if fonte == "lrclib" else " (Vagalume)"
+            print(f"ENCONTRADA{marca}: {rel} ({len(letra)} caracteres)")
             encontradas += 1
+            if fonte == "vagalume":
+                por_vagalume += 1
             if aplicar:
-                el.embed_lyrics(p, letra)  # reuso: USLT do embed_lyrics
+                # reuso: USLT do embed_lyrics. A origem marca só o
+                # Vagalume; letra do LRCLIB continua sem marca (e origem=""
+                # LIMPA marca herdada, DECISIONS #54).
+                el.embed_lyrics(p, letra,
+                                origem=(el.ORIGEM_VAGALUME
+                                        if fonte == "vagalume" else ""))
             linhas_csv.append([rel, info["titulo"], info["artista"],
-                               "encontrada", len(letra)])
+                               "encontrada" if fonte == "lrclib"
+                               else "encontrada (vagalume)", len(letra)])
         else:
             print(f"NÃO ENCONTRADA: {rel}")
             nao_encontradas += 1
             linhas_csv.append([rel, info["titulo"], info["artista"],
                                "não encontrada", ""])
 
+    # "pelo Vagalume" é um recorte das encontradas, não um balde à parte:
+    # encontradas = as do LRCLIB + as do Vagalume.
     print(f"Resumo: {encontradas} encontradas | "
-          f"{nao_encontradas} não encontradas | {erros} erros de rede")
+          f"{nao_encontradas} não encontradas | {erros} erros de rede | "
+          f"{por_vagalume} pelo Vagalume")
 
     if csv_out is not None:
         gravar_csv(csv_out, BUSCA_COLUNAS, linhas_csv)
@@ -1638,11 +1710,128 @@ def buscar_letra_oficial(titulo: str, artista: str, duracao_mp3: float,
     return melhor[1] if melhor else None
 
 
+# ---------------------------------------------------------------- vagalume
+
+# V6.1. SEGUNDA fonte de letra OFICIAL, sempre depois do LRCLIB e sempre
+# antes da transcrição. Existe por medição: no acervo real (94 arquivos de
+# repertório brasileiro regional/devocional) o LRCLIB cobriu ~3%; o
+# Vagalume é base comunitária brasileira e cobre justamente esse buraco.
+VAGALUME_URL = "https://api.vagalume.com.br/search.php"
+# A API responde por tipo: "exact"/"aprox" trazem art+mus; "notfound" e
+# "song_notfound" não trazem letra nenhuma.
+_VAGALUME_SEM_LETRA = frozenset({"notfound", "song_notfound"})
+MSG_VAGALUME_PULADO = (
+    "Vagalume: pulado (sem chave) — a chave é gratuita em "
+    "https://auth.vagalume.com.br/settings/api/; informe em "
+    "--chave-vagalume ou na variável de ambiente VAGALUME_API_KEY (o "
+    "Cancioneiro nunca grava a chave em disco)")
+# Texto de "não temos esta letra" que a base comunitária às vezes devolve
+# no lugar da letra. Comparado sobre a chave normalizada do módulo.
+_VAGALUME_INDISPONIVEL = (
+    "ainda nao temos a letra", "letra nao disponivel",
+    "letra indisponivel", "aguardando revisao", "envie a letra",
+)
+
+
+def consultar_vagalume(titulo: str, artista: str, chave: str,
+                       fetcher=None) -> dict:
+    """Consulta o Vagalume (/search.php?art=&mus=&apikey=) e devolve o
+    dicionário da resposta. Texto enviado em NFC (o macOS entrega NFD).
+    404 vira resposta vazia; erro de rede sobe para o chamador. A chave
+    entra na URL e NUNCA é impressa nem gravada."""
+    fetcher = fetcher or default_fetcher
+    qs = urllib.parse.urlencode({"art": _nfc(artista), "mus": _nfc(titulo),
+                                 "apikey": chave})
+    try:
+        body = fetcher(f"{VAGALUME_URL}?{qs}")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return {}
+        raise
+    try:
+        dados = json.loads(body)
+    except ValueError:
+        return {}
+    return dados if isinstance(dados, dict) else {}
+
+
+def _letra_indisponivel(letra: str) -> bool:
+    """True quando o "texto" devolvido é um recado da base, não a letra."""
+    chave = _norm_comparacao(letra)
+    return any(marca in chave for marca in _VAGALUME_INDISPONIVEL)
+
+
+def buscar_letra_vagalume(titulo: str, artista: str, chave: str,
+                          fetcher=None, log=None) -> str | None:
+    """Letra do Vagalume para um título+artista JÁ conhecidos (tag real ou
+    identificação confirmada). Devolve o texto em NFC ou None.
+
+    ATENÇÃO — esta fonte NÃO PODE SER CONFIRMADA COMO O LRCLIB. A API do
+    Vagalume não tem campo de duração, então a trava que sustenta todo o
+    resto do funil (±3s = ALTA, >15s desqualifica) simplesmente não existe
+    aqui. A única prova disponível é textual, e por isso ela é exigida dos
+    DOIS lados: o artista E o título devolvidos têm de ser consistentes com
+    o que foi pedido, pelas MESMAS regras do _discorda (variação de grafia
+    passa, música diferente não). Sem artista para conferir, não se
+    consulta — foi um casamento sem prova ("Lampejo" com uma faixa do
+    Roberto Carlos) que ensinou isso ao projeto. Placeholder dos dois lados
+    e recado de "ainda não temos a letra" são descartados antes de tudo.
+
+    Sem chave, devolve None sem tocar na rede — o chamador avisa uma vez."""
+    log = log or (lambda _msg: None)
+    if not chave:
+        return None
+    titulo = _nfc(titulo).strip()
+    artista = _nfc(artista).strip()
+    if not (titulo and artista):
+        # sem os dois lados não há o que conferir: não se consulta
+        log("  vagalume: sem título E artista para conferir — não consultado")
+        return None
+    if eh_placeholder(titulo) or eh_placeholder(artista):
+        log("  vagalume: título/artista de placeholder — não consultado")
+        return None
+    log(f'  vagalume: mus="{titulo}" art="{artista}"')
+    dados = consultar_vagalume(titulo, artista, chave, fetcher=fetcher)
+    tipo = str(dados.get("type") or "")
+    if not dados or tipo in _VAGALUME_SEM_LETRA:
+        log(f"  vagalume: sem letra ({tipo or 'resposta vazia'})")
+        return None
+    artista_res = _nfc(str((dados.get("art") or {}).get("name") or "")).strip()
+    musicas = dados.get("mus")
+    if not isinstance(musicas, list):
+        return None
+    for musica in musicas:
+        if not isinstance(musica, dict):
+            continue
+        titulo_res = _nfc(str(musica.get("name") or "")).strip()
+        letra = _nfc(str(musica.get("text") or "")).strip()
+        if not letra or _letra_indisponivel(letra):
+            log(f'  vagalume: descartado (sem letra útil): "{titulo_res}"')
+            continue
+        if eh_placeholder(titulo_res) or eh_placeholder(artista_res):
+            log(f'  vagalume: descartado (placeholder): '
+                f'"{titulo_res} / {artista_res}"')
+            continue
+        if _discorda(titulo, titulo_res) or _discorda(artista, artista_res):
+            log(f'  vagalume: descartado (não confere com o pedido): '
+                f'"{titulo_res} / {artista_res}"')
+            continue
+        log(f'  vagalume: encontrada ({tipo}) "{titulo_res} / {artista_res}"')
+        return letra
+    return None
+
+
+def resolver_chave_vagalume(chave: str | None) -> str:
+    """A chave vem de --chave-vagalume ou do ambiente, NUNCA de disco."""
+    return (chave or os.environ.get("VAGALUME_API_KEY", "") or "").strip()
+
+
 def cmd_identificar(pasta: Path, impressao_digital=None, fetcher=None,
                     chave: str = "", com_letra: bool = False,
                     sobrescrever_tags: bool = False,
                     csv_out: Path | None = None, verboso: bool = False,
-                    pausa: float = PAUSA_ACOUSTID_S) -> None:
+                    pausa: float = PAUSA_ACOUSTID_S,
+                    chave_vagalume: str = "") -> None:
     """F15: identifica a gravação pela impressão digital acústica.
 
     Etapa 3 do funil (~1–2 s por música, contra 30–80 s da transcrição):
@@ -1656,11 +1845,17 @@ def cmd_identificar(pasta: Path, impressao_digital=None, fetcher=None,
     (destrutivo, só para ALTA), e divergência entre a tag real e o
     identificado vira CONFLITO — nada gravado, com balde próprio no resumo
     e ação própria no CSV. Com --com-letra, a letra OFICIAL do LRCLIB entra
-    sem o marcador de transcrição, e letra existente nunca é substituída."""
+    sem o marcador de transcrição, e letra existente nunca é substituída;
+    não achando no LRCLIB, o Vagalume é consultado com o título/artista JÁ
+    confirmados (V6.1) — letra oficial também, mas com a marca "vagalume",
+    porque essa fonte não pode ser confirmada pela duração."""
     if not chave:
         die(MSG_SEM_CHAVE)
     if impressao_digital is None:
         impressao_digital = criar_impressao_digital()
+    chave_vagalume = (chave_vagalume or "").strip()
+    if com_letra and not chave_vagalume:
+        print(MSG_VAGALUME_PULADO)
 
     mp3s = listar_mp3s(pasta)
     total = len(mp3s)
@@ -1674,7 +1869,7 @@ def cmd_identificar(pasta: Path, impressao_digital=None, fetcher=None,
         estado["primeira"] = False
 
     contagem = {"identificadas": 0, "letras": 0, "sem_resultado": 0,
-                "conflitos": 0, "erros": 0}
+                "conflitos": 0, "erros": 0, "vagalume": 0}
     linhas_csv = []
     interrompido = None   # (arquivo, índice) onde o Ctrl-C parou o lote
     posicao = ("", 0)
@@ -1751,6 +1946,7 @@ def cmd_identificar(pasta: Path, impressao_digital=None, fetcher=None,
                     artista = "" if artista_atual else artista_id
 
                 letra = ""
+                letra_do_vagalume = False
                 if com_letra and not info["letra"]:
                     # letra existente nunca é substituída (nem consultada à
                     # toa): trocar letra curada por outra é apagar trabalho
@@ -1770,14 +1966,41 @@ def cmd_identificar(pasta: Path, impressao_digital=None, fetcher=None,
                         if verboso:
                             print(f"  detalhe técnico: {exc}")
                         letra = ""
+                    if not letra and chave_vagalume:
+                        # segunda fonte, com o título/artista JÁ confirmados
+                        # pela impressão digital — é isso que dá ao
+                        # casamento textual do Vagalume algo firme para
+                        # conferir. A queda de uma fonte não leva a outra.
+                        fase = "busca da letra no Vagalume"
+                        try:
+                            cortesia()
+                            letra = buscar_letra_vagalume(
+                                titulo_id, artista_id, chave_vagalume,
+                                fetcher=fetcher, log=log) or ""
+                            letra_do_vagalume = bool(letra)
+                        except KeyboardInterrupt:
+                            raise
+                        except Exception as exc:
+                            print(f"{prefixo}AVISO: {rel} — erro de rede na "
+                                  "busca da letra no Vagalume")
+                            if verboso:
+                                print(f"  detalhe técnico: {exc}")
+                            letra = ""
 
                 fase = "gravação das tags no arquivo"
                 if letra:
-                    # letra OFICIAL: sai limpa e SEM marca de transcrição
+                    # letra OFICIAL nos dois casos: NUNCA leva o marcador de
+                    # transcrição. A do Vagalume leva a marca da própria
+                    # fonte (não confirmável pela duração); a do LRCLIB
+                    # continua sem marca, como sempre foi.
                     el.embed_lyrics(p, letra, title=titulo or None,
-                                    artist=artista or None, origem="")
+                                    artist=artista or None,
+                                    origem=(el.ORIGEM_VAGALUME
+                                            if letra_do_vagalume else ""))
                     gravou = True
                     contagem["letras"] += 1
+                    if letra_do_vagalume:
+                        contagem["vagalume"] += 1
                 elif titulo or artista:
                     el.write_title_artist(p, title=titulo or None,
                                           artist=artista or None)
@@ -1793,13 +2016,15 @@ def cmd_identificar(pasta: Path, impressao_digital=None, fetcher=None,
                       f"{_ou_travessao(titulo_final)} / "
                       f"{_ou_travessao(artista_final)} "
                       f"({confianca}, pontuação {pontos}, {durs})"
-                      + (" + letra" if letra else ""))
+                      + ((" + letra (Vagalume)" if letra_do_vagalume
+                          else " + letra") if letra else ""))
                 contagem["identificadas"] += 1
                 linhas_csv.append(
                     [rel, "IDENTIFICADA", titulo_final, artista_final,
                      confianca, pontos, len(letra) if letra else "",
                      durs + ("; título/artista preservados"
-                             if preservou else "")])
+                             if preservou else "")
+                     + ("; letra do Vagalume" if letra_do_vagalume else "")])
             except KeyboardInterrupt:
                 # a gravação é atômica (embed_lyrics.save_tags), então o
                 # arquivo em andamento está íntegro; o que não dá é MENTIR
@@ -1834,7 +2059,10 @@ def cmd_identificar(pasta: Path, impressao_digital=None, fetcher=None,
               f"{contagem['letras']} letras oficiais | "
               f"{contagem['sem_resultado']} sem resultado | "
               f"{contagem['conflitos']} conflitos | "
-              f"{contagem['erros']} erros")
+              f"{contagem['erros']} erros | "
+              # recorte das letras oficiais, não balde à parte:
+              # letras oficiais = as do LRCLIB + as do Vagalume
+              f"{contagem['vagalume']} pelo Vagalume")
         if interrompido is not None:
             parou_em, indice_parada = interrompido
             print(f"Interrompido em: {parou_em} (arquivo {indice_parada} de "
@@ -2018,8 +2246,20 @@ def main(argv: list[str] | None = None) -> None:
     p_bus.add_argument("pasta", help="pasta do acervo")
     p_bus.add_argument("--aplicar", action="store_true",
                        help="grava a letra encontrada no USLT")
+    p_bus.add_argument("--chave-vagalume", default=None, dest="chave_vagalume",
+                       metavar="CHAVE",
+                       help="chave da API do Vagalume, usada como SEGUNDA "
+                            "fonte no que o LRCLIB não tiver (padrão: "
+                            "variável de ambiente VAGALUME_API_KEY). "
+                            "Gratuita em "
+                            "https://auth.vagalume.com.br/settings/api/; "
+                            "nunca é gravada em disco pelo projeto. Sem "
+                            "ela, o Vagalume é simplesmente pulado")
     p_bus.add_argument("--csv", default=None, metavar="SAIDA",
                        help="grava CSV com o resultado da busca")
+    p_bus.add_argument("--verboso", action="store_true",
+                       help="mostra cada consulta ao Vagalume e por que um "
+                            "resultado foi recusado")
 
     p_enr = sub.add_parser("enriquecer",
                            help="identifica MP3s via LRCLIB e propõe/aplica "
@@ -2105,7 +2345,15 @@ def main(argv: list[str] | None = None) -> None:
                             "gravada em disco pelo projeto")
     p_ide.add_argument("--com-letra", action="store_true", dest="com_letra",
                        help="após identificar, busca a letra OFICIAL no "
-                            "LRCLIB pelo título/artista confirmados")
+                            "LRCLIB pelo título/artista confirmados (e, no "
+                            "que ele não tiver, no Vagalume)")
+    p_ide.add_argument("--chave-vagalume", default=None, dest="chave_vagalume",
+                       metavar="CHAVE",
+                       help="chave da API do Vagalume para a busca de letra "
+                            "de --com-letra (padrão: variável de ambiente "
+                            "VAGALUME_API_KEY). Gratuita em "
+                            "https://auth.vagalume.com.br/settings/api/; "
+                            "nunca é gravada em disco pelo projeto")
     p_ide.add_argument("--sobrescrever-tags", action="store_true",
                        dest="sobrescrever_tags",
                        help="DESTRUTIVO: permite que uma identificação de "
@@ -2143,7 +2391,12 @@ def main(argv: list[str] | None = None) -> None:
     elif args.comando == "aplicar":
         cmd_aplicar(pasta, Path(args.csv), dry_run=args.dry_run)
     elif args.comando == "buscar-letra":
+        # a chave do Vagalume nunca é lida nem escrita em disco: só
+        # --chave-vagalume ou ambiente
         cmd_buscar_letra(pasta, aplicar=args.aplicar,
+                         chave_vagalume=resolver_chave_vagalume(
+                             args.chave_vagalume),
+                         verboso=args.verboso,
                          csv_out=Path(args.csv) if args.csv else None)
     elif args.comando == "enriquecer":
         cmd_enriquecer(pasta, csv_out=Path(args.csv) if args.csv else None,
@@ -2168,6 +2421,8 @@ def main(argv: list[str] | None = None) -> None:
                         chave=(args.chave
                                or os.environ.get("ACOUSTID_API_KEY", "")),
                         com_letra=args.com_letra,
+                        chave_vagalume=resolver_chave_vagalume(
+                            args.chave_vagalume),
                         sobrescrever_tags=args.sobrescrever_tags,
                         verboso=args.verboso,
                         csv_out=Path(args.csv) if args.csv else None)

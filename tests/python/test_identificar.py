@@ -611,11 +611,13 @@ class TestCsvEResumo:
         linha = next(l for l in out.splitlines() if l.startswith("Resumo:"))
         numeros = [int(t) for t in linha.replace("|", " ").split()
                    if t.isdigit()]
-        total, ident, letras, sem, confl, erros = numeros
+        (total, ident, letras, sem, confl, erros,
+         vagalume) = numeros
         assert total == 4
-        # todo arquivo cai em exatamente um balde ("letras oficiais" é um
-        # detalhe das identificadas, não um balde à parte)
+        # todo arquivo cai em exatamente um balde ("letras oficiais" e "pelo
+        # Vagalume" são detalhes das identificadas, não baldes à parte)
         assert ident + sem + confl + erros == total
+        assert vagalume <= letras
 
     def test_contador_de_progresso_por_arquivo(self, tmp_path, base_mp3,
                                                capsys):

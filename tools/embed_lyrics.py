@@ -30,10 +30,22 @@ TEMAS_DESC = "TEMAS"
 TEMAS_KEY = f"TXXX:{TEMAS_DESC}"  # HashKey do mutagen: "TXXX:" + desc
 # V5/F14: procedência da letra. Vazio/ausente = letra oficial (LRCLIB ou
 # digitada); "transcricao" = saiu do áudio pelo transcrever do curadoria.
+#
+# V6.1: o vocabulário ganhou "vagalume" — e SÓ ele. O acervo real só tem
+# "transcricao" ou nada, e o player compara o valor por igualdade estrita
+# com "transcricao" (src/lib/types.ts, ORIGEM_TRANSCRICAO), então qualquer
+# valor novo é inerte para ele. Marcar a letra do Vagalume vale a pena
+# porque é a única fonte oficial que NÃO pode ser confirmada pela duração
+# (a API não tem esse campo): quem conferir o acervo depois precisa saber
+# de onde ela veio. Letra do LRCLIB continua SEM marca, de propósito: os
+# arquivos já curados não têm essa marca e passar a escrevê-la agora só
+# criaria dois grupos indistinguíveis de letra oficial pela ausência.
 LETRA_ORIGEM_DESC = "LETRA_ORIGEM"
 LETRA_ORIGEM_KEY = f"TXXX:{LETRA_ORIGEM_DESC}"
 ORIGEM_TRANSCRICAO = "transcricao"
-ORIGEM_ROTULOS = {ORIGEM_TRANSCRICAO: "transcrição automática"}
+ORIGEM_VAGALUME = "vagalume"
+ORIGEM_ROTULOS = {ORIGEM_TRANSCRICAO: "transcrição automática",
+                  ORIGEM_VAGALUME: "Vagalume"}
 
 
 def die(message: str) -> None:

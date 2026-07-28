@@ -251,6 +251,10 @@ mais barato — e acerta em cheio nas gravações comerciais. Por isso o
 | 3. **Impressão digital (AcoustID)** | ~1–2 s | **`identificar`** |
 | 4. Transcrição local, só no que sobrou | 30–80 s | `transcrever` |
 
+(A V6.1 encaixou o Vagalume entre as etapas 3 e 4 como segunda fonte de letra —
+veja [Vagalume: a segunda fonte de letra](#vagalume-a-segunda-fonte-de-letra-v61)
+mais abaixo.)
+
 Duas dependências, ambas fáceis e ambas **opcionais** (sem elas, todos os outros
 subcomandos seguem normais — só o `identificar` avisa e sai):
 
@@ -321,6 +325,67 @@ número não pôde ser medido aqui (sem `fpcalc`, ou sem o modelo baixado), a sa
 diz com todas as letras que aquela etapa saiu de média/proporção publicada, e
 não de medição. São estimativas: o tempo real varia com o processador, a rede,
 a duração das músicas e quanto o `identificar` resolver antes.
+
+### Vagalume: a segunda fonte de letra (V6.1)
+
+O LRCLIB é uma base internacional, e no acervo real de teste — 94 arquivos de
+repertório brasileiro de nicho (Barquinha, adventícios, forró, MPB de raiz) —
+ele cobriu **cerca de 3%**. O [Vagalume](https://www.vagalume.com.br) é base
+comunitária **brasileira** e cobre justamente esse buraco. Por isso ele entra
+como **segunda fonte de letra**, sempre depois do LRCLIB e sempre antes da
+transcrição — que custa 30 a 80 segundos por música:
+
+| Etapa | Custo por música | Comando |
+|---|---|---|
+| 1. Tags + nome de arquivo + nome da pasta | instantâneo | `enriquecer` |
+| 2. LRCLIB por título/artista + duração | ~0,5 s | `enriquecer`, `buscar-letra` |
+| 3. Impressão digital (AcoustID) | ~1–2 s | `identificar` |
+| 4. **Vagalume, só no que o LRCLIB não tinha** | ~0,5 s | **`buscar-letra`, `identificar --com-letra`** |
+| 5. Transcrição local, só no que sobrou | 30–80 s | `transcrever` |
+
+A chave da API é **gratuita** e sai em um minuto em
+[auth.vagalume.com.br/settings/api](https://auth.vagalume.com.br/settings/api/).
+Como a do AcoustID, o projeto **nunca grava a chave em disco**: passe em
+`--chave-vagalume` ou deixe na variável de ambiente.
+
+```bash
+export VAGALUME_API_KEY="sua-chave"
+python3 tools/curadoria.py buscar-letra ~/Musicas --aplicar
+python3 tools/curadoria.py identificar ~/Musicas --com-letra --csv feito.csv
+```
+
+```
+ENCONTRADA: barco - Timoneiro.mp3 (1832 caracteres)
+ENCONTRADA (Vagalume): barquinha - linda sereia.mp3 (964 caracteres)
+NÃO ENCONTRADA: adventicio - lampejo.mp3
+Resumo: 2 encontradas | 1 não encontradas | 0 erros de rede | 1 pelo Vagalume
+```
+
+`1 pelo Vagalume` é um **recorte** das encontradas, não um balde à parte: as
+encontradas são as do LRCLIB mais as do Vagalume. **Sem a chave**, sai uma linha
+dizendo que o Vagalume foi pulado e como habilitá-lo, e o comando roda
+exatamente como rodava antes — nada mais muda.
+
+**A ressalva honesta:** o Vagalume **não pode ser confirmado pela duração.** A
+API não tem esse campo, então a trava que sustenta todo o resto do funil (±3s =
+ALTA, acima de 15s desqualifica) simplesmente não existe aqui. A única prova
+disponível é textual, e por isso ela é exigida dos **dois** lados: o artista **e**
+o título devolvidos precisam bater com o que foi pedido, pelas mesmas regras do
+resto do projeto (variação de grafia passa — "Milionário y José Rico" x
+"Milionário & José Rico" —, música diferente não). Sem artista para conferir,
+**nem se consulta**: foi um casamento sem prova que um dia pareou "Lampejo" com
+uma faixa do Roberto Carlos. Resultado com título/artista de preenchimento
+automático e recado de "ainda não temos a letra" são descartados antes de tudo.
+
+Pela mesma razão a letra do Vagalume fica **marcada**: ela é oficial — não leva
+o selo de transcrição, e o relatório **não** diz `SIM (transcrição)` para ela —,
+mas grava `TXXX:LETRA_ORIGEM = "vagalume"` e o relatório mostra `SIM (Vagalume)`,
+para você saber depois qual letra veio da fonte que não deu para confirmar. A do
+LRCLIB continua sem marca nenhuma, como sempre foi.
+
+E valem as travas de sempre: **letra existente nunca é substituída** (arquivo com
+letra não é nem consultado), título e artista reais nunca são tocados por este
+caminho, a gravação de tags é atômica e nenhum arquivo é renomeado ou movido.
 
 ## Testes
 
