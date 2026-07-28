@@ -155,6 +155,23 @@ python3 tools/embed_lyrics.py --check musica.mp3              # confere (linha I
   contar como erro — sai a linha `INSTRUMENTAL: … (transcrição vazia com áudio
   legível — marcado como instrumental)` e o `Resumo:` ganha o balde
   `N instrumentais`. **Áudio ilegível continua erro**: são coisas diferentes.
+- **Transcrição quase vazia conta igual.** Com o modelo `tiny` as duas faixas
+  instrumentais do acervo real voltavam vazias; com o `small` elas voltaram
+  como **ruído** (13 caracteres para 2m55s, 29 para 6m20s) e o ruído era
+  gravado como letra — o que polui a busca **e**, pior, faz o arquivo "ter
+  letra", tirando-o de todas as etapas seguintes para sempre, sem nunca ganhar
+  a marca. A separação é por **densidade** (caracteres por segundo de áudio):
+  os instrumentais medem 0,074 e 0,076 c/s, e as letras legítimas mais ralas do
+  mesmo lote medem 1,22, 2,81 e 3,10 c/s. O piso fica em **0,30 c/s**, quase
+  exatamente no meio geométrico — 3,9× acima do pior ruído e 4,1× abaixo da
+  letra mais rala. A folga importa: marcar uma música de verdade como
+  instrumental a tira da fila de letra permanentemente. A linha diz a regra que
+  decidiu, e `--densidade-minima` ajusta o piso (`0` desliga e volta ao
+  comportamento antigo):
+
+  ```
+  INSTRUMENTAL: doce preludio.mp3 (13 caracteres em 2m55s de áudio = 0,07 caractere por segundo, abaixo do mínimo de 0,30 — marcado como instrumental)
+  ```
 - **A escolha humana manda**: nenhuma rotina desmarca sozinha, nem com
   `--forcar` ou `--forcar-tudo` (essas flags falam de *letra* a refazer, não de
   rediscutir se a música tem voz). Para reprocessar um arquivo marcado, desmarque
@@ -216,10 +233,7 @@ campo vazio dos dois lados da comparação. Nenhum arquivo é renomeado.
 
 Quando o acervo é de nicho e o LRCLIB não tem quase nada, a letra sai do próprio
 áudio: o `transcrever` roda o [faster-whisper](https://github.com/SYSTRAN/faster-whisper)
-**na sua máquina** (CPU, sem chave de API, sem enviar áudio a lugar nenhum).
-Primeiro ele transcreve só um trecho (90 s a partir dos 20 s), extrai o refrão —
-a frase mais repetida costuma ser o título — e tenta identificar a música no
-LRCLIB pelo refrão + duração; se identificar, usa a letra **oficial**. Se não,
+**na sua máquina** (CPU, sem chave de API, sem enviar áudio a lugar nenhum). Ele
 transcreve a música inteira e grava o texto no `USLT`, marcado como
 `TXXX:LETRA_ORIGEM = "transcricao"` (o relatório mostra `SIM (transcrição)`).
 
@@ -233,15 +247,50 @@ python3 tools/curadoria.py transcrever ~/Musicas --csv feito.csv
 ```bash
   --modelo {tiny,base,small,medium}  padrão: small
   --idioma pt                        padrão: pt
+  --identificar-por-refrao           liga a identificação pelo refrão (F14.1),
+                                     DESLIGADA por padrão — veja abaixo
   --trecho SEGUNDOS                  trecho de identificação (padrão: 90)
   --so-identificar                   nunca transcreve a música inteira
-  --so-transcrever                   pula a identificação
+                                     (implica --identificar-por-refrao)
+  --so-transcrever                   pula a identificação (é o padrão)
   --forcar                           refaz só as letras que vieram de transcrição
   --forcar-tudo                      refaz qualquer letra (apaga letra oficial!)
   --sobrescrever-tags                deixa a identificação ALTA trocar tag real
+  --densidade-minima C_POR_S         piso de caracteres por segundo de áudio
+                                     abaixo do qual a transcrição é ruído e o
+                                     arquivo vira instrumental (padrão: 0,30;
+                                     0 desliga)
   --csv arquivo.csv                  registra o que foi feito, para conferência
   --verboso                          mostra o trecho transcrito e os candidatos
 ```
+
+#### A identificação pelo refrão (F14.1) está desligada — e é de propósito
+
+A ideia era boa: transcrever 90 s, pegar a frase mais repetida (o refrão, que
+quase sempre é o título) e procurar no LRCLIB. **Medida em duas passadas
+completas do acervo real de 94 arquivos, ela não se pagou:**
+
+| modelo | identificações | conflitos |
+|---|---|---|
+| `tiny`  | **0** | 3 |
+| `small` | **1** | 5 |
+
+E a única identificação das duas passadas estava **errada** — e foi aplicada:
+o refrão genérico `"não aguento"` casou com *Não aguento mais / Raça Negra*
+(MÉDIA, mp3 233 s contra lrclib 218 s). Os outros palpites errados só não
+entraram nos arquivos porque aqueles MP3s **tinham tag real** e viraram
+`CONFLITO` — um arquivo sem tag, que é justamente o caso que a etapa existia
+para resolver, receberia o dado errado calado. Do outro lado da conta: uma
+transcrição de trecho de 90 s **por arquivo**, antes da passada completa.
+
+Por isso a etapa passou a ser **opt-in** (`--identificar-por-refrao`;
+`--so-identificar` continua funcionando sozinha e a liga). E, quando ligada,
+a trava é mais dura que antes: resultado **sem duração** não identifica,
+diferença de duração acima de **8 s** desqualifica (eram 15 s, e o erro medido
+estava exatamente em 15 s) e a confiança `MÉDIA` só vale com **refrão
+distintivo** — 4 palavras e 20 caracteres. Para identificar barato e com prova
+de verdade, o caminho é a [impressão digital acústica](#impressão-digital-acústica-v6)
+(~1–2 s por música).
 
 Na **primeira execução** a biblioteca baixa o modelo (~500 MB para o `small`),
 uma única vez, para o cache do seu perfil — é o único acesso à rede além do
@@ -267,6 +316,11 @@ LRCLIB não prova nada — e um lote de horas roda sem ninguém olhando):
   reprocessa apenas o que a própria transcrição escreveu (o caso real: rodar de
   novo com um modelo maior) e `--forcar-tudo` — destrutivo — inclui as letras
   oficiais.
+- **Transcrição sem conteúdo não vira letra**: vazia, ou rala demais para o
+  tamanho do áudio (abaixo de `--densidade-minima`, padrão 0,30 caractere por
+  segundo), marca o arquivo como **instrumental** — ver a seção *Instrumental
+  (V8/F17)* mais acima. Gravar ruído como letra é pior do que não gravar nada:
+  o arquivo passa a "ter letra" e some de todas as etapas seguintes.
 - Como em todo o projeto: nada de renomear ou mover arquivo, e o áudio nunca é
   alterado (a gravação de tags é atômica: escreve numa cópia temporária na mesma
   pasta e a troca de lugar, então nem uma queda de energia trunca o MP3).

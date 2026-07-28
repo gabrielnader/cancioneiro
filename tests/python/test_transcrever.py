@@ -205,6 +205,19 @@ def fetcher_apresento(url: str) -> str:
     raise AssertionError("url inesperada: " + url)
 
 
+def identificando(pasta, **kwargs):
+    """`cmd_transcrever` com a F14.1 LIGADA.
+
+    Desde a V8.1 a identificação pelo refrão é opt-in (0 e 1 identificação
+    em duas passadas do acervo real, a única errada, contra 3 e 5
+    conflitos). Todo teste que exercita a F14.1 pede a etapa
+    explicitamente, como o curador faria com --identificar-por-refrao.
+    """
+    kwargs.setdefault("identificar_por_refrao", True)
+    kwargs.setdefault("pausa", 0)
+    return curadoria.cmd_transcrever(pasta, **kwargs)
+
+
 # ---------------------------------------------------------------- fixtures
 
 @pytest.fixture(scope="module")
@@ -291,8 +304,7 @@ class TestIdentificacao:
                                                                 capsys):
         alvo = pasta / "Faixa 5.mp3"
         t = FakeTranscritor()
-        curadoria.cmd_transcrever(pasta, transcritor=t,
-                                  fetcher=fetcher_apresento, pausa=0)
+        identificando(pasta, transcritor=t, fetcher=fetcher_apresento)
         assert titulo_de(alvo) == "Me Apresento"
         assert artista_de(alvo) == "Barquinha"
         assert uslt_text(alvo) == LETRA_OFICIAL
@@ -312,32 +324,28 @@ class TestIdentificacao:
             return info
 
         monkeypatch.setattr(curadoria, "ler_info", musica_longa)
-        curadoria.cmd_transcrever(
+        identificando(
             pasta, transcritor=FakeTranscritor(),
-            fetcher=lambda url: json.dumps([resultado(duration=216.0)]),
-            pausa=0)
+            fetcher=lambda url: json.dumps([resultado(duration=216.0)]))
         out = capsys.readouterr().out
         assert ('(ALTA, refrão "me apresento", mp3 214s, lrclib 216s)') in out
 
     def test_identificada_nao_transcreve_o_arquivo_inteiro(self, pasta):
         t = FakeTranscritor()
-        curadoria.cmd_transcrever(pasta, transcritor=t,
-                                  fetcher=fetcher_apresento, pausa=0)
+        identificando(pasta, transcritor=t, fetcher=fetcher_apresento)
         assert len(t.trechos) == 1
         assert t.completos == []  # não gastou CPU com a música inteira
 
     def test_trecho_padrao_90s_a_partir_de_20s(self, pasta):
         t = FakeTranscritor()
-        curadoria.cmd_transcrever(pasta, transcritor=t,
-                                  fetcher=fetcher_apresento, pausa=0)
+        identificando(pasta, transcritor=t, fetcher=fetcher_apresento)
         assert t.trechos[0][1] == 20.0
         assert t.trechos[0][2] == 90.0
 
     def test_trecho_configuravel(self, pasta):
         t = FakeTranscritor()
-        curadoria.cmd_transcrever(pasta, transcritor=t,
-                                  fetcher=fetcher_apresento, trecho=45.0,
-                                  pausa=0)
+        identificando(pasta, transcritor=t, fetcher=fetcher_apresento,
+                      trecho=45.0)
         assert t.trechos[0][2] == 45.0
 
     def test_consulta_usa_o_candidato_como_track_name(self, pasta):
@@ -347,20 +355,18 @@ class TestIdentificacao:
             urls.append(url)
             return json.dumps([resultado()])
 
-        curadoria.cmd_transcrever(pasta, transcritor=FakeTranscritor(),
-                                  fetcher=espiao, pausa=0)
+        identificando(pasta, transcritor=FakeTranscritor(), fetcher=espiao)
         assert len(urls) == 1
         assert "track_name=me+apresento" in urls[0]
         assert "q=" not in urls[0]
 
     def test_duracao_divergente_desqualifica(self, pasta, capsys):
-        def homonimo(url):  # mesmo título, 300 s (>15 s de diferença)
+        def homonimo(url):  # mesmo título, 300 s (bem além do teto)
             return json.dumps([resultado(duration=300.0)])
 
         alvo = pasta / "Faixa 5.mp3"
         t = FakeTranscritor()
-        curadoria.cmd_transcrever(pasta, transcritor=t, fetcher=homonimo,
-                                  pausa=0)
+        identificando(pasta, transcritor=t, fetcher=homonimo)
         assert titulo_de(alvo) is None          # nada foi identificado
         assert uslt_text(alvo) == TEXTO_COMPLETO  # caiu na F14.2
         assert len(t.completos) == 1
@@ -372,16 +378,14 @@ class TestIdentificacao:
                                          artist="Unknown Artist")])
 
         alvo = pasta / "Faixa 5.mp3"
-        curadoria.cmd_transcrever(pasta, transcritor=FakeTranscritor(),
-                                  fetcher=lixo, pausa=0)
+        identificando(pasta, transcritor=FakeTranscritor(), fetcher=lixo)
         assert titulo_de(alvo) is None
         assert origem_de(alvo) == "transcricao"
 
     def test_sem_resultado_cai_para_transcricao_completa(self, pasta, capsys):
         alvo = pasta / "Faixa 5.mp3"
         t = FakeTranscritor()
-        curadoria.cmd_transcrever(pasta, transcritor=t,
-                                  fetcher=fetcher_vazio, pausa=0)
+        identificando(pasta, transcritor=t, fetcher=fetcher_vazio)
         assert len(t.completos) == 1
         assert uslt_text(alvo) == TEXTO_COMPLETO
         assert titulo_de(alvo) is None  # título nunca sai da transcrição
@@ -392,8 +396,7 @@ class TestIdentificacao:
             raise urllib.error.URLError("rede indisponível")
 
         alvo = pasta / "Faixa 5.mp3"
-        curadoria.cmd_transcrever(pasta, transcritor=FakeTranscritor(),
-                                  fetcher=caiu, pausa=0)
+        identificando(pasta, transcritor=FakeTranscritor(), fetcher=caiu)
         out = capsys.readouterr().out
         assert "AVISO: Faixa 5.mp3 — erro de rede na identificação" in out
         assert uslt_text(alvo) == TEXTO_COMPLETO  # o trabalho não se perde
@@ -401,8 +404,8 @@ class TestIdentificacao:
     def test_identificada_preserva_temas_existentes(self, pasta):
         alvo = pasta / "Faixa 5.mp3"
         tag(alvo, temas=["água", "cura"])
-        curadoria.cmd_transcrever(pasta, transcritor=FakeTranscritor(),
-                                  fetcher=fetcher_apresento, pausa=0)
+        identificando(pasta, transcritor=FakeTranscritor(),
+                      fetcher=fetcher_apresento)
         assert temas_value(alvo) == "água; cura"
 
 
@@ -511,9 +514,8 @@ class TestLetraExistente:
         curadoria.cmd_transcrever(pasta, transcritor=FakeTranscritor(),
                                   fetcher=fetcher_vazio, pausa=0)
         assert origem_de(alvo) == "transcricao"
-        curadoria.cmd_transcrever(pasta, transcritor=FakeTranscritor(),
-                                  fetcher=fetcher_apresento, forcar=True,
-                                  pausa=0)
+        identificando(pasta, transcritor=FakeTranscritor(),
+                      fetcher=fetcher_apresento, forcar=True)
         assert uslt_text(alvo) == LETRA_OFICIAL
         assert origem_de(alvo) == ""  # agora é letra oficial
 
@@ -613,8 +615,8 @@ class TestInviolaveis:
         alvo = pasta / "Faixa 5.mp3"
         audio_antes = frames_audio(alvo)
         nomes_antes = nomes(pasta)
-        curadoria.cmd_transcrever(pasta, transcritor=FakeTranscritor(),
-                                  fetcher=fetcher_apresento, pausa=0)
+        identificando(pasta, transcritor=FakeTranscritor(),
+                      fetcher=fetcher_apresento)
         assert frames_audio(alvo) == audio_antes  # só a tag ID3 mudou
         assert nomes(pasta) == nomes_antes        # nada renomeado nem movido
         assert titulo_de(alvo) == "Me Apresento"  # (sanidade: a tag mudou)
@@ -637,9 +639,8 @@ class TestCsvEResumo:
         shutil.copyfile(base_mp3, p / "b.mp3")
         tag(p / "b.mp3", letra="já tem")
         saida = tmp_path / "feito.csv"
-        curadoria.cmd_transcrever(p, transcritor=FakeTranscritor(),
-                                  fetcher=fetcher_apresento, csv_out=saida,
-                                  pausa=0)
+        identificando(p, transcritor=FakeTranscritor(),
+                      fetcher=fetcher_apresento, csv_out=saida)
         assert saida.read_bytes().startswith(b"\xef\xbb\xbf")  # BOM p/ Excel
         rows = read_csv(saida)
         assert list(rows[0].keys()) == TRANSCREVER_COLS
@@ -664,8 +665,7 @@ class TestCsvEResumo:
             return json.dumps([resultado()] if "track_name" in url else [])
 
         # a.mp3 identifica; b.mp3 transcreve; c.mp3 pula; quebrado dá erro
-        curadoria.cmd_transcrever(p, transcritor=FakeTranscritor(),
-                                  fetcher=so_para_a, pausa=0)
+        identificando(p, transcritor=FakeTranscritor(), fetcher=so_para_a)
         out = capsys.readouterr().out
         linha = next(l for l in out.splitlines() if l.startswith("Resumo:"))
         numeros = [int(t) for t in linha.replace("|", " ").split()
@@ -691,9 +691,8 @@ class TestCsvEResumo:
         assert "[2/2]" in out
 
     def test_verboso_mostra_trecho_e_candidatos(self, pasta, capsys):
-        curadoria.cmd_transcrever(pasta, transcritor=FakeTranscritor(),
-                                  fetcher=fetcher_vazio, verboso=True,
-                                  pausa=0)
+        identificando(pasta, transcritor=FakeTranscritor(),
+                      fetcher=fetcher_vazio, verboso=True)
         out = capsys.readouterr().out
         assert "Sou filho da natureza" in out       # o trecho transcrito
         assert "candidatos: me apresento" in out
@@ -816,10 +815,31 @@ class TestCliSemFasterWhisper:
 # Correções pós-QA da V5 (C1, A2, A3, A4, M1/M2, M3, M5)
 # =================================================================
 
+# V8.1: MÉDIA (confirmação fraca) passou a exigir refrão DISTINTIVO — 4
+# palavras e 20 caracteres — e diferença de duração dentro de 8 s. Refrão
+# curto e genérico ("me apresento", "não aguento") foi exatamente o que
+# produziu a única identificação do acervo real, e ela estava errada. O
+# caminho MÉDIA continua existindo, só que com refrão que se sustenta.
+TRECHO_REFRAO_MEDIA = (
+    "Na beira do mar sagrado\n"
+    "Meu pai me chamou\n"
+    "Na beira do mar sagrado\n"
+)
+TITULO_MEDIA = "Na Beira do Mar Sagrado do Norte"
+LETRA_MEDIA = "Na beira do mar sagrado\nmeu pai me chamou"
+
+
+def transcritor_media() -> "FakeTranscritor":
+    """Trecho cujo refrão (5 palavras, 23 caracteres) é distintivo."""
+    return FakeTranscritor(trecho=TRECHO_REFRAO_MEDIA)
+
+
 def fetcher_media(url: str) -> str:
-    """Casamento de confiança MÉDIA: título idêntico, duração ~10 s fora
-    (>3 s e ≤15 s) — confirmação fraca, não identificação segura."""
-    return json.dumps([resultado(duration=12.0)])
+    """Casamento de confiança MÉDIA: refrão distintivo, título parecido
+    mas não idêntico (similaridade 0,84) e duração ~6 s fora (>3 s e
+    ≤8 s) — confirmação fraca, não identificação segura."""
+    return json.dumps([resultado(track=TITULO_MEDIA, artist="Barquinha",
+                                 duration=7.5, letra=LETRA_MEDIA)])
 
 
 def fetcher_espiao(urls: list, resultados=None):
@@ -904,8 +924,8 @@ class TestProtecaoDeTagsReais:
         alvo = pasta / "Faixa 5.mp3"
         tag(alvo, title="Segura o Remo", artist="Mestre Irineu")
         antes = sha256(alvo)
-        curadoria.cmd_transcrever(pasta, transcritor=FakeTranscritor(),
-                                  fetcher=fetcher_apresento, pausa=0)
+        identificando(pasta, transcritor=FakeTranscritor(),
+                      fetcher=fetcher_apresento)
         assert titulo_de(alvo) == "Segura o Remo"
         assert artista_de(alvo) == "Mestre Irineu"
         assert uslt_text(alvo) is None       # nem a letra errada entrou
@@ -920,9 +940,8 @@ class TestProtecaoDeTagsReais:
         alvo = pasta / "Faixa 5.mp3"
         tag(alvo, title="Segura o Remo", artist="Mestre Irineu")
         saida = tmp_path / "feito.csv"
-        curadoria.cmd_transcrever(pasta, transcritor=FakeTranscritor(),
-                                  fetcher=fetcher_apresento, csv_out=saida,
-                                  pausa=0)
+        identificando(pasta, transcritor=FakeTranscritor(),
+                      fetcher=fetcher_apresento, csv_out=saida)
         linha = read_csv(saida)[0]
         assert linha["acao"] == "CONFLITO"
         assert linha["titulo"] == "Segura o Remo"   # o que está no arquivo
@@ -933,16 +952,16 @@ class TestProtecaoDeTagsReais:
     def test_tag_placeholder_ainda_e_preenchida(self, pasta):
         alvo = pasta / "Faixa 5.mp3"
         tag(alvo, title="AudioTrack 05", artist="Unknown Artist")
-        curadoria.cmd_transcrever(pasta, transcritor=FakeTranscritor(),
-                                  fetcher=fetcher_apresento, pausa=0)
+        identificando(pasta, transcritor=FakeTranscritor(),
+                      fetcher=fetcher_apresento)
         assert titulo_de(alvo) == "Me Apresento"
         assert artista_de(alvo) == "Barquinha"
 
     def test_tag_igual_nao_e_conflito_e_a_letra_entra(self, pasta, capsys):
         alvo = pasta / "Faixa 5.mp3"
         tag(alvo, title="Me Apresento", artist="Barquinha")
-        curadoria.cmd_transcrever(pasta, transcritor=FakeTranscritor(),
-                                  fetcher=fetcher_apresento, pausa=0)
+        identificando(pasta, transcritor=FakeTranscritor(),
+                      fetcher=fetcher_apresento)
         assert uslt_text(alvo) == LETRA_OFICIAL
         out = capsys.readouterr().out
         assert "CONFLITO" not in out
@@ -951,9 +970,8 @@ class TestProtecaoDeTagsReais:
     def test_sobrescrever_tags_permite_alta_substituir(self, pasta, capsys):
         alvo = pasta / "Faixa 5.mp3"
         tag(alvo, title="Segura o Remo", artist="Mestre Irineu")
-        curadoria.cmd_transcrever(pasta, transcritor=FakeTranscritor(),
-                                  fetcher=fetcher_apresento,
-                                  sobrescrever_tags=True, pausa=0)
+        identificando(pasta, transcritor=FakeTranscritor(),
+                      fetcher=fetcher_apresento, sobrescrever_tags=True)
         assert titulo_de(alvo) == "Me Apresento"
         assert artista_de(alvo) == "Barquinha"
         assert uslt_text(alvo) == LETRA_OFICIAL
@@ -963,9 +981,8 @@ class TestProtecaoDeTagsReais:
         """A opção destrutiva é só para ALTA; MÉDIA continua protegida."""
         alvo = pasta / "Faixa 5.mp3"
         tag(alvo, title="Segura o Remo", artist="Mestre Irineu")
-        curadoria.cmd_transcrever(pasta, transcritor=FakeTranscritor(),
-                                  fetcher=fetcher_media,
-                                  sobrescrever_tags=True, pausa=0)
+        identificando(pasta, transcritor=transcritor_media(),
+                      fetcher=fetcher_media, sobrescrever_tags=True)
         assert titulo_de(alvo) == "Segura o Remo"
         assert artista_de(alvo) == "Mestre Irineu"
         assert "| 1 conflitos |" in capsys.readouterr().out
@@ -974,25 +991,25 @@ class TestProtecaoDeTagsReais:
 # ------------------------------------------------- M5 + A4: caminho MÉDIA
 
 class TestConfiancaMedia:
-    """O caminho mais sensível: confirmação fraca (duração ≤15 s de
-    diferença). Preenche campo vazio, nunca sobrescreve, e RELATA o que
-    de fato foi aplicado (não o que veio do LRCLIB)."""
+    """O caminho mais sensível: confirmação fraca (duração dentro de 8 s,
+    título só parecido). Desde a V8.1 ele exige refrão DISTINTIVO — e
+    quando o exigido está lá, preenche campo vazio, nunca sobrescreve, e
+    RELATA o que de fato foi aplicado (não o que veio do LRCLIB)."""
 
     def test_media_preenche_campos_vazios(self, pasta, capsys):
         alvo = pasta / "Faixa 5.mp3"
-        curadoria.cmd_transcrever(pasta, transcritor=FakeTranscritor(),
-                                  fetcher=fetcher_media, pausa=0)
-        assert titulo_de(alvo) == "Me Apresento"
+        identificando(pasta, transcritor=transcritor_media(),
+                      fetcher=fetcher_media)
+        assert titulo_de(alvo) == TITULO_MEDIA
         assert artista_de(alvo) == "Barquinha"
-        assert uslt_text(alvo) == LETRA_OFICIAL
+        assert uslt_text(alvo) == LETRA_MEDIA
         out = capsys.readouterr().out
-        assert "IDENTIFICADA: Faixa 5.mp3 → Me Apresento / Barquinha" in out
+        assert f"IDENTIFICADA: Faixa 5.mp3 → {TITULO_MEDIA} / Barquinha" in out
         assert "(MÉDIA, refrão" in out          # a confiança aparece na linha
 
     def test_media_nao_transcreve_o_arquivo_inteiro(self, pasta):
-        t = FakeTranscritor()
-        curadoria.cmd_transcrever(pasta, transcritor=t, fetcher=fetcher_media,
-                                  pausa=0)
+        t = transcritor_media()
+        identificando(pasta, transcritor=t, fetcher=fetcher_media)
         assert t.completos == []
 
     def test_media_relata_o_que_foi_aplicado_e_nao_o_do_lrclib(self, pasta,
@@ -1001,18 +1018,18 @@ class TestConfiancaMedia:
         """A4: tag real preservada (mesma música, grafia do curador) — a
         linha e o CSV têm de mostrar o que ficou no arquivo."""
         alvo = pasta / "Faixa 5.mp3"
-        tag(alvo, title="ME APRESENTO")   # real, sem artista
+        tag(alvo, title=TITULO_MEDIA.upper())   # real, sem artista
         saida = tmp_path / "feito.csv"
-        curadoria.cmd_transcrever(pasta, transcritor=FakeTranscritor(),
-                                  fetcher=fetcher_media, csv_out=saida,
-                                  pausa=0)
-        assert titulo_de(alvo) == "ME APRESENTO"   # preservado
+        identificando(pasta, transcritor=transcritor_media(),
+                      fetcher=fetcher_media, csv_out=saida)
+        assert titulo_de(alvo) == TITULO_MEDIA.upper()   # preservado
         assert artista_de(alvo) == "Barquinha"     # campo vazio preenchido
         out = capsys.readouterr().out
-        assert "IDENTIFICADA: Faixa 5.mp3 → ME APRESENTO / Barquinha" in out
-        assert "Me Apresento / Barquinha" not in out  # não mente
+        assert (f"IDENTIFICADA: Faixa 5.mp3 → {TITULO_MEDIA.upper()} / "
+                "Barquinha") in out
+        assert f"{TITULO_MEDIA} / Barquinha" not in out  # não mente
         linha = read_csv(saida)[0]
-        assert linha["titulo"] == "ME APRESENTO"
+        assert linha["titulo"] == TITULO_MEDIA.upper()
         assert linha["artista"] == "Barquinha"
         assert linha["confianca"] == "MÉDIA"
 
@@ -1020,8 +1037,8 @@ class TestConfiancaMedia:
         alvo = pasta / "Faixa 5.mp3"
         tag(alvo, title="Segura o Remo", artist="Mestre Irineu")
         antes = sha256(alvo)
-        curadoria.cmd_transcrever(pasta, transcritor=FakeTranscritor(),
-                                  fetcher=fetcher_media, pausa=0)
+        identificando(pasta, transcritor=transcritor_media(),
+                      fetcher=fetcher_media)
         assert sha256(alvo) == antes
         out = capsys.readouterr().out
         assert "CONFLITO: Faixa 5.mp3" in out
@@ -1108,9 +1125,8 @@ class TestMarcaDeOrigemNaoEnvelhece:
         curadoria.cmd_transcrever(pasta, transcritor=FakeTranscritor(),
                                   fetcher=fetcher_vazio, pausa=0)
         assert origem_de(alvo) == "transcricao"
-        curadoria.cmd_transcrever(pasta, transcritor=FakeTranscritor(),
-                                  fetcher=fetcher_apresento, forcar=True,
-                                  pausa=0)
+        identificando(pasta, transcritor=FakeTranscritor(),
+                      fetcher=fetcher_apresento, forcar=True)
         assert uslt_text(alvo) == LETRA_OFICIAL
         assert origem_de(alvo) == ""
 
@@ -1279,25 +1295,36 @@ class TestRefraoPrecisaEstarNaLetra:
     def test_letra_que_nao_contem_o_refrao_e_recusada(self, pasta, capsys):
         outra = ("Vou chegar mais cedo em casa\n"
                  "Pra te ver sorrir de novo\n")
-        curadoria.cmd_transcrever(
+        identificando(
             pasta, transcritor=FakeTranscritor(),
             fetcher=lambda url: json.dumps(
-                [resultado(track="Me Apresento", letra=outra)]),
-            pausa=0)
+                [resultado(track="Me Apresento", letra=outra)]))
         out = capsys.readouterr().out
         assert "IDENTIFICADA" not in out
         assert titulo_de(pasta / "Faixa 5.mp3") != "Me Apresento"
 
     def test_letra_que_contem_o_refrao_e_aceita(self, pasta, capsys):
-        curadoria.cmd_transcrever(pasta, transcritor=FakeTranscritor(),
-                                  fetcher=fetcher_apresento, pausa=0)
+        identificando(pasta, transcritor=FakeTranscritor(),
+                      fetcher=fetcher_apresento)
         assert "IDENTIFICADA" in capsys.readouterr().out
         assert titulo_de(pasta / "Faixa 5.mp3") == "Me Apresento"
 
+    def test_a_prova_da_letra_sozinha_nao_basta(self, pasta, capsys):
+        """V8.1: a prova da V6.1 passa de graça quando o refrão é uma
+        frase genérica — "não aguento" está mesmo na letra de "Não aguento
+        mais". Foi assim que o acervo real ganhou sua única identificação,
+        e ela estava errada."""
+        identificando(
+            pasta, transcritor=FakeTranscritor(trecho=REFRAO_GENERICO),
+            fetcher=lambda url: json.dumps([resultado(
+                track="Não aguento mais", artist="Raça Negra", duration=6.0,
+                letra="Não aguento mais\nessa saudade")]))
+        assert "IDENTIFICADA" not in capsys.readouterr().out
+
     def test_resultado_sem_letra_nao_identifica(self, pasta, capsys):
-        curadoria.cmd_transcrever(
+        identificando(
             pasta, transcritor=FakeTranscritor(),
-            fetcher=lambda url: json.dumps([resultado(letra="")]), pausa=0)
+            fetcher=lambda url: json.dumps([resultado(letra="")]))
         assert "IDENTIFICADA" not in capsys.readouterr().out
 
 
@@ -1378,3 +1405,245 @@ class TestLacoDeRepeticao:
         letra = uslt_text(alvo)
         assert "Verso bom" in letra
         assert len(letra) < 120
+
+
+# =================================================================
+# V8.1 — a F14.1 (identificação pelo refrão) sai do caminho padrão
+#
+# Medido em duas passadas completas do acervo real (94 arquivos):
+#   modelo tiny  -> 0 identificações,  3 conflitos
+#   modelo small -> 1 identificação,   5 conflitos
+# A única identificação foi ERRADA e foi APLICADA:
+#   "Barco Valente - Flavia Venceslau.mp3" -> "Não aguento mais / Raça
+#   Negra" (MÉDIA, refrão "não aguento", mp3 233s, lrclib 218s)
+# O custo é uma transcrição de trecho de 90 s por arquivo, ANTES da
+# passada completa. Zero acertos medidos, um erro gravado: por isso a
+# etapa passa a ser opt-in (--identificar-por-refrao) e, quando ligada,
+# com trava mais dura.
+# =================================================================
+
+REFRAO_GENERICO = (
+    "Não aguento, não aguento\n"
+    "Essa saudade que não tem fim\n"
+    "Não aguento\n"
+)
+REFRAO_DISTINTIVO = (
+    "Na beira do mar sagrado\n"
+    "Meu pai me chamou\n"
+    "Na beira do mar sagrado\n"
+)
+
+
+def fetcher_de(resultados):
+    def fetcher(url: str) -> str:
+        if "/api/search" in url:
+            return json.dumps(resultados)
+        raise AssertionError("url inesperada: " + url)
+    return fetcher
+
+
+@pytest.fixture
+def duracao_real(monkeypatch):
+    """Faz o `ler_info` devolver a duração de uma faixa de verdade — os
+    números do defeito são de músicas de minutos, o MP3 de teste tem 1,5 s.
+    Só a duração é falsificada."""
+    real = curadoria.ler_info
+
+    def usar(segundos: float):
+        def falso(path):
+            info = real(path)
+            if not info["ilegivel"]:
+                info["duracao"] = float(segundos)
+            return info
+
+        monkeypatch.setattr(curadoria, "ler_info", falso)
+
+    return usar
+
+
+class TestIdentificacaoDesligadaPorPadrao:
+    def test_por_padrao_nao_transcreve_trecho_nem_consulta_o_lrclib(
+            self, pasta, capsys):
+        urls = []
+        t = FakeTranscritor()
+        curadoria.cmd_transcrever(pasta, transcritor=t,
+                                  fetcher=fetcher_espiao(urls), pausa=0)
+        assert t.trechos == []      # o trecho de 90 s não é mais pago
+        assert urls == []           # nenhuma consulta ao LRCLIB
+        assert len(t.completos) == 1
+        assert uslt_text(pasta / "Faixa 5.mp3") == TEXTO_COMPLETO
+        assert "IDENTIFICADA" not in capsys.readouterr().out
+
+    def test_a_flag_liga_a_identificacao(self, pasta, capsys):
+        alvo = pasta / "Faixa 5.mp3"
+        t = FakeTranscritor()
+        curadoria.cmd_transcrever(pasta, transcritor=t,
+                                  fetcher=fetcher_apresento,
+                                  identificar_por_refrao=True, pausa=0)
+        assert len(t.trechos) == 1
+        assert titulo_de(alvo) == "Me Apresento"
+        assert "IDENTIFICADA: Faixa 5.mp3" in capsys.readouterr().out
+
+    def test_so_identificar_implica_a_identificacao(self, pasta, capsys):
+        """A flag antiga continua valendo sozinha: sem isso ela pediria
+        "só a etapa que não roda" e o lote não faria nada."""
+        alvo = pasta / "Faixa 5.mp3"
+        t = FakeTranscritor()
+        curadoria.cmd_transcrever(pasta, transcritor=t,
+                                  fetcher=fetcher_apresento,
+                                  so_identificar=True, pausa=0)
+        assert len(t.trechos) == 1
+        assert t.completos == []
+        assert titulo_de(alvo) == "Me Apresento"
+        assert "| 1 identificadas |" in capsys.readouterr().out
+
+    def test_so_identificar_sem_casamento_nao_transcreve(self, pasta, capsys):
+        t = FakeTranscritor()
+        curadoria.cmd_transcrever(pasta, transcritor=t, fetcher=fetcher_vazio,
+                                  so_identificar=True, pausa=0)
+        assert t.completos == []
+        assert "NÃO IDENTIFICADA: Faixa 5.mp3" in capsys.readouterr().out
+
+    def test_so_transcrever_continua_pulando_a_etapa(self, pasta):
+        urls = []
+        t = FakeTranscritor()
+        curadoria.cmd_transcrever(pasta, transcritor=t,
+                                  fetcher=fetcher_espiao(urls),
+                                  so_transcrever=True, pausa=0)
+        assert t.trechos == []
+        assert urls == []
+
+    def test_so_transcrever_vence_a_flag_se_as_duas_chegarem(self, pasta):
+        """Combinação contraditória não pode virar comportamento
+        surpresa: a que PULA manda (é a conservadora)."""
+        urls = []
+        t = FakeTranscritor()
+        curadoria.cmd_transcrever(pasta, transcritor=t,
+                                  fetcher=fetcher_espiao(urls),
+                                  identificar_por_refrao=True,
+                                  so_transcrever=True, pausa=0)
+        assert t.trechos == []
+        assert urls == []
+
+
+class TestFlagsNaLinhaDeComando:
+    def test_ajuda_traz_a_flag_nova(self):
+        result = run_curadoria("transcrever", "--help")
+        assert result.returncode == 0, result.stderr
+        assert "--identificar-por-refrao" in result.stdout
+        assert "--densidade-minima" in result.stdout
+
+    def test_ajuda_diz_que_a_identificacao_esta_desligada(self):
+        ajuda = " ".join(run_curadoria("transcrever", "--help").stdout.split())
+        assert "desligada por padrão" in ajuda
+        assert "--so-identificar" in ajuda
+
+    def test_flag_contraditoria_e_recusada(self, pasta):
+        antes = shas_mp3(pasta)
+        result = run_curadoria("transcrever", pasta,
+                               "--identificar-por-refrao", "--so-transcrever")
+        assert result.returncode != 0
+        assert "--identificar-por-refrao" in (result.stderr + result.stdout)
+        assert shas_mp3(pasta) == antes
+
+    def test_so_identificar_e_so_transcrever_seguem_exclusivas(self, pasta):
+        result = run_curadoria("transcrever", pasta, "--so-identificar",
+                               "--so-transcrever")
+        assert result.returncode != 0
+
+
+class TestTravaMaisDuraQuandoLigada:
+    """Com a F14.1 ligada, refrão curto e genérico não basta: foi assim
+    que "não aguento" casou com "Não aguento mais / Raça Negra"."""
+
+    def test_repro_do_acervo_real_nao_identifica_mais(self, pasta,
+                                                      duracao_real, capsys):
+        """Números exatos do run com `small`: mp3 233s, lrclib 218s."""
+        duracao_real(233.0)
+        alvo = pasta / "Faixa 5.mp3"
+        curadoria.cmd_transcrever(
+            pasta, transcritor=FakeTranscritor(trecho=REFRAO_GENERICO),
+            fetcher=fetcher_de([resultado(track="Não aguento mais",
+                                          artist="Raça Negra",
+                                          duration=218.0,
+                                          letra="Não aguento mais\n"
+                                                "essa saudade")]),
+            identificar_por_refrao=True, pausa=0)
+        out = capsys.readouterr().out
+        assert "IDENTIFICADA" not in out
+        assert "Raça Negra" not in out
+        assert titulo_de(alvo) is None
+        assert "TRANSCRITA: Faixa 5.mp3" in out
+
+    def test_refrao_generico_nao_sustenta_media_nem_com_duracao_perto(
+            self, pasta, duracao_real, capsys):
+        """Mesmo dentro da tolerância de duração: 2 palavras e 11
+        caracteres acham qualquer coisa no LRCLIB."""
+        duracao_real(220.0)
+        curadoria.cmd_transcrever(
+            pasta, transcritor=FakeTranscritor(trecho=REFRAO_GENERICO),
+            fetcher=fetcher_de([resultado(track="Não aguento mais",
+                                          artist="Raça Negra",
+                                          duration=225.0,
+                                          letra="Não aguento mais\n"
+                                                "essa saudade")]),
+            identificar_por_refrao=True, pausa=0)
+        assert "IDENTIFICADA" not in capsys.readouterr().out
+
+    def test_refrao_distintivo_ainda_identifica_em_media(self, pasta,
+                                                         duracao_real,
+                                                         capsys):
+        """A trava não pode matar a etapa: refrão de 5 palavras com a
+        duração de acordo continua valendo."""
+        duracao_real(220.0)
+        alvo = pasta / "Faixa 5.mp3"
+        curadoria.cmd_transcrever(
+            pasta, transcritor=FakeTranscritor(trecho=REFRAO_DISTINTIVO),
+            fetcher=fetcher_de([resultado(
+                track="Na Beira do Mar Sagrado do Norte",
+                artist="Coral Novo", duration=225.0,
+                letra="Na beira do mar sagrado\nmeu pai me chamou")]),
+            identificar_por_refrao=True, pausa=0)
+        out = capsys.readouterr().out
+        assert "IDENTIFICADA: Faixa 5.mp3" in out
+        assert "(MÉDIA, refrão" in out
+        assert titulo_de(alvo) == "Na Beira do Mar Sagrado do Norte"
+
+    def test_diferenca_de_duracao_acima_do_teto_desqualifica(
+            self, pasta, duracao_real, capsys):
+        """15 s de diferença era aceito como MÉDIA; agora não passa nem
+        com refrão distintivo — o teto da F14.1 é 8 s."""
+        duracao_real(233.0)
+        curadoria.cmd_transcrever(
+            pasta, transcritor=FakeTranscritor(trecho=REFRAO_DISTINTIVO),
+            fetcher=fetcher_de([resultado(
+                track="Na Beira do Mar Sagrado do Norte",
+                artist="Coral Novo", duration=218.0,
+                letra="Na beira do mar sagrado\nmeu pai me chamou")]),
+            identificar_por_refrao=True, pausa=0)
+        assert "IDENTIFICADA" not in capsys.readouterr().out
+
+    def test_resultado_sem_duracao_nao_identifica(self, pasta, capsys):
+        """Sem duração não há confirmação nenhuma, e o palpite veio do
+        áudio: título parecido sozinho não prova nada (decisão 64)."""
+        curadoria.cmd_transcrever(
+            pasta, transcritor=FakeTranscritor(),
+            fetcher=fetcher_de([resultado(duration=None)]),
+            identificar_por_refrao=True, pausa=0)
+        assert "IDENTIFICADA" not in capsys.readouterr().out
+
+    def test_alta_continua_identificando(self, pasta, duracao_real, capsys):
+        """A confirmação forte (±3 s) não foi tocada."""
+        duracao_real(220.0)
+        alvo = pasta / "Faixa 5.mp3"
+        curadoria.cmd_transcrever(
+            pasta, transcritor=FakeTranscritor(),
+            fetcher=fetcher_de([resultado(duration=222.0)]),
+            identificar_por_refrao=True, pausa=0)
+        assert titulo_de(alvo) == "Me Apresento"
+        assert "(ALTA, refrão" in capsys.readouterr().out
+
+    def test_refrao_distintivo_e_uma_regra_pura_e_testavel(self):
+        assert curadoria._refrao_distintivo("não aguento") is False
+        assert curadoria._refrao_distintivo("me apresento") is False
+        assert curadoria._refrao_distintivo("na beira do mar sagrado") is True

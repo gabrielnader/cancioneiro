@@ -1083,6 +1083,40 @@ MAX_PALAVRAS_PRIMEIRA = 8
 MIN_PALAVRAS_CANDIDATO = 2
 MIN_CARACTERES_CANDIDATO = 8
 MIN_REPETICOES_REFRAO = 2
+# --- V8.1: o que a F14.1 precisa provar para IDENTIFICAR de verdade -------
+#
+# Medição em duas passadas completas do acervo real (94 arquivos):
+#   modelo tiny  -> 0 identificações, 3 conflitos
+#   modelo small -> 1 identificação,  5 conflitos
+# A única identificação foi ERRADA e foi APLICADA: o refrão "não aguento"
+# (2 palavras, 11 caracteres) casou com "Não aguento mais / Raça Negra",
+# confiança MÉDIA, mp3 233 s contra lrclib 218 s. A prova da V6.1 ("o
+# refrão tem de estar na letra devolvida") passou de graça — uma frase
+# genérica aparece naturalmente na letra de uma música que se chama quase
+# igual a ela. Os conflitos ("Lampejo" -> Roberto Carlos, "Velho barqueiro"
+# -> banda punk espanhola, "canção dos herdeiros" -> Pato Fu) só foram
+# barrados porque aqueles arquivos tinham tag real; arquivo sem tag recebe
+# o dado errado calado.
+#
+# Duas travas, ambas calibradas nesses números:
+#
+# 1) Teto de duração da F14.1 em 8 s, não os 15 s da V3. O único erro
+#    medido estava EXATAMENTE em 15 s. No `enriquecer` o palpite nasce da
+#    própria tag (casar já implica consistência) e 15 s é tolerância
+#    razoável; aqui o palpite vem do áudio e a duração é a única prova
+#    objetiva que existe — ela tem de ser apertada. ALTA já vive dentro de
+#    ±3 s (ou ≤8 s com título quase idêntico), então o teto não custa
+#    nenhuma identificação forte.
+MAX_DIF_DURACAO_REFRAO_S = 8.0
+# 2) MÉDIA (confirmação fraca) exige refrão DISTINTIVO: 4 palavras e 20
+#    caracteres. "não aguento" (2/11) e "me apresento" (2/12) acham
+#    qualquer coisa no LRCLIB; "na beira do mar sagrado" (5/23) não. O
+#    corte fica acima das frases de 2-3 palavras que produziram o erro e
+#    abaixo do teto de 6 palavras que o próprio extrator já impõe ao
+#    refrão — ou seja, a faixa 4-6 palavras continua servindo. ALTA não
+#    passa por aqui: lá a duração bate em ±3 s e já é prova suficiente.
+MIN_PALAVRAS_REFRAO_MEDIA = 4
+MIN_CARACTERES_REFRAO_MEDIA = 20
 # Alucinações conhecidas do faster-whisper em pt-BR: em trecho instrumental
 # ou de voz baixa o modelo "ouve" legendas de vídeo e agradecimentos. Uma
 # dessas frases NUNCA vira consulta — foi assim que uma faixa qualquer do
@@ -1188,13 +1222,35 @@ def extrair_candidatos(texto: str, maximo: int = MAX_CANDIDATOS) -> list:
     return unicos[:maximo]
 
 
+def _refrao_distintivo(candidato: str) -> bool:
+    """True quando o refrão é específico o bastante para sustentar sozinho
+    uma identificação de confiança MÉDIA (V8.1).
+
+    O extrator já barra frase de 1 palavra; isto é um degrau acima, e vale
+    só onde a duração NÃO fecha a prova. "não aguento" e "me apresento"
+    são frases que meio repertório contém — casar com elas é sorteio."""
+    chave = _norm_comparacao(candidato)
+    return (len(chave) >= MIN_CARACTERES_REFRAO_MEDIA
+            and len(chave.split()) >= MIN_PALAVRAS_REFRAO_MEDIA)
+
+
 def _identificar_por_refrao(candidatos: list, duracao_mp3: float, buscar,
                             log=None) -> dict | None:
     """Consulta o LRCLIB com cada candidato como track_name e devolve o
     melhor casamento ({"sim", "dif", "res", "candidato", "confianca"}) ou
-    None. Confirmação pela duração com as MESMAS regras da V3 (classificar:
-    ±3s ALTA, ≤8s ALTA com texto quase idêntico, ≤15s MÉDIA, >15s
-    desqualifica); BAIXA não é identificação. Para no primeiro ALTA."""
+    None. Para no primeiro ALTA.
+
+    A confirmação usa `classificar` (±3s ALTA, ≤8s ALTA com texto quase
+    idêntico, MÉDIA abaixo disso), mas com as travas da V8.1 por cima —
+    aqui o palpite vem do ÁUDIO, não da tag:
+
+    - sem duração comparável não há identificação nenhuma (decisão 64: o
+      palpite do áudio precisa de prova OBJETIVA, e a duração é a única);
+    - diferença de duração acima de MAX_DIF_DURACAO_REFRAO_S (8 s)
+      desqualifica, contra os 15 s da V3;
+    - MÉDIA só vale com refrão distintivo (>= 4 palavras e 20 caracteres);
+    - BAIXA nunca é identificação.
+    """
     log = log or (lambda _msg: None)
     melhor = None
     for candidato in candidatos:
@@ -1212,6 +1268,8 @@ def _identificar_por_refrao(candidatos: list, duracao_mp3: float, buscar,
             # no 2º teste real isso casou "Lampejo" com "Vou Chegar Mais
             # Cedo em Casa / Roberto Carlos" e mais três absurdos. Resultado
             # sem letra também não serve: a letra é o objetivo da F14.1.
+            # (Sozinha esta prova NÃO basta: "não aguento" aparece na letra
+            # de "Não aguento mais" — daí as travas abaixo.)
             if _norm_comparacao(candidato) not in _norm_comparacao(
                     res.get("plainLyrics") or ""):
                 log(f'  descartado (refrão não está na letra): '
@@ -1221,21 +1279,31 @@ def _identificar_por_refrao(candidatos: list, duracao_mp3: float, buscar,
             duracao = res.get("duration")
             dif = (abs(duracao_mp3 - float(duracao))
                    if duracao is not None and duracao_mp3 else None)
-            if dif is not None and dif > 15:
-                continue  # homônimo/versão errada: desqualificado
-            bonus = 0.0
-            if dif is not None:
-                bonus = 0.3 if dif <= 3 else (0.15 if dif <= 8 else 0.0)
+            if dif is None:
+                log(f'  descartado (sem duração para confirmar): '
+                    f'"{res.get("trackName")}"')
+                continue
+            if dif > MAX_DIF_DURACAO_REFRAO_S:
+                # homônimo/versão errada: desqualificado
+                log(f'  descartado (duração {dif:.0f}s fora do teto de '
+                    f'{MAX_DIF_DURACAO_REFRAO_S:.0f}s): '
+                    f'"{res.get("trackName")}"')
+                continue
+            confianca = classificar(sim, dif)
+            if confianca == "BAIXA":
+                continue
+            if confianca == "MÉDIA" and not _refrao_distintivo(candidato):
+                log(f'  descartado (MÉDIA com refrão genérico '
+                    f'"{candidato}"): "{res.get("trackName")}"')
+                continue
+            bonus = 0.3 if dif <= 3 else 0.15
             if melhor is None or sim + bonus > melhor["score"]:
                 melhor = {"score": sim + bonus, "sim": sim, "dif": dif,
-                          "res": res, "candidato": candidato}
-        if melhor is not None and classificar(melhor["sim"],
-                                              melhor["dif"]) == "ALTA":
+                          "res": res, "candidato": candidato,
+                          "confianca": confianca}
+        if melhor is not None and melhor["confianca"] == "ALTA":
             break
-    if melhor is None:
-        return None
-    melhor["confianca"] = classificar(melhor["sim"], melhor["dif"])
-    return None if melhor["confianca"] == "BAIXA" else melhor
+    return melhor
 
 
 # Laço de repetição do Whisper sobre música: uma sílaba ou palavra curta
@@ -1285,6 +1353,55 @@ def limpar_transcricao(texto: str) -> str:
     return "\n".join(linhas)
 
 
+# --- V8.1/F17: transcrição QUASE vazia é o mesmo caso da vazia -----------
+#
+# A F17 marca instrumental quando a transcrição volta VAZIA. Com o modelo
+# `tiny` as duas faixas instrumentais do acervo real voltaram vazias e
+# foram marcadas certo. Com o `small` elas voltaram como RUÍDO — e ruído
+# gravado como letra polui o índice de busca e, pior, faz o arquivo "ter
+# letra": toda etapa seguinte passa a pulá-lo, para sempre, e a F17 nunca
+# mais tem a chance de marcá-lo.
+#
+# A separação é por DENSIDADE (caracteres por segundo de ÁUDIO), medida no
+# acervo real de 94 arquivos com o modelo small:
+#
+#   instrumentais (ruído)     13 car / 175 s = 0,074 c/s
+#                             29 car / 380 s = 0,076 c/s
+#   letras legítimas + ralas  355 car / 290 s = 1,22 c/s
+#                             481 car / 171 s = 2,81 c/s
+#                             484 car / 156 s = 3,10 c/s
+#
+# Entre 0,076 e 1,22 há um fator de 16 sem nada no meio. O piso fica em
+# 0,30 c/s, praticamente a média geométrica das duas bordas: 3,9x acima do
+# pior instrumental e 4,1x abaixo da letra legítima mais rala.
+#
+# A folga simétrica é deliberada, mas os dois erros NÃO são simétricos:
+# deixar ruído passar custa uma linha feia no índice, enquanto marcar uma
+# música de verdade como instrumental a tira da fila de letra para sempre
+# (a marca vence até --forcar-tudo, por decisão da F17). Por isso o piso
+# não sobe: 4x de folga abaixo da letra mais rala JÁ MEDIDA é o que
+# separa a regra de qualquer coisa vista no acervo real. Quem tiver
+# repertório ainda mais rarefeito ajusta com --densidade-minima (0 desliga
+# a regra e devolve o comportamento antigo: só a vazia marca).
+DENSIDADE_MINIMA_LETRA = 0.30
+
+
+def sem_conteudo(texto: str, duracao: float,
+                 densidade_minima: float = DENSIDADE_MINIMA_LETRA) -> bool:
+    """True quando a transcrição não carrega conteúdo nenhum: vazia, ou
+    tão rala para o tamanho do áudio que é o motor ouvindo quase nada.
+
+    Sem duração conhecida não há densidade a medir — e chutar aqui seria
+    marcar instrumental por engano —, então só o texto vazio conta.
+    """
+    limpo = (texto or "").strip()
+    if not limpo:
+        return True
+    if densidade_minima <= 0 or not duracao or duracao <= 0:
+        return False
+    return len(limpo) / float(duracao) < densidade_minima
+
+
 def criar_transcritor(modelo: str = "small", idioma: str = "pt"):
     """Fábrica do transcritor real (faster-whisper na CPU). O import é
     PREGUIÇOSO: a biblioteca é dependência opcional; sem ela, explica em uma
@@ -1324,6 +1441,11 @@ def criar_transcritor(modelo: str = "small", idioma: str = "pt"):
 def _fmt_milhar(n: int) -> str:
     """1842 -> "1.842" (padrão pt-BR, sem depender de locale)."""
     return "{:,}".format(n).replace(",", ".")
+
+
+def _fmt_decimal(valor: float, casas: int = 2) -> str:
+    """0.0743 -> "0,07" (vírgula decimal do pt-BR, sem depender de locale)."""
+    return f"{valor:.{casas}f}".replace(".", ",")
 
 
 def _fmt_dur(segundos: float) -> str:
@@ -1381,14 +1503,25 @@ def cmd_transcrever(pasta: Path, transcritor=None, fetcher=None,
                     modelo: str = "small", idioma: str = "pt",
                     trecho: float = TRECHO_PADRAO_S,
                     inicio: float = TRECHO_INICIO_S,
+                    identificar_por_refrao: bool = False,
                     so_identificar: bool = False,
                     so_transcrever: bool = False, forcar: bool = False,
                     forcar_tudo: bool = False,
                     sobrescrever_tags: bool = False,
+                    densidade_minima: float = DENSIDADE_MINIMA_LETRA,
                     csv_out: Path | None = None, verboso: bool = False,
                     pausa: float = PAUSA_S) -> None:
-    """F14: identifica pelo refrão (F14.1) e, falhando, grava a transcrição
-    completa como letra (F14.2).
+    """F14: grava a transcrição completa como letra (F14.2) e, se pedirem,
+    tenta antes identificar a música pelo refrão (F14.1).
+
+    A F14.1 é OPT-IN desde a V8.1 (`identificar_por_refrao`): em duas
+    passadas completas do acervo real ela rendeu 0 e 1 identificação
+    (a única, errada e aplicada), contra 3 e 5 conflitos, cobrando uma
+    transcrição de trecho de 90 s por arquivo. `so_identificar` a implica —
+    sem isso pediria "só a etapa que não roda" e o lote não faria nada. Na
+    contradição `identificar_por_refrao` + `so_transcrever`, quem pula
+    manda: é a escolha conservadora (a linha de comando recusa a
+    combinação antes de chegar aqui).
 
     Invioláveis: nunca renomeia, nunca toca no áudio e NUNCA sobrescreve
     dado real. O candidato vem do ÁUDIO — casar no LRCLIB não prova nada —,
@@ -1403,6 +1536,10 @@ def cmd_transcrever(pasta: Path, transcritor=None, fetcher=None,
     total = len(mp3s)
     log = print if verboso else None
     estado = {"primeira": True}
+    # V8.1: a etapa cara e improdutiva só roda quando alguém a pede; e
+    # quem manda pular vence quem manda tentar.
+    fazer_identificacao = ((identificar_por_refrao or so_identificar)
+                           and not so_transcrever)
 
     def buscar(track_name=""):
         if not estado["primeira"] and pausa:
@@ -1469,7 +1606,7 @@ def cmd_transcrever(pasta: Path, transcritor=None, fetcher=None,
             gravou = False
             fase = "transcrição do áudio"
             try:
-                if not so_transcrever:
+                if fazer_identificacao:
                     texto_trecho = transcritor(str(p), inicio, trecho)
                     if verboso:
                         print("  trecho transcrito:")
@@ -1571,30 +1708,53 @@ def cmd_transcrever(pasta: Path, transcritor=None, fetcher=None,
                     continue
 
                 comeco = time.monotonic()
+                bruto = unicodedata.normalize(
+                    "NFC", transcritor(str(p), None, None) or "")
+                gasto = time.monotonic() - comeco
                 # limpar_transcricao vive AQUI, não no transcritor: assim a
                 # letra gravada vem sem laço de repetição seja qual for o
                 # motor por trás (e o teste consegue provar isso).
-                texto = limpar_transcricao(unicodedata.normalize(
-                    "NFC", transcritor(str(p), None, None) or ""))
-                gasto = time.monotonic() - comeco
-                if not texto.strip():
-                    # V8/F17. O áudio foi LIDO até o fim (ilegível teria
-                    # parado lá em cima, e motor que explode cai no except
-                    # como erro): voltar vazio daqui é música SEM VOZ, não
-                    # defeito. Marcar tira o arquivo da fila para sempre —
-                    # antes ele voltava como "ERRO: transcrição vazia" em
-                    # toda execução, para sempre. Erro e instrumental são
-                    # coisas diferentes e têm baldes diferentes.
+                texto = limpar_transcricao(bruto)
+                # A densidade é medida no texto CRU, ANTES do limpador: ele
+                # colapsa linha repetida em série, e neste repertório
+                # (ponto, coco, ciranda) uma faixa de 15 minutos pode ser um
+                # refrão repetido cinquenta vezes — depois de colapsado
+                # sobrariam 200 caracteres e a música viraria "instrumental".
+                # O que se quer medir é quanto o MOTOR ouviu.
+                if sem_conteudo(bruto, info["duracao"], densidade_minima):
+                    # V8/F17 + V8.1. O áudio foi LIDO até o fim (ilegível
+                    # teria parado lá em cima, e motor que explode cai no
+                    # except como erro): voltar vazio — ou quase — daqui é
+                    # música SEM VOZ, não defeito. Marcar tira o arquivo da
+                    # fila para sempre; gravar o ruído como letra também
+                    # tirava, só que mentindo e sem a marca.
                     fase = "gravação da marca de instrumental"
+                    caracteres = len(bruto.strip())
+                    if not caracteres:
+                        motivo = "transcrição vazia com áudio legível"
+                        motivo_csv = "transcrição vazia"
+                    else:
+                        # a linha DIZ a regra: o curador precisa ver por que
+                        # este arquivo saiu da fila de letra
+                        densidade = caracteres / float(info["duracao"])
+                        motivo = (f"{_fmt_milhar(caracteres)} caracteres em "
+                                  f"{_fmt_dur(info['duracao'])} de áudio = "
+                                  f"{_fmt_decimal(densidade)} caractere por "
+                                  "segundo, abaixo do mínimo de "
+                                  f"{_fmt_decimal(densidade_minima)}")
+                        motivo_csv = (f"transcrição rala "
+                                      f"({_fmt_decimal(densidade)} c/s, "
+                                      "mínimo "
+                                      f"{_fmt_decimal(densidade_minima)})")
                     el.write_instrumental(p, True)
                     gravou = True
-                    print(f"{prefixo}INSTRUMENTAL: {rel} (transcrição vazia "
-                          "com áudio legível — marcado como instrumental)")
+                    print(f"{prefixo}INSTRUMENTAL: {rel} ({motivo} — "
+                          "marcado como instrumental)")
                     contagem["instrumentais"] += 1
                     linhas_csv.append(
                         [rel, "INSTRUMENTAL", info["titulo"], info["artista"],
-                         "", "; ".join(candidatos), "",
-                         "transcrição vazia — marcado como instrumental"])
+                         "", "; ".join(candidatos), caracteres or "",
+                         f"{motivo_csv} — marcado como instrumental"])
                     continue
                 # letra limpa (sem cabeçalho, que poluiria a busca por
                 # trecho) e título/artista intocados: transcrição não
@@ -2537,9 +2697,8 @@ def main(argv: list[str] | None = None) -> None:
                        help="permite sobrescrever letra existente")
 
     p_trs = sub.add_parser("transcrever",
-                           help="transcreve o áudio localmente (F14): "
-                                "identifica pelo refrão no LRCLIB e, "
-                                "falhando, grava a transcrição como letra")
+                           help="transcreve o áudio localmente (F14) e grava "
+                                "a transcrição como letra")
     p_trs.add_argument("pasta", help="pasta do acervo")
     p_trs.add_argument("--modelo", default="small",
                        choices=["tiny", "base", "small", "medium"],
@@ -2549,14 +2708,25 @@ def main(argv: list[str] | None = None) -> None:
     p_trs.add_argument("--trecho", type=float, default=TRECHO_PADRAO_S,
                        metavar="SEGUNDOS",
                        help="duração do trecho de identificação "
-                            "(padrão: 90, a partir de 20s)")
+                            "(padrão: 90, a partir de 20s); só vale com "
+                            "--identificar-por-refrao")
+    p_trs.add_argument("--identificar-por-refrao", action="store_true",
+                       dest="identificar_por_refrao",
+                       help="liga a identificação pelo refrão (F14.1), "
+                            "desligada por padrão: em dois acervos reais "
+                            "de 94 arquivos ela rendeu 0 e 1 identificação "
+                            "(a única, errada) contra 3 e 5 conflitos, e "
+                            "cobra uma transcrição de trecho de 90 s por "
+                            "arquivo")
     gate = p_trs.add_mutually_exclusive_group()
     gate.add_argument("--so-identificar", action="store_true",
                       dest="so_identificar",
-                      help="só F14.1; nunca transcreve a música inteira")
+                      help="só F14.1 (implica --identificar-por-refrao); "
+                           "nunca transcreve a música inteira")
     gate.add_argument("--so-transcrever", action="store_true",
                       dest="so_transcrever",
-                      help="pula a identificação; transcreve direto")
+                      help="pula a identificação e transcreve direto (é o "
+                           "padrão desde que a F14.1 saiu do caminho)")
     p_trs.add_argument("--forcar", action="store_true",
                        help="reprocessa SOMENTE as músicas cuja letra veio de "
                             "transcrição (para rodar de novo com um modelo "
@@ -2571,6 +2741,16 @@ def main(argv: list[str] | None = None) -> None:
                             "confiança ALTA substitua título/artista reais "
                             "já gravados (o padrão é só preencher campo "
                             "vazio)")
+    p_trs.add_argument("--densidade-minima", type=float,
+                       default=DENSIDADE_MINIMA_LETRA,
+                       dest="densidade_minima", metavar="C_POR_S",
+                       help="caracteres por segundo de áudio abaixo dos "
+                            "quais a transcrição é ruído, e o arquivo é "
+                            "marcado como instrumental em vez de receber "
+                            "letra (padrão: "
+                            f"{_fmt_decimal(DENSIDADE_MINIMA_LETRA)}; "
+                            "0 desliga a regra e só a transcrição vazia "
+                            "marca)")
     p_trs.add_argument("--csv", default=None, metavar="SAIDA",
                        help="registra o que foi feito, para conferência")
     p_trs.add_argument("--verboso", action="store_true",
@@ -2649,12 +2829,19 @@ def main(argv: list[str] | None = None) -> None:
         cmd_aplicar_proposta(pasta, Path(args.csv), dry_run=args.dry_run,
                              forcar=args.forcar)
     elif args.comando == "transcrever":
+        # combinação sem sentido: uma manda tentar a F14.1, a outra manda
+        # pulá-la. Recusar é melhor que escolher em silêncio por quem pediu.
+        if args.identificar_por_refrao and args.so_transcrever:
+            die("ERRO: --identificar-por-refrao e --so-transcrever se "
+                "contradizem — escolha um dos dois")
         cmd_transcrever(pasta, modelo=args.modelo, idioma=args.idioma,
                         trecho=args.trecho,
+                        identificar_por_refrao=args.identificar_por_refrao,
                         so_identificar=args.so_identificar,
                         so_transcrever=args.so_transcrever,
                         forcar=args.forcar, forcar_tudo=args.forcar_tudo,
                         sobrescrever_tags=args.sobrescrever_tags,
+                        densidade_minima=args.densidade_minima,
                         verboso=args.verboso,
                         csv_out=Path(args.csv) if args.csv else None)
     elif args.comando == "identificar":

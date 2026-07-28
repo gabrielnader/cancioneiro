@@ -499,6 +499,195 @@ class TestMarcacaoAutomatica:
         assert "| 1 instrumentais" in resumo_de(capsys.readouterr().out)
 
 
+# ============================ V8.1: transcrição QUASE vazia é o mesmo caso
+
+# Medições do acervo real de 94 arquivos com o modelo `small`. As duas
+# primeiras são as faixas instrumentais que o `tiny` devolvia VAZIAS (e a
+# F17 marcava certo) e que o `small` devolveu como RUÍDO — e o ruído foi
+# gravado como letra, tirando os arquivos da fila para sempre. As três
+# seguintes são as letras legítimas MAIS RALAS do mesmo lote: é este
+# intervalo que o piso de densidade tem de separar, e com folga dos dois
+# lados.
+INSTRUMENTAIS_REAIS = [
+    ("Instrumental - doce preludio.mp3", 13, 175.0),
+    ("instrumental - passeio pelo jardim.mp3", 29, 380.0),
+]
+LETRAS_RALAS_REAIS = [
+    ("355 caracteres em 4m50s", 355, 290.0),
+    ("481 caracteres em 2m51s", 481, 171.0),
+    ("484 caracteres em 2m36s", 484, 156.0),
+]
+
+
+def ruido(caracteres: int) -> str:
+    """Texto de N caracteres, como o motor devolve: linhas curtas."""
+    return ("la " * ((caracteres // 3) + 1))[:caracteres]
+
+
+@pytest.fixture
+def duracao_real(monkeypatch):
+    """Faz o `ler_info` devolver a duração de uma faixa de verdade.
+
+    O MP3 de teste tem ~1,5 s; o defeito medido é sobre faixas de minutos,
+    e é a razão entre caracteres e SEGUNDOS que decide. Só a duração é
+    falsificada — tags, letra e a marca continuam vindo do arquivo real.
+    """
+    real = curadoria.ler_info
+
+    def usar(segundos: float):
+        def falso(path):
+            info = real(path)
+            if not info["ilegivel"]:
+                info["duracao"] = float(segundos)
+            return info
+
+        monkeypatch.setattr(curadoria, "ler_info", falso)
+
+    return usar
+
+
+class TestDensidadeSeparaRuidoDeLetra:
+    """A regra pura, contra os números medidos no acervo real."""
+
+    @pytest.mark.parametrize("nome,caracteres,duracao", INSTRUMENTAIS_REAIS)
+    def test_instrumental_real_conta_como_sem_conteudo(self, nome,
+                                                       caracteres, duracao):
+        assert curadoria.sem_conteudo(ruido(caracteres), duracao) is True
+
+    @pytest.mark.parametrize("rotulo,caracteres,duracao", LETRAS_RALAS_REAIS)
+    def test_letra_rala_real_continua_sendo_letra(self, rotulo, caracteres,
+                                                  duracao):
+        assert curadoria.sem_conteudo(ruido(caracteres), duracao) is False
+
+    def test_transcricao_vazia_continua_sem_conteudo(self):
+        assert curadoria.sem_conteudo("", 175.0) is True
+        assert curadoria.sem_conteudo("   \n\n ", 175.0) is True
+
+    def test_o_piso_tem_folga_para_os_dois_lados(self):
+        """O piso não pode encostar em nenhuma das bordas medidas: errar
+        para cá marca música de verdade como instrumental e a tira da fila
+        de letra para sempre."""
+        piso = curadoria.DENSIDADE_MINIMA_LETRA
+        pior_instrumental = max(c / d for _n, c, d in INSTRUMENTAIS_REAIS)
+        letra_mais_rala = min(c / d for _r, c, d in LETRAS_RALAS_REAIS)
+        assert piso >= pior_instrumental * 3      # folga acima do ruído
+        assert piso <= letra_mais_rala / 3        # folga abaixo da letra
+
+    def test_sem_duracao_nao_ha_densidade_a_medir(self):
+        """Duração desconhecida (0) não pode virar divisão por zero nem
+        marcar instrumental por engano: só o texto vazio marca."""
+        assert curadoria.sem_conteudo("la la", 0.0) is False
+        assert curadoria.sem_conteudo("", 0.0) is True
+
+    def test_piso_zero_desliga_a_regra_de_densidade(self):
+        assert curadoria.sem_conteudo(ruido(13), 175.0,
+                                      densidade_minima=0) is False
+        assert curadoria.sem_conteudo("", 175.0, densidade_minima=0) is True
+
+
+class TestQuaseVaziaMarcaInstrumental:
+    """O defeito de verdade, ponta a ponta: 13 caracteres para 2m55s de
+    áudio não é letra — é o motor ouvindo quase nada."""
+
+    @pytest.fixture
+    def pasta(self, tmp_path, base_mp3) -> Path:
+        p = tmp_path / "acervo"
+        p.mkdir()
+        shutil.copyfile(base_mp3, p / "doce preludio.mp3")
+        return p
+
+    def test_ruido_do_small_marca_instrumental(self, pasta, duracao_real,
+                                               capsys):
+        duracao_real(175.0)
+        alvo = pasta / "doce preludio.mp3"
+        transcrever(pasta, transcritor=FakeTranscritor(completo=ruido(13)))
+        assert instrumental_de(alvo) is True
+        assert uslt_text(alvo) is None        # o ruído NÃO virou letra
+        assert origem_de(alvo) == ""
+        out = capsys.readouterr().out
+        assert "INSTRUMENTAL: doce preludio.mp3" in out
+        assert "TRANSCRITA" not in out
+        assert "| 1 instrumentais" in resumo_de(out)
+        assert "| 0 transcritas" in resumo_de(out)
+
+    def test_a_linha_diz_a_regra_que_decidiu(self, pasta, duracao_real,
+                                             capsys):
+        """O curador tem de conseguir ver POR QUE o arquivo foi marcado."""
+        duracao_real(175.0)
+        transcrever(pasta, transcritor=FakeTranscritor(completo=ruido(13)))
+        out = capsys.readouterr().out
+        assert "13 caracteres" in out
+        assert "2m55s" in out                       # a duração do áudio
+        assert "0,07 caractere por segundo" in out  # a densidade medida
+        assert "0,30" in out                        # o piso aplicado
+
+    def test_letra_rala_mas_legitima_nao_e_marcada(self, pasta, duracao_real):
+        """355 caracteres em 4m50s foi a letra mais rala do acervo real."""
+        duracao_real(290.0)
+        alvo = pasta / "doce preludio.mp3"
+        transcrever(pasta, transcritor=FakeTranscritor(completo=ruido(355)))
+        assert instrumental_de(alvo) is False
+        assert uslt_text(alvo) is not None
+        assert origem_de(alvo) == el.ORIGEM_TRANSCRICAO
+
+    def test_a_segunda_execucao_ja_pula_o_arquivo(self, pasta, duracao_real):
+        """O ponto do defeito: sem a marca o arquivo "tem letra" e some da
+        fila; com ela, some da fila do jeito certo — sem letra falsa."""
+        duracao_real(380.0)
+        alvo = pasta / "passeio.mp3"
+        shutil.copyfile(pasta / "doce preludio.mp3", alvo)
+        transcrever(pasta, transcritor=FakeTranscritor(completo=ruido(29)))
+        assert instrumental_de(alvo) is True
+        t = FakeTranscritor(completo=TEXTO_COMPLETO)
+        transcrever(pasta, transcritor=t)
+        assert t.chamadas == []
+
+    def test_csv_registra_instrumental_e_nao_transcrita(self, pasta,
+                                                        duracao_real,
+                                                        tmp_path):
+        duracao_real(175.0)
+        saida = tmp_path / "feito.csv"
+        transcrever(pasta, transcritor=FakeTranscritor(completo=ruido(13)),
+                    csv_out=saida)
+        linha = read_csv(saida)[0]
+        assert linha["acao"] == "INSTRUMENTAL"
+        assert "instrumental" in linha["detalhe"]
+
+    def test_marcar_preserva_audio_tags_e_nome(self, pasta, duracao_real):
+        duracao_real(175.0)
+        alvo = pasta / "doce preludio.mp3"
+        tag(alvo, title="Doce Prelúdio", artist="Coral Novo")
+        audio_antes = frames_audio(alvo)
+        nomes_antes = nomes(pasta)
+        transcrever(pasta, transcritor=FakeTranscritor(completo=ruido(13)))
+        assert frames_audio(alvo) == audio_antes
+        assert nomes(pasta) == nomes_antes
+        assert titulo_de(alvo) == "Doce Prelúdio"
+        assert artista_de(alvo) == "Coral Novo"
+
+    def test_piso_configuravel_pela_chamada(self, pasta, duracao_real):
+        """Piso 0 devolve o comportamento antigo: só a vazia marca."""
+        duracao_real(175.0)
+        alvo = pasta / "doce preludio.mp3"
+        transcrever(pasta, transcritor=FakeTranscritor(completo=ruido(13)),
+                    densidade_minima=0)
+        assert instrumental_de(alvo) is False
+        assert uslt_text(alvo) is not None
+
+    def test_densidade_medida_no_texto_CRU_antes_da_limpeza(
+            self, pasta, duracao_real):
+        """Neste repertório (ponto, coco, ciranda) uma faixa longa pode ser
+        um refrão repetido cinquenta vezes. O limpador de laço colapsa
+        linha repetida em série, e medir DEPOIS dele transformaria letra
+        legítima em "instrumental". Mede-se o que o MOTOR ouviu."""
+        duracao_real(600.0)
+        alvo = pasta / "doce preludio.mp3"
+        refrao = "Segura o remo, marinheiro, segura o remo\n"
+        transcrever(pasta, transcritor=FakeTranscritor(completo=refrao * 60))
+        assert instrumental_de(alvo) is False
+        assert uslt_text(alvo) is not None
+
+
 # ================================================ a escolha humana manda
 
 class TestEscolhaHumana:
