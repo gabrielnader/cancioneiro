@@ -1,9 +1,16 @@
 //! F10 (PRD V4) — busca de letra no LRCLIB (https://lrclib.net/api/search).
 //!
-//! O app é 100% offline em todos os fluxos, EXCETO o clique explícito em
-//! "Buscar letra na internet": este módulo (chamado pelo comando
-//! `fetch_lyrics_online` em commands.rs, que injeta o fetcher `ureq`) é o
-//! ÚNICO ponto de rede de todo o produto.
+//! O app é 100% offline em todos os fluxos, EXCETO as etapas de rede do funil
+//! de curadoria (`enrich_folder_scan` e `enrich_song_scan`), que injetam o
+//! fetcher `ureq` daqui e do `vagalume`. São os únicos pontos de rede do
+//! produto, todos acionados por clique explícito.
+//!
+//! V8/F18 — a porta antiga deste módulo (o comando "Buscar letra na
+//! internet", que consultava o LRCLIB fora do funil) SAIU junto com o botão
+//! que a chamava: superfície de rede sem chamador é superfície de rede a
+//! menos num produto cujo contrato é "rede só nos pontos enumerados". O que
+//! ficou é o que o funil usa: `query_best` (melhor candidato de uma consulta)
+//! e `classify` (o corte de confiança).
 //!
 //! O fetcher é injetável (`F: Fn(&str) -> Result<String>`) para os testes
 //! rodarem sem rede. Score portado do tools/curadoria.py (V3): similaridade
@@ -11,22 +18,12 @@
 
 use crate::db::fold_pt;
 use crate::error::{AppError, Result};
-use serde::Serialize;
 use std::collections::HashMap;
 
 /// Endereço da busca. Junto com o do Vagalume (V8/F18), é um dos DOIS únicos
 /// destinos de rede de todo o produto — `commands::funil_fetcher` recusa
 /// qualquer outro.
 pub const SEARCH_URL: &str = "https://lrclib.net/api/search";
-
-#[derive(Debug, Clone, Serialize)]
-pub struct LyricsMatch {
-    pub lyrics: String,
-    pub matched_title: String,
-    pub matched_artist: String,
-    /// "alta" | "media"
-    pub confidence: String,
-}
 
 /// Percent-encode de um valor de query string (RFC 3986: só unreserved
 /// passam sem escape) — evita depender de crate para meia dúzia de bytes.
@@ -191,38 +188,46 @@ where
     Ok(best)
 }
 
-/// Busca no LRCLIB e escolhe o melhor candidato pelas regras da V3 (ver
-/// `query_best`); confiança ALTA/MÉDIA por `classify` — abaixo do corte
-/// devolve Ok(None).
-pub fn fetch_lyrics_online<F>(
-    title: &str,
-    artist: &str,
-    duration_seconds: f64,
-    fetch: F,
-) -> Result<Option<LyricsMatch>>
-where
-    F: Fn(&str) -> Result<String>,
-{
-    let Some(best) = query_best(title, artist, duration_seconds, &fetch, |_, _| true)? else {
-        return Ok(None);
-    };
-    let Some(confidence) = classify(best.sim, best.dif) else {
-        return Ok(None); // nada confiável
-    };
-    Ok(Some(LyricsMatch {
-        lyrics: best.lyrics,
-        matched_title: best.matched_title,
-        matched_artist: best.matched_artist,
-        confidence: confidence.to_string(),
-    }))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn stub(body: &'static str) -> impl Fn(&str) -> Result<String> {
         move |_url| Ok(body.to_string())
+    }
+
+    /// Candidato do LRCLIB já aprovado pelo corte de confiança.
+    #[derive(Debug)]
+    struct Achado {
+        lyrics: String,
+        matched_title: String,
+        matched_artist: String,
+        confidence: &'static str,
+    }
+
+    /// O que o funil faz com UMA consulta ao LRCLIB: melhor candidato
+    /// (`query_best`) mais o corte de confiança (`classify`). Este par era o
+    /// miolo do comando `fetch_lyrics_online`, que saiu junto com o botão que
+    /// o chamava (V8/F18); o comportamento continua sendo o que o funil usa,
+    /// e continua coberto por estes testes.
+    fn melhor<F>(
+        title: &str,
+        artist: &str,
+        duration_seconds: f64,
+        fetch: F,
+    ) -> Result<Option<Achado>>
+    where
+        F: Fn(&str) -> Result<String>,
+    {
+        let Some(best) = query_best(title, artist, duration_seconds, &fetch, |_, _| true)? else {
+            return Ok(None);
+        };
+        Ok(classify(best.sim, best.dif).map(|confidence| Achado {
+            lyrics: best.lyrics,
+            matched_title: best.matched_title,
+            matched_artist: best.matched_artist,
+            confidence,
+        }))
     }
 
     #[test]
@@ -233,7 +238,7 @@ mod tests {
             "duration": 181.0,
             "plainLyrics": "Quando o sol amanhecer\nMeu coração vai cantar"
         }]"#;
-        let m = fetch_lyrics_online("Coração Sertanejo", "Artista Teste", 180.0, stub(body))
+        let m = melhor("Coração Sertanejo", "Artista Teste", 180.0, stub(body))
             .unwrap()
             .expect("dif 1s + texto idêntico ⇒ match");
         assert_eq!(m.confidence, "alta");
@@ -251,7 +256,7 @@ mod tests {
             "plainLyrics": "letra qualquer"
         }]"#;
         // texto idêntico mas 20s de diferença: homônimo/versão errada
-        let m = fetch_lyrics_online("Coração Sertanejo", "Artista Teste", 180.0, stub(body))
+        let m = melhor("Coração Sertanejo", "Artista Teste", 180.0, stub(body))
             .unwrap();
         assert!(m.is_none());
     }
@@ -265,7 +270,7 @@ mod tests {
             "plainLyrics": "letra"
         }]"#;
         // sim 1.0 mas dif 10s: nem dif≤3, nem dif≤8 ⇒ MÉDIA
-        let m = fetch_lyrics_online("Coração Sertanejo", "Artista Teste", 180.0, stub(body))
+        let m = melhor("Coração Sertanejo", "Artista Teste", 180.0, stub(body))
             .unwrap()
             .expect("sim alta com dif 10s ⇒ média");
         assert_eq!(m.confidence, "media");
@@ -279,14 +284,14 @@ mod tests {
             "duration": 180.0,
             "plainLyrics": "letra"
         }]"#;
-        let m = fetch_lyrics_online("Coração Sertanejo", "Artista Teste", 180.0, stub(body))
+        let m = melhor("Coração Sertanejo", "Artista Teste", 180.0, stub(body))
             .unwrap();
         assert!(m.is_none());
     }
 
     #[test]
     fn empty_results_return_none() {
-        assert!(fetch_lyrics_online("T", "A", 100.0, stub("[]"))
+        assert!(melhor("T", "A", 100.0, stub("[]"))
             .unwrap()
             .is_none());
     }
@@ -301,21 +306,21 @@ mod tests {
             {"trackName": "Coração Sertanejo", "artistName": "Artista Teste",
              "duration": 180.0}
         ]"#;
-        let m = fetch_lyrics_online("Coração Sertanejo", "Artista Teste", 180.0, stub(body))
+        let m = melhor("Coração Sertanejo", "Artista Teste", 180.0, stub(body))
             .unwrap();
         assert!(m.is_none(), "instrumental/sem letra nunca vira match");
     }
 
     #[test]
     fn invalid_json_is_an_error() {
-        assert!(fetch_lyrics_online("T", "A", 100.0, stub("not json")).is_err());
+        assert!(melhor("T", "A", 100.0, stub("not json")).is_err());
         // objeto em vez de lista também é inválido
-        assert!(fetch_lyrics_online("T", "A", 100.0, stub(r#"{"erro": 1}"#)).is_err());
+        assert!(melhor("T", "A", 100.0, stub(r#"{"erro": 1}"#)).is_err());
     }
 
     #[test]
     fn fetch_error_propagates() {
-        let err = fetch_lyrics_online("T", "A", 100.0, |_url| {
+        let err = melhor("T", "A", 100.0, |_url| {
             Err(AppError("sem conexão".into()))
         })
         .expect_err("erro do fetcher propaga");
@@ -332,7 +337,7 @@ mod tests {
             {"trackName": "Coração Sertanejo", "artistName": "Artista Teste",
              "duration": 181.0, "plainLyrics": "letra do mais próximo"}
         ]"#;
-        let m = fetch_lyrics_online("Coração Sertanejo", "Artista Teste", 180.0, stub(body))
+        let m = melhor("Coração Sertanejo", "Artista Teste", 180.0, stub(body))
             .unwrap()
             .unwrap();
         assert_eq!(m.lyrics, "letra do mais próximo");
@@ -342,7 +347,7 @@ mod tests {
     #[test]
     fn url_is_percent_encoded_with_title_and_artist() {
         let captured = std::cell::RefCell::new(String::new());
-        let _ = fetch_lyrics_online("Coração & Vida", "São João", 100.0, |url| {
+        let _ = melhor("Coração & Vida", "São João", 100.0, |url| {
             *captured.borrow_mut() = url.to_string();
             Ok("[]".into())
         })

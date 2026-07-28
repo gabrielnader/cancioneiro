@@ -279,6 +279,15 @@ pub fn reorder_playlist(
 ///
 /// `instrumental` (V8/F17) tem três estados: `true` marca, `false` desmarca e
 /// `null` (ausente no JSON) significa "não mexer" — ver writer::write_tags.
+///
+/// `letra_origem` (V8/F18) é a procedência da letra que está sendo gravada,
+/// e o editor a informa quando sabe: `"vagalume"` quando o texto no
+/// formulário veio de uma proposta da base comunitária. Ausente = o
+/// comportamento de sempre (a marca cai quando a letra muda, porque letra
+/// oficial não é transcrição). Existe porque a letra aceita de uma proposta e
+/// salva pelo editor perdia, na volta, a marca que o funil tinha acabado de
+/// gravar. Ver `writer::write_tags_com_origem`.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub fn write_tags(
     state: State<'_, Db>,
@@ -288,9 +297,10 @@ pub fn write_tags(
     lyrics: Option<String>,
     temas: Option<String>,
     instrumental: Option<bool>,
+    letra_origem: Option<String>,
 ) -> Result<Song> {
     let conn = state.lock()?;
-    crate::writer::write_tags(
+    crate::writer::write_tags_com_origem(
         &conn,
         song_id,
         &title,
@@ -298,14 +308,14 @@ pub fn write_tags(
         lyrics.as_deref(),
         temas.as_deref(),
         instrumental,
+        letra_origem.as_deref(),
     )
 }
 
-/// Fetcher real (ureq) do funil, compartilhado por `fetch_lyrics_online`,
-/// `enrich_folder_scan` e `enrich_song_scan` — os ÚNICOS pontos de rede de
-/// todo o app, todos acionados por cliques explícitos do usuário. GET com
-/// timeout de 10 s e User-Agent "Cancioneiro/0.7"; qualquer falha de rede
-/// vira "sem conexão".
+/// Fetcher real (ureq) do funil, compartilhado por `enrich_folder_scan` e
+/// `enrich_song_scan` — os ÚNICOS pontos de rede de todo o app, ambos
+/// acionados por cliques explícitos do usuário. GET com timeout de 10 s e
+/// User-Agent "Cancioneiro/0.7".
 ///
 /// A primeira coisa que ele faz é conferir o DESTINO: só LRCLIB e Vagalume
 /// passam. A trava é barata e vale como garantia executável do inviolável
@@ -315,6 +325,8 @@ pub fn write_tags(
 /// 404 no Vagalume é resposta legítima ("não conheço esta música") e vira
 /// corpo vazio, que o módulo lê como "sem resultado". Chamar isso de falha de
 /// rede transformaria repertório desconhecido em erro na tela do usuário.
+///
+/// As demais falhas viram mensagens DISTINTAS (ver `mensagem_de_status`).
 pub(crate) fn funil_fetcher(url: &str) -> Result<String> {
     let vagalume = url.starts_with(crate::vagalume::SEARCH_URL);
     if !vagalume && !url.starts_with(crate::lyrics_fetch::SEARCH_URL) {
@@ -329,27 +341,36 @@ pub(crate) fn funil_fetcher(url: &str) -> Result<String> {
             .into_string()
             .map_err(|_| AppError("sem conexão".into())),
         Err(ureq::Error::Status(404, _)) if vagalume => Ok(String::new()),
+        Err(ureq::Error::Status(status, _)) => {
+            Err(AppError(mensagem_de_status(status, vagalume).into()))
+        }
+        // transporte: DNS que não resolve, tempo esgotado, conexão recusada.
+        // Aqui "sem conexão" é a verdade, e continua sendo o texto.
         Err(_) => Err(AppError("sem conexão".into())),
     }
 }
 
-/// Busca a letra no LRCLIB por título+artista+duração.
+/// O que dizer a quem está olhando a tela quando o servidor RESPONDEU, mas
+/// não com a letra.
 ///
-/// Ponto de rede EXPLÍCITO (PRD V4): tudo o mais é 100% offline; qualquer
-/// falha de rede vira Err "sem conexão" (o frontend converte no aviso
-/// "Sem conexão — a busca de letra precisa de internet.").
-#[tauri::command]
-pub fn fetch_lyrics_online(
-    title: String,
-    artist: Option<String>,
-    duration_seconds: f64,
-) -> Result<Option<crate::lyrics_fetch::LyricsMatch>> {
-    crate::lyrics_fetch::fetch_lyrics_online(
-        &title,
-        artist.as_deref().unwrap_or(""),
-        duration_seconds,
-        funil_fetcher,
-    )
+/// Dizer "sem conexão" para tudo (o que este fetcher fazia) manda a pessoa
+/// investigar a própria internet, que está ótima, e repete a acusação errada
+/// em cada uma das linhas da varredura. As frases são curtas, sem jargão e
+/// sem número de código solto — quem cura são ~40 pessoas que não abrem
+/// terminal e não têm a quem perguntar; esta frase é a explicação inteira.
+///
+/// São TEXTO FIXO, sem interpolação: é o que garante que a chave do usuário
+/// nunca possa aparecer numa mensagem de erro.
+fn mensagem_de_status(status: u16, vagalume: bool) -> &'static str {
+    match status {
+        // só a consulta ao Vagalume leva chave; 401/403 no LRCLIB é outra
+        // coisa qualquer, e mandar conferir uma chave que não existe naquela
+        // consulta seria mandar a pessoa procurar defeito onde não há
+        401 | 403 if vagalume => crate::vagalume::ERRO_CHAVE_RECUSADA,
+        429 => "o site de letras pediu para esperar um pouco",
+        500..=599 => "o site de letras está fora do ar agora",
+        _ => "o site de letras respondeu com erro",
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -379,9 +400,12 @@ fn emissor_de_progresso(
 }
 
 /// A chave do Vagalume como o funil a espera: `None`/vazia = etapa pulada.
+///
 /// Ela vem do frontend a cada chamada (é preferência dele, não dado do
-/// acervo) e NUNCA é gravada — nem no banco, nem em log, nem em mensagem de
-/// erro. Sem chave nada falha: a etapa simplesmente não acontece.
+/// acervo) e NUNCA entra no banco de músicas, em log ou em mensagem de erro,
+/// nem é enviada a lugar nenhum além do próprio Vagalume. Fica guardada nas
+/// preferências locais do aplicativo, na máquina da própria pessoa. Sem chave
+/// nada falha: a etapa simplesmente não acontece.
 fn chave(vagalume_key: Option<String>) -> String {
     vagalume_key.unwrap_or_default().trim().to_string()
 }
@@ -432,10 +456,28 @@ pub fn enrich_folder_scan(
     resultado
 }
 
+/// Quantas músicas a varredura de `folder_prefix` (vazio = biblioteca
+/// inteira) vai olhar, para a tela poder dizer o tamanho do trabalho ANTES de
+/// a pessoa mandar começar. Sem rede, sem gravação: é a mesma
+/// `enrich::candidata` da varredura, contada (QA ALTO-2 — havia uma segunda
+/// cópia da regra em TypeScript, já divergente).
+#[tauri::command]
+pub fn enrich_count(state: State<'_, Db>, folder_prefix: String) -> Result<usize> {
+    let conn = state.lock()?;
+    crate::enrich::count_candidatas(&conn, &folder_prefix)
+}
+
 /// O MESMO funil, numa música só: o "completar dados desta música" do editor
-/// (PRD V8/F18). Devolve `null` quando não há o que propor — música já
-/// completa, nada encontrado ou proposta que não mudaria nada. Nada é
-/// gravado aqui; a proposta devolvida entra no mesmo `enrich_apply` do lote.
+/// (PRD V8/F18). Devolve `null` quando procuramos e não veio nada novo. Nada
+/// é gravado aqui; a proposta devolvida entra no mesmo `enrich_apply` do
+/// lote.
+///
+/// Ao contrário do lote, esta porta NÃO pula a música completa (QA ALTO-3b):
+/// quem apertou o botão está olhando aquele arquivo e quer uma segunda
+/// opinião. `title`/`artist` são o que está no formulário do editor naquele
+/// momento e, quando vêm, mandam na consulta — o backend procurava pela
+/// etiqueta velha do banco enquanto a pessoa já tinha digitado o nome certo
+/// (QA ALTO-3a). Os dois são opcionais: sem eles vale o que está no banco.
 ///
 /// `scan_id` é OPCIONAL porque o caso pontual do editor são segundos, não
 /// minutos: quem não manda um id não ganha cancelamento e recebe os eventos
@@ -449,6 +491,8 @@ pub fn enrich_song_scan(
     song_id: i64,
     vagalume_key: Option<String>,
     scan_id: Option<String>,
+    title: Option<String>,
+    artist: Option<String>,
 ) -> Result<Option<crate::enrich::EnrichProposal>> {
     let scan_id = scan_id.unwrap_or_default();
     let cancel = state.scan_begin(&scan_id)?;
@@ -458,6 +502,8 @@ pub fn enrich_song_scan(
         crate::enrich::enrich_scan_song(
             &conn,
             song_id,
+            title.as_deref(),
+            artist.as_deref(),
             funil_fetcher,
             &chave(vagalume_key),
             PAUSA_CORTESIA,
@@ -640,12 +686,18 @@ mod tests {
             lyrics: Some("letra".into()),
             confidence: "alta".into(),
             fonte: crate::enrich::FONTE_VAGALUME.into(),
+            has_lyrics: true,
+            letra_origem: Some("transcricao".into()),
             error: None,
         })
         .unwrap();
 
         assert_eq!(json["fonte"], "Vagalume");
         assert_eq!(json["confidence"], "alta");
+        // QA CRÍTICO-1 — a revisão precisa saber que aceitar esta linha
+        // SUBSTITUIRIA uma letra, e o que seria sobrescrito
+        assert_eq!(json["has_lyrics"], true);
+        assert_eq!(json["letra_origem"], "transcricao");
         let campos: Vec<&String> = json.as_object().unwrap().keys().collect();
         assert_eq!(
             campos,
@@ -656,6 +708,8 @@ mod tests {
                 "error",
                 "file_path",
                 "fonte",
+                "has_lyrics",
+                "letra_origem",
                 "lyrics",
                 "proposed_artist",
                 "proposed_title",
@@ -666,16 +720,18 @@ mod tests {
 
     /// O eco de `fonte` é OPCIONAL: um payload sem ele continua válido e vale
     /// como "não sei de onde veio" (a marca de procedência é limpa, nunca
-    /// inventada).
+    /// inventada). O mesmo vale para o consentimento de substituir letra:
+    /// ausente é NÃO — a omissão nunca pode autorizar uma sobrescrita.
     #[test]
     fn enrich_apply_accepts_the_source_echo_and_survives_without_it() {
         let com: crate::enrich::EnrichApply = serde_json::from_str(
             r#"{"song_id": 7, "title": "T", "artist": null, "lyrics": "L",
                 "add_temas": null, "current_title": "T", "current_artist": null,
-                "fonte": "Vagalume"}"#,
+                "fonte": "Vagalume", "substituir_letra": true}"#,
         )
         .unwrap();
         assert_eq!(com.fonte.as_deref(), Some("Vagalume"));
+        assert!(com.substituir_letra);
 
         let sem: crate::enrich::EnrichApply = serde_json::from_str(
             r#"{"song_id": 7, "title": "T", "artist": null, "lyrics": "L",
@@ -683,6 +739,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(sem.fonte, None);
+        assert!(!sem.substituir_letra, "ausente = não substituir");
     }
 
     // -----------------------------------------------------------------------
@@ -752,6 +809,66 @@ mod tests {
     fn an_in_memory_database_falls_back_to_the_shared_lock() {
         let state = estado();
         assert!(matches!(state.scan_conn().unwrap(), ScanConn::Shared(_)));
+    }
+
+    // -----------------------------------------------------------------------
+    // QA MÉDIO-6 — resposta do servidor não é "sem conexão". Antes, um 429
+    // (plausível a 300 ms × 95 músicas), um 500 ou uma chave digitada errada
+    // produziam todos a MESMA frase, e a pessoa terminava com dezenas de
+    // linhas culpando uma internet que estava ótima. Não há a quem perguntar:
+    // a frase é a explicação inteira.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn each_http_failure_says_what_actually_happened() {
+        use crate::vagalume::ERRO_CHAVE_RECUSADA;
+
+        // chave recusada: só faz sentido numa consulta ao Vagalume, que é a
+        // única que leva chave
+        assert_eq!(mensagem_de_status(401, true), ERRO_CHAVE_RECUSADA);
+        assert_eq!(mensagem_de_status(403, true), ERRO_CHAVE_RECUSADA);
+        // o LRCLIB não tem chave nenhuma: 401/403 lá é outra coisa
+        assert_eq!(
+            mensagem_de_status(401, false),
+            "o site de letras respondeu com erro"
+        );
+
+        assert_eq!(
+            mensagem_de_status(429, true),
+            "o site de letras pediu para esperar um pouco"
+        );
+        assert_eq!(
+            mensagem_de_status(429, false),
+            "o site de letras pediu para esperar um pouco"
+        );
+        for fora_do_ar in [500, 502, 503, 504] {
+            assert_eq!(
+                mensagem_de_status(fora_do_ar, false),
+                "o site de letras está fora do ar agora",
+                "status {fora_do_ar}"
+            );
+        }
+        for outro in [400, 404, 410, 418] {
+            assert_eq!(
+                mensagem_de_status(outro, false),
+                "o site de letras respondeu com erro",
+                "status {outro}"
+            );
+        }
+    }
+
+    /// Nenhuma dessas frases pode carregar a chave: elas são texto FIXO, sem
+    /// interpolação, e é assim que a garantia se sustenta.
+    #[test]
+    fn no_network_message_can_ever_carry_the_key() {
+        let chave = "minha-chave-secreta-do-vagalume";
+        for status in [400, 401, 403, 404, 429, 500, 502, 503] {
+            for vagalume in [true, false] {
+                assert!(
+                    !mensagem_de_status(status, vagalume).contains(chave),
+                    "status {status}"
+                );
+            }
+        }
     }
 
     /// A chave do Vagalume é normalizada num lugar só, e ausente/vazia

@@ -2378,8 +2378,10 @@ _VAGALUME_TIPO_EXATO = "exact"
 MSG_VAGALUME_PULADO = (
     "Vagalume: pulado (sem chave) — a chave é gratuita em "
     "https://auth.vagalume.com.br/settings/api/; informe em "
-    "--chave-vagalume ou na variável de ambiente VAGALUME_API_KEY (o "
-    "Cancioneiro nunca grava a chave em disco)")
+    "--chave-vagalume ou na variável de ambiente VAGALUME_API_KEY (a chave "
+    "nunca entra no banco de músicas nem em log, e nunca é enviada a lugar "
+    "nenhum além do próprio Vagalume; no aplicativo ela fica guardada nas "
+    "preferências locais, na sua máquina)")
 # Texto de "não temos esta letra" que a base comunitária às vezes devolve
 # no lugar da letra. Comparado sobre a chave normalizada do módulo (sem
 # acento, sem pontuação, minúsculas), então cobre as variações de acento.

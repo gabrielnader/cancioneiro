@@ -87,6 +87,15 @@ pub struct EnrichProposal {
     /// arquivo ou de uma base de letras, e o `apply` precisa dela para gravar
     /// a procedência certa em `TXXX:LETRA_ORIGEM`.
     pub fonte: String,
+    /// A música JÁ tinha letra no arquivo quando a varredura passou. Com
+    /// `lyrics: Some(...)`, isto significa que a proposta SUBSTITUIRIA uma
+    /// letra existente — o caso que o tools/curadoria.py recusa desde a
+    /// DECISIONS #55 e que o app não sabia nem mostrar.
+    pub has_lyrics: bool,
+    /// Procedência da letra ATUAL (TXXX:LETRA_ORIGEM), para a revisão poder
+    /// dizer se o que seria sobrescrito é transcrição de máquina ou letra
+    /// oficial.
+    pub letra_origem: Option<String>,
     /// Erro por música (ex.: "sem conexão", arquivo sumido) — nunca aborta
     /// o lote.
     pub error: Option<String>,
@@ -135,11 +144,23 @@ pub struct EnrichApply {
     /// ERRADA, só deixa de gravar a certa.
     #[serde(default)]
     pub fonte: Option<String>,
+    /// Consentimento EXPLÍCITO para substituir uma letra que já existe no
+    /// arquivo. Ausente/false = não substituir. Sem isto, `apply_one` recusa
+    /// a gravação.
+    #[serde(default)]
+    pub substituir_letra: bool,
 }
 
 /// Mensagem (pt-BR, curta) que a UI mostra como está quando a proposta ficou
 /// obsoleta entre a varredura e o apply.
 pub const AVISO_PROPOSTA_OBSOLETA: &str = "a música mudou depois da varredura — sugestão ignorada";
+
+/// Mensagem (pt-BR, curta) da recusa de sobrescrever letra existente sem o
+/// consentimento explícito. A proposta ALTA do LRCLIB chega PRÉ-MARCADA na
+/// revisão (DECISIONS #49), e um clique apagava a transcrição que alguém
+/// corrigiu à mão — sem aviso, sem desfazer e sem a quem perguntar.
+pub const AVISO_LETRA_EXISTENTE: &str =
+    "esta música já tem letra — marque \"substituir a letra atual\" para trocá-la";
 
 // ---------------------------------------------------------------------------
 // Placeholders (porte do eh_placeholder do tools/curadoria.py)
@@ -163,18 +184,114 @@ const PLACEHOLDERS_EXATOS: &[&str] = &[
     "titulo desconhecido",
 ];
 
-/// `^(?:\d+\s+)?(?:audio\s?track|faixa|track|pista)(?:\s?\d+)?$` sobre a
-/// chave normalizada — "AudioTrack 02", "02 Faixa 3", "track", "Pista 3"...
+/// Expressões que, em QUALQUER posição, denunciam tag de ripador — nenhum
+/// artista ou título real as contém, então a busca por trecho é segura.
+/// "artista desconheci" sem o final cobre o truncamento de campo do ID3 visto
+/// no acervo real ("04 Faixa 4 Artista Desconheci").
+const PLACEHOLDERS_TRECHO: &[&str] = &[
+    "artista desconheci",
+    "artista desconhecida",
+    "unknown artist",
+    "no artist",
+    "titulo desconheci",
+    "unknown title",
+];
+
+/// Palavras de maquinário: NÃO identificam a música, mas várias delas são
+/// título de verdade quando aparecem sozinhas ("Pista", "Gravação", "Nome",
+/// "Sem Nome" existem no repertório). Por isso esta lista sozinha NUNCA
+/// condena um texto — ver `MARCA_DE_RIPADOR`.
+const RUIDO_DE_ARQUIVO: &[&str] = &[
+    "audiotrack",
+    "audio",
+    "track",
+    "faixa",
+    "pista",
+    "converted",
+    "convertido",
+    "copia",
+    "copy",
+    "mp3",
+    "wav",
+    "untitled",
+    "new",
+    "recording",
+    "gravacao",
+    "sem",
+    "titulo",
+    "nome",
+];
+
+/// Marca de ripador: só ELA habilita a regra do `RUIDO_DE_ARQUIVO`. Vale um
+/// número solto ("04", "2010"), uma corrida com cara de horário/data
+/// ("22-17-23") ou uma palavra que nenhuma canção usa como título.
+///
+/// A exigência é o conserto de uma regressão achada pelo QA do lado Python:
+/// sem ela, "Gravação", "Nome" e "Sem Nome" viravam placeholder — ou seja,
+/// campo VAZIO — e o título REAL do curador era sobrescrito em silêncio. Uma
+/// palavra comum sozinha nunca é lixo; precisa da companhia da marca.
+const MARCA_DE_RIPADOR: &[&str] = &[
+    "audiotrack",
+    "converted",
+    "convertido",
+    "mp3",
+    "wav",
+    "untitled",
+];
+
+/// Sequência de no máximo `max` dígitos ASCII, não vazia.
+fn so_digitos(s: &str, max: usize) -> bool {
+    !s.is_empty() && s.len() <= max && s.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// `^\d{1,4}(?:[-:.]\d{1,2}){1,}$` — "22-17-23", "2010.05.03", "12:30".
+/// Conferido sobre o texto ORIGINAL, porque a pontuação some no `norm`.
+fn cara_de_horario(palavra: &str) -> bool {
+    let mut campos = palavra.split(['-', ':', '.']);
+    if !campos.next().is_some_and(|c| so_digitos(c, 4)) {
+        return false;
+    }
+    let mut houve_separador = false;
+    for campo in campos {
+        houve_separador = true;
+        if !so_digitos(campo, 2) {
+            return false;
+        }
+    }
+    houve_separador
+}
+
+/// True quando o texto traz prova de que saiu de uma máquina.
+fn tem_marca_de_ripador(partes: &[&str], bruto: &str) -> bool {
+    partes
+        .iter()
+        .any(|p| so_digitos(p, usize::MAX) || MARCA_DE_RIPADOR.contains(p))
+        || bruto.split_whitespace().any(cara_de_horario)
+}
+
+/// `^(?:\d+\s+)?(?:(?:audio\s?track|faixa|track)(?:\s?\d+)?|pista\s?\d+)$`
+/// sobre a chave normalizada — "AudioTrack 02", "02 Faixa 3", "track",
+/// "Pista 3"...
+///
+/// "pista" SOZINHA fica de fora (e é a única das cinco que exige o número):
+/// é palavra que existe como título de verdade no repertório, e tratá-la como
+/// campo vazio apagaria o título de quem curou.
 fn placeholder_faixa(chave: &str) -> bool {
     // prefixo numérico opcional ("02 audiotrack 02")
     let s = match chave.split_once(' ') {
         Some((num, resto)) if num.chars().all(|c| c.is_ascii_digit()) => resto,
         _ => chave,
     };
-    for kw in ["audio track", "audiotrack", "faixa", "track", "pista"] {
+    for (kw, exige_numero) in [
+        ("audio track", false),
+        ("audiotrack", false),
+        ("faixa", false),
+        ("track", false),
+        ("pista", true),
+    ] {
         if let Some(resto) = s.strip_prefix(kw) {
             let resto = resto.strip_prefix(' ').unwrap_or(resto);
-            if resto.is_empty() || resto.chars().all(|c| c.is_ascii_digit()) {
+            if so_digitos(resto, usize::MAX) || (!exige_numero && resto.is_empty()) {
                 return true;
             }
         }
@@ -186,6 +303,11 @@ fn placeholder_faixa(chave: &str) -> bool {
 /// vazio, só dígitos/pontuação, "AudioTrack N"/"Faixa N"/"Track N"/"Pista N"
 /// (com ou sem prefixo numérico), "no artist", "[Unknown Artist]", "Artista
 /// Desconhecido", "sem título", "untitled" etc. Case/acento-insensitive.
+///
+/// Porte do `eh_placeholder` do `tools/curadoria.py`, incluindo as duas
+/// regras que o acervo real obrigou a existir lá: a de SUBSTRING (etiqueta
+/// truncada pelo limite do ID3, "04 Faixa 4 Artista Desconheci") e a do ruído
+/// de arquivo com marca de máquina ("1-2010 22-17-23)_converted").
 pub fn is_placeholder(texto: &str) -> bool {
     let chave = lyrics_fetch::norm(texto);
     if chave.is_empty() || chave.chars().all(|c| c.is_ascii_digit()) {
@@ -194,7 +316,23 @@ pub fn is_placeholder(texto: &str) -> bool {
     if PLACEHOLDERS_EXATOS.contains(&chave.as_str()) {
         return true;
     }
-    placeholder_faixa(&chave)
+    if placeholder_faixa(&chave) {
+        return true;
+    }
+    if PLACEHOLDERS_TRECHO.iter().any(|m| chave.contains(m)) {
+        return true;
+    }
+    // Só números e palavras de maquinário E com marca de ripador junto: não
+    // sobra nada que identifique a música. Uma palavra sozinha é TÍTULO,
+    // sempre — "Convertido", "Gravação", "Nome", "Pista" viram lixo só
+    // acompanhadas da marca da máquina.
+    let partes: Vec<&str> = chave.split_whitespace().collect();
+    if partes.len() < 2 || !tem_marca_de_ripador(&partes, texto) {
+        return false;
+    }
+    partes
+        .iter()
+        .all(|p| so_digitos(p, usize::MAX) || RUIDO_DE_ARQUIVO.contains(p))
 }
 
 /// Tag placeholder é tratada como campo VAZIO em todos os pontos: não vira
@@ -429,6 +567,8 @@ fn proposta_baixa(
         lyrics: None,
         confidence: "baixa".into(),
         fonte: fonte.into(),
+        has_lyrics: song.has_lyrics,
+        letra_origem: song.letra_origem.clone(),
         error,
     }
 }
@@ -474,9 +614,40 @@ struct Candidata {
     nome: String,
 }
 
-/// Filtro de entrada da varredura: devolve `None` para a música que não tem
-/// o que completar (e portanto não conta no total do progresso nem gasta
-/// rede).
+/// Monta a `Candidata`: etiquetas EFETIVAS (placeholder já tratado como
+/// vazio) e nome base do arquivo. Ponto único dessa montagem — os dois
+/// caminhos de entrada (o lote e a música avulsa) passam por aqui.
+///
+/// `titulo`/`artista` são o que a pessoa digitou no editor e, quando vêm
+/// preenchidos, SUBSTITUEM as etiquetas do banco (V8/F18, QA ALTO-3a): o
+/// backend procurava por "Faixa 03" enquanto quem clicou tinha acabado de
+/// escrever "Asa Branca" no formulário. Passam pelo mesmo `sem_placeholder`
+/// das etiquetas — texto digitado também pode ser lixo de ripador colado.
+fn montar_candidata(song: Song, titulo: Option<&str>, artista: Option<&str>) -> Candidata {
+    fn efetivo(digitado: Option<&str>, do_banco: &str) -> String {
+        let bruto = digitado
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .unwrap_or(do_banco);
+        sem_placeholder(bruto).to_string()
+    }
+    let titulo_tag = efetivo(titulo, &song.title);
+    let artista_tag = efetivo(artista, song.artist.as_deref().unwrap_or(""));
+    let nome = Path::new(&song.file_path)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    Candidata {
+        song,
+        titulo_tag,
+        artista_tag,
+        nome,
+    }
+}
+
+/// Filtro de entrada da varredura EM LOTE: devolve `None` para a música que
+/// não tem o que completar (e portanto não conta no total do progresso nem
+/// gasta rede).
 ///
 /// Completa = título E artista reais (não-placeholder) mais letra. Para o
 /// INSTRUMENTAL a letra sai da conta (V8/F17): música sem voz não tem letra a
@@ -485,27 +656,48 @@ struct Candidata {
 /// título e artista — por isso ela não é descartada aqui, e sim nas etapas de
 /// LETRA (ver `processar_musica`): "instrumental sem letra ainda pode (e
 /// deve) ter título e artista corretos" (PRD V8).
+///
+/// O filtro é do LOTE, e só dele: ele existe para 95 músicas não virarem 95
+/// consultas inúteis. A música avulsa do editor entra por `candidata_pedida`,
+/// sem este portão.
 fn candidata(song: Song) -> Option<Candidata> {
     if !song.available {
         return None;
     }
-    let titulo_tag = sem_placeholder(&song.title).to_string();
-    let artista_tag = sem_placeholder(song.artist.as_deref().unwrap_or("")).to_string();
-    let nomes_prontos = !titulo_tag.is_empty() && !artista_tag.is_empty();
-    let completa = nomes_prontos && (song.instrumental || song.has_lyrics);
-    if completa {
-        return None;
-    }
-    let nome = Path::new(&song.file_path)
-        .file_name()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    Some(Candidata {
-        song,
-        titulo_tag,
-        artista_tag,
-        nome,
-    })
+    let cand = montar_candidata(song, None, None);
+    let nomes_prontos = !cand.titulo_tag.is_empty() && !cand.artista_tag.is_empty();
+    let completa = nomes_prontos && (cand.song.instrumental || cand.song.has_lyrics);
+    (!completa).then_some(cand)
+}
+
+/// Entrada da varredura de UMA música: quem clicou sabe o que quer.
+///
+/// A única exigência é o arquivo estar disponível — não há filtro de
+/// completude (QA ALTO-3b). A música completa era recusada aqui sem tocar a
+/// rede, e a tela dizia "não achamos esta música nos sites de letra": uma
+/// afirmação sobre uma busca que não aconteceu, repetida a cada clique, para
+/// alguém que não tem a quem perguntar. A checagem de arquivo sumido do disco
+/// continua valendo, dentro do `processar_musica`.
+fn candidata_pedida(song: Song, titulo: Option<&str>, artista: Option<&str>) -> Option<Candidata> {
+    song.available
+        .then(|| montar_candidata(song, titulo, artista))
+}
+
+/// Quantas músicas sob `folder_prefix` (vazio = biblioteca inteira) a
+/// varredura vai olhar — o mesmo número que ela anuncia como `total` no
+/// primeiro evento de progresso.
+///
+/// Existe para a tela poder dizer "vou olhar N músicas" ANTES de a pessoa
+/// mandar começar, e mora aqui por um motivo (QA ALTO-2): a regra de quem é
+/// candidata é UMA, a `candidata`. A cópia que existia em TypeScript já havia
+/// divergido, e uma contagem que não bate com a barra de progresso não tem
+/// como ser explicada a quem não abre terminal.
+pub fn count_candidatas(conn: &Connection, folder_prefix: &str) -> Result<usize> {
+    Ok(db::list_songs(conn)?
+        .into_iter()
+        .filter(|s| under_prefix(&s.file_path, folder_prefix))
+        .filter_map(candidata)
+        .count())
 }
 
 /// Passa UMA música pelo funil e devolve a proposta. `None` significa
@@ -518,6 +710,7 @@ fn processar_musica<F, C, E>(
     cand: &Candidata,
     fetch: &F,
     chave_vagalume: &str,
+    chave_recusada: &Cell<bool>,
     cortesia: &Cortesia,
     cancelled: &C,
     etapa: E,
@@ -542,10 +735,14 @@ where
     // letra pulam o arquivo [...] e a varredura em lote do app". A música
     // marcada como instrumental para aqui, com o que a etapa 1 achou.
     //
-    // Não é só economia de rede: um instrumental com título e artista
+    // Não é só economia de rede, e NÃO é filtro de completude: é regra de
+    // INTEGRIDADE, e por isso ela sobreviveu à remoção do portão da varredura
+    // de uma música só (QA ALTO-3b). Um instrumental com título e artista
     // corretos casa com a versão CANTADA da mesma peça no LRCLIB e sai
     // ALTA — e ALTA chega pré-marcada na revisão (DECISIONS #49). Um
-    // clique gravaria a letra de outra gravação dentro do arquivo.
+    // clique gravaria a letra de outra gravação dentro do arquivo. Vale
+    // igual nos dois caminhos: nem "quem clicou sabe o que quer" autoriza
+    // pôr letra de terceiro dentro de uma peça sem voz.
     if cand.song.instrumental {
         return Some(proposta_baixa(cand, None));
     }
@@ -609,13 +806,15 @@ where
             lyrics: Some(b.lyrics.clone()),
             confidence: conf.to_string(),
             fonte: FONTE_LRCLIB.into(),
+            has_lyrics: cand.song.has_lyrics,
+            letra_origem: cand.song.letra_origem.clone(),
             error: None,
         });
     }
 
     // --- etapa 3: Vagalume, SÓ onde o LRCLIB veio vazio --------------------
     //
-    // Três condições, todas herdadas do tools/curadoria.py:
+    // Quatro condições, as três primeiras herdadas do tools/curadoria.py:
     // - o LRCLIB não trouxe letra confiável (o funil só passa adiante o que a
     //   etapa anterior não resolveu) E não falhou (rede caída derruba as duas
     //   fontes; insistir só gastaria o tempo do usuário);
@@ -624,10 +823,19 @@ where
     //   a igualdade de palavras dos dois lados é a única prova que existe, e
     //   ela precisa de um pedido que já signifique alguma coisa. Palpite de
     //   nome de arquivo não é isso — identificar quem ainda não tem tag é
-    //   trabalho da impressão digital (fase 2 da F18).
+    //   trabalho da impressão digital (fase 2 da F18);
+    // - a chave ainda não foi recusada nesta varredura (QA MÉDIO-6): chave
+    //   errada não melhora entre uma música e a seguinte, e insistir custa
+    //   meio segundo por arquivo para reescrever a mesma linha de erro 95
+    //   vezes. A primeira reporta; as demais pulam em silêncio, igual ao que
+    //   já acontece quando não há chave nenhuma.
     let sem_letra_do_lrclib = erro.is_none() && confianca.is_none();
     let tem_o_que_conferir = !cand.titulo_tag.is_empty() && !cand.artista_tag.is_empty();
-    if sem_letra_do_lrclib && !chave_vagalume.trim().is_empty() && tem_o_que_conferir {
+    if sem_letra_do_lrclib
+        && !chave_vagalume.trim().is_empty()
+        && tem_o_que_conferir
+        && !chave_recusada.get()
+    {
         if cancelled() {
             return None;
         }
@@ -662,11 +870,23 @@ where
                     lyrics: Some(m.lyrics),
                     confidence: "media".into(),
                     fonte: FONTE_VAGALUME.into(),
+                    has_lyrics: cand.song.has_lyrics,
+                    letra_origem: cand.song.letra_origem.clone(),
                     error: None,
                 })
             }
             Ok(None) => {}
-            Err(e) => erro = Some(e.to_string()),
+            Err(e) => {
+                let msg = e.to_string();
+                // chave recusada é veredito sobre a varredura INTEIRA, não
+                // sobre esta música: registra e desliga a etapa. Um erro
+                // qualquer (fora do ar, "espere um pouco") pode ter sido
+                // soluço, e a música seguinte merece a tentativa.
+                if msg == vagalume::ERRO_CHAVE_RECUSADA {
+                    chave_recusada.set(true);
+                }
+                erro = Some(msg);
+            }
         }
     }
 
@@ -694,7 +914,7 @@ where
 ///   com o MESMO `done` (a barra não anda, o texto muda): uma música chega a
 ///   levar segundos entre quatro palpites no LRCLIB e a consulta ao Vagalume,
 ///   e o PRD V8 pede "a etapa atual do funil e o arquivo do momento" visíveis
-///   o tempo todo. `done` só cresce no evento `etapa = "concluida"`, um por
+///   o tempo todo. `done` só cresce no evento `etapa = "concluída"`, um por
 ///   música — quem só quer a barra pode ignorar os demais.
 ///
 /// `total` é o número de CANDIDATAS (depois do filtro de músicas completas,
@@ -739,6 +959,10 @@ where
     on_progress(0, total, "", ETAPA_PREPARANDO); // total na tela antes da 1ª consulta
 
     let cortesia = Cortesia::nova(pausa);
+    // QA MÉDIO-6 — vive pela varredura inteira, ao lado da cortesia: assim
+    // que a API recusa a chave, a etapa 3 se desliga para as músicas
+    // seguintes.
+    let chave_recusada = Cell::new(false);
     let mut propostas = Vec::new();
     for (feitas, cand) in candidatas.iter().enumerate() {
         // cancelamento entre músicas: volta com o que já tem (QA M4)
@@ -749,6 +973,7 @@ where
             cand,
             &fetch,
             chave_vagalume,
+            &chave_recusada,
             &cortesia,
             &cancelled,
             |etapa| on_progress(feitas, total, &cand.nome, etapa),
@@ -765,14 +990,30 @@ where
 /// música" do editor (PRD V8/F18: "no editar de cada música, a versão
 /// individual: rodar o funil só naquele arquivo, para o caso pontual").
 ///
-/// Devolve `Ok(None)` quando não há o que propor: música já completa, música
-/// indisponível, nada encontrado ou proposta que não mudaria nada. Música
-/// inexistente é `Err` — o id veio do próprio app, então é defeito, não
-/// resultado. O progresso sai no mesmo formato da varredura em lote (com
-/// `total` 0 ou 1), para a UI reaproveitar o mesmo indicador.
+/// Diferente do lote, esta porta NÃO tem filtro de completude (QA ALTO-3b):
+/// música completa, com nome e artista reais, é consultada mesmo assim. O
+/// botão só é apertado por alguém que está olhando aquele arquivo e quer uma
+/// segunda opinião; recusá-la em silêncio e responder "não achamos esta
+/// música nos sites de letra" era mentir sobre uma busca que nunca aconteceu.
+///
+/// `titulo`/`artista` são o que está no formulário do editor NAQUELE momento
+/// e valem mais que as etiquetas do banco para MONTAR a consulta (QA
+/// ALTO-3a). O eco `current_title`/`current_artist` da proposta continua
+/// saindo do BANCO — é ele que o `apply` confere contra o disco antes de
+/// gravar (QA A5), e um eco tirado do formulário aprovaria a si mesmo.
+///
+/// Devolve `Ok(None)` para uma coisa só: procuramos e não veio nada novo
+/// (incluindo a proposta que não mudaria nada). As exceções são o arquivo
+/// indisponível e o cancelamento no meio. Música inexistente é `Err` — o id
+/// veio do próprio app, então é defeito, não resultado. O progresso sai no
+/// mesmo formato da varredura em lote (com `total` 0 ou 1), para a UI
+/// reaproveitar o mesmo indicador.
+#[allow(clippy::too_many_arguments)]
 pub fn enrich_scan_song<F, P, C>(
     conn: &Connection,
     song_id: i64,
+    titulo: Option<&str>,
+    artista: Option<&str>,
     fetch: F,
     chave_vagalume: &str,
     pausa: Duration,
@@ -790,17 +1031,21 @@ where
     if cancelled() {
         return Ok(None);
     }
-    let Some(cand) = candidata(song) else {
-        on_progress(0, 0, "", ETAPA_PREPARANDO); // nada a completar
+    let Some(cand) = candidata_pedida(song, titulo, artista) else {
+        on_progress(0, 0, "", ETAPA_PREPARANDO); // arquivo indisponível
         return Ok(None);
     };
     on_progress(0, 1, "", ETAPA_PREPARANDO);
 
     let cortesia = Cortesia::nova(pausa);
+    // uma música só: não há "resto da varredura" para desligar, mas a recusa
+    // da chave precisa chegar à proposta como o erro que é
+    let chave_recusada = Cell::new(false);
     let Some(proposta) = processar_musica(
         &cand,
         &fetch,
         chave_vagalume,
+        &chave_recusada,
         &cortesia,
         &cancelled,
         |etapa| on_progress(0, 1, &cand.nome, etapa),
@@ -869,9 +1114,36 @@ fn apply_one(conn: &Connection, ap: &EnrichApply) -> Result<Song> {
         .as_deref()
         .map(str::trim)
         .filter(|l| !l.is_empty());
+    let lyrics_atual = db::get_lyrics(conn, ap.song_id)?;
+    let atual_efetiva = lyrics_atual
+        .as_deref()
+        .map(str::trim)
+        .filter(|l| !l.is_empty());
+
+    // QA CRÍTICO-1 — letra existente só é trocada com consentimento
+    // EXPLÍCITO. O fluxo normal do frontend manda `lyrics: None` quando
+    // ninguém pediu substituição, então esta recusa é o cinto de segurança,
+    // não o caminho comum: ela existe porque a proposta ALTA chega
+    // PRÉ-MARCADA na revisão e um clique já destruiu transcrição corrigida à
+    // mão. É o mesmo "não sobrescreve letra" que o tools/curadoria.py aplica
+    // desde a DECISIONS #55.
+    //
+    // Letra IGUAL à que já está lá (texto aparado, como em `mesmo_valor`) não
+    // é substituição: nada se perde, e recusar produziria um erro
+    // incompreensível para quem só aceitou o título.
+    let letra_igual = lyrics_novo.is_some() && lyrics_novo == atual_efetiva;
+    if lyrics_novo.is_some() && atual_efetiva.is_some() && !letra_igual && !ap.substituir_letra {
+        return Err(crate::error::AppError(AVISO_LETRA_EXISTENTE.into()));
+    }
+
     let lyrics_final = match lyrics_novo {
-        Some(_) => ap.lyrics.clone(), // grava exatamente como veio (sem trim)
-        None => db::get_lyrics(conn, ap.song_id)?, // preserva a letra atual
+        // grava exatamente como veio (sem trim)
+        Some(_) if !letra_igual => ap.lyrics.clone(),
+        // repasse: a letra que já está no arquivo, e não a cópia com espaço
+        // diferente que veio na aplicação. Regravar o mesmo texto com outra
+        // pontuação de espaço faria o writer considerar a letra TROCADA e
+        // derrubar a marca de procedência legítima (DECISIONS #54).
+        _ => lyrics_atual,
     };
     let artist_final = ap
         .artist
@@ -941,6 +1213,66 @@ mod tests {
             "Princesa Goiana", "É cedo ainda",
         ] {
             assert!(!is_placeholder(texto), "{texto:?} não é placeholder");
+        }
+    }
+
+    /// Bateria comparada ao `eh_placeholder` do `tools/curadoria.py`, caso a
+    /// caso: as duas metades do porte — a regra de SUBSTRING e a de ruído de
+    /// arquivo com marca de ripador — faltavam aqui, e as etiquetas que elas
+    /// pegam passavam por REAIS. Uma "04 Faixa 4 Artista Desconheci" julgada
+    /// real deixa a música "completa": ela some do funil para sempre.
+    ///
+    /// A segunda metade da tabela é a proteção contra o incidente inverso (a
+    /// regressão do `_RUIDO_DE_ARQUIVO`, que engoliu "Pista", "Gravação" e
+    /// "Sem Nome"): condenar um título REAL apaga o trabalho de quem curou.
+    #[test]
+    fn is_placeholder_matches_the_python_port() {
+        const CASOS: &[(&str, bool)] = &[
+            // lixo de ripador com sujeira em volta (regra de SUBSTRING)
+            ("04 Faixa 4 Artista Desconheci", true),
+            ("Artista Desconhecida", true),
+            ("05 Unknown Artist", true),
+            ("No Artist - 03", true),
+            ("Titulo Desconheci", true),
+            ("Unknown Title 3", true),
+            ("Artista Desconhecido de Verdade", true),
+            // só números e palavras de maquinário, COM marca de máquina junto
+            ("1-2010 22-17-23)_converted", true),
+            ("audiotrack 02 converted", true),
+            ("Track 05 copy", true),
+            ("faixa 3 mp3", true),
+            ("22-17-23 converted", true),
+            ("2010-05-03 gravacao", true),
+            ("New Recording 12", true),
+            ("Sem Titulo 4", true),
+            ("untitled 1", true),
+            ("01 audio", true),
+            ("wav 3", true),
+            // ...e o que NÃO pode virar placeholder: palavra de maquinário
+            // SOZINHA é título, e sem a marca da máquina a regra não vale
+            ("Pista", false),
+            ("Gravação", false),
+            ("Nome", false),
+            ("Sem Nome", false),
+            ("Convertido", false),
+            ("Copia", false),
+            ("Recording", false),
+            ("Audio", false),
+            ("Nova Gravação", false),
+            ("Sem Nome no Mundo", false),
+            ("Pista de Dança", false),
+            ("Faixa Nobre", false),
+            ("Track Dois", false),
+            ("Faixa de Gaza", false),
+            ("O Artista", false),
+            ("12 Horas", false),
+        ];
+        for (texto, esperado) in CASOS {
+            assert_eq!(
+                is_placeholder(texto),
+                *esperado,
+                "{texto:?} — o Python decide {esperado}"
+            );
         }
     }
 
@@ -1021,6 +1353,8 @@ mod tests {
             lyrics: None,
             confidence: "baixa".into(),
             fonte: FONTE_NOME_ARQUIVO.into(),
+            has_lyrics: false,
+            letra_origem: None,
             error: None,
         }
     }

@@ -860,8 +860,55 @@ fn write_tags_com_origem_ignores_a_declaration_without_a_new_lyric() {
     assert_eq!(letra_origem(&path2), None);
 }
 
-/// `write_tags` (o editor) é exatamente `write_tags_com_origem(..., None)`:
-/// não sabe de procedência e segue valendo a regra da DECISIONS #54.
+/// V8/F18 — o editor grava com a MESMA chamada que o funil, incluindo a
+/// marca de instrumental, e as duas coisas não se atrapalham.
+///
+/// É o caso novo do formulário: a pessoa aceita a letra de uma proposta do
+/// Vagalume, ela cai no campo de letra, e o salvar do editor precisa levar a
+/// procedência junto. Sem isso o editor apagava a marca que o funil tinha
+/// acabado de gravar — a mesma letra passava a se declarar oficial só porque
+/// foi salva pela outra porta.
+#[test]
+fn the_editor_can_declare_the_provenance_of_the_lyric_it_saves() {
+    let (_dir, conn, _folder_id) = setup();
+    let song = song_by_suffix(&conn, "sem_letra.mp3");
+    let path = PathBuf::from(&song.file_path);
+
+    let atualizada = writer::write_tags_com_origem(
+        &conn,
+        song.id,
+        "Ponto de Oxum",
+        Some("Coral Novo"),
+        Some("letra aceita de uma proposta do Vagalume"),
+        Some("água; esperança"),
+        Some(true), // e a marca de instrumental do mesmo formulário
+        Some(writer::ORIGEM_VAGALUME),
+    )
+    .unwrap();
+
+    assert_eq!(letra_origem(&path), Some("vagalume".into()));
+    assert_eq!(atualizada.letra_origem.as_deref(), Some("vagalume"));
+    assert!(atualizada.instrumental, "as duas marcas convivem");
+    assert_eq!(atualizada.temas.as_deref(), Some("água; esperança"));
+
+    // ...e o salvar seguinte, sem declarar nada, continua valendo a regra da
+    // DECISIONS #54: mesma letra, marca preservada
+    let de_novo = writer::write_tags(
+        &conn,
+        song.id,
+        "Ponto de Oxum",
+        Some("Coral Novo"),
+        Some("letra aceita de uma proposta do Vagalume"),
+        Some("água; esperança"),
+        None,
+    )
+    .unwrap();
+    assert_eq!(de_novo.letra_origem.as_deref(), Some("vagalume"));
+}
+
+/// `write_tags` (o editor SEM declaração) é exatamente
+/// `write_tags_com_origem(..., None)`: não sabe de procedência e segue
+/// valendo a regra da DECISIONS #54.
 #[test]
 fn write_tags_is_write_tags_com_origem_without_a_declaration() {
     let (_dir, conn, _folder_id) = setup();

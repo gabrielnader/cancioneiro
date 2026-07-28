@@ -52,7 +52,7 @@ pub fn run() {
             commands::remove_playlist_item,
             commands::reorder_playlist,
             commands::write_tags,
-            commands::fetch_lyrics_online,
+            commands::enrich_count,
             commands::enrich_folder_scan,
             commands::enrich_song_scan,
             commands::enrich_cancel_scan,

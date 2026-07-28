@@ -33,10 +33,14 @@
 //!
 //! # A chave da API
 //!
-//! Gratuita, do usuário, entra por PARÂMETRO. O Cancioneiro nunca a grava em
-//! disco nem no banco, e ela aparece num lugar só: a query string da consulta.
-//! Nenhuma mensagem de erro deste módulo a inclui. Sem chave, a etapa é
-//! pulada em silêncio (`Ok(None)`, zero rede) e o resto do funil segue igual.
+//! Gratuita, do usuário, entra por PARÂMETRO. Ela nunca entra no banco de
+//! músicas nem em log, nenhuma mensagem de erro deste módulo a inclui, e ela
+//! não é enviada a lugar nenhum além do próprio Vagalume: aparece num lugar
+//! só, a query string da consulta. Fica GUARDADA nas preferências locais do
+//! aplicativo, na máquina da própria pessoa — mandar ~40 curadores sem
+//! suporte redigitar uma chave de API a cada sessão seria pior do que
+//! guardá-la. Sem chave, a etapa é pulada em silêncio (`Ok(None)`, zero rede)
+//! e o resto do funil segue igual.
 //!
 //! # Normalização Unicode
 //!
@@ -56,6 +60,18 @@ pub const SEARCH_URL: &str = "https://api.vagalume.com.br/search.php";
 
 /// A API responde por tipo. `"exact"` é a ÚNICA resposta aproveitável.
 const TIPO_EXATO: &str = "exact";
+
+/// Mensagem (pt-BR) de chave recusada pela API — a chave foi digitada errada
+/// ou copiada pela metade, e nenhuma consulta desta varredura vai passar.
+///
+/// Ela é PRODUZIDA pelo fetcher real (`commands::funil_fetcher`, o único que
+/// enxerga o status HTTP) e RECONHECIDA pelo funil (`enrich`), que ao vê-la
+/// desliga a etapa do Vagalume pelo resto da varredura em vez de repetir a
+/// mesma rejeição em 95 linhas. O acoplamento pelo texto é deliberado: o
+/// fetcher é injetável — é assim que a suíte roda sem rede — e a mensagem é
+/// o único canal que atravessa a injeção.
+pub const ERRO_CHAVE_RECUSADA: &str =
+    "a chave do Vagalume foi recusada — confira se copiou a chave inteira";
 
 /// Texto de "não temos esta letra" que a base comunitária às vezes devolve no
 /// lugar da letra. Comparado sobre a chave normalizada (sem acento, sem
@@ -164,27 +180,68 @@ fn letra_indisponivel(letra: &str) -> bool {
     INDISPONIVEL.iter().any(|marca| chave.contains(marca))
 }
 
+/// Entidades HTML nomeadas que o desescape resolve.
+///
+/// A tabela é a do Latin-1 inteiro mais a pontuação tipográfica, porque o
+/// outro lado do produto usa o `html.unescape` do Python — que decodifica o
+/// HTML5 inteiro — sobre o MESMO texto vindo da MESMA base. O que os dois
+/// decodificarem diferente vira diferença DENTRO do arquivo de música: a
+/// tabela curta que existia aqui não tinha uma única vogal acentuada, e
+/// `Cora&ccedil;&atilde;o` entrava literal no quadro USLT e no índice de
+/// busca do player enquanto o `tools/curadoria.py` gravava "Coração".
+///
+/// `nbsp` é o espaço DURO (U+00A0), não o espaço comum, pelo mesmo motivo:
+/// é o caractere que o Python grava.
+const NOMEADAS: &[(&str, char)] = &[
+    // XML/HTML básicas
+    ("amp", '&'), ("lt", '<'), ("gt", '>'), ("quot", '"'),
+    ("apos", '\''),
+    // espaço e pontuação
+    ("nbsp", '\u{A0}'), ("shy", '\u{AD}'), ("ndash", '–'),
+    ("mdash", '—'), ("hellip", '…'), ("bull", '•'), ("middot", '·'),
+    ("deg", '°'), ("laquo", '«'), ("raquo", '»'), ("lsquo", '‘'),
+    ("rsquo", '’'), ("ldquo", '“'), ("rdquo", '”'), ("sbquo", '‚'),
+    ("bdquo", '„'), ("dagger", '†'), ("Dagger", '‡'), ("permil", '‰'),
+    ("lsaquo", '‹'), ("rsaquo", '›'), ("prime", '′'), ("Prime", '″'),
+    // símbolos
+    ("copy", '©'), ("reg", '®'), ("trade", '™'), ("sect", '§'),
+    ("para", '¶'), ("plusmn", '±'), ("times", '×'), ("divide", '÷'),
+    ("micro", 'µ'), ("not", '¬'), ("iexcl", '¡'), ("iquest", '¿'),
+    ("cent", '¢'), ("pound", '£'), ("yen", '¥'), ("euro", '€'),
+    ("curren", '¤'), ("brvbar", '¦'), ("uml", '¨'), ("macr", '¯'),
+    ("acute", '´'), ("cedil", '¸'), ("ordf", 'ª'), ("ordm", 'º'),
+    ("sup1", '¹'), ("sup2", '²'), ("sup3", '³'), ("frac14", '¼'),
+    ("frac12", '½'), ("frac34", '¾'),
+    // A
+    ("Agrave", 'À'), ("Aacute", 'Á'), ("Acirc", 'Â'), ("Atilde", 'Ã'),
+    ("Auml", 'Ä'), ("Aring", 'Å'), ("AElig", 'Æ'), ("agrave", 'à'),
+    ("aacute", 'á'), ("acirc", 'â'), ("atilde", 'ã'), ("auml", 'ä'),
+    ("aring", 'å'), ("aelig", 'æ'),
+    // C/E
+    ("Ccedil", 'Ç'), ("ccedil", 'ç'), ("Egrave", 'È'), ("Eacute", 'É'),
+    ("Ecirc", 'Ê'), ("Euml", 'Ë'), ("egrave", 'è'), ("eacute", 'é'),
+    ("ecirc", 'ê'), ("euml", 'ë'),
+    // I/N
+    ("Igrave", 'Ì'), ("Iacute", 'Í'), ("Icirc", 'Î'), ("Iuml", 'Ï'),
+    ("igrave", 'ì'), ("iacute", 'í'), ("icirc", 'î'), ("iuml", 'ï'),
+    ("Ntilde", 'Ñ'), ("ntilde", 'ñ'),
+    // O
+    ("Ograve", 'Ò'), ("Oacute", 'Ó'), ("Ocirc", 'Ô'), ("Otilde", 'Õ'),
+    ("Ouml", 'Ö'), ("Oslash", 'Ø'), ("ograve", 'ò'), ("oacute", 'ó'),
+    ("ocirc", 'ô'), ("otilde", 'õ'), ("ouml", 'ö'), ("oslash", 'ø'),
+    // U/Y e resto do Latin-1
+    ("Ugrave", 'Ù'), ("Uacute", 'Ú'), ("Ucirc", 'Û'), ("Uuml", 'Ü'),
+    ("ugrave", 'ù'), ("uacute", 'ú'), ("ucirc", 'û'), ("uuml", 'ü'),
+    ("Yacute", 'Ý'), ("yacute", 'ý'), ("yuml", 'ÿ'), ("ETH", 'Ð'),
+    ("eth", 'ð'), ("THORN", 'Þ'), ("thorn", 'þ'), ("szlig", 'ß'),
+];
+
 /// Desescapa as entidades HTML que a base devolve no texto da letra
-/// (`&quot;`, `&#39;`, `&amp;`...). Sem isto elas entram no MP3 e no índice
-/// de busca do player. Cobre as nomeadas que aparecem em texto de letra mais
-/// as numéricas (decimais e hexadecimais); entidade desconhecida fica como
-/// está, que é o comportamento seguro — nunca some texto do usuário.
+/// (`&ccedil;`, `&quot;`, `&#39;`, `&amp;`...). Sem isto elas entram no MP3 e
+/// no índice de busca do player. Cobre as `NOMEADAS` mais as numéricas
+/// (decimais e hexadecimais); entidade desconhecida fica como está, que é o
+/// comportamento seguro E o do Python — nunca some texto do usuário.
 fn unescape_html(texto: &str) -> String {
-    const NOMEADAS: &[(&str, char)] = &[
-        ("amp", '&'),
-        ("lt", '<'),
-        ("gt", '>'),
-        ("quot", '"'),
-        ("apos", '\''),
-        ("nbsp", ' '),
-        ("hellip", '…'),
-        ("ndash", '\u{2013}'),
-        ("mdash", '\u{2014}'),
-        ("lsquo", '\u{2018}'),
-        ("rsquo", '\u{2019}'),
-        ("ldquo", '\u{201C}'),
-        ("rdquo", '\u{201D}'),
-    ];
     if !texto.contains('&') {
         return texto.to_string();
     }
@@ -406,5 +463,81 @@ mod tests {
         assert_eq!(unescape_html("100% & 50%"), "100% & 50%");
         // texto sem entidade nenhuma passa intacto
         assert_eq!(unescape_html("linha\nlinha"), "linha\nlinha");
+    }
+
+    /// Paridade com o `html.unescape` do Python, entrada por entrada.
+    ///
+    /// O mesmo texto de letra passa pelos DOIS stacks — pelo
+    /// `tools/curadoria.py` no terminal da curadoria e por aqui no app —, e o
+    /// que sair diferente vai para dentro do MP3 e para o índice de busca do
+    /// player. A tabela curta de antes não tinha uma única entidade acentuada:
+    /// `Cora&ccedil;&atilde;o` virava "Coração" no Python e ficava literal
+    /// aqui. Cada par abaixo foi conferido contra o `html.unescape`.
+    #[test]
+    fn unescape_html_matches_pythons_html_unescape() {
+        const CASOS: &[(&str, &str)] = &[
+            ("Cora&ccedil;&atilde;o", "Coração"),
+            ("&eacute;", "é"),
+            ("&aacute;", "á"),
+            // `&nbsp;` é espaço DURO (U+00A0), não o espaço ASCII: é o que o
+            // Python grava, e trocá-lo mudaria o texto entre os dois stacks
+            ("a&nbsp;b", "a\u{A0}b"),
+            (
+                "Ma&ccedil;&atilde; &agrave; noite, &Eacute; ver&atilde;o",
+                "Maçã à noite, É verão",
+            ),
+            (
+                "&Aacute;gua &Ccedil;&eacute;u &Iacute;ndio &Oacute;timo &Uacute;nico",
+                "Água Çéu Índio Ótimo Único",
+            ),
+            (
+                "&agrave;&aacute;&acirc;&atilde;&auml; &egrave;&eacute;&ecirc;&euml;",
+                "àáâãä èéêë",
+            ),
+            (
+                "&igrave;&iacute;&icirc;&iuml; &ograve;&oacute;&ocirc;&otilde;&ouml;",
+                "ìíîï òóôõö",
+            ),
+            ("&ugrave;&uacute;&ucirc;&uuml; &ccedil;&ntilde;&yacute;", "ùúûü çñý"),
+            (
+                "&Agrave;&Aacute;&Acirc;&Atilde;&Auml; &Egrave;&Eacute;&Ecirc;&Euml;",
+                "ÀÁÂÃÄ ÈÉÊË",
+            ),
+            (
+                "&Igrave;&Iacute;&Icirc;&Iuml; &Ograve;&Oacute;&Ocirc;&Otilde;&Ouml;",
+                "ÌÍÎÏ ÒÓÔÕÖ",
+            ),
+            ("&Ugrave;&Uacute;&Ucirc;&Uuml; &Ccedil;&Ntilde;&Yacute;", "ÙÚÛÜ ÇÑÝ"),
+            ("&lsquo;a&rsquo; &ldquo;b&rdquo;", "‘a’ “b”"),
+            ("um&ndash;dois&mdash;tr&ecirc;s", "um–dois—três"),
+            ("retic&ecirc;ncias&hellip;", "reticências…"),
+            ("30&deg;C", "30°C"),
+            ("a&middot;b", "a·b"),
+            ("&laquo;citado&raquo;", "«citado»"),
+            ("&apos;agora&apos;", "'agora'"),
+            ("&amp; &lt; &gt; &quot;", "& < > \""),
+            ("&#39;a&#39; &#xE9; &#233;", "'a' é é"),
+            // entidade que não existe sai LITERAL, como no Python — nunca
+            // some texto do usuário
+            ("&naoexiste;", "&naoexiste;"),
+            ("Tim & Tom", "Tim & Tom"),
+            ("100% & 50%", "100% & 50%"),
+            ("linha\nlinha", "linha\nlinha"),
+        ];
+        for (entrada, esperado) in CASOS {
+            assert_eq!(&unescape_html(entrada), esperado, "entrada {entrada:?}");
+        }
+    }
+
+    /// Nome repetido na tabela é sempre defeito: a primeira ocorrência vence
+    /// em silêncio e a segunda (a que alguém acabou de acrescentar) nunca
+    /// entra em vigor.
+    #[test]
+    fn the_named_entity_table_has_no_duplicates() {
+        let mut nomes: Vec<&str> = NOMEADAS.iter().map(|(n, _)| *n).collect();
+        nomes.sort_unstable();
+        let total = nomes.len();
+        nomes.dedup();
+        assert_eq!(nomes.len(), total, "há entidade repetida em NOMEADAS");
     }
 }

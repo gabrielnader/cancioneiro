@@ -5,7 +5,7 @@
 
 use cancioneiro_lib::enrich::{self, EnrichApply};
 use cancioneiro_lib::error::AppError;
-use cancioneiro_lib::{db, indexer, writer};
+use cancioneiro_lib::{db, indexer, vagalume, writer};
 use rusqlite::Connection;
 use std::cell::RefCell;
 use std::fs;
@@ -151,6 +151,7 @@ fn enrich_scan_proposes_and_apply_writes_full_flow() {
             current_title: p.current_title.clone(),
             current_artist: p.current_artist.clone(),
             fonte: None,
+            substituir_letra: false,
         }],
     )
     .unwrap();
@@ -603,6 +604,7 @@ fn apply_with_none_preserves_existing_lyrics_artist_and_temas() {
             current_title: song.title.clone(),
             current_artist: song.artist.clone(),
             fonte: None,
+            substituir_letra: false,
         }],
     )
     .unwrap();
@@ -628,6 +630,7 @@ fn apply_with_none_preserves_existing_lyrics_artist_and_temas() {
             current_title: song.title.clone(),
             current_artist: song.artist.clone(),
             fonte: None,
+            substituir_letra: false,
         }],
     )
     .unwrap();
@@ -678,6 +681,7 @@ fn apply_never_clears_the_instrumental_mark() {
             current_title: song.title.clone(),
             current_artist: song.artist.clone(),
             fonte: None,
+            substituir_letra: false,
         }],
     )
     .unwrap();
@@ -850,6 +854,7 @@ fn missing_file_becomes_proposal_with_error_without_network() {
             current_title: song.title.clone(),
             current_artist: song.artist.clone(),
             fonte: None,
+            substituir_letra: false,
         }],
     )
     .unwrap();
@@ -889,6 +894,7 @@ fn apply_continues_batch_and_reports_per_song_errors() {
             current_title: a.title.clone(),
             current_artist: a.artist.clone(),
             fonte: None,
+            substituir_letra: false,
         },
         EnrichApply {
             song_id: b.id,
@@ -899,6 +905,7 @@ fn apply_continues_batch_and_reports_per_song_errors() {
             current_title: b.title.clone(),
             current_artist: b.artist.clone(),
             fonte: None,
+            substituir_letra: false,
         },
         EnrichApply {
             song_id: c.id,
@@ -909,6 +916,7 @@ fn apply_continues_batch_and_reports_per_song_errors() {
             current_title: c.title.clone(),
             current_artist: c.artist.clone(),
             fonte: None,
+            substituir_letra: false,
         },
     ];
     let results = enrich::apply(&conn, &lote).unwrap();
@@ -1050,6 +1058,7 @@ fn apply_writes_when_the_song_is_untouched_since_the_scan() {
             current_title: song.title.clone(),
             current_artist: song.artist.clone(),
             fonte: None,
+            substituir_letra: false,
         }],
     )
     .unwrap();
@@ -1082,6 +1091,7 @@ fn apply_refuses_stale_proposal_when_title_changed_after_the_scan() {
             current_title: titulo_na_varredura,
             current_artist: song.artist.clone(),
             fonte: None,
+            substituir_letra: false,
         }],
     )
     .unwrap();
@@ -1123,6 +1133,7 @@ fn apply_refuses_stale_proposal_when_only_the_artist_changed() {
             current_title: song.title.clone(),
             current_artist: artista_na_varredura,
             fonte: None,
+            substituir_letra: false,
         }],
     )
     .unwrap();
@@ -1154,6 +1165,7 @@ fn apply_compares_trimmed_and_treats_missing_artist_as_empty() {
             current_title: format!("  {}  ", song.title),
             current_artist: Some("   ".into()),
             fonte: None,
+            substituir_letra: false,
         }],
     )
     .unwrap();
@@ -1189,6 +1201,7 @@ fn apply_batch_mixes_stale_and_fresh_without_aborting() {
                 current_title: a.title.clone(),
                 current_artist: a.artist.clone(),
                 fonte: None,
+                substituir_letra: false,
             },
             EnrichApply {
                 song_id: b.id,
@@ -1199,6 +1212,7 @@ fn apply_batch_mixes_stale_and_fresh_without_aborting() {
                 current_title: b.title.clone(), // eco da varredura: obsoleto
                 current_artist: b.artist.clone(),
                 fonte: None,
+                substituir_letra: false,
             },
             EnrichApply {
                 song_id: c.id,
@@ -1209,6 +1223,7 @@ fn apply_batch_mixes_stale_and_fresh_without_aborting() {
                 current_title: c.title.clone(),
                 current_artist: c.artist.clone(),
                 fonte: None,
+                substituir_letra: false,
             },
         ],
     )
@@ -1273,6 +1288,7 @@ fn apply_pass_through_keeps_the_transcription_marker() {
             current_title: song.title.clone(),
             current_artist: song.artist.clone(),
             fonte: None,
+            substituir_letra: false,
         }],
     )
     .unwrap();
@@ -1282,6 +1298,402 @@ fn apply_pass_through_keeps_the_transcription_marker() {
         tag_de(&song.file_path).get_user_text("LETRA_ORIGEM"),
         Some("transcricao"),
         "lote que preserva a letra não pode apagar a marca legítima"
+    );
+}
+
+// ===========================================================================
+// QA MÉDIO-6 — chave recusada é uma notícia, não noventa e cinco.
+//
+// A chave errada não melhora entre uma música e a seguinte: repetir a
+// consulta é gastar meio segundo por arquivo para receber a mesma rejeição e
+// escrever a mesma linha de erro. A primeira música reporta; as demais pulam
+// o Vagalume em silêncio, exatamente como já acontece quando não há chave.
+// ===========================================================================
+#[test]
+fn a_rejected_key_switches_the_vagalume_stage_off_for_the_rest_of_the_scan() {
+    let (_dir, conn, _folder_id) = setup_with(&[
+        ("sem_letra.mp3", "Uma.mp3"),
+        ("sem_letra.mp3", "Duas.mp3"),
+    ]);
+    // as duas precisam de tags reais para a etapa 3 ser alcançada
+    for (suffix, titulo) in [("Uma.mp3", "Ponto de Oxum"), ("Duas.mp3", "Ponto de Iansã")] {
+        let s = song_by_suffix(&conn, suffix);
+        writer::write_tags(&conn, s.id, titulo, Some("Coral Novo"), None, None, None).unwrap();
+    }
+
+    let urls = RefCell::new(Vec::new());
+    let props = enrich::enrich_scan(
+        &conn,
+        "",
+        |url: &str| {
+            urls.borrow_mut().push(url.to_string());
+            if url.contains("vagalume") {
+                Err(AppError(vagalume::ERRO_CHAVE_RECUSADA.into()))
+            } else {
+                Ok("[]".to_string())
+            }
+        },
+        CHAVE_VG,
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+
+    assert_eq!(
+        urls_de(&urls, "vagalume").len(),
+        1,
+        "a chave recusada é consultada UMA vez: {:?}",
+        urls_de(&urls, "vagalume")
+    );
+    // e o LRCLIB, que não usa chave nenhuma, foi consultado pelas duas
+    let no_lrclib = urls_de(&urls, "lrclib").join(" ");
+    assert!(no_lrclib.contains("Oxum") && no_lrclib.contains("Ians"));
+    // UMA linha explica o problema; a outra nem aparece — sem a etapa 3 não
+    // sobra nada a propor para ela, e uma linha muda repetindo a mesma
+    // acusação seria só ruído na revisão
+    let com_erro: Vec<&str> = props.iter().filter_map(|p| p.error.as_deref()).collect();
+    assert_eq!(com_erro, vec![vagalume::ERRO_CHAVE_RECUSADA]);
+    // a chave nunca entra na explicação
+    assert!(!serde_json::to_string(&props).unwrap().contains(CHAVE_VG));
+}
+
+/// Um erro de rede QUALQUER do Vagalume (fora do ar, 429) não desliga a
+/// etapa: ele pode ter sido um soluço, e a música seguinte merece a tentativa.
+/// Só a chave recusada é veredito sobre a varredura inteira.
+#[test]
+fn a_passing_vagalume_failure_does_not_switch_the_stage_off() {
+    let (_dir, conn, _folder_id) = setup_with(&[
+        ("sem_letra.mp3", "Uma.mp3"),
+        ("sem_letra.mp3", "Duas.mp3"),
+    ]);
+    for (suffix, titulo) in [("Uma.mp3", "Ponto de Oxum"), ("Duas.mp3", "Ponto de Iansã")] {
+        let s = song_by_suffix(&conn, suffix);
+        writer::write_tags(&conn, s.id, titulo, Some("Coral Novo"), None, None, None).unwrap();
+    }
+
+    let urls = RefCell::new(Vec::new());
+    enrich::enrich_scan(
+        &conn,
+        "",
+        |url: &str| {
+            urls.borrow_mut().push(url.to_string());
+            if url.contains("vagalume") {
+                Err(AppError("o site de letras está fora do ar agora".into()))
+            } else {
+                Ok("[]".to_string())
+            }
+        },
+        CHAVE_VG,
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+
+    assert_eq!(urls_de(&urls, "vagalume").len(), 2, "as duas são tentadas");
+}
+
+// ===========================================================================
+// QA ALTO-2 — quantas músicas a varredura vai olhar é UMA regra, e ela mora
+// aqui. O frontend tinha uma cópia em TypeScript que já divergira desta; a
+// contagem que a tela promete e o total que a barra de progresso anuncia
+// precisam sair da MESMA `candidata`.
+// ===========================================================================
+#[test]
+fn count_candidatas_is_the_same_rule_the_scan_uses() {
+    let (_dir, conn, _folder_id) = setup_with(&[
+        ("sem_tags.mp3", "Pasta/Falamansa - Oh! Chuva.mp3"), // sem tag nenhuma
+        ("sem_letra.mp3", "Pasta/sem_letra.mp3"),            // tem nomes, falta letra
+        ("com_letra.mp3", "Pasta/com_letra.mp3"),            // completa: fora
+        ("sem_tags.mp3", "Outra/x.mp3"),                     // fora do prefixo
+    ]);
+    let raiz = song_by_suffix(&conn, "Oh! Chuva.mp3").file_path;
+    let pasta = raiz.trim_end_matches("/Falamansa - Oh! Chuva.mp3").to_string();
+
+    // o total anunciado pela varredura é a verdade a espelhar
+    let eventos = RefCell::new(Vec::new());
+    enrich::enrich_scan(
+        &conn,
+        &pasta,
+        |_: &str| Ok("[]".to_string()),
+        SEM_CHAVE,
+        ZERO,
+        |_, total, _, _| eventos.borrow_mut().push(total),
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+    let total_da_varredura = eventos.borrow()[0];
+
+    assert_eq!(enrich::count_candidatas(&conn, &pasta).unwrap(), 2);
+    assert_eq!(
+        enrich::count_candidatas(&conn, &pasta).unwrap(),
+        total_da_varredura,
+        "a contagem prometida na tela é a mesma que a barra vai anunciar"
+    );
+    // prefixo vazio = biblioteca inteira
+    assert_eq!(enrich::count_candidatas(&conn, "").unwrap(), 3);
+    // pasta sem nada a completar
+    assert_eq!(
+        enrich::count_candidatas(&conn, "/lugar/nenhum").unwrap(),
+        0
+    );
+}
+
+/// A contagem não gasta rede e não propõe nada: ela existe para a tela poder
+/// dizer "vou olhar N músicas" ANTES de a pessoa mandar começar.
+#[test]
+fn count_candidatas_never_touches_the_network() {
+    let (_dir, conn, _folder_id) = setup_with(&[("sem_tags.mp3", "a - Um.mp3")]);
+    assert_eq!(enrich::count_candidatas(&conn, "").unwrap(), 1);
+}
+
+/// O instrumental com título E artista não tem o que completar (a letra não
+/// conta para ele, V8/F17) — e some da contagem, exatamente como some da
+/// varredura.
+#[test]
+fn count_candidatas_excludes_instrumentals_with_both_names() {
+    let (_dir, conn, _folder_id) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
+    let song = song_by_suffix(&conn, "sem_letra.mp3");
+    assert_eq!(enrich::count_candidatas(&conn, "").unwrap(), 1);
+
+    writer::write_tags(
+        &conn,
+        song.id,
+        "Instrumental Sem Letra",
+        Some("Banda Fixture"),
+        None,
+        None,
+        Some(true),
+    )
+    .unwrap();
+    assert_eq!(enrich::count_candidatas(&conn, "").unwrap(), 0);
+}
+
+// ===========================================================================
+// QA CRÍTICO-1 — o lote não pode trocar uma letra que já existe sem que quem
+// revisa saiba e concorde.
+//
+// A repro: "Falamansa - Oh! Chuva.mp3" com TIT2 "AudioTrack 03", sem TPE1, e
+// dentro dele uma transcrição corrigida à mão (TXXX:LETRA_ORIGEM =
+// "transcricao"). Ela É candidata, e tem de continuar sendo: é assim que uma
+// "Faixa 03" ganha o nome certo. Só que o palpite do nome do arquivo casa a
+// duração no LRCLIB, sai ALTA, chega PRÉ-MARCADA — e um clique destruía horas
+// de correção manual. O `tools/curadoria.py` recusa isso desde a DECISIONS
+// #55; o app não tinha equivalente nem sabia mostrar que havia letra ali.
+//
+// A correção tem duas metades: a proposta CARREGA a informação (`has_lyrics`
+// e a procedência do que seria sobrescrito) e a gravação exige consentimento
+// EXPLÍCITO (`substituir_letra`).
+// ===========================================================================
+
+/// A repro do QA, pronta para uso: devolve a Song e a transcrição que está
+/// dentro do arquivo.
+fn transcricao_com_nome_de_ripador() -> (tempfile::TempDir, Connection, db::Song, String) {
+    use lofty::config::WriteOptions;
+    use lofty::tag::TagExt;
+
+    let (dir, conn, _folder_id) = setup_with(&[("com_letra.mp3", "Falamansa - Oh! Chuva.mp3")]);
+    let song = song_by_suffix(&conn, "Oh! Chuva.mp3");
+    let transcricao = db::get_lyrics(&conn, song.id)
+        .unwrap()
+        .expect("a fixture tem letra");
+
+    // a marca que as ferramentas Python gravam...
+    let mut tag = id3(&song.file_path);
+    tag.insert_user_text("LETRA_ORIGEM".into(), "transcricao".into());
+    tag.save_to_path(&song.file_path, WriteOptions::default()).unwrap();
+    // ...e o TIT2 de ripador, pela porta do editor (que reindexa e preserva a
+    // marca, porque a letra é repassada sem mudar)
+    writer::write_tags(
+        &conn,
+        song.id,
+        "AudioTrack 03",
+        None,
+        Some(&transcricao),
+        None,
+        None,
+    )
+    .unwrap();
+
+    let song = song_by_suffix(&conn, "Oh! Chuva.mp3");
+    assert!(song.has_lyrics, "a repro precisa de letra no arquivo");
+    assert_eq!(song.letra_origem.as_deref(), Some("transcricao"));
+    (dir, conn, song, transcricao)
+}
+
+/// Proposta do LRCLIB (ALTA, com letra) para a repro acima.
+fn proposta_alta_sobre_a_transcricao(
+    conn: &Connection,
+    song: &db::Song,
+    letra_nova: &str,
+) -> enrich::EnrichProposal {
+    let dur = song.duration_seconds.expect("fixture tem duração") as f64;
+    let corpo = format!(
+        r#"[{{"trackName": "Oh! Chuva", "artistName": "Falamansa",
+             "duration": {dur}, "plainLyrics": {}}}]"#,
+        serde_json::to_string(letra_nova).unwrap()
+    );
+    scan_props(conn, "", move |_url: &str| Ok(corpo.clone()))
+        .into_iter()
+        .find(|p| p.song_id == song.id)
+        .expect("a música com nome de ripador continua candidata")
+}
+
+#[test]
+fn a_proposal_says_the_song_already_has_a_lyric_and_where_it_came_from() {
+    let (_dir, conn, song, _transcricao) = transcricao_com_nome_de_ripador();
+    let p = proposta_alta_sobre_a_transcricao(&conn, &song, "letra nova do LRCLIB");
+
+    assert_eq!(p.confidence, "alta", "é a proposta pré-marcada da repro");
+    assert!(p.lyrics.is_some(), "e ela traz letra: substituiria a atual");
+    assert!(p.has_lyrics, "a proposta precisa DIZER que já há letra ali");
+    assert_eq!(
+        p.letra_origem.as_deref(),
+        Some("transcricao"),
+        "e de onde veio o que seria sobrescrito"
+    );
+
+    // a música sem letra nenhuma não carrega alarme falso
+    let (_dir2, conn2, _fid) = setup_with(&[("sem_tags.mp3", "Falamansa - Oh! Chuva.mp3")]);
+    let sem = song_by_suffix(&conn2, "Oh! Chuva.mp3");
+    let p = proposta_alta_sobre_a_transcricao(&conn2, &sem, "letra nova do LRCLIB");
+    assert!(!p.has_lyrics);
+    assert_eq!(p.letra_origem, None);
+}
+
+#[test]
+fn apply_refuses_to_replace_an_existing_lyric_without_consent() {
+    let (_dir, conn, song, transcricao) = transcricao_com_nome_de_ripador();
+    let p = proposta_alta_sobre_a_transcricao(&conn, &song, "letra nova do LRCLIB");
+
+    let results = enrich::apply(
+        &conn,
+        &[EnrichApply {
+            song_id: p.song_id,
+            title: p.proposed_title.clone(),
+            artist: p.proposed_artist.clone(),
+            lyrics: p.lyrics.clone(),
+            add_temas: None,
+            current_title: p.current_title.clone(),
+            current_artist: p.current_artist.clone(),
+            fonte: Some(p.fonte.clone()),
+            substituir_letra: false,
+        }],
+    )
+    .unwrap();
+
+    assert_eq!(
+        results[0].error.as_deref(),
+        Some(enrich::AVISO_LETRA_EXISTENTE),
+        "sem consentimento, a gravação é recusada"
+    );
+    assert!(results[0].song.is_none());
+
+    // e o arquivo fica INTACTO: nem a letra, nem a marca, nem o título
+    assert_eq!(
+        db::get_lyrics(&conn, song.id).unwrap().as_deref(),
+        Some(transcricao.as_str())
+    );
+    assert_eq!(
+        id3(&song.file_path).get_user_text("LETRA_ORIGEM"),
+        Some("transcricao")
+    );
+    let inalterada = song_by_suffix(&conn, "Oh! Chuva.mp3");
+    assert_eq!(inalterada.title, "AudioTrack 03", "recusa não grava nada");
+}
+
+#[test]
+fn apply_replaces_the_existing_lyric_when_consent_is_explicit() {
+    // fonte LRCLIB: letra oficial, e letra oficial não leva marca nenhuma
+    let (_dir, conn, song, _transcricao) = transcricao_com_nome_de_ripador();
+    let p = proposta_alta_sobre_a_transcricao(&conn, &song, "letra nova do LRCLIB");
+
+    let results = enrich::apply(
+        &conn,
+        &[EnrichApply {
+            song_id: p.song_id,
+            title: p.proposed_title.clone(),
+            artist: p.proposed_artist.clone(),
+            lyrics: p.lyrics.clone(),
+            add_temas: None,
+            current_title: p.current_title.clone(),
+            current_artist: p.current_artist.clone(),
+            fonte: Some(p.fonte.clone()),
+            substituir_letra: true,
+        }],
+    )
+    .unwrap();
+
+    assert_eq!(results[0].error, None, "com consentimento, grava");
+    assert_eq!(
+        db::get_lyrics(&conn, song.id).unwrap().as_deref(),
+        Some("letra nova do LRCLIB")
+    );
+    assert_eq!(
+        id3(&song.file_path).get_user_text("LETRA_ORIGEM"),
+        None,
+        "letra do LRCLIB é oficial: a marca de transcrição cai"
+    );
+
+    // ...e a mesma troca vinda do Vagalume fica marcada como tal
+    let (_dir, conn, song, _t) = transcricao_com_nome_de_ripador();
+    let results = enrich::apply(
+        &conn,
+        &[EnrichApply {
+            song_id: song.id,
+            title: song.title.clone(),
+            artist: None,
+            lyrics: Some("letra nova da base comunitária".into()),
+            add_temas: None,
+            current_title: song.title.clone(),
+            current_artist: song.artist.clone(),
+            fonte: Some(enrich::FONTE_VAGALUME.into()),
+            substituir_letra: true,
+        }],
+    )
+    .unwrap();
+    assert_eq!(results[0].error, None);
+    assert_eq!(
+        id3(&song.file_path).get_user_text("LETRA_ORIGEM"),
+        Some("vagalume")
+    );
+}
+
+/// Regravar a MESMA letra não é substituição — nada seria perdido, e recusar
+/// aqui só produziria um erro incompreensível na revisão de quem aceitou uma
+/// proposta que só mudava o título.
+#[test]
+fn an_identical_lyric_is_not_a_replacement() {
+    let (_dir, conn, song, transcricao) = transcricao_com_nome_de_ripador();
+
+    let results = enrich::apply(
+        &conn,
+        &[EnrichApply {
+            song_id: song.id,
+            title: "Oh! Chuva".into(),
+            artist: Some("Falamansa".into()),
+            // a mesma letra, com espaços a mais nas pontas
+            lyrics: Some(format!("\n{transcricao}  ")),
+            add_temas: None,
+            current_title: song.title.clone(),
+            current_artist: song.artist.clone(),
+            fonte: None,
+            substituir_letra: false,
+        }],
+    )
+    .unwrap();
+
+    assert_eq!(results[0].error, None, "letra igual não é substituição");
+    assert_eq!(
+        results[0].song.as_ref().unwrap().title,
+        "Oh! Chuva",
+        "e o título proposto entra normalmente"
+    );
+    assert_eq!(
+        id3(&song.file_path).get_user_text("LETRA_ORIGEM"),
+        Some("transcricao"),
+        "a letra não mudou, então a marca legítima continua valendo"
     );
 }
 
@@ -1860,8 +2272,10 @@ fn the_api_key_never_leaves_the_query_string() {
     let json = serde_json::to_string(&props).unwrap();
     assert!(!json.contains(CHAVE_VG), "a chave não entra na proposta");
 
-    // ...nem no banco: o esquema inteiro (tabelas e colunas) não menciona
-    // chave nenhuma — a do usuário vive só na memória do frontend.
+    // ...nem no BANCO DE MÚSICAS: o esquema inteiro (tabelas e colunas) não
+    // menciona chave nenhuma. A do usuário fica guardada nas preferências
+    // locais do aplicativo, na máquina dela, e nunca é enviada a lugar nenhum
+    // além do próprio Vagalume.
     let mut stmt = conn
         .prepare("SELECT ifnull(sql, '') FROM sqlite_master")
         .unwrap();
@@ -1876,6 +2290,44 @@ fn the_api_key_never_leaves_the_query_string() {
         !esquema.contains("chave") && !esquema.contains("apikey") && !esquema.contains("api_key"),
         "o banco não guarda chave de API: {esquema}"
     );
+}
+
+/// QA MÉDIO-6 — e os caminhos de erro NOVOS também não vazam a chave. É
+/// justamente a mensagem de "chave recusada" que teria a desculpa de mostrar
+/// o valor para ajudar a conferir; ela não mostra.
+#[test]
+fn none_of_the_new_network_messages_leak_the_key() {
+    for mensagem in [
+        vagalume::ERRO_CHAVE_RECUSADA,
+        "o site de letras pediu para esperar um pouco",
+        "o site de letras está fora do ar agora",
+        "o site de letras respondeu com erro",
+        "sem conexão",
+    ] {
+        let (_dir, conn, _folder_id) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
+        let props = enrich::enrich_scan(
+            &conn,
+            "",
+            |url: &str| {
+                if url.contains("vagalume") {
+                    Err(AppError(mensagem.into()))
+                } else {
+                    Ok("[]".to_string())
+                }
+            },
+            CHAVE_VG,
+            ZERO,
+            SEM_PROGRESSO,
+            SEM_CANCELAMENTO,
+        )
+        .unwrap();
+
+        assert_eq!(props[0].error.as_deref(), Some(mensagem));
+        assert!(
+            !serde_json::to_string(&props).unwrap().contains(CHAVE_VG),
+            "a chave vazou pela mensagem {mensagem:?}"
+        );
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1917,6 +2369,7 @@ fn applying_a_vagalume_lyric_records_its_provenance() {
             current_title: p.current_title.clone(),
             current_artist: p.current_artist.clone(),
             fonte: Some(p.fonte.clone()), // eco da proposta
+            substituir_letra: false,
         }],
     )
     .unwrap();
@@ -1983,6 +2436,8 @@ fn an_lrclib_lyric_never_carries_the_transcription_mark() {
                 current_title: atual.title.clone(),
                 current_artist: atual.artist.clone(),
                 fonte: fonte.clone(),
+                // a troca da letra é o assunto deste teste: consentida
+                substituir_letra: true,
             }],
         )
         .unwrap();
@@ -2015,6 +2470,7 @@ fn declaring_vagalume_without_a_new_lyric_marks_nothing() {
             current_title: song.title.clone(),
             current_artist: song.artist.clone(),
             fonte: Some("Vagalume".into()),
+            substituir_letra: false,
         }],
     )
     .unwrap();
@@ -2046,6 +2502,7 @@ fn a_stale_vagalume_proposal_is_refused() {
             current_title: "o que a varredura viu, e já não é".into(),
             current_artist: song.artist.clone(),
             fonte: Some("Vagalume".into()),
+            substituir_letra: false,
         }],
     )
     .unwrap();
@@ -2175,6 +2632,8 @@ fn scan_song_runs_the_same_funnel_on_a_single_file() {
     let p = enrich::enrich_scan_song(
         &conn,
         song.id,
+        None,
+        None,
         duas_fontes(
             &urls,
             "[]".into(),
@@ -2228,6 +2687,7 @@ fn scan_song_runs_the_same_funnel_on_a_single_file() {
             current_title: p.current_title.clone(),
             current_artist: p.current_artist.clone(),
             fonte: Some(p.fonte.clone()),
+            substituir_letra: false,
         }],
     )
     .unwrap();
@@ -2235,16 +2695,30 @@ fn scan_song_runs_the_same_funnel_on_a_single_file() {
     assert!(results[0].song.as_ref().unwrap().has_lyrics);
 }
 
+// ---------------------------------------------------------------------------
+// QA ALTO-3b — quem clicou sabe o que quer. A varredura de UMA música não
+// usa mais o filtro de completude do LOTE como portão: a música completa é
+// consultada mesmo assim.
+//
+// Antes ela devolvia `Ok(None)` sem tocar a rede, e a tela imprimia "não
+// achamos esta música nos sites de letra" — uma afirmação sobre uma busca que
+// nunca aconteceu. A pessoa clicava de novo, e de novo, e recebia a mesma
+// mentira. O botão só existe porque alguém está olhando aquele arquivo e quer
+// uma segunda opinião; negá-la em silêncio é pior do que gastar meio segundo.
+// ---------------------------------------------------------------------------
 #[test]
-fn scan_song_returns_none_when_there_is_nothing_to_complete() {
+fn scan_song_consults_the_sources_even_for_a_complete_song() {
     let (_dir, conn, _folder_id) = setup_with(&[("com_letra.mp3", "com_letra.mp3")]);
     let song = song_by_suffix(&conn, "com_letra.mp3");
+    assert!(song.has_lyrics, "a fixture é a música COMPLETA");
 
     let urls = RefCell::new(Vec::new());
     let eventos = RefCell::new(Vec::new());
     let r = enrich::enrich_scan_song(
         &conn,
         song.id,
+        None,
+        None,
         duas_fontes(&urls, "[]".into(), corpo_vagalume("x", "y", "z")),
         CHAVE_VG,
         ZERO,
@@ -2253,9 +2727,132 @@ fn scan_song_returns_none_when_there_is_nothing_to_complete() {
     )
     .unwrap();
 
-    assert!(r.is_none(), "música completa não tem o que completar");
-    assert!(urls.borrow().is_empty(), "e não gasta rede");
-    assert_eq!(*eventos.borrow(), vec![(0, 0)]);
+    assert!(
+        !urls.borrow().is_empty(),
+        "a busca precisa ACONTECER antes de a tela dizer que nada foi achado"
+    );
+    assert_eq!(
+        *eventos.borrow().first().unwrap(),
+        (0, 1),
+        "e ela conta como uma música a processar, não como zero"
+    );
+    // as duas fontes vieram vazias: `None` aqui significa "procuramos e não
+    // veio nada novo", que é a única coisa que ele passa a significar
+    assert!(r.is_none());
+}
+
+/// QA ALTO-3a — o título e o artista que a pessoa ACABOU de digitar no editor
+/// são os que vão para a consulta. Enquanto o backend procurava por "Faixa
+/// 03" (a etiqueta velha do banco), quem digitou "Asa Branca" via a busca
+/// falhar sem entender por quê.
+#[test]
+fn scan_song_searches_for_what_the_person_typed() {
+    let (_dir, conn, _folder_id) = setup_with(&[("sem_tags.mp3", "Faixa 03.mp3")]);
+    let song = song_by_suffix(&conn, "Faixa 03.mp3");
+    writer::write_tags(&conn, song.id, "Faixa 03", None, None, None, None).unwrap();
+    let song = song_by_suffix(&conn, "Faixa 03.mp3");
+
+    let urls = RefCell::new(Vec::new());
+    enrich::enrich_scan_song(
+        &conn,
+        song.id,
+        Some("Asa Branca"),
+        Some("Luiz Gonzaga"),
+        duas_fontes(&urls, "[]".into(), corpo_vagalume("x", "y", "z")),
+        CHAVE_VG,
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+
+    let consultas = urls.borrow().join(" ");
+    assert!(
+        consultas.contains("Asa%20Branca") && consultas.contains("Luiz%20Gonzaga"),
+        "o texto digitado tem de chegar às fontes: {consultas}"
+    );
+    // e o Vagalume, que exige título E artista reais, passa a ser consultado
+    assert!(
+        !urls_de(&urls, "vagalume").is_empty(),
+        "com nomes digitados há o que conferir na base comunitária"
+    );
+}
+
+/// ...mas o texto digitado é PALPITE, não estado. `current_title` e
+/// `current_artist` continuam saindo do BANCO: eles são o eco que o `apply`
+/// confere contra o disco antes de gravar (QA A5). Se o digitado virasse eco,
+/// a conferência aprovaria a si mesma e a proteção contra proposta obsoleta
+/// deixaria de existir.
+#[test]
+fn scan_song_echoes_the_database_values_never_the_typed_ones() {
+    let (_dir, conn, _folder_id) = setup_with(&[("sem_tags.mp3", "Faixa 03.mp3")]);
+    let song = song_by_suffix(&conn, "Faixa 03.mp3");
+    writer::write_tags(&conn, song.id, "Faixa 03", Some("Ripador"), None, None, None).unwrap();
+    let song = song_by_suffix(&conn, "Faixa 03.mp3");
+    let dur = song.duration_seconds.unwrap() as f64;
+
+    let corpo = format!(
+        r#"[{{"trackName": "Asa Branca", "artistName": "Luiz Gonzaga",
+             "duration": {dur}, "plainLyrics": "Quando olhei a terra ardendo"}}]"#
+    );
+    let p = enrich::enrich_scan_song(
+        &conn,
+        song.id,
+        Some("Asa Branca"),
+        Some("Luiz Gonzaga"),
+        move |_: &str| Ok(corpo.clone()),
+        SEM_CHAVE,
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap()
+    .expect("o palpite digitado acha a música");
+
+    assert_eq!(p.current_title, "Faixa 03", "o eco é o que está no banco");
+    assert_eq!(p.current_artist.as_deref(), Some("Ripador"));
+    assert_eq!(p.proposed_title, "Asa Branca");
+}
+
+/// O curto-circuito de instrumental NÃO é filtro de completude, e por isso
+/// sobrevive à remoção do portão: um instrumental com título e artista casa
+/// com a versão CANTADA da mesma peça no LRCLIB, e gravar aquela letra dentro
+/// deste arquivo é o defeito que a marca veio impedir.
+#[test]
+fn scan_song_still_skips_the_lyric_stages_of_an_instrumental() {
+    let (_dir, conn, _folder_id) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
+    let song = song_by_suffix(&conn, "sem_letra.mp3");
+    writer::write_tags(
+        &conn,
+        song.id,
+        "Instrumental Sem Letra",
+        Some("Banda Fixture"),
+        None,
+        None,
+        Some(true),
+    )
+    .unwrap();
+
+    let urls = RefCell::new(Vec::new());
+    let r = enrich::enrich_scan_song(
+        &conn,
+        song.id,
+        None,
+        None,
+        duas_fontes(
+            &urls,
+            "[]".into(),
+            corpo_vagalume("Instrumental Sem Letra", "Banda Fixture", LETRA_VG),
+        ),
+        CHAVE_VG,
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+
+    assert!(urls.borrow().is_empty(), "nenhuma etapa de LETRA acontece");
+    assert!(r.is_none(), "e não sobra proposta: os nomes já estão certos");
 }
 
 #[test]
@@ -2267,6 +2864,8 @@ fn scan_song_returns_none_when_the_funnel_finds_nothing_new() {
     let r = enrich::enrich_scan_song(
         &conn,
         song.id,
+        None,
+        None,
         |_: &str| Ok("[]".to_string()),
         CHAVE_VG,
         ZERO,
@@ -2283,6 +2882,8 @@ fn scan_song_errors_for_an_unknown_song() {
     let err = enrich::enrich_scan_song(
         &conn,
         999_999,
+        None,
+        None,
         |_: &str| Ok("[]".to_string()),
         SEM_CHAVE,
         ZERO,
@@ -2302,6 +2903,8 @@ fn scan_song_is_cancellable_like_the_batch() {
     let r = enrich::enrich_scan_song(
         &conn,
         song.id,
+        None,
+        None,
         |_: &str| {
             *chamadas.borrow_mut() += 1;
             Ok("[]".to_string())
