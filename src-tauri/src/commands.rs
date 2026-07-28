@@ -281,11 +281,11 @@ pub fn write_tags(
 /// Fetcher real (ureq) do LRCLIB, compartilhado por fetch_lyrics_online e
 /// enrich_folder_scan — os ÚNICOS pontos de rede de todo o app, ambos
 /// acionados por cliques explícitos do usuário. GET com timeout de 10 s e
-/// User-Agent "Cancioneiro/0.4"; qualquer falha de rede vira "sem conexão".
+/// User-Agent "Cancioneiro/0.5"; qualquer falha de rede vira "sem conexão".
 fn lrclib_fetcher(url: &str) -> Result<String> {
     let agent = ureq::AgentBuilder::new()
         .timeout(std::time::Duration::from_secs(10))
-        .user_agent("Cancioneiro/0.4")
+        .user_agent("Cancioneiro/0.5")
         .build();
     agent
         .get(url)

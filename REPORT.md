@@ -1,5 +1,37 @@
 # REPORT — Cancioneiro
 
+> **Atualização V5/V6/V7 (0.5.0):** três frentes fechadas depois do teste em
+> acervo real.
+> **V5 — Transcrição local** (`PRD-v5-transcricao.md`): `curadoria.py
+> transcrever` tira a letra do próprio áudio (faster-whisper, dependência
+> opcional) e, antes disso, tenta **identificar a música pelo refrão** — a
+> frase mais repetida do trecho costuma ser o título, e confirmada pela duração
+> no LRCLIB traz título, artista e letra oficiais sem transcrever o resto. O
+> player exibe uma ressalva discreta em letra transcrita, que some quando
+> alguém revisa o texto.
+> **V6 — Impressão digital acústica** (`PRD-v6-impressao-digital.md`):
+> `identificar` (Chromaprint/AcoustID) custa 1–2 s por música contra 30–80 s da
+> transcrição, e é o que torna viável um acervo de 10 mil arquivos. Fecha o
+> funil por custo crescente: tags/nome → LRCLIB → impressão digital →
+> transcrição, cada etapa recebendo só o que a anterior não resolveu.
+> `estimar` projeta o tempo de cada etapa antes de encarar horas de máquina.
+> **V7 — Atualização automática** (`PRD-v7-atualizacao.md`): o app verifica ao
+> abrir, baixa em segundo plano e avisa; instalar e reiniciar só a pedido, e
+> todo caminho de falha é silencioso. Revisa o princípio "nenhuma rede em
+> runtime" — sem telemetria, sem conta, sem nada do acervo saindo da máquina.
+> Suítes na 0.5.0: **403 pytest + 106 cargo + 341 vitest + 20 E2E — todas
+> verdes**, `tsc` e `cargo check` sem avisos.
+>
+> **A lição desta rodada, registrada nas decisões 51-61:** um palpite derivado
+> do áudio não prova nada. O `enriquecer` era seguro porque o palpite nascia da
+> própria tag; o refrão vem do áudio, e o QA cético reproduziu o estrago —
+> alucinação do motor ("música", "obrigado por assistir") casando a duração por
+> acaso e gravando título, artista e letra errados sobre tags boas. Daí as
+> travas que hoje valem para toda identificação automática: lista de
+> alucinações descartada antes da consulta, candidato precisa de substância,
+> **tag real nunca sobrescrita em nenhuma confiança**, e divergência entre tag
+> e identificação vira `CONFLITO` sem gravar nada.
+
 > **Atualização V4/V5 (0.4.0):** o teste em acervo real (94 MP3s de repertório de
 > nicho, Mac M2) guiou duas rodadas de evolução.
 > **V4 — Curadoria no player** (`PRD-v4-curadoria-no-player.md`): edição de
