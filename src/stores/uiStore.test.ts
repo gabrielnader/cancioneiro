@@ -35,3 +35,28 @@ describe("uiStore (F3 — persistência de painel e fonte)", () => {
     expect(reopened.getState().fontLevel).toBe(2);
   });
 });
+
+// V8/F18 — a chave gratuita do Vagalume é preferência da pessoa, não segredo
+// do produto: mora junto das outras preferências e sobrevive ao reinício.
+describe("uiStore — chave do Vagalume (V8/F18)", () => {
+  it("padrão: vazia — sem chave, a etapa do Vagalume é pulada em silêncio", () => {
+    expect(createUiStore().getState().vagalumeApiKey).toBe("");
+  });
+
+  it("a chave é guardada sem espaços em volta e persiste entre sessões", async () => {
+    const store = createUiStore();
+    store.getState().setVagalumeApiKey("  minha-chave  ");
+    expect(store.getState().vagalumeApiKey).toBe("minha-chave");
+
+    const reopened = createUiStore();
+    await Promise.resolve();
+    expect(reopened.getState().vagalumeApiKey).toBe("minha-chave");
+  });
+
+  it("apagar o campo volta ao estado sem chave", () => {
+    const store = createUiStore();
+    store.getState().setVagalumeApiKey("x");
+    store.getState().setVagalumeApiKey("");
+    expect(store.getState().vagalumeApiKey).toBe("");
+  });
+});

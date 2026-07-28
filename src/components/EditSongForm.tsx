@@ -1,15 +1,40 @@
 import { useState } from "react";
 import { audioController } from "../hooks/playerAudioCore";
-import { getBackend } from "../lib/api";
+import { getBackend, type EnrichProposal } from "../lib/api";
+import { SEM_RESULTADO_INDIVIDUAL } from "../lib/curadoria";
 import type { Song } from "../lib/types";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlayerStore } from "../stores/playerStore";
 import { usePlaylistStore } from "../stores/playlistStore";
 import { useToastStore } from "../stores/toastStore";
+import { useUiStore } from "../stores/uiStore";
 
 function basename(filePath: string): string {
   return filePath.split(/[\\/]/).pop() ?? filePath;
 }
+
+/** Rótulo de confiança, igual ao da revisão em lote (mesma linguagem). */
+const BADGE_CONFIANCA: Record<EnrichProposal["confidence"], string> = {
+  alta: "ALTA",
+  media: "MÉDIA",
+  baixa: "BAIXA",
+};
+
+const CLASSE_CONFIANCA: Record<EnrichProposal["confidence"], string> = {
+  alta: "bg-[#DCFCE7] text-[#166534]",
+  media: "bg-[#FEF9C3] text-[#854D0E]",
+  baixa: "bg-[#F3F4F6] text-[#5B6472]",
+};
+
+/**
+ * O que a busca do funil desta música devolveu. É estado da FICHA, não do
+ * disco: nada aqui foi gravado — quem grava continua sendo "Salvar no
+ * arquivo".
+ */
+type ResultadoBusca =
+  | { tipo: "proposta"; proposta: EnrichProposal }
+  | { tipo: "vazio" }
+  | { tipo: "falha"; mensagem: string };
 
 interface EditSongFormProps {
   song: Song;
@@ -58,8 +83,10 @@ export function EditSongForm({
   const [lyrics, setLyrics] = useState(initialLyrics);
   const [titleError, setTitleError] = useState(false);
   const [busy, setBusy] = useState(false);
-  // busy próprio da busca de letra (V5 Q5): não trava Salvar/Cancelar
+  // busy próprio da busca (V5 Q5): não trava Salvar/Cancelar
   const [fetchBusy, setFetchBusy] = useState(false);
+  // V8/F18 — resultado do funil desta música, mostrado na própria ficha
+  const [resultado, setResultado] = useState<ResultadoBusca | null>(null);
 
   /**
    * Confirma o texto pendente do input de tema como chip e devolve a lista
@@ -77,30 +104,55 @@ export function EditSongForm({
     return next;
   }
 
-  async function handleFetchLyrics() {
+  /**
+   * V8/F18 — o funil inteiro nesta música (o "caso pontual" do PRD).
+   *
+   * Substituiu o "Buscar letra na internet" da V4, que consultava só o LRCLIB
+   * e só sabia trazer letra. Dois botões dizendo "buscar na internet", com a
+   * diferença invisível para quem não sabe o que é LRCLIB, seriam uma escolha
+   * às cegas — e a escolha errada é silenciosamente pior. Este botão faz tudo
+   * o que o antigo fazia e mais: passa pelas três etapas, diz de onde veio o
+   * dado e também corrige título e artista.
+   *
+   * A busca NÃO grava e NÃO preenche nada sozinha: o resultado aparece na
+   * ficha, com procedência e confiança, e só entra no formulário se a pessoa
+   * mandar (mesma regra do lote — nada é aplicado sem revisão).
+   */
+  async function handleBuscarDados() {
     setFetchBusy(true);
+    setResultado(null);
     try {
-      const match = await getBackend().fetchLyricsOnline(
-        title.trim(),
-        artist.trim() ? artist.trim() : null,
-        song.duration_seconds ?? 0,
+      const proposta = await getBackend().enrichSongScan(
+        song.id,
+        useUiStore.getState().vagalumeApiKey || null,
       );
-      if (!match) {
-        push("Letra não encontrada para este título e artista.", "warning");
-        return;
-      }
-      if (
-        lyrics.trim() &&
-        !window.confirm("Substituir a letra atual pelo resultado da busca?")
-      ) {
-        return;
-      }
-      setLyrics(match.lyrics);
+      setResultado(proposta ? { tipo: "proposta", proposta } : { tipo: "vazio" });
     } catch {
-      push("Sem conexão — a busca de letra precisa de internet.", "warning");
+      // o resultado é inline: um toast some sozinho e esta é a única
+      // explicação que a pessoa vai receber — não há suporte para perguntar
+      setResultado({
+        tipo: "falha",
+        mensagem: "Sem conexão — a busca de dados precisa de internet.",
+      });
     } finally {
       setFetchBusy(false);
     }
+  }
+
+  /** Traz a proposta para o formulário (ainda sem tocar no arquivo). */
+  function usarProposta(p: EnrichProposal) {
+    if (
+      p.lyrics !== null &&
+      lyrics.trim() &&
+      // copy mantida da V4: é a pergunta que as pessoas já conhecem
+      !window.confirm("Substituir a letra atual pelo resultado da busca?")
+    ) {
+      return;
+    }
+    if (p.proposed_title.trim()) setTitle(p.proposed_title);
+    if (p.proposed_artist?.trim()) setArtist(p.proposed_artist);
+    if (p.lyrics !== null) setLyrics(p.lyrics);
+    setResultado(null);
   }
 
   async function handleSave() {
@@ -270,14 +322,89 @@ export function EditSongForm({
         />
       </div>
 
+      {/*
+        V8/F18 — o resultado do funil desta música, na própria ficha. Fica
+        acima dos botões, entre a letra e a ação: é o que a pessoa precisa ler
+        antes de decidir. Nada daqui foi para o disco.
+      */}
+      {resultado && (
+        <div
+          role="status"
+          className="shrink-0 rounded-md border border-[#E5E7EB] bg-[#F9FAFB] p-3"
+        >
+          {resultado.tipo === "vazio" ? (
+            <p className="text-[13px] leading-relaxed text-[#374151]">
+              {SEM_RESULTADO_INDIVIDUAL}
+            </p>
+          ) : resultado.tipo === "falha" ? (
+            <p className="text-[13px] text-[#B91C1C]">{resultado.mensagem}</p>
+          ) : resultado.proposta.error !== null ? (
+            <p className="text-[13px] text-[#B91C1C]">{resultado.proposta.error}</p>
+          ) : (
+            <>
+              <p className="flex flex-wrap items-center gap-2 text-[13px] text-[#5B6472]">
+                <span
+                  className={`rounded px-1.5 py-0.5 text-[11px] font-semibold ${
+                    CLASSE_CONFIANCA[resultado.proposta.confidence]
+                  }`}
+                >
+                  {BADGE_CONFIANCA[resultado.proposta.confidence]}
+                </span>
+                <span>via {resultado.proposta.fonte}</span>
+                {resultado.proposta.lyrics !== null && (
+                  <span className="text-[#0F766E]">letra encontrada</span>
+                )}
+              </p>
+              <dl className="mt-2 space-y-0.5 text-[13px]">
+                <div className="flex gap-2">
+                  <dt className="shrink-0 text-[#5B6472]">Título:</dt>
+                  <dd className="min-w-0 break-words text-[#111827]">
+                    {resultado.proposta.proposed_title}
+                  </dd>
+                </div>
+                {resultado.proposta.proposed_artist && (
+                  <div className="flex gap-2">
+                    <dt className="shrink-0 text-[#5B6472]">Artista:</dt>
+                    <dd className="min-w-0 break-words text-[#111827]">
+                      {resultado.proposta.proposed_artist}
+                    </dd>
+                  </div>
+                )}
+              </dl>
+              <p className="mt-2 text-[13px] text-[#5B6472]">
+                Nada foi gravado ainda: use os dados, confira, e só então salve
+                no arquivo.
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => usarProposta(resultado.proposta)}
+                  className="rounded-md bg-[#0F766E] px-3 py-1.5 text-[14px] font-medium text-white hover:bg-[#115E59]"
+                >
+                  Usar estes dados
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setResultado(null)}
+                  className="rounded-md px-3 py-1.5 text-[14px] font-medium text-[#374151] hover:bg-[#F3F4F6]"
+                >
+                  Descartar
+                </button>
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
       <div className="flex shrink-0 flex-wrap items-center gap-2">
         <button
           type="button"
-          disabled={busy || fetchBusy}
-          onClick={() => void handleFetchLyrics()}
+          disabled={fetchBusy}
+          title="Procura título, artista e letra desta música: primeiro no próprio arquivo, depois no LRCLIB e no Vagalume"
+          onClick={() => void handleBuscarDados()}
           className="rounded-md border border-[#0F766E] px-3 py-1.5 text-[14px] font-medium text-[#0F766E] hover:bg-[#F0FDFA] disabled:opacity-60"
         >
-          {fetchBusy ? "Buscando…" : "Buscar letra na internet"}
+          {fetchBusy ? "Buscando…" : "Buscar dados na internet"}
         </button>
         <span className="ml-auto flex items-center gap-2">
           <button

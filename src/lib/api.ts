@@ -23,6 +23,13 @@ export interface EnrichProposal {
   /** Letra achada no LRCLIB (vem na proposta — o apply não volta à rede). */
   lyrics: string | null;
   confidence: "alta" | "media" | "baixa";
+  /**
+   * De ONDE o dado veio, em pt-BR e pronto para exibir ("LRCLIB", "Vagalume",
+   * "nome do arquivo"…) — V8/F18. Quem cura decide olhando a procedência: a
+   * mesma confiança significa coisas diferentes vindo de um banco com duração
+   * conferida ou de um palpite de nome de arquivo.
+   */
+  fonte: string;
   /** Erro por música (ex.: "sem conexão") — a linha fica desabilitada. */
   error: string | null;
 }
@@ -38,6 +45,12 @@ export interface EnrichProgress {
   total: number;
   /** Nome-base do arquivo em processamento (sem diretório). */
   atual: string;
+  /**
+   * Etapa do funil em curso, em pt-BR e pronta para exibir (V8/F18) — o PRD
+   * exige "a etapa atual do funil" junto da contagem. Pode vir vazia (backend
+   * antigo): a UI simplesmente não mostra a linha.
+   */
+  etapa: string;
   /**
    * Varredura que emitiu o evento. A UI IGNORA evento de scan_id diferente do
    * atual: uma varredura cancelada continua respondendo por alguns segundos e
@@ -63,6 +76,14 @@ export interface EnrichApply {
    */
   current_title: string;
   current_artist: string | null;
+  /**
+   * Eco do `fonte` da proposta (V8/F18): é ele que decide a procedência
+   * gravada em `TXXX:LETRA_ORIGEM`. Letra do Vagalume fica marcada como tal;
+   * qualquer outra fonte LIMPA a marca — letra oficial nunca é transcrição
+   * (DECISIONS #54). Ausente, o backend não grava procedência nenhuma: nunca
+   * grava a errada.
+   */
+  fonte: string | null;
 }
 
 /**
@@ -125,12 +146,30 @@ export interface Backend {
     durationSeconds: number,
   ): Promise<LyricsMatch | null>;
   /**
-   * Identifica no LRCLIB as músicas incompletas sob folderPrefix ("" =
-   * biblioteca inteira) — ponto de rede EXPLÍCITO, pode levar minutos (F13).
+   * Roda o funil nas músicas incompletas sob folderPrefix ("" = biblioteca
+   * inteira) — ponto de rede EXPLÍCITO, pode levar minutos (F13/F18).
    * `scanId` identifica esta varredura nos eventos de progresso e é a chave
    * do cancelamento (M4).
+   *
+   * `vagalumeKey` é a chave GRATUITA da própria pessoa, guardada aqui no
+   * frontend como preferência (V8/F18). Vazia/`null` = a etapa do Vagalume é
+   * pulada em silêncio — não é erro, é uma etapa opcional.
    */
-  enrichFolderScan(folderPrefix: string, scanId: string): Promise<EnrichProposal[]>;
+  enrichFolderScan(
+    folderPrefix: string,
+    scanId: string,
+    vagalumeKey: string | null,
+  ): Promise<EnrichProposal[]>;
+  /**
+   * O mesmo funil, para UMA música só — o "caso pontual" do editor (V8/F18).
+   * Não emite progresso (é uma música) e devolve `null` quando nenhuma etapa
+   * achou nada. Nada é gravado: quem grava é o "Salvar no arquivo" do editor,
+   * depois de a pessoa ver o que veio.
+   */
+  enrichSongScan(
+    songId: number,
+    vagalumeKey: string | null,
+  ): Promise<EnrichProposal | null>;
   /**
    * Pede o cancelamento da varredura `scanId`: ela para na próxima música e
    * resolve sem propostas (M4 — "Cancelar" precisa cancelar de verdade).
@@ -251,11 +290,24 @@ function tauriBackend(): Backend {
         durationSeconds,
       });
     },
-    async enrichFolderScan(folderPrefix, scanId) {
+    async enrichFolderScan(folderPrefix, scanId, vagalumeKey) {
       const { invoke } = await import("@tauri-apps/api/core");
       return invoke<EnrichProposal[]>("enrich_folder_scan", {
         folderPrefix,
         scanId,
+        // string vazia é "não tenho chave" tanto quanto null; o backend pula a
+        // etapa. Nunca vai para log — é a chave pessoal de quem está usando.
+        vagalumeKey: vagalumeKey || null,
+      });
+    },
+    async enrichSongScan(songId, vagalumeKey) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<EnrichProposal | null>("enrich_song_scan", {
+        songId,
+        vagalumeKey: vagalumeKey || null,
+        // uma música só: não há varredura para acompanhar nem cancelar, e o
+        // backend trata a ausência como "sem id" (nenhum progresso registrado)
+        scanId: null,
       });
     },
     async enrichCancelScan(scanId) {

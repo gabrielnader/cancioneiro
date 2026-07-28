@@ -5,8 +5,10 @@ import {
   type EnrichProgress,
   type EnrichProposal,
 } from "../lib/api";
+import { textoSemPropostas } from "../lib/curadoria";
 import { useEnrichStore } from "./enrichStore";
 import { useToastStore } from "./toastStore";
+import { useUiStore } from "./uiStore";
 
 function proposal(overrides: Partial<EnrichProposal> = {}): EnrichProposal {
   return {
@@ -18,6 +20,7 @@ function proposal(overrides: Partial<EnrichProposal> = {}): EnrichProposal {
     proposed_artist: "Artista",
     lyrics: "letra",
     confidence: "alta",
+    fonte: "LRCLIB",
     error: null,
     ...overrides,
   };
@@ -50,9 +53,31 @@ describe("enrichStore (V5 — F13)", () => {
     expect(useEnrichStore.getState().folderPrefix).toBe("/acervo/1");
     await pending;
 
-    expect(enrichFolderScan).toHaveBeenCalledWith("/acervo/1", expect.any(String));
+    // sem chave do Vagalume configurada, o parâmetro vai como null
+    expect(enrichFolderScan).toHaveBeenCalledWith(
+      "/acervo/1",
+      expect.any(String),
+      null,
+    );
     expect(useEnrichStore.getState().status).toBe("review");
     expect(useEnrichStore.getState().proposals).toEqual(proposals);
+  });
+
+  // V8/F18 — a chave é preferência de quem usa e viaja como PARÂMETRO da
+  // varredura; o backend não guarda credencial nenhuma.
+  it("startScan leva a chave do Vagalume configurada nas preferências", async () => {
+    const enrichFolderScan = vi.fn(async () => []);
+    setBackendForTests({ enrichFolderScan } as unknown as Backend);
+    useUiStore.getState().setVagalumeApiKey("chave-da-pessoa");
+
+    await useEnrichStore.getState().startScan("");
+
+    expect(enrichFolderScan).toHaveBeenCalledWith(
+      "",
+      expect.any(String),
+      "chave-da-pessoa",
+    );
+    useUiStore.getState().setVagalumeApiKey("");
   });
 
   it("bloqueia disparo duplo enquanto a varredura está em andamento", async () => {
@@ -155,14 +180,27 @@ describe("enrichStore (V5 — F13)", () => {
       await Promise.resolve();
       const scan_id = useEnrichStore.getState().scanId;
 
-      emit({ done: 0, total: 94, atual: "a.mp3", scan_id });
+      emit({
+        done: 0,
+        total: 94,
+        atual: "a.mp3",
+        etapa: "procurando no LRCLIB",
+        scan_id,
+      });
       expect(useEnrichStore.getState().progress).toEqual({
         done: 0,
         total: 94,
         atual: "a.mp3",
+        etapa: "procurando no LRCLIB",
         scan_id,
       });
-      emit({ done: 12, total: 94, atual: "b.mp3", scan_id });
+      emit({
+        done: 12,
+        total: 94,
+        atual: "b.mp3",
+        etapa: "procurando no LRCLIB",
+        scan_id,
+      });
       expect(useEnrichStore.getState().progress?.done).toBe(12);
 
       resolve([proposal()]);
@@ -186,10 +224,22 @@ describe("enrichStore (V5 — F13)", () => {
       await Promise.resolve();
       const scan_id = useEnrichStore.getState().scanId;
 
-      emit({ done: 90, total: 94, atual: "zumbi.mp3", scan_id: "varredura-antiga" });
+      emit({
+        done: 90,
+        total: 94,
+        atual: "zumbi.mp3",
+        etapa: "procurando no LRCLIB",
+        scan_id: "varredura-antiga",
+      });
       expect(useEnrichStore.getState().progress).toBeNull();
 
-      emit({ done: 1, total: 3, atual: "atual.mp3", scan_id });
+      emit({
+        done: 1,
+        total: 3,
+        atual: "atual.mp3",
+        etapa: "procurando no LRCLIB",
+        scan_id,
+      });
       expect(useEnrichStore.getState().progress?.done).toBe(1);
       expect(useEnrichStore.getState().progress?.total).toBe(3);
     });
@@ -342,7 +392,7 @@ describe("enrichStore (V5 — F13)", () => {
       );
     });
 
-    it("fim em segundo plano SEM propostas e SEM candidatas: toast 'Nada a ajustar' e volta a idle", async () => {
+    it("fim em segundo plano SEM propostas e SEM candidatas: toast honesto e volta a idle", async () => {
       setBackendForTests({
         enrichFolderScan: vi.fn(async () => []),
       } as unknown as Backend);
@@ -352,7 +402,7 @@ describe("enrichStore (V5 — F13)", () => {
       await pending;
 
       expect(useToastStore.getState().toasts[0].message).toBe(
-        "Nada a ajustar nesta pasta.",
+        textoSemPropostas(0),
       );
       expect(useEnrichStore.getState().status).toBe("idle");
       expect(useEnrichStore.getState().overlayOpen).toBe(false);
@@ -377,14 +427,18 @@ describe("enrichStore (V5 — F13)", () => {
       useEnrichStore.getState().hideOverlay();
       await Promise.resolve();
       const scan_id = useEnrichStore.getState().scanId;
-      emit({ done: 81, total: 81, atual: "z.mp3", scan_id });
+      emit({
+        done: 81,
+        total: 81,
+        atual: "z.mp3",
+        etapa: "procurando no LRCLIB",
+        scan_id,
+      });
       resolve([]);
       await pending;
 
       expect(useToastStore.getState().toasts[0].message).toBe(
-        "Conferimos as 81 músicas incompletas desta pasta e não achamos nenhuma" +
-          " delas na internet. Para completar essas letras, use a transcrição" +
-          " das ferramentas de curadoria.",
+        textoSemPropostas(81),
       );
       expect(useEnrichStore.getState().status).toBe("idle");
     });
@@ -409,15 +463,14 @@ describe("enrichStore (V5 — F13)", () => {
         done: 1,
         total: 1,
         atual: "z.mp3",
+        etapa: "procurando no LRCLIB",
         scan_id: useEnrichStore.getState().scanId,
       });
       resolve([]);
       await pending;
 
       expect(useToastStore.getState().toasts[0].message).toBe(
-        "Conferimos a única música incompleta desta pasta e não a achamos na" +
-          " internet. Para completar essa letra, use a transcrição das" +
-          " ferramentas de curadoria.",
+        textoSemPropostas(1),
       );
     });
 
@@ -440,6 +493,7 @@ describe("enrichStore (V5 — F13)", () => {
         done: 94,
         total: 94,
         atual: "z.mp3",
+        etapa: "procurando no LRCLIB",
         scan_id: useEnrichStore.getState().scanId,
       });
       resolve([]);

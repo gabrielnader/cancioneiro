@@ -127,10 +127,13 @@ export function Sidebar() {
 }
 
 /**
- * Rodapé da sidebar com a varredura F13 que roda em segundo plano: mostra a
- * contagem enquanto busca e vira "Revisar N propostas" quando termina sem o
- * overlay na tela (o toast desta base não carrega ação de clique). Clicar
- * reabre o overlay.
+ * Rodapé da sidebar com a varredura que roda em segundo plano (F13): mostra a
+ * contagem e a ETAPA do funil enquanto busca (V8/F18) e vira "Revisar N
+ * propostas" quando termina sem o overlay na tela (o toast desta base não
+ * carrega ação de clique). Clicar reabre o overlay.
+ *
+ * A varredura passou a ser disparada de Configurações, longe daqui — este
+ * indicador é justamente o que garante que ela não some de vista por isso.
  */
 function EnrichBackgroundIndicator() {
   const status = useEnrichStore((s) => s.status);
@@ -141,7 +144,7 @@ function EnrichBackgroundIndicator() {
 
   if (status === "idle" || overlayOpen) return null;
 
-  const label =
+  const contagem =
     status === "scanning"
       ? progress
         ? `Buscando dados… ${progress.done} de ${progress.total}`
@@ -149,15 +152,24 @@ function EnrichBackgroundIndicator() {
       : proposals.length === 1
         ? "Revisar 1 proposta"
         : `Revisar ${proposals.length} propostas`;
+  // backend antigo (ou evento inicial) pode vir sem etapa: a linha some
+  const etapa = status === "scanning" ? (progress?.etapa ?? "") : "";
 
   return (
     <button
       type="button"
       onClick={openOverlay}
       title="Abrir a revisão de dados"
-      className="mt-2 truncate rounded-md bg-[#F0FDFA] px-3 py-2 text-left text-[13px] font-medium text-[#0F766E] hover:bg-[#CCFBF1]"
+      aria-label={etapa ? `${contagem} — ${etapa}` : contagem}
+      className="mt-2 rounded-md bg-[#F0FDFA] px-3 py-2 text-left text-[13px] font-medium text-[#0F766E] hover:bg-[#CCFBF1]"
     >
-      {label}
+      <span className="block truncate">{contagem}</span>
+      {etapa && (
+        // #115E59 sobre #F0FDFA = 7,27:1 — texto pequeno também passa em AA
+        <span className="block truncate text-[12px] font-normal text-[#115E59]">
+          {etapa}
+        </span>
+      )}
     </button>
   );
 }
@@ -166,74 +178,42 @@ function EnrichBackgroundIndicator() {
  * Item recursivo da árvore de pastas (V4 — F11): clique numa SUBPASTA filtra a
  * biblioteca. A pasta RAIZ (level 0, pasta registrada) equivale a "Biblioteca":
  * clicar nela LIMPA o filtro — sem chip 📁 (V5 Q2, o × na raiz assustava).
+ *
+ * V8/F18 — o ✎ que disparava a varredura em lote SAIU daqui. A lateral é para
+ * navegar, e um botão que começa horas de processamento no meio da navegação
+ * diária é convite a clique acidental. A varredura mudou de endereço: agora
+ * mora em Configurações → "Curadoria do acervo", já apontando para a pasta que
+ * estiver selecionada aqui — o contexto que o ✎ dava de graça.
  */
 function FolderTreeItem({ node, level }: { node: FolderNode; level: number }) {
   const folderFilter = useLibraryStore((s) => s.folderFilter);
   const setFolderFilter = useLibraryStore((s) => s.setFolderFilter);
   const setView = useUiStore((s) => s.setView);
   const closePlaylist = usePlaylistStore((s) => s.closePlaylist);
-  const startScan = useEnrichStore((s) => s.startScan);
-  // só UMA varredura por vez: com uma rodando (inclusive em segundo plano, de
-  // outra pasta) o ✎ de todas as pastas fica desabilitado
-  const scanning = useEnrichStore((s) => s.status === "scanning");
-  // depois do "Cancelar" o invoke ainda leva alguns segundos para responder:
-  // liberar o ✎ aí faria a segunda varredura correr por cima da primeira (M4)
-  const encerrando = useEnrichStore((s) => s.scanInFlight && s.status !== "scanning");
   const isRoot = level === 0;
   const active = !isRoot && folderFilter === node.path;
-  // raiz = Biblioteca (Q2): conta como "selecionada" quando não há filtro
-  const enrichVisible = isRoot ? folderFilter === null : active;
 
   return (
     <>
-      <span className="group relative flex w-full items-center gap-1 pr-2">
-        <button
-          type="button"
-          aria-label={`Pasta ${node.name}`}
-          title={node.path}
-          className={`flex min-w-0 flex-1 items-center justify-between gap-2 rounded-md py-1 pr-2 text-left text-[14px] ${
-            active
-              ? "bg-[#F0FDFA] font-medium text-[#0F766E]"
-              : "text-[#374151] hover:bg-[#F3F4F6]"
-          }`}
-          style={{ paddingLeft: 20 + level * 14 }}
-          onClick={() => {
-            closePlaylist();
-            setFolderFilter(isRoot ? null : node.path);
-            setView("library");
-          }}
-        >
-          <span className="truncate">{node.name}</span>
-          <span className="shrink-0 text-[12px] text-[#9CA3AF]">{node.count}</span>
-        </button>
-        {/* F13: dispara o "Completar dados" da pasta (raiz = biblioteca
-            inteira, prefixo ""). Como o "+" do SongRow (DECISIONS #31):
-            hover + visível quando selecionada, para toque/teclado. */}
-        <button
-          type="button"
-          aria-label={
-            isRoot
-              ? "Completar dados da biblioteca"
-              : `Completar dados da pasta ${node.name}`
-          }
-          disabled={scanning || encerrando}
-          title={
-            scanning
-              ? "Uma busca de dados já está em andamento"
-              : encerrando
-                ? "Terminando de encerrar a busca anterior — aguarde alguns segundos"
-                : isRoot
-                  ? "Completar dados da biblioteca"
-                  : "Completar dados desta pasta"
-          }
-          className={`h-6 w-6 shrink-0 rounded text-[13px] text-[#374151] hover:bg-[#E5E7EB] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent group-hover:block ${
-            enrichVisible ? "block" : "hidden"
-          }`}
-          onClick={() => void startScan(isRoot ? "" : node.path)}
-        >
-          ✎
-        </button>
-      </span>
+      <button
+        type="button"
+        aria-label={`Pasta ${node.name}`}
+        title={node.path}
+        className={`flex w-full min-w-0 items-center justify-between gap-2 rounded-md py-1 pr-2 text-left text-[14px] ${
+          active
+            ? "bg-[#F0FDFA] font-medium text-[#0F766E]"
+            : "text-[#374151] hover:bg-[#F3F4F6]"
+        }`}
+        style={{ paddingLeft: 20 + level * 14 }}
+        onClick={() => {
+          closePlaylist();
+          setFolderFilter(isRoot ? null : node.path);
+          setView("library");
+        }}
+      >
+        <span className="truncate">{node.name}</span>
+        <span className="shrink-0 text-[12px] text-[#9CA3AF]">{node.count}</span>
+      </button>
       {node.children.map((child) => (
         <FolderTreeItem key={child.path} node={child} level={level + 1} />
       ))}

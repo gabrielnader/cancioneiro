@@ -101,7 +101,13 @@ describe("Sidebar — árvore de pastas (V4 F11)", () => {
   });
 });
 
-describe("Sidebar — Completar dados (V5 F13)", () => {
+/*
+  V8/F18 — o ✎ saiu da árvore de pastas NO MESMO lançamento que trouxe a seção
+  de curadoria em Configurações. A lateral é para NAVEGAR: um botão que dispara
+  horas de processamento no meio da navegação diária é convite a clique
+  acidental (o mesmo problema que tirou os chips de tema de perto do título).
+*/
+describe("Sidebar — a árvore de pastas voltou a ser só navegação (V8 F18)", () => {
   beforeEach(() => {
     setBackendForTests({
       listPlaylists: vi.fn(async () => []),
@@ -127,87 +133,32 @@ describe("Sidebar — Completar dados (V5 F13)", () => {
     });
   });
 
-  it("SUBPASTA tem o botão 'Completar dados desta pasta' que dispara com o caminho da pasta", () => {
-    const startScan = vi.fn(async () => {});
-    useEnrichStore.setState({ startScan });
-    render(<Sidebar />);
-    fireEvent.click(
-      screen.getByRole("button", { name: "Completar dados da pasta 1" }),
-    );
-    expect(startScan).toHaveBeenCalledWith("/acervo/1");
-  });
-
-  it("RAIZ tem 'Completar dados da biblioteca' que dispara com prefixo vazio", () => {
-    const startScan = vi.fn(async () => {});
-    useEnrichStore.setState({ startScan });
-    render(<Sidebar />);
-    fireEvent.click(
-      screen.getByRole("button", { name: "Completar dados da biblioteca" }),
-    );
-    expect(startScan).toHaveBeenCalledWith("");
-  });
-
-  it("botão da subpasta não dispara o filtro de pasta (clique não propaga)", () => {
-    const startScan = vi.fn(async () => {});
-    useEnrichStore.setState({ startScan });
-    render(<Sidebar />);
-    fireEvent.click(
-      screen.getByRole("button", { name: "Completar dados da pasta 2" }),
-    );
-    expect(useLibraryStore.getState().folderFilter).toBeNull();
-    expect(startScan).toHaveBeenCalledWith("/acervo/2");
-  });
-
-  it("botão fica visível (block) quando a pasta está selecionada — alcançável por toque", () => {
+  it("nenhuma pasta da árvore tem mais o botão de completar dados", () => {
     useLibraryStore.setState({ folderFilter: "/acervo/1" });
     render(<Sidebar />);
-    const selecionada = screen.getByRole("button", {
-      name: "Completar dados da pasta 1",
-    });
-    expect(selecionada.className).toContain("block");
-    const outra = screen.getByRole("button", {
-      name: "Completar dados da pasta 2",
-    });
-    expect(outra.className).toContain("hidden");
+    expect(screen.queryByRole("button", { name: /Completar dados/ })).toBeNull();
+    expect(screen.queryByText("✎")).toBeNull();
   });
 
-  it("uma varredura em andamento desabilita o ✎ de TODAS as pastas (só uma por vez)", () => {
-    useEnrichStore.setState({ status: "scanning" });
+  it("a árvore continua navegando normalmente: um botão por pasta, e só", () => {
     render(<Sidebar />);
-    for (const name of [
-      "Completar dados da biblioteca",
-      "Completar dados da pasta 1",
-      "Completar dados da pasta 2",
-    ]) {
-      const botao = screen.getByRole("button", { name });
-      expect(botao).toBeDisabled();
-      expect(botao).toHaveAttribute(
-        "title",
-        "Uma busca de dados já está em andamento",
-      );
-    }
+    const pastas = screen
+      .getAllByRole("button")
+      .filter((b) => b.getAttribute("aria-label")?.startsWith("Pasta "));
+    expect(pastas.map((b) => b.getAttribute("aria-label"))).toEqual([
+      "Pasta acervo",
+      "Pasta 1",
+      "Pasta 2",
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Pasta 1" }));
+    expect(useLibraryStore.getState().folderFilter).toBe("/acervo/1");
   });
 
-  // M4: depois de "Cancelar" o invoke ainda está na rede por alguns segundos;
-  // liberar o ✎ aí começava uma segunda varredura por cima da primeira.
-  it("varredura cancelada mas ainda respondendo: ✎ segue desabilitado, com o porquê", () => {
-    useEnrichStore.setState({ status: "idle", scanInFlight: true });
+  // Ordem obrigatória do PRD: a varredura em lote não pode sumir do produto.
+  it("a varredura em lote continua alcançável: Configurações está na lateral", () => {
     render(<Sidebar />);
-    const botao = screen.getByRole("button", {
-      name: "Completar dados da biblioteca",
-    });
-    expect(botao).toBeDisabled();
-    expect(botao).toHaveAttribute(
-      "title",
-      "Terminando de encerrar a busca anterior — aguarde alguns segundos",
-    );
-  });
-
-  it("nada rodando: ✎ habilitado", () => {
-    render(<Sidebar />);
-    expect(
-      screen.getByRole("button", { name: "Completar dados da biblioteca" }),
-    ).toBeEnabled();
+    fireEvent.click(screen.getByRole("button", { name: "Configurações" }));
+    expect(useUiStore.getState().view).toBe("settings");
   });
 });
 
@@ -241,7 +192,13 @@ describe("Sidebar — indicador de varredura em segundo plano (V5 F13)", () => {
     useEnrichStore.setState({
       status: "scanning",
       overlayOpen: true,
-      progress: { done: 2, total: 9, atual: "a.mp3", scan_id: "s1" },
+      progress: {
+        done: 2,
+        total: 9,
+        atual: "a.mp3",
+        etapa: "procurando no LRCLIB",
+        scan_id: "s1",
+      },
     });
     render(<Sidebar />);
     expect(
@@ -249,18 +206,41 @@ describe("Sidebar — indicador de varredura em segundo plano (V5 F13)", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("varrendo em segundo plano: mostra a contagem e reabre o overlay no clique", () => {
+  // V8/F18 — "progresso com contagem e barra, a etapa atual do funil e o
+  // arquivo do momento". Na lateral cabem a contagem e a etapa; o arquivo,
+  // que muda a cada segundo, fica no overlay.
+  it("varrendo em segundo plano: contagem E etapa, e reabre o overlay no clique", () => {
     useEnrichStore.setState({
       status: "scanning",
       overlayOpen: false,
-      progress: { done: 2, total: 9, atual: "a.mp3", scan_id: "s1" },
+      progress: {
+        done: 2,
+        total: 9,
+        atual: "a.mp3",
+        etapa: "procurando no LRCLIB",
+        scan_id: "s1",
+      },
     });
     render(<Sidebar />);
     const indicador = screen.getByRole("button", {
-      name: "Buscando dados… 2 de 9",
+      name: "Buscando dados… 2 de 9 — procurando no LRCLIB",
     });
+    expect(indicador).toHaveTextContent("2 de 9");
+    expect(indicador).toHaveTextContent("procurando no LRCLIB");
     fireEvent.click(indicador);
     expect(useEnrichStore.getState().overlayOpen).toBe(true);
+  });
+
+  it("backend sem etapa: o indicador continua com a contagem, sem sobra de texto", () => {
+    useEnrichStore.setState({
+      status: "scanning",
+      overlayOpen: false,
+      progress: { done: 2, total: 9, atual: "a.mp3", etapa: "", scan_id: "s1" },
+    });
+    render(<Sidebar />);
+    expect(
+      screen.getByRole("button", { name: "Buscando dados… 2 de 9" }),
+    ).toBeInTheDocument();
   });
 
   it("sem progresso ainda: indicador sem contagem", () => {

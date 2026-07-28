@@ -30,6 +30,13 @@ export interface Song {
 /** Valor de `Song.letra_origem` que a curadoria grava para letra transcrita. */
 export const ORIGEM_TRANSCRICAO = "transcricao";
 
+/**
+ * Valor de `Song.letra_origem` para letra vinda do Vagalume (V8/F18) — o
+ * mesmo que `tools/embed_lyrics.py` e o writer Rust gravam. Não é transcrição:
+ * não puxa o aviso de "pode conter erros".
+ */
+export const ORIGEM_VAGALUME = "vagalume";
+
 export interface SearchResult {
   song: Song;
   snippet: string | null;

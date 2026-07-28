@@ -24,6 +24,17 @@ async function resetApp(page: Page) {
   await page.reload();
 }
 
+/**
+ * V8/F18 — a varredura em lote mudou de endereço: saiu do ✎ da árvore de
+ * pastas e passou a viver em Configurações → "Curadoria do acervo". Toda a
+ * suíte passa por aqui, que é o caminho real da pessoa.
+ */
+async function dispararCuradoria(page: Page, pasta = "") {
+  await page.getByRole("button", { name: "Configurações" }).click();
+  await page.getByLabel("Pasta a curar").selectOption(pasta);
+  await page.getByRole("button", { name: "Buscar dados desta pasta" }).click();
+}
+
 async function addMockFolder(page: Page) {
   await page.getByRole("button", { name: "Adicionar pasta" }).first().click();
   await expect(page.getByText("3 músicas indexadas.")).toBeVisible();
@@ -536,7 +547,6 @@ test.describe("Playlists (F5)", () => {
     await page.getByPlaceholder("Nome da playlist").fill(name);
     await page.getByRole("button", { name: "Criar" }).click();
     // volta para a biblioteca para adicionar músicas
-    // exact: o botão "Completar dados da biblioteca" (F13) também contém o texto
     await page.getByRole("button", { name: "Biblioteca", exact: true }).click();
     for (const title of ["Coração Sertanejo", "Instrumental Sem Letra"]) {
       const row = page.getByRole("option").filter({ hasText: title }).first();
@@ -693,7 +703,9 @@ test.describe("V4", () => {
     expect(errors).toEqual([]);
   });
 
-  test("buscar letra na internet: não achou, achou (preenche a textarea) e sem conexão", async ({
+  // V8/F18 — o "Buscar letra na internet" da V4 virou "Buscar dados na
+  // internet": o funil inteiro nesta música, com o resultado na própria ficha.
+  test("funil de uma música só no editor: resultado inline, usar preenche, sem conexão avisa", async ({
     page,
   }) => {
     await resetApp(page);
@@ -702,28 +714,62 @@ test.describe("V4", () => {
     await page.getByText("Instrumental Sem Letra").first().click();
     const panel = page.getByLabel("Painel de letra");
     await panel.getByRole("button", { name: "Editar" }).click();
-
-    // título original não casa com o mock → aviso exato de não encontrada
-    await panel.getByRole("button", { name: "Buscar letra na internet" }).click();
+    // o botão antigo não existe mais: uma porta só para "buscar na internet"
     await expect(
-      page.getByText("Letra não encontrada para este título e artista."),
-    ).toBeVisible();
+      panel.getByRole("button", { name: "Buscar letra na internet" }),
+    ).toHaveCount(0);
 
-    // usa o título DIGITADO (não salvo): "Coração Sertanejo" casa com o mock
-    await panel.getByLabel("Título").fill("Coração Sertanejo");
-    await panel.getByRole("button", { name: "Buscar letra na internet" }).click();
+    await panel.getByRole("button", { name: "Buscar dados na internet" }).click();
+    // procedência e confiança à vista, e nada preenchido sem mandar
+    await expect(panel.getByText("via LRCLIB")).toBeVisible();
+    await expect(panel.getByText("MÉDIA", { exact: true })).toBeVisible();
+    await expect(panel.getByLabel("Letra", { exact: true })).toHaveValue("");
+
+    await panel.getByRole("button", { name: "Usar estes dados" }).click();
     await expect(panel.getByLabel("Letra", { exact: true })).toHaveValue(
       /Quando o sol amanhecer/,
     );
+    // e continua sendo o "Salvar no arquivo" quem grava
+    await panel.getByRole("button", { name: "Salvar no arquivo" }).click();
+    await expect(page.getByText("Alterações salvas em sem_letra.mp3.")).toBeVisible();
 
-    // sem conexão: o mock rejeita e o app avisa com a copy exata
+    // sem conexão: o aviso fica na ficha, não some como um toast
     await page.evaluate(() => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (window as any).__CANCIONEIRO_MOCK__._offline = true;
     });
-    await panel.getByRole("button", { name: "Buscar letra na internet" }).click();
+    await panel.getByRole("button", { name: "Editar" }).click();
+    await panel.getByRole("button", { name: "Buscar dados na internet" }).click();
+    await expect(panel.getByText("sem conexão")).toBeVisible();
     await expect(
-      page.getByText("Sem conexão — a busca de letra precisa de internet."),
+      panel.getByRole("button", { name: "Usar estes dados" }),
+    ).toHaveCount(0);
+  });
+
+  // ~3% de cobertura no acervo real: "não achamos" é o desfecho mais comum.
+  test("uma música sem nada a propor recebe o aviso honesto, não um erro", async ({
+    page,
+  }) => {
+    await resetApp(page);
+    await addMockFolder(page);
+
+    // título já igual ao palpite do nome do arquivo, sem artista e sem letra
+    await page.getByText("sem_tags", { exact: true }).first().click();
+    const panel = page.getByLabel("Painel de letra");
+    await panel.getByRole("button", { name: "Editar" }).click();
+    await panel.getByLabel("Título").fill("sem tags");
+    await panel.getByRole("button", { name: "Salvar no arquivo" }).click();
+    await expect(page.getByText("Alterações salvas em sem_tags.mp3.")).toBeVisible();
+
+    await panel.getByRole("button", { name: "Editar" }).click();
+    await panel.getByRole("button", { name: "Buscar dados na internet" }).click();
+    await expect(
+      panel.getByText(/Não achamos esta música nos sites de letra/),
+    ).toBeVisible();
+    // não lê como fracasso nem como "esta música está completa"
+    await expect(panel.getByText(/Isso é comum/)).toBeVisible();
+    await expect(
+      panel.getByText(/Escrever a letra ouvindo o áudio ainda não é feito/),
     ).toBeVisible();
   });
 
@@ -863,10 +909,8 @@ test.describe("V5 — Completar dados em lote (F13)", () => {
     // com_letra completa fica de fora: sem_letra (MÉDIA) e sem_tags (BAIXA)
     expect(await page.getByText("Sem letra", { exact: true }).count()).toBe(2);
 
-    // raiz da árvore = biblioteca inteira (prefixo "")
-    await page
-      .getByRole("button", { name: "Completar dados da biblioteca" })
-      .click();
+    // "Toda a biblioteca" = prefixo vazio
+    await dispararCuradoria(page);
 
     const dialog = page.getByRole("dialog", { name: "Completar dados" });
     await expect(
@@ -890,9 +934,17 @@ test.describe("V5 — Completar dados em lote (F13)", () => {
       .getByRole("button", { name: "Aplicar selecionadas (1)" })
       .click();
 
-    await expect(page.getByText("1 música atualizada.")).toBeVisible();
+    // PRD V8: o aviso final diz o que MUDOU, nunca uma tarefa a fazer
+    await expect(
+      page.getByText("1 música ganhou letra. A biblioteca já está atualizada."),
+    ).toBeVisible();
+    // e NÃO existe popup nenhum pedindo reindexação ou reinício: a curadoria
+    // feita dentro do app já reindexou
     await expect(dialog).toHaveCount(0);
-    // a música ganhou letra: só a sem_tags continua com o badge
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+
+    // de volta à biblioteca, a música ganhou letra: só a sem_tags tem o badge
+    await page.getByRole("button", { name: "Biblioteca", exact: true }).click();
     expect(await page.getByText("Sem letra", { exact: true }).count()).toBe(1);
 
     // a letra aplicada abre no painel de detalhes
@@ -915,9 +967,7 @@ test.describe("V5 — Completar dados em lote (F13)", () => {
       (window as any).__CANCIONEIRO_MOCK__._enrichDelayMs = 1500;
     });
 
-    await page
-      .getByRole("button", { name: "Completar dados da biblioteca" })
-      .click();
+    await dispararCuradoria(page);
 
     const dialog = page.getByRole("dialog", { name: "Completar dados" });
     // barra determinada com "n de total" (2 músicas incompletas)
@@ -928,7 +978,7 @@ test.describe("V5 — Completar dados em lote (F13)", () => {
     );
     // com uma varredura rodando, disparar outra fica bloqueado
     await expect(
-      page.getByRole("button", { name: "Completar dados da biblioteca" }),
+      page.getByRole("button", { name: "Buscar dados desta pasta" }),
     ).toBeDisabled();
 
     // some da frente sem cancelar: o app continua usável
@@ -938,6 +988,12 @@ test.describe("V5 — Completar dados em lote (F13)", () => {
     await expect(dialog).toHaveCount(0);
     const indicador = page.getByRole("button", { name: /Buscando dados/ });
     await expect(indicador).toBeVisible();
+    // o indicador da lateral traz contagem E etapa do funil (V8/F18)
+    await expect(indicador).toContainText(/de 2/);
+    await expect(indicador).toContainText(/procurando no LRCLIB|preparando/);
+
+    // a pessoa volta ao dia a dia enquanto a busca roda
+    await page.getByRole("button", { name: "Biblioteca", exact: true }).click();
 
     // busca (atalho global) responde durante a varredura em segundo plano
     await page.keyboard.press("/");
@@ -971,9 +1027,8 @@ test.describe("V5 — Completar dados em lote (F13)", () => {
       (window as any).__CANCIONEIRO_MOCK__._enrichDelayMs = 1500;
     });
 
-    const abrir = page.getByRole("button", {
-      name: "Completar dados da biblioteca",
-    });
+    await page.getByRole("button", { name: "Configurações" }).click();
+    const abrir = page.getByRole("button", { name: "Buscar dados desta pasta" });
     await abrir.click();
     const dialog = page.getByRole("dialog", { name: "Completar dados" });
     await expect(dialog.getByText("Buscando dados… 0 de 2")).toBeVisible();
@@ -989,7 +1044,7 @@ test.describe("V5 — Completar dados em lote (F13)", () => {
       "Terminando de encerrar a busca anterior — aguarde alguns segundos",
     );
 
-    // quando o invoke enfim responde, o ✎ volta e a nova varredura começa do zero
+    // quando o invoke enfim responde, o botão volta e a varredura recomeça do zero
     await expect(abrir).toBeEnabled({ timeout: 15000 });
     await abrir.click();
     await expect(dialog.getByText("Buscando dados… 0 de 2")).toBeVisible();
@@ -1046,6 +1101,130 @@ test.describe("V5 — Aviso de transcrição automática (F14)", () => {
     );
     await expect(panel.getByTestId("lyrics-origem")).toHaveCount(0);
     expect(errors).toEqual([]);
+  });
+});
+
+/**
+ * V8/F18 — o funil dentro do app, Fase 1. A varredura em lote saiu do ✎ da
+ * árvore de pastas e virou uma seção própria em Configurações, fora do caminho
+ * do dia a dia. Estes testes cobrem o caminho inteiro de quem cura: escolher a
+ * pasta, entender o que vai acontecer, disparar, acompanhar e conferir.
+ */
+test.describe("V8 — O funil dentro do app (F18)", () => {
+  test("o ✎ saiu da lateral e a curadoria mora em Configurações, já na pasta selecionada", async ({
+    page,
+  }) => {
+    const errors = trackErrors(page);
+    await resetApp(page);
+    await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__CANCIONEIRO_MOCK__._seedFolderTree();
+    });
+    await page.reload();
+    await expect(page.getByRole("button", { name: "Pasta acervo" })).toBeVisible();
+
+    // a lateral voltou a ser só navegação
+    await expect(
+      page.getByRole("button", { name: /Completar dados/ }),
+    ).toHaveCount(0);
+
+    // quem estava olhando a subpasta "1" não precisa procurá-la de novo
+    await page.getByRole("button", { name: "Pasta 1" }).click();
+    await page.getByRole("button", { name: "Configurações" }).click();
+    await expect(page.getByLabel("Pasta a curar")).toHaveValue("/acervo/1");
+
+    // e o que vai acontecer está explicado ANTES de qualquer clique
+    const secao = page.getByRole("region", { name: "Curadoria do acervo" });
+    await expect(secao.getByText(/Nada é gravado sem você conferir/)).toBeVisible();
+    await expect(secao.getByText(/LRCLIB/).first()).toBeVisible();
+    await expect(
+      secao.getByText(/ainda não são feitos aqui dentro/),
+    ).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
+  test("a chave do Vagalume liga a terceira etapa, persiste e aparece na procedência", async ({
+    page,
+  }) => {
+    const errors = trackErrors(page);
+    await resetApp(page);
+    await addMockFolder(page);
+
+    await page.getByRole("button", { name: "Configurações" }).click();
+    const campo = page.getByLabel("Chave do Vagalume (opcional)");
+    // o endereço para pegar a chave gratuita está ali, escrito
+    await expect(
+      page.getByText("https://auth.vagalume.com.br/settings/api/"),
+    ).toBeVisible();
+    await campo.fill("chave-de-teste");
+
+    // preferência como as outras: sobrevive ao reinício do app
+    await page.reload();
+    await page.getByRole("button", { name: "Configurações" }).click();
+    await expect(page.getByLabel("Chave do Vagalume (opcional)")).toHaveValue(
+      "chave-de-teste",
+    );
+
+    // com a chave, a música que o LRCLIB não resolveu passa pelo Vagalume
+    await page.getByRole("button", { name: "Buscar dados desta pasta" }).click();
+    const dialog = page.getByRole("dialog", { name: "Completar dados" });
+    await expect(dialog.getByText("via Vagalume")).toBeVisible();
+    await expect(dialog.getByText("via LRCLIB")).toBeVisible();
+    // sem chave, a mesma música vinha BAIXA e sem letra
+    await expect(
+      dialog.getByText("2 propostas — 0 alta, 2 média, 0 baixa"),
+    ).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
+  // ~3% de cobertura no acervo real: este é o desfecho MAIS COMUM.
+  test("nada encontrado não lê como fracasso nem como 'sua pasta está completa'", async ({
+    page,
+  }) => {
+    const errors = trackErrors(page);
+    await resetApp(page);
+    await addMockFolder(page);
+
+    // deixa a instrumental completa e a sem_tags sem nada a propor
+    await page.getByText("Instrumental Sem Letra").first().click();
+    const panel = page.getByLabel("Painel de letra");
+    await panel.getByRole("button", { name: "Editar" }).click();
+    await panel.getByLabel("Letra", { exact: true }).fill("Letra já conferida");
+    await panel.getByRole("button", { name: "Salvar no arquivo" }).click();
+    await expect(page.getByText("Alterações salvas em sem_letra.mp3.")).toBeVisible();
+
+    await page.getByText("sem_tags", { exact: true }).first().click();
+    await panel.getByRole("button", { name: "Editar" }).click();
+    await panel.getByLabel("Título").fill("sem tags");
+    await panel.getByRole("button", { name: "Salvar no arquivo" }).click();
+    await expect(page.getByText("Alterações salvas em sem_tags.mp3.")).toBeVisible();
+
+    await dispararCuradoria(page);
+    const dialog = page.getByRole("dialog", { name: "Completar dados" });
+    // .last(): a mesma frase também vai para a região viva (sr-only) que
+    // anuncia o fim da busca — o parágrafo visível é o segundo
+    const aviso = dialog
+      .getByText(/Conferimos a única música incompleta desta pasta/)
+      .last();
+    await expect(aviso).toBeVisible();
+    await expect(aviso).toContainText("não quer dizer que a pasta esteja completa");
+    await expect(aviso).toContainText(
+      "Escrever a letra ouvindo o áudio ainda não é feito pelo aplicativo",
+    );
+    expect(errors).toEqual([]);
+  });
+
+  test("pasta sem música incompleta: o disparo fica bloqueado, com o motivo escrito", async ({
+    page,
+  }) => {
+    await resetApp(page);
+    await page.getByRole("button", { name: "Configurações" }).click();
+    await expect(
+      page.getByText(/Nenhuma música desta pasta está sem título, artista ou letra/),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Buscar dados desta pasta" }),
+    ).toBeDisabled();
   });
 });
 
@@ -1113,9 +1292,7 @@ test.describe("V8 — Marca de instrumental (F17)", () => {
     });
     await page.reload();
 
-    await page
-      .getByRole("button", { name: "Completar dados da biblioteca" })
-      .click();
+    await dispararCuradoria(page);
 
     const dialog = page.getByRole("dialog", { name: "Completar dados" });
     // sobra só a sem_tags: a instrumental não é candidata nem no total

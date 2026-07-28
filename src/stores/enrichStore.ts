@@ -5,7 +5,15 @@ import {
   type EnrichProgress,
   type EnrichProposal,
 } from "../lib/api";
+import { textoSemPropostas } from "../lib/curadoria";
 import { useToastStore } from "./toastStore";
+import { useUiStore } from "./uiStore";
+
+/**
+ * Reexportado por compatibilidade: a copy vive em `lib/curadoria` (testada
+ * como função pura), e o resto do app continua importando daqui.
+ */
+export { textoSemPropostas };
 
 /**
  * Estado do fluxo "Completar dados desta pasta" (F13 — PRD V5).
@@ -79,28 +87,6 @@ function textoEncontrado(n: number): string {
     : `Dados encontrados para ${n} músicas — abra a revisão para conferir.`;
 }
 
-/**
- * Fim de varredura sem NENHUMA proposta. Com ~3% de cobertura do LRCLIB, o
- * normal no acervo real é conferir dezenas de músicas e não achar nada — dizer
- * só "nada a ajustar" faz o usuário entender "esta pasta está completa" (A6).
- * Com candidatas conferidas, o texto conta o que houve e aponta o remédio.
- */
-export function textoSemPropostas(total: number): string {
-  if (total <= 0) return "Nada a ajustar nesta pasta.";
-  if (total === 1) {
-    return (
-      "Conferimos a única música incompleta desta pasta e não a achamos na" +
-      " internet. Para completar essa letra, use a transcrição das" +
-      " ferramentas de curadoria."
-    );
-  }
-  return (
-    `Conferimos as ${total} músicas incompletas desta pasta e não achamos` +
-    " nenhuma delas na internet. Para completar essas letras, use a" +
-    " transcrição das ferramentas de curadoria."
-  );
-}
-
 export const useEnrichStore = create<EnrichState>()((set, get) => ({
   status: "idle",
   overlayOpen: false,
@@ -152,7 +138,14 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
     })();
 
     try {
-      const proposals = await getBackend().enrichFolderScan(folderPrefix, scanId);
+      // A chave do Vagalume é preferência de quem usa (V8/F18) e viaja como
+      // PARÂMETRO: o backend não guarda credencial nenhuma. Sem chave, a
+      // etapa é pulada em silêncio — não é erro.
+      const proposals = await getBackend().enrichFolderScan(
+        folderPrefix,
+        scanId,
+        useUiStore.getState().vagalumeApiKey || null,
+      );
       if (seq !== scanSeq) return; // cancelado durante a busca: descarta
       // quantas candidatas foram efetivamente conferidas (A6)
       const conferidas = get().progress?.total ?? 0;

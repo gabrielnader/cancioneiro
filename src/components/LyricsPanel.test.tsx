@@ -6,7 +6,9 @@ import { useLibraryStore } from "../stores/libraryStore";
 import { usePlayerStore } from "../stores/playerStore";
 import { usePlaylistStore } from "../stores/playlistStore";
 import { useToastStore } from "../stores/toastStore";
+import { SEM_RESULTADO_INDIVIDUAL } from "../lib/curadoria";
 import type { Song } from "../lib/types";
+import { useUiStore } from "../stores/uiStore";
 import {
   AA_TEXTO_NORMAL,
   contrastRatio,
@@ -165,7 +167,7 @@ describe("LyricsPanel (F3)", () => {
 
 describe("LyricsPanel — modo de edição (V4 F10)", () => {
   let writeTags: ReturnType<typeof vi.fn>;
-  let fetchLyricsOnline: ReturnType<typeof vi.fn>;
+  let enrichSongScan: ReturnType<typeof vi.fn>;
   let getLyrics: ReturnType<typeof vi.fn>;
 
   function setupEditBackend(overrides: Partial<Backend> = {}) {
@@ -185,16 +187,22 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
         has_lyrics: lyrics !== null,
       }),
     );
-    fetchLyricsOnline = vi.fn(async () => ({
+    enrichSongScan = vi.fn(async () => ({
+      song_id: 1,
+      file_path: "/acervo/1.mp3",
+      current_title: "Coração Sertanejo",
+      current_artist: "Artista Teste",
+      proposed_title: "Coração Sertanejo",
+      proposed_artist: "Artista Teste",
       lyrics: "Letra vinda da internet\nSegunda linha",
-      matched_title: "Coração Sertanejo",
-      matched_artist: "Artista Teste",
       confidence: "alta" as const,
+      fonte: "LRCLIB",
+      error: null,
     }));
     setBackendForTests({
       getLyrics,
       writeTags,
-      fetchLyricsOnline,
+      enrichSongScan,
       ...overrides,
     } as unknown as Backend);
   }
@@ -233,7 +241,7 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
     ).toBeInTheDocument();
     expect(screen.getByPlaceholderText("Adicionar tema")).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Buscar letra na internet" }),
+      screen.getByRole("button", { name: "Buscar dados na internet" }),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Salvar no arquivo" }),
@@ -403,32 +411,83 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
     expect(usePlayerStore.getState().isPlaying).toBe(true);
   });
 
-  it("buscar letra usa título/artista digitados + duração e preenche a textarea (confirmando sobrescrita)", async () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+  /*
+    V8/F18 — o "Buscar letra na internet" (V4) FOI SUBSTITUÍDO por "Buscar
+    dados na internet", que roda o funil inteiro nesta música: o que já está
+    no arquivo, depois LRCLIB, depois Vagalume (com chave). Dois botões
+    dizendo "buscar na internet", com a diferença invisível para quem não
+    sabe o que é LRCLIB, seriam uma escolha às cegas — e o antigo perdia
+    sempre, porque consultava uma fonte só e nunca corrigia título ou artista.
+    O resultado aparece AQUI, na ficha, e nada vai para o disco antes do
+    "Salvar no arquivo".
+  */
+  it("o botão antigo de buscar SÓ letra não existe mais", async () => {
     await enterEditMode();
-    fireEvent.change(screen.getByLabelText("Título"), {
-      target: { value: "Coração Digitado" },
-    });
-    fireEvent.change(screen.getByLabelText("Artista"), {
-      target: { value: "Artista Digitado" },
-    });
+    expect(
+      screen.queryByRole("button", { name: "Buscar letra na internet" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Buscar dados na internet" }),
+    ).toBeInTheDocument();
+  });
+
+  it("roda o funil nesta música e mostra o resultado na própria ficha", async () => {
+    await enterEditMode();
     fireEvent.click(
-      screen.getByRole("button", { name: "Buscar letra na internet" }),
+      screen.getByRole("button", { name: "Buscar dados na internet" }),
+    );
+    await waitFor(() => expect(enrichSongScan).toHaveBeenCalledWith(1, null));
+    // procedência e confiança à vista, como na revisão do lote
+    expect(await screen.findByText(/via LRCLIB/)).toBeInTheDocument();
+    expect(screen.getByText("ALTA")).toBeInTheDocument();
+    expect(screen.getByText("letra encontrada")).toBeInTheDocument();
+    // nada foi gravado nem preenchido sem a pessoa mandar
+    expect(writeTags).not.toHaveBeenCalled();
+    expect(screen.getByLabelText("Letra")).toHaveValue(LYRICS);
+  });
+
+  it("leva a chave do Vagalume das preferências", async () => {
+    useUiStore.getState().setVagalumeApiKey("chave-da-pessoa");
+    await enterEditMode();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Buscar dados na internet" }),
     );
     await waitFor(() =>
-      expect(fetchLyricsOnline).toHaveBeenCalledWith(
-        "Coração Digitado",
-        "Artista Digitado",
-        3,
-      ),
+      expect(enrichSongScan).toHaveBeenCalledWith(1, "chave-da-pessoa"),
     );
-    // textarea tinha conteúdo → confirmou com a copy exata antes de sobrescrever
+    useUiStore.getState().setVagalumeApiKey("");
+  });
+
+  it("'Usar estes dados' preenche o formulário (confirmando a sobrescrita da letra)", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    enrichSongScan.mockResolvedValueOnce({
+      song_id: 1,
+      file_path: "/acervo/1.mp3",
+      current_title: "Coração Sertanejo",
+      current_artist: "Artista Teste",
+      proposed_title: "Coração Sertanejo (ao vivo)",
+      proposed_artist: "Outro Artista",
+      lyrics: "Letra vinda da internet\nSegunda linha",
+      confidence: "media",
+      fonte: "Vagalume",
+      error: null,
+    });
+    await enterEditMode();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Buscar dados na internet" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Usar estes dados" }));
+
     expect(confirmSpy).toHaveBeenCalledWith(
       "Substituir a letra atual pelo resultado da busca?",
     );
+    expect(screen.getByLabelText("Título")).toHaveValue("Coração Sertanejo (ao vivo)");
+    expect(screen.getByLabelText("Artista")).toHaveValue("Outro Artista");
     expect(screen.getByLabelText("Letra")).toHaveValue(
       "Letra vinda da internet\nSegunda linha",
     );
+    // continua sendo o "Salvar no arquivo" quem grava
+    expect(writeTags).not.toHaveBeenCalled();
     confirmSpy.mockRestore();
   });
 
@@ -436,108 +495,130 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
     await enterEditMode();
     fireEvent.click(
-      screen.getByRole("button", { name: "Buscar letra na internet" }),
+      screen.getByRole("button", { name: "Buscar dados na internet" }),
     );
-    await waitFor(() => expect(fetchLyricsOnline).toHaveBeenCalled());
+    fireEvent.click(await screen.findByRole("button", { name: "Usar estes dados" }));
     expect(screen.getByLabelText("Letra")).toHaveValue(LYRICS);
     confirmSpy.mockRestore();
   });
 
-  it("textarea vazia preenche sem pedir confirmação", async () => {
+  it("letra vazia é preenchida sem pedir confirmação", async () => {
     const confirmSpy = vi.spyOn(window, "confirm");
     useLibraryStore.setState({ selectedSongId: 2 });
     render(<LyricsPanel />);
     fireEvent.click(await screen.findByRole("button", { name: "Editar" }));
     fireEvent.click(
-      screen.getByRole("button", { name: "Buscar letra na internet" }),
+      screen.getByRole("button", { name: "Buscar dados na internet" }),
     );
-    await waitFor(() =>
-      expect(screen.getByLabelText("Letra")).toHaveValue(
-        "Letra vinda da internet\nSegunda linha",
-      ),
+    fireEvent.click(await screen.findByRole("button", { name: "Usar estes dados" }));
+    expect(screen.getByLabelText("Letra")).toHaveValue(
+      "Letra vinda da internet\nSegunda linha",
     );
     expect(confirmSpy).not.toHaveBeenCalled();
     confirmSpy.mockRestore();
   });
 
-  it("busca sem resultado: toast warning exato", async () => {
-    fetchLyricsOnline.mockResolvedValueOnce(null);
+  it("'Descartar' fecha o resultado sem mexer em nada", async () => {
     await enterEditMode();
     fireEvent.click(
-      screen.getByRole("button", { name: "Buscar letra na internet" }),
+      screen.getByRole("button", { name: "Buscar dados na internet" }),
     );
-    await waitFor(() =>
-      expect(useToastStore.getState().toasts).toEqual([
-        expect.objectContaining({
-          message: "Letra não encontrada para este título e artista.",
-          kind: "warning",
-        }),
-      ]),
-    );
-    // letra atual não é tocada
+    fireEvent.click(await screen.findByRole("button", { name: "Descartar" }));
+    expect(
+      screen.queryByRole("button", { name: "Usar estes dados" }),
+    ).not.toBeInTheDocument();
     expect(screen.getByLabelText("Letra")).toHaveValue(LYRICS);
   });
 
-  it("sem conexão: toast warning exato", async () => {
-    fetchLyricsOnline.mockRejectedValueOnce(new Error("sem conexão"));
+  // ~3% de cobertura no acervo real: "não achamos" é o desfecho MAIS COMUM e
+  // não pode ler como fracasso nem como "esta música está completa".
+  it("nada encontrado: aviso honesto na ficha, sem toast de erro", async () => {
+    enrichSongScan.mockResolvedValueOnce(null);
     await enterEditMode();
     fireEvent.click(
-      screen.getByRole("button", { name: "Buscar letra na internet" }),
+      screen.getByRole("button", { name: "Buscar dados na internet" }),
     );
-    await waitFor(() =>
-      expect(useToastStore.getState().toasts).toEqual([
-        expect.objectContaining({
-          message: "Sem conexão — a busca de letra precisa de internet.",
-          kind: "warning",
-        }),
-      ]),
-    );
+    expect(await screen.findByText(SEM_RESULTADO_INDIVIDUAL)).toBeInTheDocument();
+    expect(useToastStore.getState().toasts).toEqual([]);
+    expect(screen.getByLabelText("Letra")).toHaveValue(LYRICS);
   });
 
-  it("loading da busca (V5 Q5): botão vira 'Buscando…' desabilitado e restaura no sucesso", async () => {
-    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
-    let resolveFetch!: (v: unknown) => void;
-    fetchLyricsOnline.mockImplementationOnce(
-      () => new Promise((resolve) => (resolveFetch = resolve)),
+  it("erro por música (sem conexão) aparece na ficha, sem oferecer 'Usar'", async () => {
+    enrichSongScan.mockResolvedValueOnce({
+      song_id: 1,
+      file_path: "/acervo/1.mp3",
+      current_title: "Coração Sertanejo",
+      current_artist: "Artista Teste",
+      proposed_title: "Coração Sertanejo",
+      proposed_artist: "Artista Teste",
+      lyrics: null,
+      confidence: "baixa",
+      fonte: "LRCLIB",
+      error: "sem conexão",
+    });
+    await enterEditMode();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Buscar dados na internet" }),
+    );
+    expect(await screen.findByText("sem conexão")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Usar estes dados" }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("invoke rejeitado: aviso de falta de conexão na ficha", async () => {
+    enrichSongScan.mockRejectedValueOnce(new Error("sem conexão"));
+    await enterEditMode();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Buscar dados na internet" }),
+    );
+    expect(
+      await screen.findByText("Sem conexão — a busca de dados precisa de internet."),
+    ).toBeInTheDocument();
+  });
+
+  // O produto é lido em tela de notebook, em sala mal iluminada, por quem
+  // está conduzindo uma reunião (DECISIONS #69) — inclusive esta ficha nova.
+  it("todo texto do resultado inline passa em AA sobre o fundo do bloco", async () => {
+    await enterEditMode();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Buscar dados na internet" }),
+    );
+    const bloco = await screen.findByRole("status");
+    const comCor = [...bloco.querySelectorAll<HTMLElement>("*"), bloco].filter(
+      (el) => /text-\[#[0-9a-fA-F]{6}\]/.test(el.className),
+    );
+    expect(comCor.length).toBeGreaterThan(0);
+    for (const el of comCor) {
+      // o fundo é o do bloco, exceto nos selos, que trazem o próprio
+      const proprio = /bg-\[(#[0-9a-fA-F]{6})\]/.exec(el.className);
+      const fundo = proprio ? proprio[1] : "#F9FAFB";
+      expect(
+        contrastRatio(corDoTexto(el.className), fundo),
+        `"${el.textContent?.slice(0, 30)}"`,
+      ).toBeGreaterThanOrEqual(AA_TEXTO_NORMAL);
+    }
+  });
+
+  it("loading: botão vira 'Buscando…' desabilitado e não trava Salvar", async () => {
+    let resolveScan!: (v: unknown) => void;
+    enrichSongScan.mockImplementationOnce(
+      () => new Promise((resolve) => (resolveScan = resolve)),
     );
     await enterEditMode();
     fireEvent.click(
-      screen.getByRole("button", { name: "Buscar letra na internet" }),
+      screen.getByRole("button", { name: "Buscar dados na internet" }),
     );
 
-    // promise pendente: botão desabilitado com a copy exata (ellipsis U+2026)
     const buscando = screen.getByRole("button", { name: "Buscando…" });
     expect(buscando).toBeDisabled();
-    expect(
-      screen.queryByRole("button", { name: "Buscar letra na internet" }),
-    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Salvar no arquivo" })).toBeEnabled();
 
-    resolveFetch({
-      lyrics: "Letra vinda da internet\nSegunda linha",
-      matched_title: "Coração Sertanejo",
-      matched_artist: "Artista Teste",
-      confidence: "alta",
-    });
+    resolveScan(null);
     const restaurado = await screen.findByRole("button", {
-      name: "Buscar letra na internet",
+      name: "Buscar dados na internet",
     });
     expect(restaurado).toBeEnabled();
-    confirmSpy.mockRestore();
-  });
-
-  it("loading da busca (V5 Q5): restaura também quando não acha e quando dá erro", async () => {
-    fetchLyricsOnline.mockResolvedValueOnce(null);
-    await enterEditMode();
-    const botao = () =>
-      screen.getByRole("button", { name: "Buscar letra na internet" });
-    fireEvent.click(botao());
-    await waitFor(() => expect(botao()).toBeEnabled());
-
-    fetchLyricsOnline.mockRejectedValueOnce(new Error("sem conexão"));
-    fireEvent.click(botao());
-    await waitFor(() => expect(botao()).toBeEnabled());
-    // salvar não ficou travado pelo busy da busca
-    expect(screen.getByRole("button", { name: "Salvar no arquivo" })).toBeEnabled();
   });
 
   it("trocar a música selecionada sai do modo edição", async () => {
@@ -615,7 +696,7 @@ describe("LyricsPanel — aviso de transcrição automática (V5 F14)", () => {
     setBackendForTests({
       getLyrics: vi.fn(async () => LYRICS),
       writeTags,
-      fetchLyricsOnline: vi.fn(async () => null),
+      enrichSongScan: vi.fn(async () => null),
     } as unknown as Backend);
     useLibraryStore.setState({
       results: [{ song: transcrita(), snippet: null }],
@@ -657,7 +738,7 @@ describe("LyricsPanel — marca de instrumental (V8/F17)", () => {
     setBackendForTests({
       getLyrics: vi.fn(async () => (s.has_lyrics ? LYRICS : null)),
       writeTags,
-      fetchLyricsOnline: vi.fn(async () => null),
+      enrichSongScan: vi.fn(async () => null),
     } as unknown as Backend);
     useLibraryStore.setState({
       results: [{ song: s, snippet: null }],

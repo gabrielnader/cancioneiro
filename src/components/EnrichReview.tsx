@@ -6,7 +6,8 @@ import {
 } from "react";
 import { audioController } from "../hooks/playerAudioCore";
 import { getBackend, type EnrichApply, type EnrichProposal } from "../lib/api";
-import { textoSemPropostas, useEnrichStore } from "../stores/enrichStore";
+import { textoAplicado, textoSemPropostas } from "../lib/curadoria";
+import { useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlayerStore } from "../stores/playerStore";
 import { usePlaylistStore } from "../stores/playlistStore";
@@ -35,7 +36,9 @@ const BADGES: Record<
 > = {
   alta: { label: "ALTA", className: "bg-[#DCFCE7] text-[#166534]" },
   media: { label: "MÉDIA", className: "bg-[#FEF9C3] text-[#854D0E]" },
-  baixa: { label: "BAIXA", className: "bg-[#F3F4F6] text-[#6B7280]" },
+  // #6B7280 sobre #F3F4F6 dava 4,39:1 — abaixo de AA. #5B6472 dá 5,44:1
+  // (DECISIONS #69: contraste mínimo vale para texto secundário também).
+  baixa: { label: "BAIXA", className: "bg-[#F3F4F6] text-[#5B6472]" },
 };
 
 function nomeCompleto(title: string, artist: string | null): string {
@@ -216,7 +219,16 @@ export function EnrichReview() {
       add_temas: null,
       current_title: p.current_title,
       current_artist: p.current_artist,
+      // a procedência viaja junto: é ela que decide o TXXX:LETRA_ORIGEM
+      fonte: p.fonte || null,
     }));
+
+    // Estado ANTES da gravação: é a única forma honesta de dizer "ganhou
+    // letra" — uma proposta com letra pode ser para uma música que já tinha
+    // letra e só estava sem artista (o lote também as considera incompletas).
+    const antes = new Map(
+      useLibraryStore.getState().allSongs.map((s) => [s.id, s.has_lyrics]),
+    );
 
     setBusy(true);
     try {
@@ -234,10 +246,27 @@ export function EnrichReview() {
       }
 
       if (gravadas.length > 0) {
+        // PRD V8: "o aviso diz o que mudou ('47 músicas ganharam letra'), não
+        // uma tarefa a fazer" — curadoria feita dentro do app já reindexou, e
+        // por isso NÃO existe popup pedindo reindexação nem reinício.
+        // Os dois grupos são disjuntos (quem ganhou letra não é recontada na
+        // correção de nome): senão as contas somariam mais que o total.
+        let ganharamLetra = 0;
+        let nomeCorrigido = 0;
+        for (const r of gravadas) {
+          const p = proposals.find((x) => x.song_id === r.song_id);
+          if (!p) continue;
+          if (p.lyrics !== null && antes.get(p.song_id) !== true) {
+            ganharamLetra++;
+          } else if (
+            p.proposed_title !== p.current_title ||
+            (p.proposed_artist ?? null) !== (p.current_artist ?? null)
+          ) {
+            nomeCorrigido++;
+          }
+        }
         push(
-          gravadas.length === 1
-            ? "1 música atualizada."
-            : `${gravadas.length} músicas atualizadas.`,
+          textoAplicado(ganharamLetra, nomeCorrigido, gravadas.length),
           "success",
         );
       }
@@ -322,6 +351,14 @@ export function EnrichReview() {
                     }}
                   />
                 </div>
+                {/* V8/F18 — a etapa do funil. Sem ela, minutos parados no
+                    mesmo número parecem travamento; com ela, a pessoa vê que
+                    a busca passou do arquivo para a rede. */}
+                {progress.etapa && (
+                  <p className="mt-1 text-[13px] text-[#5B6472]">
+                    Etapa: {progress.etapa}
+                  </p>
+                )}
                 {/* nome do arquivo pode ser enorme: trunca em uma linha */}
                 <p
                   title={progress.atual}
@@ -429,11 +466,17 @@ export function EnrichReview() {
                           {error}
                         </span>
                       ) : (
-                        p.lyrics !== null && (
-                          <span className="block text-[13px] text-[#0F766E]">
-                            letra encontrada
-                          </span>
-                        )
+                        // V8/F18 — procedência sempre à vista: ALTA vinda do
+                        // LRCLIB (que confere a duração) e ALTA vinda de um
+                        // palpite de nome de arquivo não se decidem igual.
+                        <span className="flex flex-wrap gap-x-2 text-[13px]">
+                          {p.lyrics !== null && (
+                            <span className="text-[#0F766E]">letra encontrada</span>
+                          )}
+                          {p.fonte && (
+                            <span className="text-[#5B6472]">via {p.fonte}</span>
+                          )}
+                        </span>
                       )}
                     </span>
                     <span

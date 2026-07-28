@@ -17,7 +17,7 @@ import type {
   SearchResult,
   Song,
 } from "./types";
-import { ORIGEM_TRANSCRICAO } from "./types";
+import { ORIGEM_TRANSCRICAO, ORIGEM_VAGALUME } from "./types";
 
 /**
  * Backend em memória com a mesma semântica do backend Rust (src-tauri),
@@ -271,6 +271,31 @@ function arquivoParaBusca(song: SongRecord): string {
  * na origem e o mock espelha. Propostas COM letra ou COM erro continuam: a
  * letra é o ganho e a linha com erro precisa ficar visível (desabilitada).
  */
+/**
+ * Etapas do funil (V8/F18) como o backend as manda para a tela: pt-BR, prontas
+ * para exibir. O evento inicial (done=0) sai com a etapa de preparo, antes de
+ * qualquer consulta.
+ */
+const ETAPA_PREPARANDO = "preparando";
+const FONTE_ARQUIVO = "nome do arquivo";
+const FONTE_LRCLIB = "LRCLIB";
+const FONTE_VAGALUME = "Vagalume";
+
+/**
+ * Etapa do funil em que uma proposta com esta procedência foi resolvida —
+ * mesmas strings do backend Rust (enrich::ETAPA_*), que é quem a UI mostra.
+ *
+ * O Rust emite um evento ao ENTRAR em cada etapa e outro ao concluir a música;
+ * o mock coalesce isso num evento por música, com a etapa que a resolveu: sem
+ * latência de rede os eventos sairiam todos no mesmo tique e a tela só mostraria
+ * o último.
+ */
+function etapaDaFonte(fonte: string): string {
+  if (fonte === FONTE_LRCLIB) return "procurando no LRCLIB";
+  if (fonte === FONTE_VAGALUME) return "procurando no Vagalume";
+  return "lendo etiquetas e nome do arquivo";
+}
+
 function propostaNoOp(p: EnrichProposal): boolean {
   return (
     p.error === null &&
@@ -307,10 +332,12 @@ export function createMockBackend(): MockBackend {
     done: number,
     total: number,
     atual: string,
+    etapa: string,
   ): void {
     // o evento carrega a varredura que o emitiu: a UI ignora o que vier de
-    // uma varredura já cancelada (M4)
-    const payload: EnrichProgress = { done, total, atual, scan_id: scanId };
+    // uma varredura já cancelada (M4). `etapa` (V8/F18) é a etapa do funil em
+    // curso, em pt-BR e pronta para exibir.
+    const payload: EnrichProgress = { done, total, atual, etapa, scan_id: scanId };
     enrichProgressListeners.forEach((cb) => cb(payload));
   }
 
@@ -336,6 +363,114 @@ export function createMockBackend(): MockBackend {
     state.playlistItems = state.playlistItems.filter((i) => !doomedIds.has(i.song_id));
     touched.forEach(renumber);
     return doomed.length;
+  }
+
+  /**
+   * O funil inteiro para UMA música (V8/F18), na ordem de custo crescente:
+   * o que já está no arquivo → LRCLIB → Vagalume (só com chave). É o mesmo
+   * caminho para o lote e para o caso pontual do editor — duas implementações
+   * divergiriam, e é justamente a procedência que a pessoa usa para decidir.
+   */
+  function propostaDoFunil(
+    song: SongRecord,
+    vagalumeKey: string | null,
+  ): EnrichProposal {
+    const base = {
+      song_id: song.id,
+      file_path: song.file_path,
+      current_title: song.title,
+      current_artist: song.artist,
+    };
+
+    // arquivo sumido do disco: reporta sem gastar "rede"
+    if (state.deletedFiles.includes(song.file_path)) {
+      return {
+        ...base,
+        proposed_title: song.title,
+        proposed_artist: song.artist,
+        lyrics: null,
+        confidence: "baixa",
+        fonte: FONTE_ARQUIVO,
+        error: `arquivo não encontrado: ${song.file_path}`,
+      };
+    }
+
+    // sem rede: o backend real NUNCA rejeita por rede — o erro vem POR MÚSICA
+    // na proposta e a linha fica desabilitada (DECISIONS #47)
+    if (backend._offline) {
+      return {
+        ...base,
+        proposed_title: song.title,
+        proposed_artist: song.artist,
+        lyrics: null,
+        confidence: "baixa",
+        fonte: FONTE_LRCLIB,
+        error: "sem conexão",
+      };
+    }
+
+    // "LRCLIB" determinístico: o único hit ALTA é o da fixture (mesmo
+    // conhecimento do fetchLyricsOnline)
+    if (normalize(song.title).includes("coracao sertanejo")) {
+      return {
+        ...base,
+        proposed_title: "Coração Sertanejo",
+        proposed_artist: "Artista Teste",
+        lyrics: FIXTURE_LYRICS,
+        confidence: "alta",
+        fonte: FONTE_LRCLIB,
+        error: null,
+      };
+    }
+
+    // título+artista reais → match MÉDIA com letra encontrada no LRCLIB
+    if (song.artist !== null) {
+      return {
+        ...base,
+        proposed_title: song.title,
+        proposed_artist: song.artist,
+        lyrics: FIXTURE_LYRICS,
+        confidence: "media",
+        fonte: FONTE_LRCLIB,
+        error: null,
+      };
+    }
+
+    // resto: só o palpite do nome do arquivo
+    const stem = nomeArquivo(song)
+      .replace(/\.mp3$/i, "")
+      .replace(/_/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+    const divisor = stem.indexOf(" - ");
+    const [guessArtist, guessTitle] =
+      divisor > 0
+        ? [stem.slice(0, divisor).trim(), stem.slice(divisor + 3).trim()]
+        : [null, stem];
+
+    // Vagalume é a ÚLTIMA etapa e só existe com a chave gratuita da pessoa
+    // (V8/F18). Sem chave, pula em silêncio: não é erro nem aviso.
+    if (vagalumeKey) {
+      return {
+        ...base,
+        proposed_title: guessTitle || song.title,
+        proposed_artist: guessArtist,
+        lyrics: FIXTURE_LYRICS,
+        confidence: "media",
+        fonte: FONTE_VAGALUME,
+        error: null,
+      };
+    }
+
+    return {
+      ...base,
+      proposed_title: guessTitle || song.title,
+      proposed_artist: guessArtist,
+      lyrics: null,
+      confidence: "baixa",
+      fonte: FONTE_ARQUIVO,
+      error: null,
+    };
   }
 
   function songWords(song: SongRecord): string[] {
@@ -641,6 +776,7 @@ export function createMockBackend(): MockBackend {
     async enrichFolderScan(
       folderPrefix: string,
       scanId: string,
+      vagalumeKey: string | null = null,
     ): Promise<EnrichProposal[]> {
       enrichCancelled.delete(scanId);
       // candidatas pré-contadas ANTES do trabalho (como o scan_all): o total
@@ -665,7 +801,7 @@ export function createMockBackend(): MockBackend {
       const proposals: EnrichProposal[] = [];
       // primeiro evento com done=0 antes de começar: só o total na tela
       // (mesmo contrato do Rust — `atual` vazio nesse evento)
-      emitEnrichProgress(scanId, 0, total, "");
+      emitEnrichProgress(scanId, 0, total, "", ETAPA_PREPARANDO);
 
       for (let i = 0; i < total; i++) {
         const song = candidatas[i];
@@ -678,100 +814,36 @@ export function createMockBackend(): MockBackend {
           enrichCancelled.delete(scanId);
           return [];
         }
-        // emitido DEPOIS de cada música, com o nome da que acabou de sair
-        // (mesmo ponto do on_progress do Rust)
-        const avanca = () =>
-          emitEnrichProgress(scanId, i + 1, total, nomeArquivo(song));
-
-        const base = {
-          song_id: song.id,
-          file_path: song.file_path,
-          current_title: song.title,
-          current_artist: song.artist,
-        };
-
-        // arquivo sumido do disco: proposta com error, sem gastar "rede"
-        if (state.deletedFiles.includes(song.file_path)) {
-          proposals.push({
-            ...base,
-            proposed_title: song.title,
-            proposed_artist: song.artist,
-            lyrics: null,
-            confidence: "baixa",
-            error: `arquivo não encontrado: ${song.file_path}`,
-          });
-          avanca();
-          continue;
-        }
-
-        // sem rede: o backend real NUNCA rejeita por rede — o erro vem POR
-        // MÚSICA na proposta e a linha fica desabilitada (DECISIONS #47)
-        if (backend._offline) {
-          proposals.push({
-            ...base,
-            proposed_title: song.title,
-            proposed_artist: song.artist,
-            lyrics: null,
-            confidence: "baixa",
-            error: "sem conexão",
-          });
-          avanca();
-          continue;
-        }
-
-        // "LRCLIB" determinístico: o único hit ALTA é o da fixture (mesmo
-        // conhecimento do fetchLyricsOnline)
-        if (normalize(song.title).includes("coracao sertanejo")) {
-          proposals.push({
-            ...base,
-            proposed_title: "Coração Sertanejo",
-            proposed_artist: "Artista Teste",
-            lyrics: FIXTURE_LYRICS,
-            confidence: "alta",
-            error: null,
-          });
-          avanca();
-          continue;
-        }
-
-        // título+artista reais → match MÉDIA com letra encontrada
-        if (song.artist !== null) {
-          proposals.push({
-            ...base,
-            proposed_title: song.title,
-            proposed_artist: song.artist,
-            lyrics: FIXTURE_LYRICS,
-            confidence: "media",
-            error: null,
-          });
-          avanca();
-          continue;
-        }
-
-        // resto: BAIXA — palpite do nome do arquivo, sem letra
-        const stem = nomeArquivo(song)
-          .replace(/\.mp3$/i, "")
-          .replace(/_/g, " ")
-          .replace(/\s+/g, " ")
-          .trim();
-        const divisor = stem.indexOf(" - ");
-        const [guessArtist, guessTitle] =
-          divisor > 0
-            ? [stem.slice(0, divisor).trim(), stem.slice(divisor + 3).trim()]
-            : [null, stem];
-        proposals.push({
-          ...base,
-          proposed_title: guessTitle || song.title,
-          proposed_artist: guessArtist,
-          lyrics: null,
-          confidence: "baixa",
-          error: null,
-        });
-        avanca();
+        const proposta = propostaDoFunil(song, vagalumeKey);
+        proposals.push(proposta);
+        // emitido DEPOIS de cada música, com o nome da que acabou de sair e a
+        // etapa em que ela foi resolvida (mesmo ponto do on_progress do Rust)
+        emitEnrichProgress(
+          scanId,
+          i + 1,
+          total,
+          nomeArquivo(song),
+          etapaDaFonte(proposta.fonte),
+        );
       }
       enrichCancelled.delete(scanId);
       // propostas sem nada a decidir não chegam à UI (mesmo corte do Rust)
       return proposals.filter((p) => !propostaNoOp(p));
+    },
+
+    async enrichSongScan(
+      songId: number,
+      vagalumeKey: string | null = null,
+    ): Promise<EnrichProposal | null> {
+      const song = state.songs.find((s) => s.id === songId);
+      if (!song) return null;
+      // O caso pontual é pedido À MÃO, música por música: aqui a marca de
+      // instrumental e a completude NÃO excluem ninguém — quem clicou sabe o
+      // que quer, e o filtro do lote existe para poupar rede em centenas de
+      // arquivos, não para recusar um pedido explícito.
+      const proposta = propostaDoFunil(song, vagalumeKey);
+      // sem letra nova E sem nada a corrigir = o funil não achou nada
+      return propostaNoOp(proposta) ? null : proposta;
     },
 
     async enrichCancelScan(scanId: string): Promise<void> {
@@ -833,9 +905,13 @@ export function createMockBackend(): MockBackend {
           song.artist = ap.artist.trim();
         }
         if (ap.lyrics?.trim()) {
-          // mesma regra do writer: letra diferente invalida a marca de origem
+          // Mesma regra do writer: letra diferente invalida a marca de origem
+          // e, quando a gravação DECLARA a procedência (V8/F18), grava a nova.
+          // Letra do Vagalume fica marcada como tal; qualquer outra fonte
+          // limpa a marca — letra oficial nunca é transcrição.
           if (song.lyrics !== ap.lyrics) {
-            song.letra_origem = null;
+            song.letra_origem =
+              ap.fonte?.toLowerCase() === "vagalume" ? ORIGEM_VAGALUME : null;
           }
           song.lyrics = ap.lyrics;
           song.has_lyrics = true;

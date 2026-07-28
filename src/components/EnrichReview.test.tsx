@@ -10,6 +10,7 @@ import {
   type EnrichProgress,
   type EnrichProposal,
 } from "../lib/api";
+import { textoAplicado, textoSemPropostas } from "../lib/curadoria";
 import type { Song } from "../lib/types";
 import { useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
@@ -43,6 +44,7 @@ function proposal(overrides: Partial<EnrichProposal>): EnrichProposal {
     proposed_artist: "Artista Um",
     lyrics: "letra da um",
     confidence: "alta",
+    fonte: "LRCLIB",
     error: null,
     ...overrides,
   };
@@ -178,7 +180,12 @@ describe("EnrichReview (V5 — F13)", () => {
   });
 
   it("com progresso mostra barra determinada, contagem e o arquivo atual", () => {
-    renderScanning({ done: 12, total: 94, atual: "Fulano - Canção.mp3" });
+    renderScanning({
+      done: 12,
+      total: 94,
+      atual: "Fulano - Canção.mp3",
+      etapa: "procurando no LRCLIB",
+    });
     expect(screen.getByText("Buscando dados… 12 de 94")).toBeInTheDocument();
     expect(screen.getByText("Fulano - Canção.mp3")).toBeInTheDocument();
     const bar = screen.getByRole("progressbar");
@@ -191,12 +198,37 @@ describe("EnrichReview (V5 — F13)", () => {
 
   it("nome de arquivo comprido é truncado (não quebra o layout)", () => {
     const atual = `${"nome muito comprido ".repeat(20)}.mp3`;
-    renderScanning({ done: 1, total: 2, atual });
+    renderScanning({ done: 1, total: 2, atual, etapa: "procurando no LRCLIB" });
     expect(screen.getByText(atual).className).toContain("truncate");
   });
 
+  // V8/F18 — "progresso com contagem e barra, a ETAPA atual do funil e o
+  // arquivo do momento". Sem a etapa, minutos parados no mesmo número
+  // parecem travamento.
+  it("mostra a etapa do funil junto da contagem e do arquivo", () => {
+    renderScanning({
+      done: 25,
+      total: 95,
+      atual: "a.mp3",
+      etapa: "procurando no Vagalume",
+    });
+    expect(screen.getByText("Etapa: procurando no Vagalume")).toBeInTheDocument();
+    expect(screen.getByText("Buscando dados… 25 de 95")).toBeInTheDocument();
+  });
+
+  it("backend sem etapa: a linha da etapa some, o resto continua", () => {
+    renderScanning({ done: 25, total: 95, atual: "a.mp3", etapa: "" });
+    expect(screen.queryByText(/^Etapa:/)).not.toBeInTheDocument();
+    expect(screen.getByText("Buscando dados… 25 de 95")).toBeInTheDocument();
+  });
+
   it("'Deixar rodando em segundo plano' esconde o overlay e NÃO cancela a varredura", () => {
-    renderScanning({ done: 3, total: 10, atual: "a.mp3" });
+    renderScanning({
+      done: 3,
+      total: 10,
+      atual: "a.mp3",
+      etapa: "procurando no LRCLIB",
+    });
     fireEvent.click(
       screen.getByRole("button", { name: "Deixar rodando em segundo plano" }),
     );
@@ -205,15 +237,20 @@ describe("EnrichReview (V5 — F13)", () => {
   });
 
   it("'Cancelar' durante a varredura descarta tudo e volta a idle", () => {
-    renderScanning({ done: 3, total: 10, atual: "a.mp3" });
+    renderScanning({
+      done: 3,
+      total: 10,
+      atual: "a.mp3",
+      etapa: "procurando no LRCLIB",
+    });
     fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
     expect(useEnrichStore.getState().status).toBe("idle");
     expect(useEnrichStore.getState().overlayOpen).toBe(false);
   });
 
-  it("resultado vazio SEM candidatas: 'Nada a ajustar nesta pasta.' com Fechar", () => {
+  it("resultado vazio SEM candidatas: diz que não havia nada incompleto, com Fechar", () => {
     renderReview([], 0);
-    expect(screen.getByText("Nada a ajustar nesta pasta.")).toBeInTheDocument();
+    expect(screen.getByText(textoSemPropostas(0))).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Fechar" }));
     expect(useEnrichStore.getState().status).toBe("idle");
   });
@@ -222,27 +259,13 @@ describe("EnrichReview (V5 — F13)", () => {
   // ler "pasta completa" — o texto tem que dizer o que aconteceu de verdade.
   it("resultado vazio COM candidatas: diz quantas foram conferidas e aponta a transcrição", () => {
     renderReview([], 81);
-    expect(
-      screen.getByText(
-        "Conferimos as 81 músicas incompletas desta pasta e não achamos nenhuma" +
-          " delas na internet. Para completar essas letras, use a transcrição" +
-          " das ferramentas de curadoria.",
-      ),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByText("Nada a ajustar nesta pasta."),
-    ).not.toBeInTheDocument();
+    expect(screen.getByText(textoSemPropostas(81))).toBeInTheDocument();
+    expect(screen.queryByText(textoSemPropostas(0))).not.toBeInTheDocument();
   });
 
   it("resultado vazio com UMA candidata: texto no singular", () => {
     renderReview([], 1);
-    expect(
-      screen.getByText(
-        "Conferimos a única música incompleta desta pasta e não a achamos na" +
-          " internet. Para completar essa letra, use a transcrição das" +
-          " ferramentas de curadoria.",
-      ),
-    ).toBeInTheDocument();
+    expect(screen.getByText(textoSemPropostas(1))).toBeInTheDocument();
   });
 
   it("header com contadores por confiança", () => {
@@ -279,6 +302,30 @@ describe("EnrichReview (V5 — F13)", () => {
     expect(screen.getAllByText("letra encontrada")).toHaveLength(2);
     // atual → proposto
     expect(screen.getByText(/Faixa Dois — Artista Dois/)).toBeInTheDocument();
+  });
+
+  // V8/F18 — a MESMA confiança significa coisas diferentes vindo do LRCLIB
+  // (com duração conferida) ou de um palpite de nome de arquivo. Quem decide
+  // precisa ver a procedência sem abrir nada.
+  it("cada linha mostra de onde o dado veio", () => {
+    renderReview([
+      proposal({ song_id: 1, current_title: "faixa 1", fonte: "LRCLIB" }),
+      proposal({
+        song_id: 2,
+        current_title: "faixa 2",
+        lyrics: null,
+        confidence: "baixa",
+        fonte: "nome do arquivo",
+      }),
+    ]);
+    expect(screen.getByText("via LRCLIB")).toBeInTheDocument();
+    expect(screen.getByText("via nome do arquivo")).toBeInTheDocument();
+  });
+
+  it("linha com erro mostra o erro, não a procedência", () => {
+    renderReview([COM_ERRO]);
+    expect(screen.getByText("sem conexão")).toBeInTheDocument();
+    expect(screen.queryByText(/^via /)).not.toBeInTheDocument();
   });
 
   it("BAIXA é marcável (quem decide é o humano)", () => {
@@ -336,6 +383,9 @@ describe("EnrichReview (V5 — F13)", () => {
         add_temas: null,
         current_title: "faixa 1",
         current_artist: null,
+        // V8/F18 — a procedência ecoa a proposta: é ela que decide o
+        // TXXX:LETRA_ORIGEM gravado pelo writer
+        fonte: "LRCLIB",
       },
       {
         song_id: 3,
@@ -345,11 +395,12 @@ describe("EnrichReview (V5 — F13)", () => {
         add_temas: null,
         current_title: "faixa 3",
         current_artist: null,
+        fonte: "LRCLIB",
       },
     ]);
   });
 
-  it("sucesso de 1: toast SINGULAR '1 música atualizada.', sincroniza stores e fecha", async () => {
+  it("sucesso de 1: o aviso diz o que MUDOU, sincroniza stores e fecha", async () => {
     const updated: Song = {
       ...song(1, "Faixa Um"),
       artist: "Artista Um",
@@ -378,7 +429,7 @@ describe("EnrichReview (V5 — F13)", () => {
 
     const toasts = useToastStore.getState().toasts;
     expect(toasts).toHaveLength(1);
-    expect(toasts[0].message).toBe("1 música atualizada.");
+    expect(toasts[0].message).toBe(textoAplicado(1, 0, 1));
     expect(toasts[0].kind).toBe("success");
     // pós-save igual ao EditSongForm: library + playlist + player
     expect(useLibraryStore.getState().allSongs[0].title).toBe("Faixa Um");
@@ -388,7 +439,7 @@ describe("EnrichReview (V5 — F13)", () => {
     expect(useEnrichStore.getState().status).toBe("idle");
   });
 
-  it("sucesso de várias: toast PLURAL 'N músicas atualizadas.'", async () => {
+  it("sucesso de várias: o aviso conta quantas ganharam letra", async () => {
     setBackendForTests({
       enrichApply: vi.fn(async (aplicacoes: EnrichApply[]) =>
         aplicacoes.map((a) => ok(song(a.song_id, a.title))),
@@ -405,7 +456,7 @@ describe("EnrichReview (V5 — F13)", () => {
 
     const toasts = useToastStore.getState().toasts;
     expect(toasts).toHaveLength(1);
-    expect(toasts[0].message).toBe("2 músicas atualizadas.");
+    expect(toasts[0].message).toBe(textoAplicado(2, 0, 2));
     expect(toasts[0].kind).toBe("success");
     expect(useEnrichStore.getState().status).toBe("idle");
   });
@@ -437,7 +488,7 @@ describe("EnrichReview (V5 — F13)", () => {
     expect(useLibraryStore.getState().allSongs[0].title).toBe("Faixa Um");
     const toasts = useToastStore.getState().toasts;
     expect(toasts).toHaveLength(2);
-    expect(toasts[0].message).toBe("1 música atualizada.");
+    expect(toasts[0].message).toBe(textoAplicado(1, 0, 1));
     expect(toasts[0].kind).toBe("success");
     expect(toasts[1].message).toBe("1 não pôde ser gravada.");
     expect(toasts[1].kind).toBe("error");
@@ -600,7 +651,12 @@ describe("EnrichReview (V5 — F13)", () => {
     });
 
     it("Esc DURANTE a varredura manda para segundo plano (não cancela)", () => {
-      renderScanning({ done: 1, total: 5, atual: "a.mp3" });
+      renderScanning({
+        done: 1,
+        total: 5,
+        atual: "a.mp3",
+        etapa: "procurando no LRCLIB",
+      });
       fireEvent.keyDown(window, { key: "Escape" });
       expect(useEnrichStore.getState().overlayOpen).toBe(false);
       expect(useEnrichStore.getState().status).toBe("scanning");
@@ -634,7 +690,12 @@ describe("EnrichReview (V5 — F13)", () => {
       document.body.appendChild(abridor);
       abridor.focus();
 
-      const { rerender } = renderScanning({ done: 1, total: 5, atual: "a.mp3" });
+      const { rerender } = renderScanning({
+   done: 1,
+   total: 5,
+   atual: "a.mp3",
+   etapa: "procurando no LRCLIB",
+ });
       fireEvent.click(
         screen.getByRole("button", { name: "Deixar rodando em segundo plano" }),
       );
@@ -657,7 +718,12 @@ describe("EnrichReview (V5 — F13)", () => {
     // M6: role="status" em volta do contador + barra + nome do arquivo fazia
     // uma varredura de 94 músicas ser anunciada ~94 vezes, com nome de arquivo.
     it("o nome do arquivo em processamento NÃO fica dentro de região viva", () => {
-      renderScanning({ done: 12, total: 94, atual: "Fulano - Canção.mp3" });
+      renderScanning({
+        done: 12,
+        total: 94,
+        atual: "Fulano - Canção.mp3",
+        etapa: "procurando no LRCLIB",
+      });
       const arquivo = screen.getByText("Fulano - Canção.mp3");
       expect(arquivo.closest("[role='status']")).toBeNull();
       expect(arquivo.closest("[aria-live]")).toBeNull();
@@ -672,7 +738,12 @@ describe("EnrichReview (V5 — F13)", () => {
     });
 
     it("a região viva anuncia só as transições: início e fim da varredura", () => {
-      const { rerender } = renderScanning({ done: 1, total: 94, atual: "a.mp3" });
+      const { rerender } = renderScanning({
+   done: 1,
+   total: 94,
+   atual: "a.mp3",
+   etapa: "procurando no LRCLIB",
+ });
       const regiao = screen.getByRole("status");
       expect(regiao).toHaveTextContent(
         "A busca de dados começou. Isso pode demorar alguns minutos.",
@@ -681,7 +752,7 @@ describe("EnrichReview (V5 — F13)", () => {
       // eventos de progresso não mexem no que é anunciado
       act(() => {
         useEnrichStore.setState({
-          progress: { done: 2, total: 94, atual: "b.mp3", scan_id: "scan-1" },
+          progress: { done: 2, total: 94, atual: "b.mp3", etapa: "procurando no LRCLIB", scan_id: "scan-1" },
         });
       });
       expect(screen.getByRole("status")).toHaveTextContent(

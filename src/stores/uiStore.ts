@@ -18,10 +18,19 @@ interface UiState {
    * nenhuma chamada de rede acontece na abertura (rede isolada).
    */
   checkUpdatesOnStart: boolean;
+  /**
+   * V8/F18 — chave gratuita e PESSOAL do Vagalume, digitada por quem usa.
+   * Fica junto das outras preferências (localStorage) porque é isso que ela
+   * é: uma preferência de uma conta gratuita da própria pessoa, num app sem
+   * telemetria e sem servidor. Vazia = a etapa do Vagalume é pulada em
+   * silêncio. Nunca é impressa em log.
+   */
+  vagalumeApiKey: string;
   toggleLyricsPanel: () => void;
   cycleFontLevel: () => void;
   setView: (view: View) => void;
   setCheckUpdatesOnStart: (value: boolean) => void;
+  setVagalumeApiKey: (value: string) => void;
 }
 
 export function createUiStore() {
@@ -32,12 +41,16 @@ export function createUiStore() {
         fontLevel: 0,
         view: "library" as View,
         checkUpdatesOnStart: true,
+        vagalumeApiKey: "",
         toggleLyricsPanel: () =>
           set((s) => ({ lyricsPanelVisible: !s.lyricsPanelVisible })),
         cycleFontLevel: () =>
           set((s) => ({ fontLevel: ((s.fontLevel + 1) % 3) as FontLevel })),
         setView: (view) => set({ view }),
         setCheckUpdatesOnStart: (value) => set({ checkUpdatesOnStart: value }),
+        // colar de um site costuma trazer espaço/quebra de linha junto, e a
+        // chave iria assim para a URL da consulta
+        setVagalumeApiKey: (value) => set({ vagalumeApiKey: value.trim() }),
       }),
       {
         name: "cancioneiro-ui",
@@ -45,6 +58,7 @@ export function createUiStore() {
           lyricsPanelVisible: s.lyricsPanelVisible,
           fontLevel: s.fontLevel,
           checkUpdatesOnStart: s.checkUpdatesOnStart,
+          vagalumeApiKey: s.vagalumeApiKey,
         }),
       },
     ),
