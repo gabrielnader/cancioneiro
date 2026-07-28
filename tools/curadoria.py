@@ -7,6 +7,8 @@ Subcomandos:
         Varre a pasta recursivamente (*.mp3, case-insensitive), imprime uma
         tabela alinhada com arquivo/título/artista/letra/temas e, com --csv,
         grava um plano editável (UTF-8 com BOM, para abrir direto no Excel).
+        Música marcada como instrumental (V8/F17) aparece como INSTRUMENTAL
+        na coluna de letra, no lugar do NÃO — informação, não cobrança.
 
     aplicar PASTA --csv plano.csv [--dry-run]
         Aplica em massa o CSV editado: título (TIT2), artista (TPE1), temas
@@ -29,7 +31,9 @@ Subcomandos:
         "exact", e as MESMAS palavras de título e artista). --forcar
         reprocessa SÓ a letra que veio de transcrição (mesma semântica do
         transcrever --forcar): sem ele, quem já transcreveu o acervo
-        inteiro nunca alcança as fontes oficiais.
+        inteiro nunca alcança as fontes oficiais. Arquivo marcado como
+        instrumental (V8/F17) é pulado nas DUAS fontes, com contagem
+        própria no Resumo — nem o --forcar o devolve à fila.
 
     enriquecer PASTA [--csv proposta.csv] [--interativo | --auto]
                [--forcar] [--sem-temas-de-pastas] [--verboso]
@@ -65,9 +69,13 @@ Subcomandos:
         sobrescritos (nem em ALTA) sem --sobrescrever-tags, e divergência
         vira CONFLITO relatado sem gravar nada. Letra existente só é
         reprocessada com --forcar (a que veio de transcrição) ou
-        --forcar-tudo (qualquer uma, inclusive oficial). Alucinações do
-        motor ("música", "legendas pela comunidade Amara.org") e frases de
-        uma palavra nunca viram consulta.
+        --forcar-tudo (qualquer uma, inclusive oficial). V8/F17:
+        transcrição vazia com áudio LEGÍVEL marca o arquivo como
+        instrumental (balde próprio no Resumo) em vez de virar erro —
+        áudio ilegível continua erro —, e arquivo já marcado é pulado
+        antes de qualquer transcrição, inclusive com --forcar-tudo.
+        Alucinações do motor ("música", "legendas pela comunidade
+        Amara.org") e frases de uma palavra nunca viram consulta.
 
     identificar PASTA [--chave CHAVE] [--com-letra] [--csv saida.csv]
                 [--sobrescrever-tags] [--verboso]
@@ -84,7 +92,10 @@ Subcomandos:
         placeholder é descartado. --com-letra encadeia a busca da letra
         OFICIAL no LRCLIB com o título/artista confirmados (sem marcador
         de transcrição, e sem tocar em letra existente) e, no que ele não
-        tiver, no Vagalume (--chave-vagalume ou VAGALUME_API_KEY).
+        tiver, no Vagalume (--chave-vagalume ou VAGALUME_API_KEY). Em
+        arquivo marcado como instrumental (V8/F17) a busca de letra é
+        pulada, mas a impressão digital RODA: instrumental sem letra ainda
+        pode (e deve) ter título e artista corretos.
 
     estimar PASTA [--amostra N] [--verboso]
         V6/F15.1. Conta os arquivos, quantos estão incompletos, mede uma
@@ -175,7 +186,8 @@ def ler_info(path: Path) -> dict:
         tags = el.load_tags(path)
     except Exception:
         return {"ilegivel": True, "titulo": "", "artista": "",
-                "letra": "", "temas": [], "duracao": 0.0, "letra_origem": ""}
+                "letra": "", "temas": [], "duracao": 0.0, "letra_origem": "",
+                "instrumental": False}
     uslt = tags.getall("USLT")
     return {
         "ilegivel": False,
@@ -185,20 +197,29 @@ def ler_info(path: Path) -> dict:
         "temas": el.read_temas(tags),
         "duracao": float(audio.info.length or 0.0),
         "letra_origem": el.read_letra_origem(tags),
+        # V8/F17: a marca viaja no MP3 e todo subcomando enxerga daqui
+        "instrumental": el.read_instrumental(tags),
     }
 
 
 def rotulo_letra(info: dict) -> str:
-    """Coluna "letra" do relatório: NÃO, SIM, SIM (transcrição) ou
-    SIM (Vagalume) — o selo de procedência (TXXX:LETRA_ORIGEM).
+    """Coluna "letra" do relatório: NÃO, INSTRUMENTAL, SIM, SIM (transcrição)
+    ou SIM (Vagalume) — o selo de procedência (TXXX:LETRA_ORIGEM).
 
     "(transcrição)" continua EXCLUSIVO da letra saída do áudio (V5/F14):
     é o rótulo que o curador aprendeu a ler como "isto pode estar errado".
     "(Vagalume)" é letra OFICIAL, mas de uma fonte que não pôde ser
     confirmada pela duração (V6.1). Origem desconhecida (arquivo gravado
-    por uma versão futura) cai no SIM genérico, nunca em transcrição."""
+    por uma versão futura) cai no SIM genérico, nunca em transcrição.
+
+    V8/F17: INSTRUMENTAL toma o lugar do NÃO — informação, não cobrança,
+    igualzinho ao que o player faz com o selo cinza "Sem letra". A letra
+    registrada MANDA na coluna de letra: instrumental que ainda assim tem
+    letra (raro, mas possível) aparece como SIM/SIM (transcrição) e não
+    perde a marca por isso — quem quer o estado da marca lê o
+    "N instrumentais" do resumo, o CSV ou o `embed_lyrics --check`."""
     if not info["letra"]:
-        return "NÃO"
+        return "INSTRUMENTAL" if info.get("instrumental") else "NÃO"
     origem = info.get("letra_origem") or ""
     if origem == el.ORIGEM_TRANSCRICAO:
         return "SIM (transcrição)"
@@ -225,7 +246,7 @@ def cmd_relatorio(pasta: Path, csv_out: Path | None = None) -> None:
 
     header = ["arquivo", "título", "artista", "letra", "temas"]
     linhas_tabela = []
-    com_letra = com_temas = 0
+    com_letra = com_temas = instrumentais = 0
     for rel, info in itens:
         if info["ilegivel"]:
             titulo = "(ilegível)"
@@ -238,6 +259,8 @@ def cmd_relatorio(pasta: Path, csv_out: Path | None = None) -> None:
             com_letra += 1
         if info["temas"]:
             com_temas += 1
+        if info["instrumental"]:
+            instrumentais += 1
         linhas_tabela.append([rel, titulo, artista, letra, temas])
 
     larguras = [max(len(linha[i]) for linha in [header] + linhas_tabela)
@@ -248,8 +271,11 @@ def cmd_relatorio(pasta: Path, csv_out: Path | None = None) -> None:
                         for i, campo in enumerate(linha)).rstrip())
 
     total = len(itens)
+    # "instrumentais" é RECORTE, não balde: um instrumental sem letra também
+    # é contado em "sem letra" (a conta de letra continua a mesma de antes).
     print(f"Resumo: {total} arquivos | {com_letra} com letra | "
-          f"{total - com_letra} sem letra | {com_temas} com temas")
+          f"{total - com_letra} sem letra | {com_temas} com temas | "
+          f"{instrumentais} instrumentais")
 
     if csv_out is not None:
         linhas_csv = []
@@ -394,6 +420,7 @@ def cmd_buscar_letra(pasta: Path, aplicar: bool = False,
     veio de transcrição; letra OFICIAL (inclusive a do Vagalume) não é
     tocada. Achando letra oficial, o marcador de transcrição some junto."""
     encontradas = nao_encontradas = erros = por_vagalume = 0
+    instrumentais = 0
     linhas_csv = []
     log = print if verboso else None
     chave_vagalume = (chave_vagalume or "").strip()
@@ -419,6 +446,15 @@ def cmd_buscar_letra(pasta: Path, aplicar: bool = False,
         rel = p.relative_to(pasta).as_posix()
         info = ler_info(p)
         if info["ilegivel"]:
+            continue
+        if info["instrumental"]:
+            # V8/F17: música sem voz não tem letra a buscar, em fonte
+            # nenhuma. Vem ANTES do --forcar de propósito: o --forcar fala
+            # de letra de MÁQUINA a refazer, não de rediscutir a marca.
+            print(f"PULADO: {rel} (instrumental)")
+            instrumentais += 1
+            linhas_csv.append([rel, info["titulo"], info["artista"],
+                               "instrumental", ""])
             continue
         if info["letra"]:
             # com --forcar, letra de MÁQUINA volta para a fila; letra
@@ -486,7 +522,8 @@ def cmd_buscar_letra(pasta: Path, aplicar: bool = False,
     # encontradas = as do LRCLIB + as do Vagalume.
     print(f"Resumo: {encontradas} encontradas | "
           f"{nao_encontradas} não encontradas | {erros} erros de rede | "
-          f"{por_vagalume} pelo Vagalume")
+          f"{por_vagalume} pelo Vagalume | "
+          f"{instrumentais} instrumentais")
 
     if csv_out is not None:
         gravar_csv(csv_out, BUSCA_COLUNAS, linhas_csv)
@@ -1336,7 +1373,8 @@ def _discorda(atual: str, identificado: str) -> bool:
 
 def _instantaneo(info: dict) -> tuple:
     """O que uma gravação desta rotina pode mudar num arquivo."""
-    return (info["titulo"], info["artista"], info["letra"])
+    return (info["titulo"], info["artista"], info["letra"],
+            info["instrumental"])
 
 
 def cmd_transcrever(pasta: Path, transcritor=None, fetcher=None,
@@ -1377,7 +1415,7 @@ def cmd_transcrever(pasta: Path, transcritor=None, fetcher=None,
         transcritor = criar_transcritor(modelo, idioma)
 
     contagem = {"identificadas": 0, "transcritas": 0, "nao_identificadas": 0,
-                "pulados": 0, "conflitos": 0, "erros": 0}
+                "pulados": 0, "conflitos": 0, "erros": 0, "instrumentais": 0}
     linhas_csv = []
     interrompido = None   # (arquivo, índice) onde o Ctrl-C parou o lote
     posicao = ("", 0)
@@ -1393,6 +1431,22 @@ def cmd_transcrever(pasta: Path, transcritor=None, fetcher=None,
                 contagem["erros"] += 1
                 linhas_csv.append([rel, "ERRO", "", "", "", "", "",
                                    "áudio ilegível"])
+                continue
+            if info["instrumental"]:
+                # V8/F17. A ESCOLHA HUMANA MANDA — e vence até o
+                # --forcar-tudo, por isso este teste vem antes de tudo:
+                # essas flags falam de LETRA a refazer, não de rediscutir se
+                # a música tem voz. Se a marca cedesse a elas, o arquivo
+                # voltaria para a fila de horas de CPU em cada execução,
+                # que é exatamente o que a F17 veio eliminar. Para
+                # reprocessar, desmarque antes:
+                # embed_lyrics.py ARQUIVO --nao-instrumental.
+                print(f"{prefixo}INSTRUMENTAL: {rel} (já marcado como "
+                      "instrumental — nada a transcrever)")
+                contagem["instrumentais"] += 1
+                linhas_csv.append([rel, "INSTRUMENTAL", info["titulo"],
+                                   info["artista"], "", "", "",
+                                   "já marcado como instrumental"])
                 continue
             if info["letra"] and not forcar_tudo:
                 # --forcar reprocessa só o que a MÁQUINA escreveu (rodar de
@@ -1524,12 +1578,23 @@ def cmd_transcrever(pasta: Path, transcritor=None, fetcher=None,
                     "NFC", transcritor(str(p), None, None) or ""))
                 gasto = time.monotonic() - comeco
                 if not texto.strip():
-                    print(f"{prefixo}ERRO: {rel} — transcrição vazia")
-                    contagem["erros"] += 1
-                    linhas_csv.append([rel, "ERRO", info["titulo"],
-                                       info["artista"], "",
-                                       "; ".join(candidatos), "",
-                                       "transcrição vazia"])
+                    # V8/F17. O áudio foi LIDO até o fim (ilegível teria
+                    # parado lá em cima, e motor que explode cai no except
+                    # como erro): voltar vazio daqui é música SEM VOZ, não
+                    # defeito. Marcar tira o arquivo da fila para sempre —
+                    # antes ele voltava como "ERRO: transcrição vazia" em
+                    # toda execução, para sempre. Erro e instrumental são
+                    # coisas diferentes e têm baldes diferentes.
+                    fase = "gravação da marca de instrumental"
+                    el.write_instrumental(p, True)
+                    gravou = True
+                    print(f"{prefixo}INSTRUMENTAL: {rel} (transcrição vazia "
+                          "com áudio legível — marcado como instrumental)")
+                    contagem["instrumentais"] += 1
+                    linhas_csv.append(
+                        [rel, "INSTRUMENTAL", info["titulo"], info["artista"],
+                         "", "; ".join(candidatos), "",
+                         "transcrição vazia — marcado como instrumental"])
                     continue
                 # letra limpa (sem cabeçalho, que poluiria a busca por
                 # trecho) e título/artista intocados: transcrição não
@@ -1581,7 +1646,10 @@ def cmd_transcrever(pasta: Path, transcritor=None, fetcher=None,
               f"{contagem['nao_identificadas']} não identificadas | "
               f"{contagem['pulados']} puladas | "
               f"{contagem['conflitos']} conflitos | "
-              f"{contagem['erros']} erros")
+              f"{contagem['erros']} erros | "
+              # balde próprio (F17): quem foi marcado agora e quem já
+              # estava marcado — nenhum deles é erro nem pulo de letra
+              f"{contagem['instrumentais']} instrumentais")
         if interrompido is not None:
             parou_em, indice_parada = interrompido
             print(f"Interrompido em: {parou_em} (arquivo {indice_parada} de "
@@ -2019,7 +2087,8 @@ def cmd_identificar(pasta: Path, impressao_digital=None, fetcher=None,
         estado["primeira"] = False
 
     contagem = {"identificadas": 0, "letras": 0, "sem_resultado": 0,
-                "conflitos": 0, "erros": 0, "vagalume": 0}
+                "conflitos": 0, "erros": 0, "vagalume": 0,
+                "instrumentais": 0}
     linhas_csv = []
     interrompido = None   # (arquivo, índice) onde o Ctrl-C parou o lote
     posicao = ("", 0)
@@ -2036,6 +2105,16 @@ def cmd_identificar(pasta: Path, impressao_digital=None, fetcher=None,
                 linhas_csv.append([rel, "ERRO", "", "", "", "", "",
                                    "áudio ilegível"])
                 continue
+            if info["instrumental"]:
+                # V8/F17: só a LETRA é pulada. A impressão digital continua
+                # rodando — instrumental sem letra ainda pode (e deve) ter
+                # título e artista corretos, e é justamente esta etapa que
+                # os descobre. O aviso só sai quando havia mesmo uma busca
+                # de letra para pular.
+                contagem["instrumentais"] += 1
+                if com_letra:
+                    print(f"{prefixo}INSTRUMENTAL: {rel} (letra não buscada; "
+                          "a impressão digital segue)")
 
             antes = _instantaneo(info)
             gravou = False
@@ -2097,9 +2176,12 @@ def cmd_identificar(pasta: Path, impressao_digital=None, fetcher=None,
 
                 letra = ""
                 letra_do_vagalume = False
-                if com_letra and not info["letra"]:
+                if (com_letra and not info["letra"]
+                        and not info["instrumental"]):
                     # letra existente nunca é substituída (nem consultada à
-                    # toa): trocar letra curada por outra é apagar trabalho
+                    # toa): trocar letra curada por outra é apagar trabalho.
+                    # Instrumental (F17) também não se consulta: não há
+                    # letra a achar, e as duas fontes custam rede
                     fase = "busca da letra no LRCLIB"
                     try:
                         cortesia()
@@ -2212,7 +2294,11 @@ def cmd_identificar(pasta: Path, impressao_digital=None, fetcher=None,
               f"{contagem['erros']} erros | "
               # recorte das letras oficiais, não balde à parte:
               # letras oficiais = as do LRCLIB + as do Vagalume
-              f"{contagem['vagalume']} pelo Vagalume")
+              f"{contagem['vagalume']} pelo Vagalume | "
+              # também RECORTE (F17): o instrumental é identificado como
+              # qualquer outro e cai no balde do seu resultado; o que ele
+              # pula é só a busca de letra
+              f"{contagem['instrumentais']} instrumentais")
         if interrompido is not None:
             parou_em, indice_parada = interrompido
             print(f"Interrompido em: {parou_em} (arquivo {indice_parada} de "

@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""embed_lyrics.py — grava/inspeciona letras (USLT) e temas (TXXX:TEMAS) em MP3s.
+"""embed_lyrics.py — grava/inspeciona letras (USLT), temas (TXXX:TEMAS) e a
+marca de instrumental (TXXX:INSTRUMENTAL) em MP3s.
 
-Spec F6 do PRD do Cancioneiro + F7 do PRD-v2-temas.md.
+Spec F6 do PRD do Cancioneiro + F7 do PRD-v2-temas.md + F17 do
+PRD-v8-instrumental-e-funil-no-app.md.
 
 Uso:
     python tools/embed_lyrics.py musica.mp3 letra.txt [--title T] [--artist A]
@@ -10,6 +12,8 @@ Uso:
     python tools/embed_lyrics.py musica.mp3 --title "X" [--artist "Y"]
     python tools/embed_lyrics.py musica.mp3 --temas "água, cura"
     python tools/embed_lyrics.py musica.mp3 --add-tema "esperança" --remove-tema "cura"
+    python tools/embed_lyrics.py musica.mp3 --instrumental
+    python tools/embed_lyrics.py musica.mp3 --nao-instrumental
     python tools/embed_lyrics.py --check musica.mp3
 """
 
@@ -46,6 +50,16 @@ ORIGEM_TRANSCRICAO = "transcricao"
 ORIGEM_VAGALUME = "vagalume"
 ORIGEM_ROTULOS = {ORIGEM_TRANSCRICAO: "transcrição automática",
                   ORIGEM_VAGALUME: "Vagalume"}
+# V8/F17: marca de música sem voz. Mesma filosofia dos temas e da
+# procedência da letra — o dado viaja com o arquivo, não num banco à parte.
+# O valor é literalmente "1" (nada de "sim"/"true"): é o que o PRD
+# especifica e o que os dois stacks comparam. A AUSÊNCIA do frame é o
+# "não" — desmarcar REMOVE o frame em vez de gravar "0", para um arquivo
+# nunca marcado e um desmarcado serem indistinguíveis (e para o MP3 não
+# carregar um frame inútil).
+INSTRUMENTAL_DESC = "INSTRUMENTAL"
+INSTRUMENTAL_KEY = f"TXXX:{INSTRUMENTAL_DESC}"  # HashKey do mutagen
+INSTRUMENTAL_SIM = "1"
 
 
 def die(message: str) -> None:
@@ -131,6 +145,32 @@ def read_letra_origem(tags: ID3) -> str:
     if not frames or not frames[0].text:
         return ""
     return str(frames[0].text[0]).strip()
+
+
+def read_instrumental(tags: ID3) -> bool:
+    """Lê TXXX:INSTRUMENTAL. True SÓ para o valor "1" do PRD.
+
+    Qualquer outro valor (um "0" antigo, um "sim" de uma versão futura)
+    conta como NÃO marcado: na dúvida o arquivo continua na fila de letra,
+    que é o comportamento de sempre — o erro barato. O erro caro seria
+    calar um arquivo por causa de um valor que ninguém especificou."""
+    frames = [f for f in tags.getall("TXXX") if f.desc == INSTRUMENTAL_DESC]
+    if not frames or not frames[0].text:
+        return False
+    return str(frames[0].text[0]).strip() == INSTRUMENTAL_SIM
+
+
+def write_instrumental(path: Path, marcado: bool) -> None:
+    """Grava (ou remove) a marca de instrumental — e SÓ ela: letra, temas,
+    título, artista e procedência ficam onde estavam. A marca descreve o
+    ÁUDIO, não a letra: por isso ela sobrevive a qualquer gravação de letra
+    posterior (ver embed_lyrics, que não a toca)."""
+    tags = load_tags(path)
+    tags.delall(INSTRUMENTAL_KEY)  # substitui, nunca duplica
+    if marcado:
+        tags.add(TXXX(encoding=Encoding.UTF8, desc=INSTRUMENTAL_DESC,
+                      text=[INSTRUMENTAL_SIM]))
+    save_tags(tags, path)
 
 
 def write_title_artist(path: Path, title: str | None = None,
@@ -227,6 +267,10 @@ def check(path: Path) -> None:
         print(f"Temas: {'; '.join(temas)}")
     else:
         print("Temas: (nenhum)")
+    # sempre impressa, nos dois estados (como a de temas): quem confere
+    # precisa distinguir "não é instrumental" de "esta versão não sabe ler
+    # a marca". Ausência de linha seria ambígua.
+    print("Instrumental: " + ("sim" if read_instrumental(tags) else "não"))
     if origem:  # letra oficial não imprime linha: só marca o que tem origem
         print(f"Origem da letra: {ORIGEM_ROTULOS.get(origem, origem)}")
     if uslt:
@@ -255,6 +299,14 @@ def main(argv: list[str] | None = None) -> None:
                         metavar="TEMA", help="acrescenta um tema (repetível)")
     parser.add_argument("--remove-tema", action="append", default=[],
                         metavar="TEMA", help="remove um tema (repetível)")
+    parser.add_argument("--instrumental", action="store_true",
+                        help="marca a música como instrumental (sem voz): "
+                             "as etapas de letra passam a pular o arquivo")
+    parser.add_argument("--nao-instrumental", action="store_true",
+                        dest="nao_instrumental",
+                        help="remove a marca de instrumental (o único jeito "
+                             "de desmarcar — nenhuma rotina desmarca "
+                             "sozinha)")
     args = parser.parse_args(argv)
 
     mp3_path = Path(args.mp3)
@@ -266,9 +318,12 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.temas is not None and (args.add_tema or args.remove_tema):
         die("ERRO: use --temas OU --add-tema/--remove-tema, não ambos")
+    if args.instrumental and args.nao_instrumental:
+        die("ERRO: use --instrumental OU --nao-instrumental, não ambos")
 
     has_temas_op = (args.temas is not None or bool(args.add_tema)
                     or bool(args.remove_tema))
+    has_instrumental_op = args.instrumental or args.nao_instrumental
 
     if args.lyrics is not None and args.lyrics_file is not None:
         parser.error("use um arquivo de letra OU --lyrics, não ambos")
@@ -279,11 +334,12 @@ def main(argv: list[str] | None = None) -> None:
         if not lyrics_path.is_file():
             die(f"ERRO: arquivo inválido ou não encontrado: {lyrics_path}")
         lyrics = lyrics_path.read_text(encoding="utf-8")
-    elif has_temas_op or args.title or args.artist:
-        lyrics = None  # operação só de temas e/ou tags, sem exigir letra
+    elif has_temas_op or has_instrumental_op or args.title or args.artist:
+        lyrics = None  # operação só de temas/marca/tags, sem exigir letra
     else:
-        parser.error("informe um arquivo de letra, --lyrics, --title/--artist "
-                     "ou --temas (ou use --check)")
+        parser.error("informe um arquivo de letra, --lyrics, --title/--artist,"
+                     " --temas ou --instrumental/--nao-instrumental (ou use "
+                     "--check)")
 
     if lyrics is not None:
         if not lyrics:
@@ -299,6 +355,11 @@ def main(argv: list[str] | None = None) -> None:
     if has_temas_op:
         n = apply_temas_ops(mp3_path, args.temas, args.add_tema, args.remove_tema)
         print(f"OK: temas gravados em {mp3_path} ({n} temas)")
+
+    if has_instrumental_op:
+        write_instrumental(mp3_path, args.instrumental)
+        print(f"OK: {mp3_path} marcada como instrumental" if args.instrumental
+              else f"OK: marca de instrumental removida de {mp3_path}")
 
 
 if __name__ == "__main__":

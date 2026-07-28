@@ -464,15 +464,20 @@ class TestTranscricaoCompleta:
         assert letra == unicodedata.normalize("NFC", nfd)
         assert "Água" in letra
 
-    def test_transcricao_vazia_vira_erro_sem_gravar(self, pasta, capsys):
+    def test_transcricao_vazia_marca_instrumental_e_nao_grava_letra(
+            self, pasta, capsys):
+        """V8/F17: transcrição vazia com áudio LEGÍVEL é música sem voz, não
+        erro — a letra continua sem ser gravada, mas o arquivo sai da fila
+        marcado como instrumental (detalhes em test_instrumental.py)."""
         alvo = pasta / "Faixa 5.mp3"
-        antes = sha256(alvo)
         curadoria.cmd_transcrever(pasta, transcritor=FakeTranscritor(
             trecho="", completo="   \n\n"), fetcher=fetcher_vazio, pausa=0)
-        assert sha256(alvo) == antes
+        assert uslt_text(alvo) is None            # nada de letra em branco
+        assert el.read_instrumental(ID3(str(alvo))) is True
         out = capsys.readouterr().out
-        assert "ERRO: Faixa 5.mp3 — transcrição vazia" in out
-        assert "| 1 erros" in out
+        assert "INSTRUMENTAL: Faixa 5.mp3" in out
+        assert "| 0 erros" in out                 # não é erro
+        assert "| 1 instrumentais" in out
 
 
 # ------------------------------------------------- letra existente
@@ -665,10 +670,13 @@ class TestCsvEResumo:
         linha = next(l for l in out.splitlines() if l.startswith("Resumo:"))
         numeros = [int(t) for t in linha.replace("|", " ").split()
                    if t.isdigit()]
-        total, ident, transc, nao_ident, pulad, confl, erros = numeros
+        (total, ident, transc, nao_ident, pulad, confl, erros,
+         instrum) = numeros
         assert total == 4
-        # todo arquivo cai em exatamente um balde
-        assert ident + transc + nao_ident + pulad + confl + erros == total
+        # todo arquivo cai em exatamente um balde (o de instrumentais, da
+        # F17, é mais um deles: nem erro, nem pulo de letra)
+        assert (ident + transc + nao_ident + pulad + confl + erros
+                + instrum) == total
 
     def test_contador_de_progresso_por_arquivo(self, tmp_path, base_mp3,
                                                capsys):

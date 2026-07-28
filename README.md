@@ -134,6 +134,41 @@ python3 tools/embed_lyrics.py --check musica.mp3                  # confere (lin
 Os temas são normalizados ao gravar (minúsculas, sem duplicatas, ordem alfabética)
 e a busca ignora acentos ("agua" encontra "água").
 
+### Instrumental (V8/F17 — músicas sem voz)
+
+Uma música sem voz não tem letra a procurar. Sem dizer isso ao acervo, ela é
+tratada como pendência para sempre: entra em toda varredura de letra, é
+transcrita, volta vazia, vira erro — e é tentada de novo na execução seguinte.
+Marcar uma vez resolve as duas pontas, **informação** e **economia** (spec:
+`PRD-v8-instrumental-e-funil-no-app.md`). A marca é o frame
+`TXXX:INSTRUMENTAL = "1"`, gravada no próprio MP3, como os temas e a procedência
+da letra — o dado viaja com o arquivo.
+
+```bash
+python3 tools/embed_lyrics.py musica.mp3 --instrumental       # marca
+python3 tools/embed_lyrics.py musica.mp3 --nao-instrumental   # desmarca
+python3 tools/embed_lyrics.py --check musica.mp3              # confere (linha Instrumental:)
+```
+
+- **Automática**: no `curadoria.py transcrever`, quando a transcrição volta
+  **vazia com áudio legível**, o arquivo é marcado como instrumental em vez de
+  contar como erro — sai a linha `INSTRUMENTAL: … (transcrição vazia com áudio
+  legível — marcado como instrumental)` e o `Resumo:` ganha o balde
+  `N instrumentais`. **Áudio ilegível continua erro**: são coisas diferentes.
+- **A escolha humana manda**: nenhuma rotina desmarca sozinha, nem com
+  `--forcar` ou `--forcar-tudo` (essas flags falam de *letra* a refazer, não de
+  rediscutir se a música tem voz). Para reprocessar um arquivo marcado, desmarque
+  antes com `--nao-instrumental`.
+- **Economia**: todas as etapas de **letra** pulam o arquivo — `buscar-letra`
+  (inclusive a perna do Vagalume), `identificar --com-letra` e `transcrever` —,
+  cada uma com sua contagem `N instrumentais` no `Resumo:`. A **impressão
+  digital** (`identificar`) **continua rodando**: instrumental sem letra ainda
+  pode e deve ter título e artista corretos.
+- **No relatório**, a coluna `letra` mostra `INSTRUMENTAL` no lugar do `NÃO` —
+  informação, não cobrança. Um instrumental que ainda assim tenha letra
+  registrada (raro, mas possível) mostra a letra normalmente (`SIM`,
+  `SIM (transcrição)`…) e **mantém** a marca.
+
 ## Organizar o acervo inteiro (`tools/curadoria.py`)
 
 Para curadoria em massa — do acervo bagunçado ao acervo pesquisável:
