@@ -282,3 +282,53 @@ opção mais simples que passa nos Acceptance Checks do PRD.
 69. **Contraste mínimo vale para texto secundário também**: a linha do nome
     nasceu com 2,54:1 e foi para 5,98:1. O produto é lido em tela de notebook,
     em sala mal iluminada, por quem está conduzindo uma reunião.
+
+## V7 — Instrumental, busca por nome de arquivo e a duração que mente
+
+70. **Marca de instrumental no próprio MP3** (`TXXX:INSTRUMENTAL`): música sem
+    voz era pendência eterna — entrava em toda varredura, transcrevia vazio,
+    virava erro, e era tentada de novo para sempre. Marca automática quando a
+    transcrição volta vazia com áudio legível; áudio ilegível continua erro,
+    são coisas diferentes. Fora da FTS: temas são indexados porque são
+    vocabulário que alguém escreveu PARA achar a música; procedência e
+    "é instrumental" não são conteúdo pesquisável.
+71. **A escolha humana vence a rotina**: nem `--forcar` nem `--forcar-tudo`
+    desmarcam instrumental (falam de letra a refazer, não de rediscutir se a
+    música tem voz), o lote passa "não mexer" no parâmetro de três estados, e
+    o editor só manda a marca quando a pessoa toca na caixa — sem isso, salvar
+    um título com a visão do banco desatualizada apagava a marca em silêncio.
+72. **Duração precisa ser PROVADA, não lida** (achado CRÍTICO do QA): sem
+    cabeçalho Xing o mutagen estima pelo primeiro quadro — 300 s reais viraram
+    2365 s, e uma música cantada foi marcada instrumental para sempre. Ordem de
+    autoridade: quem transcreveu sabe quanto áudio existe; senão, medição
+    quadro a quadro; senão, o cabeçalho, e só quando a medição confirma. Sem
+    prova, duração é desconhecida — e transcrição rala sem duração provável
+    vira `ADIADA`, sem gravar nada. **Margem de segurança não protege contra
+    erro de ordem de grandeza; só corroboração protege.**
+73. **Nome do arquivo é buscável, sem extensão e sem duplicar**: ninguém digita
+    "mp3", e como todo arquivo indexado é .mp3 isso entregaria a biblioteca a
+    um token. Nome igual ao título (música sem tag) não é indexado: o alcance
+    seria o mesmo, mas o ranqueamento soma ocorrências entre colunas e
+    empurraria a parte mal etiquetada para cima da bem etiquetada em toda
+    busca. A coluna vai no FIM da FTS porque o trecho destacado sai por
+    POSIÇÃO (índice 2 = letra) — inserir no meio faria a busca citar o campo
+    errado em silêncio; há teste fixando a ordem.
+74. **A identificação pelo refrão saiu do caminho padrão** (medido em duas
+    execuções de 94 arquivos: 0 e 1 identificação, esta errada e aplicada, com
+    3 e 5 conflitos). Refrão genérico passa de graça pela prova "está na
+    letra": "não aguento" está mesmo na letra de "Não aguento mais". Ligada
+    explicitamente, exige duração no resultado, teto de 8 s (o erro medido
+    estava em 15 s) e refrão distintivo.
+75. **Ação perigosa que virou inócua tem de recusar, não silenciar**:
+    `--sobrescrever-tags` sem a identificação ligada é recusado — autorização
+    destrutiva ignorada em silêncio é pior que erro.
+76. **Uma medida única para a faixa do botão flutuante**: três telas com o
+    mesmo número copiado à mão levaram a corrigir uma e piorar duas. O E2E
+    mede as três telas em duas larguras e varre TODOS os controles do
+    cabeçalho, em vez de uma lista conhecida — teste que só olha onde o autor
+    lembrou dá confiança falsa.
+77. **Suítes não disputam as fixtures**: o pytest regenera os MP3s de
+    `fixtures/`, que o cargo lê e o dev server serve. Isso dava falha fantasma
+    no Rust e recarregava a página no meio do E2E — falha diferente a cada
+    rodada, que é o que ensina uma equipe a ignorar a suíte. Snapshot para o
+    Rust, `fixtures/` fora do watcher do Vite.
