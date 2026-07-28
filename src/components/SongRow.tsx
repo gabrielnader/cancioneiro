@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { songFileName } from "../lib/folderTree";
 import { parseSnippet } from "../lib/highlight";
 import type { Song } from "../lib/types";
 import { usePlayerStore } from "../stores/playerStore";
@@ -24,6 +25,10 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
   // próprio), então um dropdown inline ficaria por baixo da linha seguinte.
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
   const plusRef = useRef<HTMLButtonElement>(null);
+
+  // V6 — o nome do arquivo é como as coordenadoras já se organizam; entra como
+  // segunda linha (soma, não troca): não disputa espaço com badge/temas/"+".
+  const nomeArquivo = songFileName(song);
 
   const titleColor = !song.available
     ? "text-[#9CA3AF]"
@@ -106,6 +111,15 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
           )}
         </span>
       </div>
+      {nomeArquivo && (
+        <p
+          data-testid="song-filename"
+          title={nomeArquivo}
+          className="truncate text-[12px] leading-4 text-[#9CA3AF]"
+        >
+          {nomeArquivo}
+        </p>
+      )}
       {snippet && (
         <p className="mt-0.5 truncate text-[13px] text-[#6B7280]">
           {parseSnippet(snippet).map((seg, i) =>

@@ -73,6 +73,62 @@ describe("LyricsPanel (F3)", () => {
     expect(useLibraryStore.getState().query).toBe("esperança");
   });
 
+  // ---------------------------------------------------------------------------
+  // V6 — nome do arquivo no painel. É aqui que a coordenadora confere "é mesmo
+  // o arquivo que eu conheço?": nome inteiro, selecionável, junto do título.
+  // ---------------------------------------------------------------------------
+  describe("nome do arquivo (V6)", () => {
+    function comCaminho(filePath: string, title = "Coração Sertanejo"): Song {
+      return { ...song(1, true), file_path: filePath, title };
+    }
+
+    function renderCom(s: Song) {
+      useLibraryStore.setState({
+        results: [{ song: s, snippet: null }],
+        selectedSongId: 1,
+      });
+      render(<LyricsPanel />);
+    }
+
+    it("mostra o nome do arquivo (sem a pasta) logo abaixo de título e artista", async () => {
+      renderCom(comCaminho("/acervo/capoeira/barco - Marinheiro só (Capoeira).mp3"));
+      const nome = await screen.findByTestId("panel-filename");
+      expect(nome).toHaveTextContent("barco - Marinheiro só (Capoeira).mp3");
+      expect(nome.textContent).not.toContain("/acervo");
+      // depois do título e do artista, na ordem do documento
+      const titulo = screen.getByText("Coração Sertanejo");
+      const artista = screen.getByText("Artista Teste");
+      expect(
+        artista.compareDocumentPosition(nome) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(
+        titulo.compareDocumentPosition(nome) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    it("nome inteiro (nada de truncar) e selecionável para copiar", async () => {
+      const LONGO =
+        "barco - Marinheiro só (Capoeira) - gravação ao vivo no encontro de 2019.mp3";
+      renderCom(comCaminho(`/acervo/${LONGO}`));
+      const nome = await screen.findByTestId("panel-filename");
+      expect(nome.textContent).toBe(LONGO);
+      expect(nome.className).not.toContain("truncate");
+      expect(nome.className).toContain("select-text");
+    });
+
+    it("caminho Windows: mostra só o nome do arquivo", async () => {
+      renderCom(comCaminho("C:\\acervo\\capoeira\\barco - Marinheiro.mp3"));
+      const nome = await screen.findByTestId("panel-filename");
+      expect(nome.textContent).toBe("barco - Marinheiro.mp3");
+    });
+
+    it("música sem tags (título = nome do arquivo): não repete o mesmo texto", async () => {
+      renderCom(comCaminho("/acervo/sem_tags.mp3", "sem_tags"));
+      await screen.findByText("sem_tags");
+      expect(screen.queryByTestId("panel-filename")).not.toBeInTheDocument();
+    });
+  });
+
   it("música sem letra: mensagens exatas do PRD", async () => {
     useLibraryStore.setState({ selectedSongId: 2 });
     render(<LyricsPanel />);

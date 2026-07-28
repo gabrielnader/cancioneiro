@@ -40,9 +40,46 @@ export function filterResultsByFolder(
   return results.filter((r) => isUnderFolder(r.song.file_path, folderFilter));
 }
 
+/** Última parte não-vazia do caminho (aceita "/" e "\"). */
+function lastSegment(path: string): string {
+  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+}
+
 /** Nome exibido de uma pasta: última parte não-vazia do caminho. */
 export function folderName(path: string): string {
-  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+  return lastSegment(path);
+}
+
+/**
+ * Nome do arquivo (basename COM extensão), sem a pasta — a pasta já aparece na
+ * árvore lateral (DECISIONS #43).
+ */
+export function fileName(path: string): string {
+  return lastSegment(path);
+}
+
+/** Comparação de redundância: ignora caixa e espaços em volta (não ignora acento). */
+function mesmoTexto(a: string, b: string): boolean {
+  return a.trim().toLocaleLowerCase() === b.trim().toLocaleLowerCase();
+}
+
+/**
+ * Nome do arquivo a EXIBIR junto do título (V6), ou null quando ele não
+ * acrescenta nada.
+ *
+ * As coordenadoras se organizam por nome de arquivo há anos, e a identificação
+ * automática às vezes erra o título: ver o arquivo é continuidade e rede de
+ * segurança ao mesmo tempo. Mas quando a música não tem tags o indexador cai
+ * no próprio nome do arquivo como título — aí imprimir os dois é imprimir a
+ * mesma coisa duas vezes. Redundante = título igual ao nome do arquivo com ou
+ * sem a extensão. Acento NÃO é redundância ("Coracao.mp3" com título "Coração"
+ * é exatamente a diferença que a pessoa procura na tela).
+ */
+export function songFileName(song: Song): string | null {
+  const name = fileName(song.file_path);
+  const stem = name.replace(/\.[^.]+$/, "");
+  if (mesmoTexto(song.title, name) || mesmoTexto(song.title, stem)) return null;
+  return name;
 }
 
 /** Monta a árvore: uma raiz por pasta registrada, subpastas com contadores. */

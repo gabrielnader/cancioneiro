@@ -1,12 +1,29 @@
 import { useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { filterResultsByFolder } from "../lib/folderTree";
+import { filterResultsByFolder, songFileName } from "../lib/folderTree";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlayerStore } from "../stores/playerStore";
+import type { SearchResult } from "../lib/types";
 import { SongRow } from "./SongRow";
 
+/**
+ * Alturas fixas da virtualização (a linha não é medida). Cada linha extra tem
+ * altura própria e SOMA à base — a linha do nome do arquivo (V6) usa
+ * leading-4 = 16px, o snippet mantém os 22px de sempre.
+ */
 const ROW_HEIGHT = 40;
-const ROW_WITH_SNIPPET_HEIGHT = 62;
+const FILENAME_LINE_HEIGHT = 16;
+const SNIPPET_LINE_HEIGHT = 22;
+
+/** Altura da linha: base + nome do arquivo (quando exibido) + snippet. */
+function rowHeight(result: SearchResult | undefined): number {
+  if (!result) return ROW_HEIGHT;
+  return (
+    ROW_HEIGHT +
+    (songFileName(result.song) ? FILENAME_LINE_HEIGHT : 0) +
+    (result.snippet ? SNIPPET_LINE_HEIGHT : 0)
+  );
+}
 
 /** Lista virtualizada de músicas (biblioteca/resultados de busca). */
 export function SongList() {
@@ -26,8 +43,7 @@ export function SongList() {
   const virtualizer = useVirtualizer({
     count: results.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: (index) =>
-      results[index]?.snippet ? ROW_WITH_SNIPPET_HEIGHT : ROW_HEIGHT,
+    estimateSize: (index) => rowHeight(results[index]),
     overscan: 12,
   });
 

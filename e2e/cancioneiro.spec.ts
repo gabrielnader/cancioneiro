@@ -45,6 +45,41 @@ test.describe("Fluxo crítico: indexar → buscar → ver letra → tocar", () =
     expect(errors).toEqual([]);
   });
 
+  // V6 — as coordenadoras se organizam por nome de arquivo há anos: ele entra
+  // como SOMA (segunda linha da lista, linha inteira no painel), nunca no lugar
+  // do título.
+  test("nome do arquivo aparece na linha e no painel, sem repetir o título", async ({
+    page,
+  }) => {
+    const errors = trackErrors(page);
+    await resetApp(page);
+    await addMockFolder(page);
+
+    const linha = page
+      .getByRole("option")
+      .filter({ hasText: "Coração Sertanejo" })
+      .first();
+    const nome = linha.getByTestId("song-filename");
+    await expect(nome).toHaveText("com_letra.mp3");
+    // nome inteiro disponível na dica, para quando o nome for longo e truncar
+    await expect(nome).toHaveAttribute("title", "com_letra.mp3");
+    // o título continua sendo a informação principal da linha
+    await expect(linha.getByText("Coração Sertanejo")).toBeVisible();
+
+    // painel de detalhes: nome do arquivo por extenso, junto do título
+    // (clicar na própria linha do nome seleciona — o alvo de clique não mudou)
+    await nome.click();
+    const panel = page.getByLabel("Painel de letra");
+    await expect(panel.getByTestId("panel-filename")).toHaveText("com_letra.mp3");
+
+    // música sem tags: o título JÁ é o nome do arquivo — nada é impresso duas vezes
+    const semTags = page.getByRole("option").filter({ hasText: "sem_tags" }).first();
+    await expect(semTags.getByTestId("song-filename")).toHaveCount(0);
+    await semTags.getByText("sem_tags", { exact: true }).click();
+    await expect(panel.getByTestId("panel-filename")).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+
   test("buscar trecho que existe só na letra destaca o termo; sem acento também encontra", async ({
     page,
   }) => {
@@ -778,6 +813,10 @@ test.describe("Escala: 2.000 músicas", () => {
 
     const list = page.getByRole("listbox", { name: "Músicas" });
     await expect(list).toBeVisible();
+    // a segunda linha com o nome do arquivo (V6) também vale em escala
+    await expect(page.getByTestId("song-filename").first()).toHaveText(
+      /^musica_\d+\.mp3$/,
+    );
     // rola até o fim sem travar (virtualização: DOM pequeno)
     await list.evaluate((el) => {
       el.scrollTop = el.scrollHeight;

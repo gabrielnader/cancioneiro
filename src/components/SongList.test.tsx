@@ -7,18 +7,25 @@ import { usePlaylistStore } from "../stores/playlistStore";
 import type { SearchResult, Song } from "../lib/types";
 
 // Virtualização depende de medidas reais de layout — inexistentes no jsdom.
+// O mock empilha os itens usando estimateSize(index), como o virtualizer real:
+// a altura da linha varia (snippet, nome do arquivo).
 vi.mock("@tanstack/react-virtual", () => ({
-  useVirtualizer: (opts: { count: number; estimateSize: () => number }) => ({
-    getTotalSize: () => opts.count * opts.estimateSize(),
-    getVirtualItems: () =>
-      Array.from({ length: opts.count }, (_, index) => ({
-        index,
-        key: index,
-        start: index * opts.estimateSize(),
-        size: opts.estimateSize(),
-      })),
-    measureElement: () => {},
-  }),
+  useVirtualizer: (opts: { count: number; estimateSize: (index: number) => number }) => {
+    const sizes = () =>
+      Array.from({ length: opts.count }, (_, index) => opts.estimateSize(index));
+    return {
+      getTotalSize: () => sizes().reduce((a, b) => a + b, 0),
+      getVirtualItems: () => {
+        let start = 0;
+        return sizes().map((size, index) => {
+          const item = { index, key: index, start, size };
+          start += size;
+          return item;
+        });
+      },
+      measureElement: () => {},
+    };
+  },
 }));
 
 function song(id: number, title: string, hasLyrics = true): Song {
@@ -148,6 +155,135 @@ describe("SongList (F1 UI / F2 / F3)", () => {
         (el) => el.textContent === "Alguém",
       )!;
       expect(artist.className).toContain("truncate");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // V6 — nome do arquivo na linha. As coordenadoras se organizam por nome de
+  // arquivo há anos: ele entra como SEGUNDA linha (soma, não troca), abaixo do
+  // título/artista, em corpo menor e cinza.
+  // -------------------------------------------------------------------------
+  describe("nome do arquivo na linha (V6)", () => {
+    const LONGO =
+      "barco - Marinheiro só (Capoeira) - gravação ao vivo no encontro de 2019.mp3";
+
+    function comArquivo(id: number, title: string, filePath: string): SearchResult {
+      return { song: { ...song(id, title), file_path: filePath }, snippet: null };
+    }
+
+    it("linha mostra o nome do arquivo além do título e do artista", () => {
+      useLibraryStore.setState({
+        results: [
+          comArquivo(10, "Marinheiro só", "/acervo/capoeira/barco - Marinheiro só.mp3"),
+        ],
+      });
+      render(<SongList />);
+      const row = screen.getByText("Marinheiro só").closest('[role="option"]')!;
+      const nome = row.querySelector('[data-testid="song-filename"]')!;
+      expect(nome).toHaveTextContent("barco - Marinheiro só.mp3");
+      // só o nome do arquivo, sem a pasta (a pasta já está na árvore lateral)
+      expect(nome.textContent).not.toContain("/acervo");
+    });
+
+    it("o título continua vindo antes e em corpo maior que o nome do arquivo", () => {
+      useLibraryStore.setState({
+        results: [comArquivo(10, "Marinheiro só", "/acervo/barco.mp3")],
+      });
+      render(<SongList />);
+      const row = screen.getByText("Marinheiro só").closest('[role="option"]')!;
+      const titulo = screen.getByText("Marinheiro só");
+      const nome = row.querySelector('[data-testid="song-filename"]')!;
+      expect(
+        titulo.compareDocumentPosition(nome) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(titulo.className).toContain("text-[15px]");
+      expect(nome.className).toContain("text-[12px]");
+    });
+
+    it("nome longo trunca com reticências e expõe o nome inteiro no title", () => {
+      useLibraryStore.setState({
+        results: [comArquivo(10, "Marinheiro só", `/acervo/${LONGO}`)],
+      });
+      render(<SongList />);
+      const nome = screen
+        .getByText("Marinheiro só")
+        .closest('[role="option"]')!
+        .querySelector('[data-testid="song-filename"]')!;
+      expect(nome.className).toContain("truncate");
+      expect(nome).toHaveAttribute("title", LONGO);
+    });
+
+    it("caminho Windows: mostra só o nome do arquivo", () => {
+      useLibraryStore.setState({
+        results: [
+          comArquivo(10, "Marinheiro só", "C:\\acervo\\capoeira\\barco - Marinheiro.mp3"),
+        ],
+      });
+      render(<SongList />);
+      const nome = screen
+        .getByText("Marinheiro só")
+        .closest('[role="option"]')!
+        .querySelector('[data-testid="song-filename"]')!;
+      expect(nome).toHaveTextContent("barco - Marinheiro.mp3");
+      expect(nome.textContent).not.toContain("acervo");
+    });
+
+    it("música sem tags (título = nome do arquivo): não repete o mesmo texto", () => {
+      useLibraryStore.setState({
+        results: [comArquivo(10, "sem_tags", "/acervo/sem_tags.mp3")],
+      });
+      render(<SongList />);
+      const row = screen.getByText("sem_tags").closest('[role="option"]')!;
+      expect(row.querySelector('[data-testid="song-filename"]')).toBeNull();
+    });
+
+    it("a linha do nome não empurra badge/chips/'+' para fora: eles seguem na linha do título", () => {
+      usePlaylistStore.setState({
+        playlists: [{ id: 1, name: "Culto", song_count: 0 }],
+      });
+      useLibraryStore.setState({
+        results: [
+          {
+            song: {
+              ...song(10, "Marinheiro só", false),
+              file_path: `/acervo/${LONGO}`,
+              temas: "capoeira",
+            },
+            snippet: null,
+          },
+        ],
+        selectedSongId: 10,
+      });
+      render(<SongList />);
+      const row = screen.getByText("Marinheiro só").closest('[role="option"]')!;
+      const linhaDoTitulo = screen.getByText("Marinheiro só").parentElement!;
+      const nome = row.querySelector('[data-testid="song-filename"]')!;
+      for (const el of [
+        Array.from(row.querySelectorAll("span")).find(
+          (e) => e.textContent === "Sem letra",
+        )!,
+        screen.getByRole("button", { name: "Tema: capoeira" }),
+        row.querySelector('[aria-label="Adicionar à playlist"]')!,
+      ]) {
+        expect(linhaDoTitulo.contains(el)).toBe(true);
+        expect(nome.contains(el)).toBe(false);
+      }
+    });
+
+    it("a altura virtualizada acompanha a linha extra do nome do arquivo", () => {
+      useLibraryStore.setState({
+        results: [
+          comArquivo(10, "Marinheiro só", "/acervo/barco.mp3"),
+          // sem tags: sem linha extra
+          comArquivo(11, "sem_tags", "/acervo/sem_tags.mp3"),
+        ],
+      });
+      render(<SongList />);
+      const [comNome, semNome] = screen
+        .getAllByRole("option")
+        .map((o) => o.parentElement!.style.height);
+      expect(parseInt(semNome, 10)).toBeGreaterThan(0);
+      expect(parseInt(comNome, 10)).toBeGreaterThan(parseInt(semNome, 10));
     });
   });
 

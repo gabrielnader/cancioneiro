@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getBackend } from "../lib/api";
+import { songFileName } from "../lib/folderTree";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlaylistStore } from "../stores/playlistStore";
 import { FONT_SIZES_PX, useUiStore } from "../stores/uiStore";
@@ -19,6 +20,9 @@ export function LyricsPanel() {
     results.find((r) => r.song.id === selectedSongId)?.song ??
     playlistItems.find((i) => i.song.id === selectedSongId)?.song ??
     null;
+
+  // V6 — nome do arquivo (null quando o título já É o nome do arquivo).
+  const nomeArquivo = selected ? songFileName(selected) : null;
 
   const [lyrics, setLyrics] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
@@ -70,6 +74,20 @@ export function LyricsPanel() {
               {selected.artist && (
                 <p className="truncate text-[14px] text-[#6B7280]">
                   {selected.artist}
+                </p>
+              )}
+              {/*
+                V6 — nome do arquivo por extenso. É aqui que a coordenadora
+                confere "é mesmo o arquivo que eu conheço?": nada de truncar e
+                selecionável para copiar. Some quando o título já É o nome do
+                arquivo (música sem tags), para não repetir o mesmo texto.
+              */}
+              {nomeArquivo && (
+                <p
+                  data-testid="panel-filename"
+                  className="mt-0.5 select-text break-words text-[12px] leading-4 text-[#9CA3AF]"
+                >
+                  {nomeArquivo}
                 </p>
               )}
               {selected.temas && (

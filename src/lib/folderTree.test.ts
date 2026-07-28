@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildFolderTree, filterResultsByFolder, isUnderFolder } from "./folderTree";
+import {
+  buildFolderTree,
+  fileName,
+  filterResultsByFolder,
+  isUnderFolder,
+  songFileName,
+} from "./folderTree";
 import type { Folder, SearchResult, Song } from "./types";
 
 function song(id: number, filePath: string, folderId = 1): Song {
@@ -133,6 +139,69 @@ describe("buildFolderTree", () => {
     expect(names).toContain("10");
     const um = tree[0].children.find((c) => c.name === "1")!;
     expect(um.count).toBe(1);
+  });
+});
+
+describe("fileName (V6 — nome do arquivo na UI)", () => {
+  it("devolve só o nome do arquivo com extensão (separador /)", () => {
+    expect(fileName("/acervo/capoeira/barco - Marinheiro só.mp3")).toBe(
+      "barco - Marinheiro só.mp3",
+    );
+  });
+
+  it("aceita separador Windows (\\\\)", () => {
+    expect(fileName("C:\\musicas\\acervo\\barco - Marinheiro só.mp3")).toBe(
+      "barco - Marinheiro só.mp3",
+    );
+  });
+
+  it("caminho sem diretório é o próprio nome", () => {
+    expect(fileName("a.mp3")).toBe("a.mp3");
+  });
+});
+
+describe("songFileName — regra de redundância (V6)", () => {
+  function comCaminho(filePath: string, title: string): Song {
+    return { ...song(1, filePath), title };
+  }
+
+  it("mostra o nome do arquivo quando ele diz algo além do título", () => {
+    expect(
+      songFileName(
+        comCaminho("/acervo/barco - Marinheiro só (Capoeira).mp3", "Marinheiro só"),
+      ),
+    ).toBe("barco - Marinheiro só (Capoeira).mp3");
+  });
+
+  it("some quando o título É o nome do arquivo sem extensão (música sem tags)", () => {
+    expect(songFileName(comCaminho("/acervo/sem_tags.mp3", "sem_tags"))).toBeNull();
+  });
+
+  it("a redundância ignora caixa e espaços em volta", () => {
+    expect(songFileName(comCaminho("/acervo/Sem_Tags.mp3", "  sem_tags "))).toBeNull();
+  });
+
+  it("acento NÃO é redundância: 'Coracao.mp3' com título 'Coração' continua visível", () => {
+    expect(songFileName(comCaminho("/acervo/Coracao.mp3", "Coração"))).toBe(
+      "Coracao.mp3",
+    );
+  });
+
+  it("título igual ao nome COM extensão também é redundante (nada é impresso duas vezes)", () => {
+    expect(songFileName(comCaminho("/acervo/barco.mp3", "barco.mp3"))).toBeNull();
+  });
+
+  it("título que só contém o nome do arquivo (não é igual) continua mostrando", () => {
+    expect(songFileName(comCaminho("/acervo/barco.mp3", "barco no mar"))).toBe(
+      "barco.mp3",
+    );
+  });
+
+  it("funciona com caminho Windows", () => {
+    expect(
+      songFileName(comCaminho("C:\\acervo\\barco - Marinheiro.mp3", "Marinheiro só")),
+    ).toBe("barco - Marinheiro.mp3");
+    expect(songFileName(comCaminho("C:\\acervo\\sem_tags.mp3", "sem_tags"))).toBeNull();
   });
 });
 
