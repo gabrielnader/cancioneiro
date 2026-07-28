@@ -17,6 +17,7 @@ import type {
   SearchResult,
   Song,
 } from "./types";
+import { ORIGEM_TRANSCRICAO } from "./types";
 
 /**
  * Backend em memória com a mesma semântica do backend Rust (src-tauri),
@@ -30,6 +31,12 @@ export interface MockBackend extends Backend {
   _seedSongs(count: number): void;
   /** Simula a deleção do arquivo no disco (fileExists → false; scan remove do índice). */
   _removeFileFromDisk(filePath: string): void;
+  /**
+   * Simula o que a curadoria (`tools/curadoria.py transcrever`) deixa no MP3:
+   * TXXX:LETRA_ORIGEM = "transcricao". Compõe com qualquer seed — é assim que
+   * testes e E2E produzem uma música com letra transcrita.
+   */
+  _markAsTranscribed(filePath: string): void;
   /** Zera o estado em memória e a persistência. */
   _reset(): void;
   /** Valor devolvido pelo próximo pickFolder(). */
@@ -202,6 +209,7 @@ function toSong(record: SongRecord): Song {
     has_lyrics: record.has_lyrics,
     available: record.available,
     temas: record.temas ?? null,
+    letra_origem: record.letra_origem ?? null,
   };
 }
 
@@ -572,8 +580,15 @@ export function createMockBackend(): MockBackend {
       // grava só as tags — NUNCA renomeia (file_path intocado)
       song.title = title.trim();
       song.artist = artist?.trim() ? artist.trim() : null;
+      const letraAnterior = song.lyrics;
       song.lyrics = lyrics?.trim() ? lyrics : null;
       song.has_lyrics = song.lyrics !== null;
+      // A marca de origem descreve a letra ATUAL (DECISIONS #54): trocar ou
+      // apagar a letra a derruba; repassar a mesma letra (caminho do lote) a
+      // preserva. Nunca inventa marca em arquivo que não tinha.
+      if (song.lyrics !== letraAnterior) {
+        song.letra_origem = null;
+      }
       song.temas = normalizeTemas(temas);
       save();
       return toSong(song);
@@ -788,6 +803,10 @@ export function createMockBackend(): MockBackend {
           song.artist = ap.artist.trim();
         }
         if (ap.lyrics?.trim()) {
+          // mesma regra do writer: letra diferente invalida a marca de origem
+          if (song.lyrics !== ap.lyrics) {
+            song.letra_origem = null;
+          }
           song.lyrics = ap.lyrics;
           song.has_lyrics = true;
         }
@@ -867,6 +886,13 @@ export function createMockBackend(): MockBackend {
           lyrics: null,
         });
       }
+      save();
+    },
+
+    _markAsTranscribed(filePath: string): void {
+      const song = state.songs.find((s) => s.file_path === filePath);
+      if (!song) return;
+      song.letra_origem = ORIGEM_TRANSCRICAO;
       save();
     },
 

@@ -70,6 +70,66 @@ Ressalvas honestas: no macOS a substituição do app pode pedir a senha do
 computador; no Windows o instalador pode exibir o SmartScreen de novo. Enquanto
 os binários não forem assinados, esses avisos continuam possíveis.
 
+## Setup único do dono do repositório (obrigatório antes da próxima release)
+
+A chave pública minisign já está em `src-tauri/tauri.conf.json`. Falta só a
+privada, que **nunca** entra no repositório — ela vive como segredo do GitHub.
+
+1. Em `https://github.com/gabrielnader/cancioneiro/settings/secrets/actions`,
+   clique em **New repository secret**.
+2. Nome: `TAURI_SIGNING_PRIVATE_KEY`. Valor: o **conteúdo inteiro** do arquivo
+   de chave privada gerado com o par que está no `tauri.conf.json` (o texto que
+   começa com `untrusted comment: rsign encrypted secret key`). Colar o
+   conteúdo, não o caminho do arquivo.
+3. Nome: `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Valor: a senha da chave. **A
+   chave desta rodada foi gerada sem senha** — cadastre o segredo mesmo assim,
+   com valor vazio, para o `env:` do workflow não ficar indefinido.
+4. Guardar uma cópia da chave privada fora do GitHub (gerenciador de senhas).
+   Perder a chave significa que nenhum app já instalado aceitará atualizações:
+   seria preciso publicar uma versão com chave nova e pedir reinstalação manual
+   a todo mundo — exatamente o problema que a V7 resolve.
+
+Se os segredos não existirem, o build da release **falha** (o
+`createUpdaterArtifacts` exige assinatura). Isso é proposital: uma release sem
+assinatura seria recusada pelo updater de quem já tem o app instalado, e o erro
+apareceria só meses depois.
+
+Para gerar um par novo, se algum dia for preciso:
+`npm run tauri signer generate -- -w ~/.tauri/cancioneiro.key` — a saída
+imprime a pública (vai para `tauri.conf.json`) e grava a privada no arquivo.
+
+### A partir de quando isso funciona
+
+A atualização automática só começa a valer **da primeira release que contiver
+este código em diante**. Quem já tem o Cancioneiro instalado hoje está numa
+versão que não sabe procurar atualização: essas pessoas precisam instalar **uma
+vez, à mão**, a primeira versão com F16. Dali em diante nunca mais.
+
+Depois de publicar a release, conferir que o arquivo `latest.json` aparece
+entre os assets e que ele lista as quatro plataformas (`darwin-aarch64`,
+`darwin-x86_64`, `windows-x86_64`, `linux-x86_64`). Os quatro jobs da matriz
+escrevem esse mesmo arquivo; se dois terminarem no mesmo instante, um pode
+sobrescrever o outro e faltar plataforma. Nesse caso basta reexecutar o job da
+plataforma ausente.
+
+## Notas de implementação
+
+- **Baixa sozinho, instala só a pedido.** O plugin oferece
+  `downloadAndInstall()`, mas no Windows a instalação encerra o processo na
+  hora (`std::process::exit(0)` depois de disparar o instalador) — mataria uma
+  música tocando numa reunião. Por isso a abertura só faz `download()`, e o
+  `install()` + `relaunch()` acontecem quando a pessoa clica em "Reiniciar
+  agora". A capability concede `updater:allow-check/download/install` e
+  **não** concede `allow-download-and-install`.
+- Como a instalação passa a ser posterior ao aviso, a frase ficou
+  "Atualização pronta. Reinicie o Cancioneiro para usar a versão nova." em vez
+  de "Atualização instalada…" — dizer "instalada" antes de instalar seria
+  mentira se o app fechasse antes do reinício.
+- O aviso é um elemento fixo no canto inferior esquerdo, não um toast: o
+  toastStore some sozinho em 5 s e não carrega botão de ação.
+- Fora do Tauri (dev no navegador e E2E do Playwright) o módulo é inerte:
+  `checkForUpdatesOnStartup()` retorna antes de importar qualquer plugin.
+
 ## Invioláveis (inalterados)
 
 - Nenhuma telemetria, nenhuma conta, nenhum dado do acervo sai da máquina.

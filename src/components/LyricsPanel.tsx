@@ -3,6 +3,7 @@ import { getBackend } from "../lib/api";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlaylistStore } from "../stores/playlistStore";
 import { FONT_SIZES_PX, useUiStore } from "../stores/uiStore";
+import { ORIGEM_TRANSCRICAO } from "../lib/types";
 import { EditSongForm } from "./EditSongForm";
 import { TemaChips } from "./TemaChips";
 
@@ -121,13 +122,32 @@ export function LyricsPanel() {
           ) : (
             <div className="flex-1 overflow-y-auto p-4">
               {selected.has_lyrics && lyrics ? (
-                <p
-                  data-testid="lyrics-body"
-                  className="whitespace-pre-wrap text-[#111827]"
-                  style={{ fontSize: FONT_SIZES_PX[fontLevel], lineHeight: 1.7 }}
-                >
-                  {lyrics}
-                </p>
+                <>
+                  {/*
+                    V5/F14 — a letra saiu de transcrição automática do áudio.
+                    Ressalva discreta (cinza, corpo pequeno), acima do texto:
+                    quem lê precisa saber ANTES de projetar ou cantar, mas isto
+                    não é um erro nem um alerta. O backend limpa a marca quando
+                    a letra é trocada (DECISIONS #54), então o aviso vale
+                    sempre pelo texto que está na tela.
+                  */}
+                  {selected.letra_origem === ORIGEM_TRANSCRICAO && (
+                    <p
+                      data-testid="lyrics-origem"
+                      className="mb-3 border-l-2 border-[#E5E7EB] pl-2 text-[13px] leading-snug text-[#6B7280]"
+                    >
+                      Letra transcrita automaticamente do áudio — pode conter
+                      erros.
+                    </p>
+                  )}
+                  <p
+                    data-testid="lyrics-body"
+                    className="whitespace-pre-wrap text-[#111827]"
+                    style={{ fontSize: FONT_SIZES_PX[fontLevel], lineHeight: 1.7 }}
+                  >
+                    {lyrics}
+                  </p>
+                </>
               ) : selected.has_lyrics ? null : (
                 <div className="pt-4">
                   <p className="text-[#6B7280]">

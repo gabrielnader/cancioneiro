@@ -719,6 +719,54 @@ test.describe("V5 — Completar dados em lote (F13)", () => {
   });
 });
 
+test.describe("V5 — Aviso de transcrição automática (F14)", () => {
+  const AVISO = "Letra transcrita automaticamente do áudio — pode conter erros.";
+
+  test("aviso aparece na letra transcrita e some ao salvar uma letra revisada", async ({
+    page,
+  }) => {
+    const errors = trackErrors(page);
+    await resetApp(page);
+    await addMockFolder(page);
+
+    // a curadoria marcou o arquivo como transcrito (TXXX:LETRA_ORIGEM)
+    await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__CANCIONEIRO_MOCK__._markAsTranscribed(
+        "/musicas/mock/com_letra.mp3",
+      );
+    });
+    await page.reload();
+
+    const panel = page.getByLabel("Painel de letra");
+    await page.getByText("Coração Sertanejo").first().click();
+    await expect(panel.getByTestId("lyrics-body")).toBeVisible();
+    await expect(panel.getByTestId("lyrics-origem")).toHaveText(AVISO);
+
+    // música oficial (sem marca) não carrega ressalva alguma
+    await page.getByText("Instrumental Sem Letra").first().click();
+    await expect(panel.getByTestId("lyrics-origem")).toHaveCount(0);
+
+    // revisar a letra à mão derruba o aviso na hora, sem reiniciar o app
+    await page.getByText("Coração Sertanejo").first().click();
+    await expect(panel.getByTestId("lyrics-origem")).toBeVisible();
+    await panel.getByRole("button", { name: "Editar" }).click();
+    await panel
+      .getByRole("textbox", { name: "Letra", exact: true })
+      .fill("Letra conferida à mão");
+    await panel.getByRole("button", { name: "Salvar no arquivo" }).click();
+    await expect(
+      page.getByText("Alterações salvas em com_letra.mp3."),
+    ).toBeVisible();
+
+    await expect(panel.getByTestId("lyrics-body")).toHaveText(
+      "Letra conferida à mão",
+    );
+    await expect(panel.getByTestId("lyrics-origem")).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+});
+
 test.describe("Escala: 2.000 músicas", () => {
   test("lista virtualizada rola e busca responde rápido", async ({ page }) => {
     await resetApp(page);

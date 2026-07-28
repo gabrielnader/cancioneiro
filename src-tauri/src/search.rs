@@ -62,6 +62,9 @@ pub fn search(conn: &Connection, input: &str, limit: usize) -> Result<Vec<Search
             .join(", ")
     );
 
+    // O snippet é a última coluna do SELECT, logo após as da Song — derivado
+    // de SONG_COLS para não quebrar quando a Song ganha um campo (V5/F14).
+    let snippet_idx = db::song_col_count();
     let mut stmt = conn.prepare_cached(&sql)?;
     let rows = stmt.query_map(
         params![
@@ -72,7 +75,7 @@ pub fn search(conn: &Connection, input: &str, limit: usize) -> Result<Vec<Search
         ],
         |r| {
             let song = db::song_from_row(r)?;
-            let raw_snippet: Option<String> = r.get(10)?;
+            let raw_snippet: Option<String> = r.get(snippet_idx)?;
             Ok(SearchResult {
                 song,
                 // snippet só é relevante quando o match foi na letra — o

@@ -23,6 +23,12 @@ pub struct Song {
     pub available: bool,
     /// Temas do frame TXXX:TEMAS, unidos por "; " (V2 — PRD-v2-temas.md).
     pub temas: Option<String>,
+    /// Procedência da letra ATUAL, do frame TXXX:LETRA_ORIGEM gravado pela
+    /// curadoria (V5/F14): "transcricao" = letra saída do áudio por
+    /// transcrição automática. `None` = sem marca (letra oficial, digitada ou
+    /// simplesmente sem procedência declarada). Ver DECISIONS #54: quem troca
+    /// a letra derruba a marca, então ela sempre descreve o texto exibido.
+    pub letra_origem: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -62,6 +68,11 @@ CREATE TABLE IF NOT EXISTS songs (
     lyrics TEXT,
     temas TEXT,
     pastas TEXT,
+    -- V5/F14: procedência da letra atual (TXXX:LETRA_ORIGEM). Deliberadamente
+    -- FORA da songs_fts: é bandeira de procedência, não conteúdo pesquisável —
+    -- indexá-la faria "transcrição" recuperar toda música transcrita como se a
+    -- palavra estivesse na letra. Quem quiser filtrar por origem usa a coluna.
+    letra_origem TEXT,
     file_mtime INTEGER NOT NULL,
     file_size INTEGER NOT NULL,
     available INTEGER NOT NULL DEFAULT 1,
@@ -139,7 +150,7 @@ pub(crate) fn fold_pt(s: &str) -> String {
         .collect()
 }
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
 pub fn init_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch("PRAGMA foreign_keys = ON;")?;
@@ -153,12 +164,12 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// Migra bancos antigos para o schema atual (V3). O banco é reconstruível
+/// Migra bancos antigos para o schema atual (V4). O banco é reconstruível
 /// por reindexação, então a migração é simples: colunas novas (`temas` na
-/// V2, `pastas` na V3), FTS recriada com as colunas extras e mtime zerado
-/// para o próximo rescan reler os arquivos (e popular temas/pastas) —
-/// playlists e demais dados ficam intactos. O mesmo caminho cobre v1→v3 e
-/// v2→v3 (migração encadeada): só as colunas ausentes são adicionadas.
+/// V2, `pastas` na V3, `letra_origem` na V4), FTS recriada e mtime zerado
+/// para o próximo rescan reler os arquivos (e popular as colunas novas) —
+/// playlists e demais dados ficam intactos. O mesmo caminho cobre v1→v4,
+/// v2→v4 e v3→v4 (migração encadeada): só as colunas ausentes são adicionadas.
 ///
 /// A migração inteira (ALTERs, FTS derrubada+recriada+repovoada, mtime e o
 /// bump de user_version) roda numa ÚNICA transação — DDL de FTS5 é
@@ -193,8 +204,11 @@ fn migrate_if_needed(conn: &Connection) -> Result<()> {
     if !has_column("pastas")? {
         alters.push_str("ALTER TABLE songs ADD COLUMN pastas TEXT;\n"); // V3
     }
+    if !has_column("letra_origem")? {
+        alters.push_str("ALTER TABLE songs ADD COLUMN letra_origem TEXT;\n"); // V4
+    }
     // Mesmo sem coluna faltando (ex.: migração antiga interrompida depois dos
-    // ALTERs), version < 3 exige a FTS reconstruída e repovoada.
+    // ALTERs), version < SCHEMA_VERSION exige a FTS reconstruída e repovoada.
 
     let tx = conn.unchecked_transaction()?;
     tx.execute_batch(&format!(
@@ -203,7 +217,8 @@ fn migrate_if_needed(conn: &Connection) -> Result<()> {
          DROP TRIGGER IF EXISTS songs_ad;
          DROP TRIGGER IF EXISTS songs_au;
          DROP TABLE IF EXISTS songs_fts;
-         -- força releitura dos arquivos no próximo rescan (popula temas/pastas)
+         -- força releitura dos arquivos no próximo rescan (popula
+         -- temas/pastas/letra_origem, que só existem nas tags do MP3)
          UPDATE songs SET file_mtime = -1;"
     ))?;
     // Recria songs_fts/triggers com as colunas novas e repovoa o índice com
@@ -292,7 +307,13 @@ pub fn list_folders(conn: &Connection) -> Result<Vec<Folder>> {
 // ---------------------------------------------------------------------------
 
 pub(crate) const SONG_COLS: &str =
-    "id, file_path, folder_id, title, artist, album, duration_seconds, has_lyrics, available, temas";
+    "id, file_path, folder_id, title, artist, album, duration_seconds, has_lyrics, available, temas, letra_origem";
+
+/// Quantas colunas o SONG_COLS projeta — quem acrescenta colunas na mesma
+/// query (o snippet da busca) parte deste índice em vez de um número fixo.
+pub(crate) fn song_col_count() -> usize {
+    SONG_COLS.split(", ").count()
+}
 
 pub(crate) fn song_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Song> {
     Ok(Song {
@@ -306,6 +327,7 @@ pub(crate) fn song_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Song> {
         has_lyrics: r.get::<_, i64>(7)? != 0,
         available: r.get::<_, i64>(8)? != 0,
         temas: r.get(9)?,
+        letra_origem: r.get(10)?,
     })
 }
 
@@ -483,6 +505,7 @@ pub fn get_playlist_items(conn: &Connection, playlist_id: i64) -> Result<Vec<Pla
                 has_lyrics: r.get::<_, i64>(10)? != 0,
                 available: r.get::<_, i64>(11)? != 0,
                 temas: r.get(12)?,
+                letra_origem: r.get(13)?,
             },
         })
     })?;
@@ -519,9 +542,9 @@ mod tests {
     }
 
     #[test]
-    fn v1_database_migrates_chained_to_v3_keeping_playlists() {
-        // Cria um banco no schema V1 (sem colunas temas/pastas), com dados e
-        // playlist — a migração encadeada v1→v2→v3 deve funcionar num passo.
+    fn v1_database_migrates_chained_to_v4_keeping_playlists() {
+        // Cria um banco no schema V1 (sem temas/pastas/letra_origem), com dados
+        // e playlist — a migração encadeada v1→v2→v3→v4 num passo só.
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
             "PRAGMA foreign_keys = ON;
@@ -561,9 +584,10 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
         assert!(column_exists(&conn, "temas"));
         assert!(column_exists(&conn, "pastas"));
+        assert!(column_exists(&conn, "letra_origem"));
 
         // playlist intacta
         let items = get_playlist_items(&conn, 1).unwrap();
@@ -593,7 +617,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_database_migrates_to_v3_keeping_playlists_and_temas() {
+    fn v2_database_migrates_to_v4_keeping_playlists_and_temas() {
         // Banco no schema V2 (com temas, sem pastas), user_version = 2
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch(
@@ -634,8 +658,9 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
         assert!(column_exists(&conn, "pastas"));
+        assert!(column_exists(&conn, "letra_origem"));
 
         // playlist e temas intactos
         let items = get_playlist_items(&conn, 1).unwrap();
@@ -667,7 +692,7 @@ mod tests {
     }
 
     #[test]
-    fn interrupted_v3_migration_recovers_with_populated_fts() {
+    fn interrupted_migration_recovers_with_populated_fts() {
         // Simula o estado deixado pela antiga janela de crash da migração
         // v→3: colunas novas já criadas, FTS/triggers derrubados, mtime
         // zerado — mas o repovoamento da FTS nunca aconteceu e user_version
@@ -705,9 +730,9 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
 
-        // user_version=3 implica FTS repovoada: uma linha por música
+        // user_version atual implica FTS repovoada: uma linha por música
         let songs_count: i64 = conn
             .query_row("SELECT count(*) FROM songs", [], |r| r.get(0))
             .unwrap();
@@ -728,6 +753,128 @@ mod tests {
                 .unwrap();
             assert_eq!(hits, 1, "termo {termo}");
         }
+    }
+
+    /// Banco no schema V3 (temas + pastas, FTS de 5 colunas), user_version = 3.
+    fn v3_database() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON;
+             CREATE TABLE folders (id INTEGER PRIMARY KEY AUTOINCREMENT, path TEXT NOT NULL UNIQUE,
+                 created_at TEXT NOT NULL DEFAULT (datetime('now')), last_scanned_at TEXT);
+             CREATE TABLE songs (id INTEGER PRIMARY KEY AUTOINCREMENT, file_path TEXT NOT NULL UNIQUE,
+                 folder_id INTEGER NOT NULL REFERENCES folders(id) ON DELETE CASCADE,
+                 title TEXT NOT NULL, artist TEXT, album TEXT, duration_seconds INTEGER,
+                 has_lyrics INTEGER NOT NULL DEFAULT 0, lyrics TEXT, temas TEXT, pastas TEXT,
+                 file_mtime INTEGER NOT NULL, file_size INTEGER NOT NULL,
+                 available INTEGER NOT NULL DEFAULT 1,
+                 indexed_at TEXT NOT NULL DEFAULT (datetime('now')));
+             CREATE VIRTUAL TABLE songs_fts USING fts5(title, artist, lyrics, temas, pastas,
+                 content='songs', content_rowid='id',
+                 tokenize='unicode61 remove_diacritics 2');
+             CREATE TRIGGER songs_ai AFTER INSERT ON songs BEGIN
+                 INSERT INTO songs_fts(rowid, title, artist, lyrics, temas, pastas)
+                 VALUES (new.id, new.title, new.artist, new.lyrics, new.temas, new.pastas); END;
+             CREATE TABLE playlists (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+                 created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                 updated_at TEXT NOT NULL DEFAULT (datetime('now')));
+             CREATE TABLE playlist_items (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                 playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
+                 song_id INTEGER NOT NULL REFERENCES songs(id) ON DELETE CASCADE,
+                 position INTEGER NOT NULL);
+             INSERT INTO folders (path) VALUES ('/f');
+             INSERT INTO songs (file_path, folder_id, title, lyrics, temas, pastas, has_lyrics, file_mtime, file_size)
+             VALUES ('/f/sub/a.mp3', 1, 'Antiga', 'letra antiga', 'água; cura', 'sub', 1, 12345, 10);
+             INSERT INTO playlists (name) VALUES ('Reunião');
+             INSERT INTO playlist_items (playlist_id, song_id, position) VALUES (1, 1, 0);
+             PRAGMA user_version = 3;",
+        )
+        .unwrap();
+        conn
+    }
+
+    #[test]
+    fn v3_database_migrates_to_v4_keeping_data_and_forcing_rescan() {
+        // V5/F14: a coluna letra_origem entra vazia e só o próximo rescan a
+        // preenche — por isso o mtime é zerado, como nas migrações anteriores.
+        let conn = v3_database();
+        init_schema(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 4);
+        assert!(column_exists(&conn, "letra_origem"));
+
+        // dados existentes intactos (playlist, temas, letra)
+        let items = get_playlist_items(&conn, 1).unwrap();
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].song.title, "Antiga");
+        assert_eq!(items[0].song.temas.as_deref(), Some("água; cura"));
+        // coluna nova nasce vazia: nada é inventado a partir do banco antigo
+        assert_eq!(items[0].song.letra_origem, None);
+        assert_eq!(
+            get_lyrics(&conn, 1).unwrap().as_deref(),
+            Some("letra antiga")
+        );
+
+        // FTS repovoada e funcional (título, letra, tema e pasta)
+        for termo in ["\"antiga\"", "\"letra\"", "\"cura\"", "\"sub\""] {
+            let hits: i64 = conn
+                .query_row(
+                    &format!("SELECT count(*) FROM songs_fts WHERE songs_fts MATCH '{termo}'"),
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(hits, 1, "termo {termo}");
+        }
+
+        // mtime zerado força a releitura que popula letra_origem
+        let mtime: i64 = conn
+            .query_row("SELECT file_mtime FROM songs WHERE id = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(mtime, -1);
+
+        // idempotente: reabrir de novo não erra nem perde dados
+        init_schema(&conn).unwrap();
+        assert_eq!(get_playlist_items(&conn, 1).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn letra_origem_is_not_searchable_content() {
+        // Decisão V5/F14: letra_origem é bandeira de PROCEDÊNCIA, não conteúdo.
+        // Se entrasse na FTS, buscar "transcrição" listaria todas as músicas
+        // transcritas como se a palavra estivesse na letra delas.
+        let conn = open_in_memory().unwrap();
+        conn.execute_batch(
+            "INSERT INTO folders (path) VALUES ('/f');
+             INSERT INTO songs (file_path, folder_id, title, lyrics, letra_origem,
+                                has_lyrics, file_mtime, file_size)
+             VALUES ('/f/a.mp3', 1, 'Antiga', 'letra antiga', 'transcricao', 1, 0, 0);",
+        )
+        .unwrap();
+
+        let cols: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('songs_fts') WHERE name = 'letra_origem'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(cols, 0, "letra_origem não pertence ao índice de busca");
+
+        let hits: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM songs_fts WHERE songs_fts MATCH '\"transcricao\"'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hits, 0);
+
+        // a música continua achável pelo que é conteúdo de verdade
+        assert_eq!(get_song(&conn, 1).unwrap().unwrap().letra_origem.as_deref(), Some("transcricao"));
     }
 
     #[test]

@@ -55,6 +55,30 @@ Subcomandos:
         motor ("música", "legendas pela comunidade Amara.org") e frases de
         uma palavra nunca viram consulta.
 
+    identificar PASTA [--chave CHAVE] [--com-letra] [--csv saida.csv]
+                [--sobrescrever-tags] [--verboso]
+        V6/F15. Impressão digital acústica: calcula a assinatura do áudio
+        com o fpcalc (Chromaprint, dependência externa OPCIONAL), consulta
+        o AcoustID (chave gratuita em --chave ou ACOUSTID_API_KEY, nunca
+        gravada em disco) e aplica o melhor candidato — pontuação >= 0,7 E
+        duração compatível pelas MESMAS regras da V3 (±3s ALTA, ≤15s
+        MÉDIA, >15s desqualifica). Custa ~1-2 s por música: é a etapa 3 do
+        funil, antes da transcrição (~30-80 s). Travas idênticas às da V5,
+        porque o candidato também vem do ÁUDIO: título/artista REAIS nunca
+        são sobrescritos sem --sobrescrever-tags, divergência vira
+        CONFLITO sem gravar nada, e resultado com título/artista de
+        placeholder é descartado. --com-letra encadeia a busca da letra
+        OFICIAL no LRCLIB com o título/artista confirmados (sem marcador
+        de transcrição, e sem tocar em letra existente).
+
+    estimar PASTA [--amostra N] [--verboso]
+        V6/F15.1. Conta os arquivos, quantos estão incompletos, mede uma
+        amostra e projeta o tempo de cada etapa do funil neste computador.
+        Não grava nada e não baixa nada: sem fpcalc a identificação sai da
+        média publicada e a transcrição sai sempre da proporção publicada
+        do faster-whisper — a saída diz quando o número é medido e quando
+        é projetado.
+
     temas-de-pastas PASTA [--aplicar]
         Cada subpasta do caminho relativo vira um tema (normalizado, V2),
         SOMADO aos existentes; MP3 na raiz não ganha tema. Sem --aplicar,
@@ -68,7 +92,10 @@ import argparse
 import csv
 import difflib
 import json
+import os
 import re
+import shutil
+import subprocess
 import sys
 import time
 import unicodedata
@@ -1310,6 +1337,541 @@ def cmd_transcrever(pasta: Path, transcritor=None, fetcher=None,
             gravar_csv(csv_out, TRANSCREVER_COLUNAS, linhas_csv)
 
 
+# ---------------------------------------------------------------- identificar
+
+ACOUSTID_URL = "https://api.acoustid.org/v2/lookup"
+# Pontuação mínima da impressão digital (PRD V6). Abaixo disso o AcoustID
+# está chutando — e chute vindo do ÁUDIO não encosta em tag de curador.
+PONTUACAO_MINIMA = 0.7
+# O AcoustID pede no máximo ~3 consultas por segundo.
+PAUSA_ACOUSTID_S = 0.34
+# Acima disto a duração denuncia outra gravação (regra da V3, uniforme).
+MAX_DIF_DURACAO_S = 15.0
+TIMEOUT_FPCALC_S = 120
+IDENTIFICAR_COLUNAS = ["arquivo", "acao", "titulo", "artista", "confianca",
+                       "pontuacao", "caracteres", "detalhe"]
+MSG_SEM_FPCALC = (
+    'ERRO: fpcalc (Chromaprint) não encontrado no PATH — instale com "brew '
+    'install chromaprint" (macOS), "sudo apt install libchromaprint-tools" '
+    "(Linux) ou baixe o binário oficial em https://acoustid.org/chromaprint "
+    "(Windows)")
+MSG_SEM_CHAVE = (
+    "ERRO: chave da API do AcoustID ausente — a chave é gratuita (cadastro "
+    "de um minuto) em https://acoustid.org/new-application; informe em "
+    "--chave ou na variável de ambiente ACOUSTID_API_KEY (o Cancioneiro "
+    "nunca grava a chave em disco)")
+
+
+def _nfc(texto: str) -> str:
+    """Normaliza para NFC. O macOS entrega NFD em nome de arquivo e o motor
+    de transcrição também — o projeto já foi mordido duas vezes por isso.
+    Tudo que é comparado, gravado ou enviado a uma API passa por aqui."""
+    return unicodedata.normalize("NFC", texto or "")
+
+
+def criar_impressao_digital(programa: str = "fpcalc"):
+    """Fábrica do calculador real de impressão digital (fpcalc, do
+    Chromaprint). O binário é dependência externa OPCIONAL e é procurado
+    SÓ aqui: sem ele, uma linha em pt-BR explicando como instalar e saída
+    com código 1, sem tocar em arquivo nenhum — e todos os outros
+    subcomandos seguem funcionando normalmente.
+
+    O calculador devolvido tem a assinatura injetável usada pelos testes:
+    (caminho) -> (duracao_em_segundos, impressao_digital)."""
+    caminho = shutil.which(programa)
+    if caminho is None:
+        die(MSG_SEM_FPCALC)
+
+    def impressao_digital(caminho_mp3: str) -> tuple:
+        saida = subprocess.run([caminho, "-json", str(caminho_mp3)],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               timeout=TIMEOUT_FPCALC_S)
+        if saida.returncode != 0:
+            detalhe = saida.stderr.decode("utf-8", "replace").strip()
+            raise RuntimeError(detalhe or "fpcalc terminou com erro")
+        dados = json.loads(saida.stdout.decode("utf-8", "replace"))
+        return float(dados["duration"]), str(dados["fingerprint"])
+
+    return impressao_digital
+
+
+def _artista_da_gravacao(gravacao: dict) -> str:
+    """Nome do artista de uma gravação do MusicBrainz, respeitando a
+    "joinphrase" das participações ("Gal Costa & Caetano Veloso"). Sai em
+    NFC, como tudo que vai virar tag ou consulta."""
+    nomes = []
+    for artista in gravacao.get("artists") or []:
+        nome = _nfc(str(artista.get("name") or "")).strip()
+        if nome:
+            nomes.append((nome, str(artista.get("joinphrase") or "")))
+    partes = []
+    for indice, (nome, junta) in enumerate(nomes):
+        partes.append(nome)
+        if indice < len(nomes) - 1:
+            partes.append(junta or " & ")
+    return "".join(partes).strip()
+
+
+def consultar_acoustid(duracao: float, fingerprint: str, chave: str,
+                       fetcher=None) -> list:
+    """Consulta o AcoustID (/v2/lookup) e devolve a lista de resultados
+    (pontuação + gravações do MusicBrainz). Erro de rede sobe para o
+    chamador; erro da própria API vira exceção com a mensagem dela. A
+    chave entra na URL e NUNCA é impressa nem gravada."""
+    fetcher = fetcher or default_fetcher
+    qs = urllib.parse.urlencode({
+        "client": chave,
+        "meta": "recordings",
+        "duration": str(int(round(duracao or 0))),
+        "fingerprint": fingerprint,
+    })
+    dados = json.loads(fetcher(f"{ACOUSTID_URL}?{qs}"))
+    if not isinstance(dados, dict):
+        return []
+    if dados.get("status") != "ok":
+        erro = dados.get("error") or {}
+        raise RuntimeError(str(erro.get("message") or "resposta inesperada"))
+    return dados.get("results") or []
+
+
+def escolher_candidato(resultados: list, duracao_mp3: float,
+                       log=None) -> dict | None:
+    """Melhor candidato do AcoustID ({"confianca", "pontuacao", "titulo",
+    "artista", "duracao", "dif"}) ou None.
+
+    Duas travas antes de qualquer coisa: pontuação mínima 0,7 (abaixo disso
+    é chute) e confirmação pela duração com as MESMAS regras da V3
+    (classificar: ±3s ALTA, ≤8s ALTA quando a pontuação é altíssima, ≤15s
+    MÉDIA, >15s desqualifica). Gravação com título OU artista de
+    placeholder ("AudioTrack 05", "Unknown Artist", artista ausente) é
+    descartada antes do score. BAIXA não é identificação. Empate de
+    pontuação decide pela duração mais próxima."""
+    log = log or (lambda _msg: None)
+    melhor = None
+    for res in resultados:
+        try:
+            pontuacao = float(res.get("score") or 0.0)
+        except (TypeError, ValueError):
+            pontuacao = 0.0
+        if pontuacao < PONTUACAO_MINIMA:
+            log(f"  descartado: pontuação {pontuacao:.2f} abaixo de "
+                f"{PONTUACAO_MINIMA}")
+            continue
+        for gravacao in res.get("recordings") or []:
+            titulo = _nfc(str(gravacao.get("title") or "")).strip()
+            artista = _artista_da_gravacao(gravacao)
+            if eh_placeholder(titulo) or eh_placeholder(artista):
+                log(f'  descartado (placeholder): "{titulo} / {artista}"')
+                continue
+            duracao = gravacao.get("duration")
+            dif = (abs(duracao_mp3 - float(duracao))
+                   if duracao is not None and duracao_mp3 else None)
+            if dif is not None and dif > MAX_DIF_DURACAO_S:
+                log(f'  descartado (duração {dif:.0f}s fora): "{titulo}"')
+                continue
+            confianca = classificar(pontuacao, dif)
+            if confianca == "BAIXA":
+                log(f'  descartado (confirmação fraca): "{titulo}"')
+                continue
+            ordem = (pontuacao, -(dif if dif is not None else 1e9))
+            if melhor is None or ordem > melhor["ordem"]:
+                melhor = {"ordem": ordem, "pontuacao": pontuacao, "dif": dif,
+                          "confianca": confianca, "titulo": titulo,
+                          "artista": artista, "duracao": duracao}
+    return melhor
+
+
+def buscar_letra_oficial(titulo: str, artista: str, duracao_mp3: float,
+                         fetcher=None, log=None) -> str | None:
+    """Letra OFICIAL do LRCLIB para uma identificação já confirmada (F15,
+    --com-letra). Reusa a busca por campo (track_name/artist_name, mais
+    precisa) e o classificar da V3 para confirmar pela duração; resultado
+    com placeholder, sem letra ou de confirmação BAIXA não vale. O texto
+    volta limpo — quem grava usa embed_lyrics sem origem, então a letra
+    NÃO recebe o marcador de transcrição."""
+    log = log or (lambda _msg: None)
+    log(f'  letra: track="{titulo}" artista="{artista}"')
+    resultados = fetch_search(fetcher=fetcher, track_name=_nfc(titulo),
+                              artist_name=_nfc(artista))
+    alvo = f"{titulo} {artista}".strip()
+    melhor = None
+    for res in resultados:
+        track = _nfc(str(res.get("trackName") or ""))
+        nome = _nfc(str(res.get("artistName") or ""))
+        if eh_placeholder(track) or eh_placeholder(nome):
+            continue
+        letra = res.get("plainLyrics") or ""
+        if not letra:
+            continue
+        sim = similaridade(alvo, f"{track} {nome}")
+        duracao = res.get("duration")
+        dif = (abs(duracao_mp3 - float(duracao))
+               if duracao is not None and duracao_mp3 else None)
+        if dif is not None and dif > MAX_DIF_DURACAO_S:
+            continue
+        if classificar(sim, dif) == "BAIXA":
+            continue
+        bonus = 0.0
+        if dif is not None:
+            bonus = 0.3 if dif <= 3 else (0.15 if dif <= 8 else 0.0)
+        if melhor is None or sim + bonus > melhor[0]:
+            melhor = (sim + bonus, _nfc(letra))
+    log("  letra: " + ("encontrada" if melhor else "não encontrada"))
+    return melhor[1] if melhor else None
+
+
+def cmd_identificar(pasta: Path, impressao_digital=None, fetcher=None,
+                    chave: str = "", com_letra: bool = False,
+                    sobrescrever_tags: bool = False,
+                    csv_out: Path | None = None, verboso: bool = False,
+                    pausa: float = PAUSA_ACOUSTID_S) -> None:
+    """F15: identifica a gravação pela impressão digital acústica.
+
+    Etapa 3 do funil (~1–2 s por música, contra 30–80 s da transcrição):
+    calcula a impressão com o fpcalc, consulta o AcoustID e aplica o melhor
+    candidato — pontuação ≥ 0,7 E duração compatível pelas regras da V3.
+
+    Invioláveis: nunca renomeia, nunca toca no áudio e NUNCA sobrescreve
+    dado real. Como no transcrever, o candidato vem do ÁUDIO: título e
+    artista REAIS existentes são preservados em qualquer confiança (só
+    campo vazio ou placeholder é preenchido), salvo --sobrescrever-tags
+    (destrutivo, só para ALTA), e divergência entre a tag real e o
+    identificado vira CONFLITO — nada gravado, com balde próprio no resumo
+    e ação própria no CSV. Com --com-letra, a letra OFICIAL do LRCLIB entra
+    sem o marcador de transcrição, e letra existente nunca é substituída."""
+    if not chave:
+        die(MSG_SEM_CHAVE)
+    if impressao_digital is None:
+        impressao_digital = criar_impressao_digital()
+
+    mp3s = listar_mp3s(pasta)
+    total = len(mp3s)
+    log = print if verboso else None
+    registrar = log or (lambda _msg: None)
+    estado = {"primeira": True}
+
+    def cortesia():
+        if not estado["primeira"] and pausa:
+            time.sleep(pausa)  # o AcoustID pede no máximo 3 consultas/s
+        estado["primeira"] = False
+
+    contagem = {"identificadas": 0, "letras": 0, "sem_resultado": 0,
+                "conflitos": 0, "erros": 0}
+    linhas_csv = []
+    interrompido = None   # (arquivo, índice) onde o Ctrl-C parou o lote
+    posicao = ("", 0)
+
+    try:
+        for indice, p in enumerate(mp3s, 1):
+            rel = p.relative_to(pasta).as_posix()
+            posicao = (rel, indice)
+            prefixo = f"[{indice}/{total}] "
+            info = ler_info(p)
+            if info["ilegivel"]:
+                print(f"{prefixo}ERRO: {rel} — áudio ilegível")
+                contagem["erros"] += 1
+                linhas_csv.append([rel, "ERRO", "", "", "", "", "",
+                                   "áudio ilegível"])
+                continue
+
+            antes = _instantaneo(info)
+            gravou = False
+            fase = "leitura da impressão digital"
+            try:
+                duracao_fp, fingerprint = impressao_digital(str(p))
+                # o fpcalc devolve a duração REAL do arquivo; sem ela, vale
+                # a que o mutagen leu do cabeçalho
+                duracao = float(duracao_fp or 0.0) or info["duracao"]
+                fase = "consulta ao AcoustID"
+                cortesia()
+                resultados = consultar_acoustid(duracao, fingerprint, chave,
+                                                fetcher=fetcher)
+                registrar(f"  {len(resultados)} resultados do AcoustID")
+                melhor = escolher_candidato(resultados, duracao, log=log)
+                if melhor is None:
+                    print(f"{prefixo}SEM RESULTADO: {rel}")
+                    contagem["sem_resultado"] += 1
+                    linhas_csv.append([rel, "SEM RESULTADO", info["titulo"],
+                                       info["artista"], "", "", "",
+                                       "nenhum candidato confirmado"])
+                    continue
+
+                confianca = melhor["confianca"]
+                titulo_id = melhor["titulo"]
+                artista_id = melhor["artista"]
+                pontos = f"{melhor['pontuacao']:.2f}"
+                dur_ac = ("?" if melhor["duracao"] is None
+                          else f"{float(melhor['duracao']):.0f}s")
+                durs = f"mp3 {duracao:.0f}s, acoustid {dur_ac}"
+                # tag placeholder ("Faixa 5", "no artist") conta como vazia:
+                # pode ser preenchida
+                titulo_atual = _sem_placeholder(info["titulo"])
+                artista_atual = _sem_placeholder(info["artista"])
+                pode_sobrescrever = sobrescrever_tags and confianca == "ALTA"
+                if not pode_sobrescrever and (
+                        _discorda(titulo_atual, titulo_id)
+                        or _discorda(artista_atual, artista_id)):
+                    # a identificação contradiz dado real: silêncio aqui é o
+                    # que torna o lote perigoso
+                    print(f"{prefixo}CONFLITO: {rel} — tag atual "
+                          f'"{_ou_travessao(info["titulo"])} / '
+                          f'{_ou_travessao(info["artista"])}" difere do '
+                          f'identificado "{titulo_id} / {artista_id}" '
+                          "(não alterado)")
+                    contagem["conflitos"] += 1
+                    linhas_csv.append(
+                        [rel, "CONFLITO", info["titulo"], info["artista"],
+                         confianca, pontos, "",
+                         f'identificado "{titulo_id} / {artista_id}" não '
+                         f"aplicado ({durs})"])
+                    continue
+
+                if pode_sobrescrever:
+                    titulo, artista = titulo_id, artista_id
+                else:  # regra da V3.1: só preenche campo vazio
+                    titulo = "" if titulo_atual else titulo_id
+                    artista = "" if artista_atual else artista_id
+
+                letra = ""
+                if com_letra and not info["letra"]:
+                    # letra existente nunca é substituída (nem consultada à
+                    # toa): trocar letra curada por outra é apagar trabalho
+                    fase = "busca da letra no LRCLIB"
+                    try:
+                        cortesia()
+                        letra = buscar_letra_oficial(
+                            titulo_id, artista_id, duracao, fetcher=fetcher,
+                            log=log) or ""
+                    except KeyboardInterrupt:
+                        raise
+                    except Exception as exc:
+                        # a identificação já está paga: erro de rede na letra
+                        # não descarta o que foi identificado
+                        print(f"{prefixo}AVISO: {rel} — erro de rede na "
+                              "busca da letra")
+                        if verboso:
+                            print(f"  detalhe técnico: {exc}")
+                        letra = ""
+
+                fase = "gravação das tags no arquivo"
+                if letra:
+                    # letra OFICIAL: sai limpa e SEM marca de transcrição
+                    el.embed_lyrics(p, letra, title=titulo or None,
+                                    artist=artista or None, origem="")
+                    gravou = True
+                    contagem["letras"] += 1
+                elif titulo or artista:
+                    el.write_title_artist(p, title=titulo or None,
+                                          artist=artista or None)
+                    gravou = True
+
+                # a linha e o CSV mostram o que FICOU no arquivo, não o que
+                # veio do AcoustID: o CSV é para conferência
+                titulo_final = titulo or info["titulo"]
+                artista_final = artista or info["artista"]
+                preservou = ((titulo_atual and not titulo)
+                             or (artista_atual and not artista))
+                print(f"{prefixo}IDENTIFICADA: {rel} → "
+                      f"{_ou_travessao(titulo_final)} / "
+                      f"{_ou_travessao(artista_final)} "
+                      f"({confianca}, pontuação {pontos}, {durs})"
+                      + (" + letra" if letra else ""))
+                contagem["identificadas"] += 1
+                linhas_csv.append(
+                    [rel, "IDENTIFICADA", titulo_final, artista_final,
+                     confianca, pontos, len(letra) if letra else "",
+                     durs + ("; título/artista preservados"
+                             if preservou else "")])
+            except KeyboardInterrupt:
+                # a gravação é atômica (embed_lyrics.save_tags), então o
+                # arquivo em andamento está íntegro; o que não dá é MENTIR
+                # sobre ter gravado — confere no disco
+                if not gravou:
+                    gravou = _instantaneo(ler_info(p)) != antes
+                situacao = ("gravação já concluída neste arquivo" if gravou
+                            else "nada gravado")
+                print(f"{prefixo}INTERROMPIDO: {rel} ({situacao})")
+                linhas_csv.append([rel, "INTERROMPIDO", info["titulo"],
+                                   info["artista"], "", "", "", situacao])
+                interrompido = posicao
+                break
+            except Exception as exc:
+                print(f"{prefixo}ERRO: {rel} — falha na {fase}")
+                if verboso:  # a mensagem original costuma vir em inglês
+                    print(f"  detalhe técnico: {exc}")
+                contagem["erros"] += 1
+                linhas_csv.append([rel, "ERRO", info["titulo"],
+                                   info["artista"], "", "", "",
+                                   f"falha na {fase}"])
+                continue
+    except KeyboardInterrupt:
+        # Ctrl-C fora do processamento de um arquivo (entre um e outro)
+        if interrompido is None:
+            interrompido = posicao
+    finally:
+        # o resumo e o CSV SEMPRE saem: em acervo grande são horas de
+        # trabalho, e perdê-las por um Ctrl-C seria pior que não ter CSV
+        print(f"Resumo: {total} arquivos | "
+              f"{contagem['identificadas']} identificadas | "
+              f"{contagem['letras']} letras oficiais | "
+              f"{contagem['sem_resultado']} sem resultado | "
+              f"{contagem['conflitos']} conflitos | "
+              f"{contagem['erros']} erros")
+        if interrompido is not None:
+            parou_em, indice_parada = interrompido
+            print(f"Interrompido em: {parou_em} (arquivo {indice_parada} de "
+                  f"{total}) — {total - indice_parada} não processados")
+        if csv_out is not None:
+            gravar_csv(csv_out, IDENTIFICAR_COLUNAS, linhas_csv)
+
+
+# ---------------------------------------------------------------- estimar
+
+AMOSTRA_PADRAO = 10
+# Média publicada do Chromaprint (o PRD mede 1–2 s por música). Só entra em
+# cena quando não há fpcalc para medir aqui — e a saída DIZ isso.
+SEGUNDOS_IDENTIFICAR_PADRAO = 1.5
+# Segundos de CPU por segundo de áudio, por modelo do faster-whisper
+# (proporção publicada). Serve para projetar sem baixar modelo nenhum e
+# para converter uma medição de um modelo nos outros.
+RAZAO_TRANSCRICAO = {"tiny": 0.06, "base": 0.10, "small": 0.25,
+                     "medium": 0.70}
+MODELOS_NA_ESTIMATIVA = ("small", "tiny")
+
+
+def _fmt_estimativa(segundos: float) -> str:
+    """Tempo projetado em linguagem de estimativa: "~45 s", "~4 min",
+    "~1h20"."""
+    total = max(0.0, float(segundos or 0.0))
+    if total < 90:
+        return f"~{max(1, int(round(total)))} s"  # "~0 s" não informa nada
+    minutos = int(round(total / 60.0))
+    if minutos < 60:
+        return f"~{minutos} min"
+    return f"~{minutos // 60}h{minutos % 60:02d}"
+
+
+def _incompleto(info: dict) -> bool:
+    """Falta letra, título ou artista REAIS (placeholder conta como vazio)."""
+    return not (info["letra"] and _sem_placeholder(info["titulo"])
+                and _sem_placeholder(info["artista"]))
+
+
+def _amostrar(itens: list, quantos: int) -> list:
+    """Amostra espalhada pelo acervo — não só o começo, que costuma ser uma
+    pasta só — e determinística (mesma pasta, mesma amostra)."""
+    if quantos <= 0:
+        return []
+    if quantos >= len(itens):
+        return list(itens)
+    passo = len(itens) / float(quantos)
+    return [itens[int(i * passo)] for i in range(quantos)]
+
+
+def cmd_estimar(pasta: Path, amostra: int = AMOSTRA_PADRAO,
+                impressao_digital=None, transcritor=None,
+                modelo: str = "small", relogio=None,
+                trecho: float = TRECHO_PADRAO_S,
+                verboso: bool = False) -> None:
+    """F15.1: conta o acervo, mede uma amostra e projeta o tempo de cada
+    etapa do funil NESTE computador — para o curador decidir com número na
+    mão em vez de descobrir depois de seis horas.
+
+    Nada é gravado e NADA é baixado. Sem `fpcalc`, a identificação é
+    projetada pela média publicada; a transcrição é sempre projetada pela
+    proporção publicada do faster-whisper, a não ser que o chamador injete
+    um transcritor já carregado (o comando jamais carrega o modelo por
+    conta própria — seriam ~500 MB para dar um palpite). Os dois casos são
+    DITOS na saída: estimativa apresentada como medição seria pior que não
+    estimar."""
+    relogio = relogio or time.monotonic
+    mp3s = listar_mp3s(pasta)
+    total = len(mp3s)
+    if total == 0:
+        print("Acervo: 0 arquivos")
+        return
+
+    infos = [(p, ler_info(p)) for p in mp3s]
+    legiveis = [(p, info) for p, info in infos if not info["ilegivel"]]
+    incompletos = sum(1 for _p, info in legiveis if _incompleto(info))
+    sem_letra = sum(1 for _p, info in legiveis if not info["letra"])
+    print(f"Acervo: {total} arquivos | {incompletos} incompletos | "
+          f"{sem_letra} sem letra")
+
+    escolhidos = _amostrar(legiveis, amostra)
+    if impressao_digital is None and shutil.which("fpcalc"):
+        impressao_digital = criar_impressao_digital()
+
+    avisos = []
+    medidos = gasto_id = 0
+    duracao_amostra = 0.0
+    for p, info in escolhidos:
+        duracao_amostra += info["duracao"]
+        if impressao_digital is None:
+            continue
+        comeco = relogio()
+        try:
+            impressao_digital(str(p))
+        except Exception:
+            continue  # arquivo problemático não estraga a amostra
+        gasto_id += relogio() - comeco
+        medidos += 1
+        if verboso:
+            print(f"  medido: {p.relative_to(pasta).as_posix()}")
+
+    n_amostra = len(escolhidos)
+    media_duracao = (duracao_amostra / n_amostra) if n_amostra else 0.0
+    if medidos:
+        por_musica = gasto_id / medidos
+    else:
+        por_musica = SEGUNDOS_IDENTIFICAR_PADRAO
+        media = f"{SEGUNDOS_IDENTIFICAR_PADRAO:.1f}".replace(".", ",")
+        avisos.append(
+            f"AVISO: fpcalc não encontrado — identificar foi projetado pela "
+            f"média publicada (~{media} s por música), não medido nesta "
+            "máquina.")
+
+    razao_base = RAZAO_TRANSCRICAO.get(modelo, RAZAO_TRANSCRICAO["small"])
+    nota = ("transcrever: projetado pela proporção publicada do "
+            "faster-whisper (não medido nesta máquina — estimar não baixa "
+            "modelo).")
+    if transcritor is not None:
+        gasto_tr = 0.0
+        medidos_tr = 0
+        for p, _info in escolhidos:
+            comeco = relogio()
+            try:
+                transcritor(str(p), 0.0, trecho)
+            except Exception:
+                continue
+            gasto_tr += relogio() - comeco
+            medidos_tr += 1
+        if medidos_tr:
+            razao_base = (gasto_tr / medidos_tr) / max(trecho, 1.0)
+            nota = (f"transcrever: medido nesta máquina em {medidos_tr} "
+                    f"trecho(s) de {trecho:.0f}s com o modelo {modelo}; os "
+                    "demais modelos saem da razão conhecida entre eles.")
+
+    projecoes = []
+    for nome_modelo in MODELOS_NA_ESTIMATIVA:
+        fator = (RAZAO_TRANSCRICAO[nome_modelo]
+                 / RAZAO_TRANSCRICAO.get(modelo, RAZAO_TRANSCRICAO["small"]))
+        segundos = razao_base * fator * media_duracao * sem_letra
+        projecoes.append(f"{_fmt_estimativa(segundos)} (modelo "
+                         f"{nome_modelo})")
+
+    print(f"Amostra: {n_amostra} arquivos (média de "
+          f"{_fmt_dur(media_duracao)} por música)")
+    print(f"Projeção: identificar: {_fmt_estimativa(por_musica * total)} | "
+          "transcrever o restante: " + " ou ".join(projecoes))
+    for aviso in avisos:
+        print(aviso)
+    print(nota)
+    print("São ESTIMATIVAS, não promessas: o tempo real varia com o "
+          "processador, a rede, a duração das músicas e quanto o "
+          "identificar resolver antes.")
+
+
 # ---------------------------------------------------------------- main
 
 def main(argv: list[str] | None = None) -> None:
@@ -1414,6 +1976,40 @@ def main(argv: list[str] | None = None) -> None:
     p_trs.add_argument("--verboso", action="store_true",
                        help="mostra o trecho transcrito e os candidatos")
 
+    p_ide = sub.add_parser("identificar",
+                           help="identifica pela impressão digital acústica "
+                                "(AcoustID) e grava título/artista (V6)")
+    p_ide.add_argument("pasta", help="pasta do acervo")
+    p_ide.add_argument("--chave", default=None, metavar="CHAVE",
+                       help="chave da API do AcoustID (padrão: variável de "
+                            "ambiente ACOUSTID_API_KEY). Gratuita em "
+                            "https://acoustid.org/new-application; nunca é "
+                            "gravada em disco pelo projeto")
+    p_ide.add_argument("--com-letra", action="store_true", dest="com_letra",
+                       help="após identificar, busca a letra OFICIAL no "
+                            "LRCLIB pelo título/artista confirmados")
+    p_ide.add_argument("--sobrescrever-tags", action="store_true",
+                       dest="sobrescrever_tags",
+                       help="DESTRUTIVO: permite que uma identificação de "
+                            "confiança ALTA substitua título/artista reais "
+                            "já gravados (o padrão é só preencher campo "
+                            "vazio)")
+    p_ide.add_argument("--csv", default=None, metavar="SAIDA",
+                       help="registra o que foi aplicado, com a confiança")
+    p_ide.add_argument("--verboso", action="store_true",
+                       help="mostra a pontuação e os candidatos descartados")
+
+    p_est = sub.add_parser("estimar",
+                           help="mede uma amostra e projeta o tempo de cada "
+                                "etapa do funil neste computador")
+    p_est.add_argument("pasta", help="pasta do acervo")
+    p_est.add_argument("--amostra", type=int, default=AMOSTRA_PADRAO,
+                       metavar="N",
+                       help="quantos arquivos medir (padrão: "
+                            f"{AMOSTRA_PADRAO})")
+    p_est.add_argument("--verboso", action="store_true",
+                       help="mostra cada arquivo medido")
+
     p_tdp = sub.add_parser("temas-de-pastas",
                            help="soma às tags os temas vindos das subpastas")
     p_tdp.add_argument("pasta", help="pasta do acervo")
@@ -1448,6 +2044,17 @@ def main(argv: list[str] | None = None) -> None:
                         sobrescrever_tags=args.sobrescrever_tags,
                         verboso=args.verboso,
                         csv_out=Path(args.csv) if args.csv else None)
+    elif args.comando == "identificar":
+        # a chave nunca é lida nem escrita em disco: só --chave ou ambiente
+        cmd_identificar(pasta,
+                        chave=(args.chave
+                               or os.environ.get("ACOUSTID_API_KEY", "")),
+                        com_letra=args.com_letra,
+                        sobrescrever_tags=args.sobrescrever_tags,
+                        verboso=args.verboso,
+                        csv_out=Path(args.csv) if args.csv else None)
+    elif args.comando == "estimar":
+        cmd_estimar(pasta, amostra=args.amostra, verboso=args.verboso)
     elif args.comando == "temas-de-pastas":
         cmd_temas_de_pastas(pasta, aplicar=args.aplicar)
 

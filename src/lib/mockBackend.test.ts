@@ -608,6 +608,83 @@ describe("mockBackend", () => {
     });
   });
 
+  describe("letra_origem — transcrição automática (V5 — F14)", () => {
+    /** A música da fixture que tem letra, já marcada como transcrita. */
+    async function comLetraTranscrita(): Promise<Song> {
+      await backend.addFolder("/musicas/teste");
+      backend._markAsTranscribed("/musicas/teste/com_letra.mp3");
+      const songs = await backend.listSongs();
+      return songs.find((s) => s.file_path === "/musicas/teste/com_letra.mp3")!;
+    }
+
+    it("músicas indexadas nascem sem procedência declarada", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      expect(songs.every((s) => s.letra_origem === null)).toBe(true);
+    });
+
+    it("_markAsTranscribed marca só o arquivo indicado e a marca chega na Song", async () => {
+      const marcada = await comLetraTranscrita();
+      expect(marcada.letra_origem).toBe("transcricao");
+      const outras = (await backend.listSongs()).filter((s) => s.id !== marcada.id);
+      expect(outras.every((s) => s.letra_origem === null)).toBe(true);
+      // chega igual pela busca e pelas playlists
+      const [hit] = await backend.search("Coração Sertanejo");
+      expect(hit.song.letra_origem).toBe("transcricao");
+    });
+
+    it("letra nova derruba a marca; repassar a mesma letra preserva (DECISIONS #54)", async () => {
+      const marcada = await comLetraTranscrita();
+
+      // repasse da letra idêntica (caminho do lote): a marca continua válida
+      const igual = await backend.writeTags(
+        marcada.id,
+        "Outro Título",
+        marcada.artist,
+        FIXTURE_LYRICS,
+        marcada.temas ?? null,
+      );
+      expect(igual.letra_origem).toBe("transcricao");
+
+      const editada = await backend.writeTags(
+        marcada.id,
+        igual.title,
+        igual.artist,
+        "Letra conferida à mão",
+        igual.temas ?? null,
+      );
+      expect(editada.letra_origem).toBeNull();
+      const depois = (await backend.listSongs()).find((s) => s.id === marcada.id)!;
+      expect(depois.letra_origem).toBeNull();
+    });
+
+    it("apagar a letra derruba a marca e gravar letra nunca a inventa", async () => {
+      const marcada = await comLetraTranscrita();
+      const semLetra = await backend.writeTags(marcada.id, marcada.title, null, null, null);
+      expect(semLetra.has_lyrics).toBe(false);
+      expect(semLetra.letra_origem).toBeNull();
+
+      // arquivo sem marca nenhuma não ganha uma ao receber letra
+      const songs = await backend.listSongs();
+      const semTags = songs.find((s) => s.title === "sem_tags")!;
+      const comLetraNova = await backend.writeTags(
+        semTags.id,
+        semTags.title,
+        null,
+        "Letra digitada",
+        null,
+      );
+      expect(comLetraNova.letra_origem).toBeNull();
+    });
+
+    it("persiste em localStorage (sobrevive a reload)", async () => {
+      const marcada = await comLetraTranscrita();
+      const reborn = createMockBackend();
+      const songs = await reborn.listSongs();
+      expect(songs.find((s) => s.id === marcada.id)!.letra_origem).toBe("transcricao");
+    });
+  });
+
   describe("_seedFolderTree (V4 — F11)", () => {
     it("cria /acervo com músicas em /acervo/1 e /acervo/2", async () => {
       backend._seedFolderTree();

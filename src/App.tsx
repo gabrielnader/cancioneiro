@@ -9,9 +9,52 @@ import { Sidebar } from "./components/Sidebar";
 import { Toasts } from "./components/Toasts";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { getBackend } from "./lib/api";
+import { checkForUpdatesOnStartup, useUpdateStore } from "./lib/updater";
 import { useLibraryStore } from "./stores/libraryStore";
 import { usePlaylistStore } from "./stores/playlistStore";
 import { useUiStore } from "./stores/uiStore";
+
+/**
+ * Aviso discreto e NÃO-MODAL de atualização baixada (V7/F16). Fica no canto
+ * inferior esquerdo, longe dos toasts, e não some sozinho: o app só reinicia
+ * quando a pessoa mandar — pode haver música tocando numa reunião.
+ */
+function UpdateNotice() {
+  const ready = useUpdateStore((s) => s.ready);
+  const restarting = useUpdateStore((s) => s.restarting);
+  const runRestart = useUpdateStore((s) => s.runRestart);
+  const dismiss = useUpdateStore((s) => s.dismiss);
+
+  if (!ready) return null;
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="fixed bottom-20 left-4 z-50 flex w-96 max-w-[calc(100vw-2rem)] items-start gap-3 rounded-md bg-[#F0FDFA] px-4 py-3 text-[14px] text-[#115E59] shadow-md ring-1 ring-[#99F6E4]"
+    >
+      <p className="min-w-0 flex-1">
+        Atualização pronta. Reinicie o Cancioneiro para usar a versão nova.
+      </p>
+      <button
+        type="button"
+        disabled={restarting}
+        className="shrink-0 rounded bg-[#0F766E] px-3 py-1.5 text-[14px] font-medium text-white hover:bg-[#0D5F58] disabled:opacity-50"
+        onClick={() => void runRestart()}
+      >
+        {restarting ? "Reiniciando…" : "Reiniciar agora"}
+      </button>
+      <button
+        type="button"
+        aria-label="Dispensar aviso de atualização"
+        className="shrink-0 rounded px-1 text-[16px] leading-none text-[#0F766E] hover:bg-[#CCFBF1]"
+        onClick={dismiss}
+      >
+        ×
+      </button>
+    </div>
+  );
+}
 
 function App() {
   useKeyboardShortcuts();
@@ -42,6 +85,10 @@ function App() {
         unlisten();
       }
     })();
+
+    // V7/F16 — a checagem de atualização roda à parte, sem `await` de ninguém:
+    // não segura a abertura da janela, o scan nem a busca. Falha em silêncio.
+    void checkForUpdatesOnStartup();
   }, []);
 
   return (
@@ -70,6 +117,7 @@ function App() {
       </div>
       <PlayerBar />
       <EnrichReview />
+      <UpdateNotice />
       <Toasts />
     </div>
   );

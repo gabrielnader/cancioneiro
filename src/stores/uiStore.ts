@@ -13,9 +13,15 @@ interface UiState {
   lyricsPanelVisible: boolean;
   fontLevel: FontLevel;
   view: View;
+  /**
+   * V7/F16 — "Verificar atualizações ao abrir". Ligado por padrão; desligado,
+   * nenhuma chamada de rede acontece na abertura (rede isolada).
+   */
+  checkUpdatesOnStart: boolean;
   toggleLyricsPanel: () => void;
   cycleFontLevel: () => void;
   setView: (view: View) => void;
+  setCheckUpdatesOnStart: (value: boolean) => void;
 }
 
 export function createUiStore() {
@@ -25,17 +31,20 @@ export function createUiStore() {
         lyricsPanelVisible: true,
         fontLevel: 0,
         view: "library" as View,
+        checkUpdatesOnStart: true,
         toggleLyricsPanel: () =>
           set((s) => ({ lyricsPanelVisible: !s.lyricsPanelVisible })),
         cycleFontLevel: () =>
           set((s) => ({ fontLevel: ((s.fontLevel + 1) % 3) as FontLevel })),
         setView: (view) => set({ view }),
+        setCheckUpdatesOnStart: (value) => set({ checkUpdatesOnStart: value }),
       }),
       {
         name: "cancioneiro-ui",
         partialize: (s) => ({
           lyricsPanelVisible: s.lyricsPanelVisible,
           fontLevel: s.fontLevel,
+          checkUpdatesOnStart: s.checkUpdatesOnStart,
         }),
       },
     ),

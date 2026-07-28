@@ -15,6 +15,11 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-dialog = "2"
+# V7/F16 — atualização automática. Consulta o manifesto da release no GitHub e
+# valida a assinatura minisign (chave pública em tauri.conf.json).
+tauri-plugin-updater = "2"
+# só para o "Reiniciar agora" do aviso de atualização (relaunch)
+tauri-plugin-process = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 lofty = "0.22"

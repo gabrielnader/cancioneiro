@@ -32,6 +32,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -39,5 +40,16 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDYzN0Q5MzA4REVFRTQ4NTcKUldSWFNPN2VDSk45WXkraVFMQ2c0bUY5TlJCQVlsSXJkNWdTQUpzcVJveVR2TGdHYnhPcmNtZmQK",
+      "endpoints": [
+        "https://github.com/gabrielnader/cancioneiro/releases/latest/download/latest.json"
+      ],
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

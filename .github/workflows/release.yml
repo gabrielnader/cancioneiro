@@ -60,6 +60,12 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # V7/F16 — assinatura minisign do pacote de atualização. Sem estes
+          # segredos o build FALHA (createUpdaterArtifacts está ligado): é de
+          # propósito, uma release sem assinatura seria recusada pelo updater
+          # de quem já tem o app instalado. Ver PRD-v7-atualizacao.md.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.event.inputs.tag || github.ref_name }}
           releaseName: "Cancioneiro ${{ github.event.inputs.tag || github.ref_name }}"
@@ -71,7 +77,13 @@ jobs:
               (primeira abertura: botão direito → "Abrir", app não assinado)
             - **Linux**: `.deb`, `.rpm` ou `.AppImage`
 
+            A partir desta versão o Cancioneiro se atualiza sozinho: ao abrir,
+            ele verifica se há versão nova, baixa em segundo plano e avisa para
+            reiniciar quando estiver pronto (dá para desligar em Configurações).
+
             Guia de uso e curadoria do acervo: README.md do repositório.
           releaseDraft: false
           prerelease: false
+          # publica o latest.json (manifesto lido pelo tauri-plugin-updater)
+          includeUpdaterJson: true
           args: ${{ matrix.args }}

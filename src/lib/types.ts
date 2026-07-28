@@ -10,7 +10,17 @@ export interface Song {
   available: boolean;
   /** Temas do frame TXXX:TEMAS, unidos por "; " (V2). Ausente/null = sem temas. */
   temas?: string | null;
+  /**
+   * Procedência da letra ATUAL, do frame TXXX:LETRA_ORIGEM (V5/F14):
+   * ORIGEM_TRANSCRICAO = letra produzida automaticamente a partir do áudio.
+   * Ausente/null = sem procedência declarada. Trocar a letra derruba a marca
+   * no backend (DECISIONS #54), então ela sempre descreve o texto exibido.
+   */
+  letra_origem?: string | null;
 }
+
+/** Valor de `Song.letra_origem` que a curadoria grava para letra transcrita. */
+export const ORIGEM_TRANSCRICAO = "transcricao";
 
 export interface SearchResult {
   song: Song;

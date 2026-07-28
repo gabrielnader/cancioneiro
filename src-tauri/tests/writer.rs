@@ -431,7 +431,7 @@ fn write_tags_keeps_letra_origem_when_lyrics_pass_through_unchanged() {
     marcar_transcricao_com_capa(&path);
     let letra = db::get_lyrics(&conn, song.id).unwrap().expect("fixture tem letra");
 
-    writer::write_tags(
+    let updated = writer::write_tags(
         &conn,
         song.id,
         "Outro Título",
@@ -446,10 +446,56 @@ fn write_tags_keeps_letra_origem_when_lyrics_pass_through_unchanged() {
         Some("transcricao"),
         "letra inalterada: a marca legítima tem de continuar"
     );
+    assert_eq!(
+        updated.letra_origem.as_deref(),
+        Some("transcricao"),
+        "a Song reindexada continua marcada — o selo do painel permanece"
+    );
     frames_alheios_intactos(&path);
 
     // e a letra continua lá, byte a byte
     assert_eq!(db::get_lyrics(&conn, song.id).unwrap().as_deref(), Some(letra.as_str()));
+}
+
+// ---------------------------------------------------------------------------
+// V5/F14 — o selo do player some no ato: a Song devolvida pelo write_tags (e
+// a que o banco passa a servir) já vem SEM procedência quando a letra muda.
+// Sem isso o painel continuaria dizendo "transcrição automática" sobre a letra
+// que o coordenador acabou de digitar, até reiniciar o app.
+// ---------------------------------------------------------------------------
+#[test]
+fn write_tags_clears_letra_origem_in_the_reindexed_song() {
+    let (_dir, conn, folder_id) = setup();
+    let song = song_by_suffix(&conn, "com_letra.mp3");
+    let path = PathBuf::from(&song.file_path);
+    marcar_transcricao_com_capa(&path);
+
+    // rescan: o banco passa a enxergar a marca deixada pela curadoria
+    indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
+    assert_eq!(
+        song_by_suffix(&conn, "com_letra.mp3").letra_origem.as_deref(),
+        Some("transcricao"),
+        "o indexer precisa ver a marca antes da edição"
+    );
+
+    let updated = writer::write_tags(
+        &conn,
+        song.id,
+        &song.title,
+        song.artist.as_deref(),
+        Some("Letra escrita à mão pelo usuário"),
+        None,
+    )
+    .unwrap();
+
+    assert_eq!(
+        updated.letra_origem, None,
+        "a Song devolvida ao frontend não pode mais se declarar transcrição"
+    );
+    assert_eq!(
+        db::get_song(&conn, song.id).unwrap().unwrap().letra_origem,
+        None
+    );
 }
 
 // ---------------------------------------------------------------------------

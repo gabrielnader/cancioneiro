@@ -236,6 +236,92 @@ LRCLIB não prova nada — e um lote de horas roda sem ninguém olhando):
   alterado (a gravação de tags é atômica: escreve numa cópia temporária na mesma
   pasta e a troca de lugar, então nem uma queda de energia trunca o MP3).
 
+### Impressão digital acústica (V6)
+
+Transcrever custa 30 a 80 segundos por música; em 10.000 arquivos são 100 a 200
+horas. A impressão digital acústica calcula uma assinatura do áudio e a compara
+com uma base pública (AcoustID/MusicBrainz) em **1 a 2 segundos** — cerca de 30×
+mais barato — e acerta em cheio nas gravações comerciais. Por isso o
+`identificar` entra **antes** do `transcrever` no funil, que fica assim:
+
+| Etapa | Custo por música | Comando |
+|---|---|---|
+| 1. Tags + nome de arquivo + nome da pasta | instantâneo | `enriquecer` |
+| 2. LRCLIB por título/artista + duração | ~0,5 s | `enriquecer`, `buscar-letra` |
+| 3. **Impressão digital (AcoustID)** | ~1–2 s | **`identificar`** |
+| 4. Transcrição local, só no que sobrou | 30–80 s | `transcrever` |
+
+Duas dependências, ambas fáceis e ambas **opcionais** (sem elas, todos os outros
+subcomandos seguem normais — só o `identificar` avisa e sai):
+
+1. **`fpcalc`**, do Chromaprint, que calcula a assinatura:
+
+   ```bash
+   brew install chromaprint                        # macOS
+   sudo apt install libchromaprint-tools           # Debian/Ubuntu
+   # Windows: baixe o binário oficial em https://acoustid.org/chromaprint
+   #          e ponha a pasta do fpcalc.exe no PATH
+   ```
+
+2. **Chave da API do AcoustID**, gratuita e com cadastro de um minuto em
+   [acoustid.org/new-application](https://acoustid.org/new-application). O
+   projeto **nunca grava a chave em disco**: passe em `--chave` ou deixe na
+   variável de ambiente.
+
+```bash
+export ACOUSTID_API_KEY="sua-chave"
+python3 tools/curadoria.py identificar ~/Musicas --com-letra --csv feito.csv
+```
+
+```bash
+  --chave CHAVE          chave da API (ou a variável ACOUSTID_API_KEY)
+  --com-letra            depois de identificar, busca a letra oficial no LRCLIB
+  --csv arquivo.csv      registra o que foi aplicado, com a confiança
+  --sobrescrever-tags    deixa a identificação ALTA trocar tag real (destrutivo)
+  --verboso              mostra a pontuação e os candidatos descartados
+```
+
+Só entra o candidato com **pontuação ≥ 0,7 E duração compatível** (±3s = ALTA,
+até 15s = MÉDIA, acima disso desqualifica — as mesmas regras da V3). Cada linha
+traz o contador `[12/94]`, e Ctrl-C encerra com o `Resumo:` e o `--csv` gravado,
+dizendo onde parou:
+
+```
+[12/94] IDENTIFICADA: barco - Timoneiro.mp3 → Timoneiro / Paulinho da Viola (ALTA, pontuação 0.94, mp3 232s, acoustid 231s) + letra
+[13/94] SEM RESULTADO: barquinha - linda sereia.mp3
+[14/94] CONFLITO: barco - Canoeiro.mp3 — tag atual "Canoeiro / Paulo Diniz" difere do identificado "Canoeiro / Leila Pinheiro" (não alterado)
+Resumo: 94 arquivos | 31 identificadas | 12 letras oficiais | 48 sem resultado | 3 conflitos | 0 erros
+```
+
+Valem aqui **as mesmas travas** que o `transcrever` aprendeu na marra — o palpite
+também vem do áudio, então casar não prova nada: título e artista reais nunca são
+sobrescritos (só campo vazio ou de preenchimento automático), divergência vira
+`CONFLITO` sem gravar nada, resultado com título/artista de placeholder é
+descartado, letra existente nunca é substituída, a gravação de tags é atômica e
+nenhum arquivo é renomeado ou movido. Com `--com-letra` a letra que entra é a
+**oficial** do LRCLIB — não recebe o selo `SIM (transcrição)` do relatório.
+
+#### Quanto tempo isto vai levar? (`estimar`)
+
+Acervo grande não se encara às cegas. O `estimar` conta os arquivos, mede uma
+amostra nesta máquina e projeta cada etapa do funil:
+
+```bash
+python3 tools/curadoria.py estimar ~/Musicas --amostra 10
+```
+
+```
+Acervo: 94 arquivos | 63 incompletos | 71 sem letra
+Amostra: 10 arquivos (média de 3m52s por música)
+Projeção: identificar: ~4 min | transcrever o restante: ~1h20 (modelo small) ou ~18 min (modelo tiny)
+```
+
+Ele não grava nada e **não baixa nada** — nem o modelo do Whisper. Quando um
+número não pôde ser medido aqui (sem `fpcalc`, ou sem o modelo baixado), a saída
+diz com todas as letras que aquela etapa saiu de média/proporção publicada, e
+não de medição. São estimativas: o tempo real varia com o processador, a rede,
+a duração das músicas e quanto o `identificar` resolver antes.
+
 ## Testes
 
 ```bash

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { LyricsPanel } from "./LyricsPanel";
 import { setBackendForTests, type Backend } from "../lib/api";
@@ -466,5 +466,95 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
     await waitFor(() =>
       expect(screen.queryByLabelText("Título")).not.toBeInTheDocument(),
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V5/F14 — aviso de letra vinda de transcrição automática. A marca
+// TXXX:LETRA_ORIGEM descreve a letra ATUAL (DECISIONS #54), então o aviso vale
+// exatamente pelo texto que está na tela.
+// ---------------------------------------------------------------------------
+describe("LyricsPanel — aviso de transcrição automática (V5 F14)", () => {
+  const AVISO = "Letra transcrita automaticamente do áudio — pode conter erros.";
+
+  function transcrita(overrides: Partial<Song> = {}): Song {
+    return { ...song(1, true), letra_origem: "transcricao", ...overrides };
+  }
+
+  beforeEach(() => {
+    setupBackend();
+    useToastStore.setState({ toasts: [] });
+    usePlaylistStore.setState({ items: [], activePlaylistId: null });
+    usePlayerStore.setState({ current: null, isPlaying: false });
+  });
+
+  it("letra transcrita: aviso discreto logo acima da letra", async () => {
+    useLibraryStore.setState({
+      results: [{ song: transcrita(), snippet: null }],
+      selectedSongId: 1,
+    });
+    render(<LyricsPanel />);
+
+    const body = await screen.findByTestId("lyrics-body");
+    const aviso = screen.getByTestId("lyrics-origem");
+    expect(aviso).toHaveTextContent(AVISO);
+    // vem ANTES da letra na ordem do documento
+    expect(aviso.compareDocumentPosition(body)).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  });
+
+  it("letra oficial (sem marca) e música sem letra: nenhum aviso", async () => {
+    useLibraryStore.setState({
+      results: [
+        { song: song(1, true), snippet: null },
+        { song: { ...song(2, false), letra_origem: "transcricao" }, snippet: null },
+      ],
+      selectedSongId: 1,
+    });
+    render(<LyricsPanel />);
+    await screen.findByTestId("lyrics-body");
+    expect(screen.queryByTestId("lyrics-origem")).not.toBeInTheDocument();
+
+    // música sem letra nenhuma: nada a ressalvar, mesmo com marca residual
+    act(() => useLibraryStore.setState({ selectedSongId: 2 }));
+    await screen.findByText("Esta música ainda não tem letra registrada.");
+    expect(screen.queryByTestId("lyrics-origem")).not.toBeInTheDocument();
+  });
+
+  it("salvar uma letra nova derruba o aviso na hora (sem reiniciar o app)", async () => {
+    const NOVA = "Letra conferida à mão\nSegunda linha";
+    // o backend limpa a marca ao trocar a letra e devolve a Song reindexada
+    const writeTags = vi.fn(
+      async (songId: number, title: string, artist: string | null): Promise<Song> => ({
+        ...transcrita({ id: songId, title, artist }),
+        letra_origem: null,
+      }),
+    );
+    setBackendForTests({
+      getLyrics: vi.fn(async () => LYRICS),
+      writeTags,
+      fetchLyricsOnline: vi.fn(async () => null),
+    } as unknown as Backend);
+    useLibraryStore.setState({
+      results: [{ song: transcrita(), snippet: null }],
+      selectedSongId: 1,
+    });
+
+    render(<LyricsPanel />);
+    await screen.findByTestId("lyrics-body");
+    expect(screen.getByTestId("lyrics-origem")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Editar" }));
+    fireEvent.change(screen.getByLabelText("Letra"), { target: { value: NOVA } });
+    fireEvent.click(screen.getByRole("button", { name: "Salvar no arquivo" }));
+
+    await waitFor(() => expect(writeTags).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(screen.queryByTestId("lyrics-origem")).not.toBeInTheDocument(),
+    );
+    expect(
+      useLibraryStore.getState().results[0].song.letra_origem,
+    ).toBeNull();
   });
 });

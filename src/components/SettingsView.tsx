@@ -1,11 +1,13 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { getBackend } from "../lib/api";
+import { getAppVersion } from "../lib/updater";
 import { useLibraryStore } from "../stores/libraryStore";
 import { useToastStore } from "../stores/toastStore";
+import { useUiStore } from "../stores/uiStore";
 import { AddFolderButton } from "./AddFolderButton";
 import { ConfirmDialog } from "./ConfirmDialog";
 
-/** Configurações (F1): pastas observadas, remover, reindexar. */
+/** Configurações (F1): pastas observadas, remover, reindexar. (V7/F16: atualização.) */
 export function SettingsView() {
   const folders = useLibraryStore((s) => s.folders);
   const removeFolder = useLibraryStore((s) => s.removeFolder);
@@ -14,6 +16,21 @@ export function SettingsView() {
   const scanning = useLibraryStore((s) => s.scanning);
   const push = useToastStore((s) => s.push);
   const [confirmingFolderId, setConfirmingFolderId] = useState<number | null>(null);
+  const checkUpdatesOnStart = useUiStore((s) => s.checkUpdatesOnStart);
+  const setCheckUpdatesOnStart = useUiStore((s) => s.setCheckUpdatesOnStart);
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+
+  // Versão vinda do próprio app (nunca uma string no código) — null no modo
+  // web, onde a linha simplesmente não aparece.
+  useEffect(() => {
+    let alive = true;
+    void getAppVersion().then((v) => {
+      if (alive) setAppVersion(v);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   async function handleRescan() {
     const unlisten = await getBackend().onScanProgress((p) =>
@@ -87,6 +104,33 @@ export function SettingsView() {
               />
             </div>
           </div>
+        )}
+      </section>
+
+      <section className="mt-8">
+        <h2 className="text-[15px] font-medium text-[#111827]">Atualizações</h2>
+        <label className="mt-2 flex max-w-md items-start gap-3">
+          <input
+            type="checkbox"
+            className="mt-1 h-4 w-4 accent-[#0F766E]"
+            checked={checkUpdatesOnStart}
+            onChange={(e) => setCheckUpdatesOnStart(e.target.checked)}
+          />
+          <span>
+            <span className="text-[#111827]">
+              Verificar atualizações ao abrir
+            </span>
+            <span className="mt-0.5 block text-[13px] text-[#6B7280]">
+              Consulta apenas se existe uma versão nova. Nada do seu acervo sai
+              do computador. Desligado, o Cancioneiro não acessa a internet ao
+              abrir.
+            </span>
+          </span>
+        </label>
+        {appVersion && (
+          <p className="mt-4 text-[13px] text-[#6B7280]">
+            Versão instalada: {appVersion}
+          </p>
         )}
       </section>
 

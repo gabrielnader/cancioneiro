@@ -433,6 +433,51 @@ fn roundtrip_temas_from_python_script_and_search_by_tema() {
 }
 
 // ---------------------------------------------------------------------------
+// V5/F14 — round-trip da marca de procedência: o `tools/curadoria.py
+// transcrever` grava TXXX:LETRA_ORIGEM = "transcricao" no MP3 e o indexer lê
+// esse frame igual aos demais TXXX. Arquivo sem a marca fica sem procedência
+// (None) — nunca "oficial" por engano.
+// ---------------------------------------------------------------------------
+#[test]
+fn scan_reads_letra_origem_marker_and_leaves_unmarked_files_absent() {
+    use lofty::config::{ParseOptions, WriteOptions};
+    use lofty::file::AudioFile;
+    use lofty::tag::TagExt;
+
+    let dir = setup_music_dir(false);
+
+    // marca só a fixture com letra, como faria a ferramenta de curadoria
+    let marcada = dir.path().join("com_letra.mp3");
+    let mut tag = lofty::mpeg::MpegFile::read_from(
+        &mut fs::File::open(&marcada).unwrap(),
+        ParseOptions::new(),
+    )
+    .unwrap()
+    .id3v2()
+    .cloned()
+    .unwrap_or_default();
+    tag.insert_user_text("LETRA_ORIGEM".to_string(), "transcricao".to_string());
+    tag.save_to_path(&marcada, WriteOptions::default()).unwrap();
+
+    let conn = test_conn();
+    let folder_id = db::add_folder(&conn, dir.path().to_str().unwrap()).unwrap();
+    indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
+
+    let songs = db::list_songs(&conn).unwrap();
+    let com_letra = songs
+        .iter()
+        .find(|s| s.file_path.ends_with("com_letra.mp3"))
+        .unwrap();
+    assert_eq!(com_letra.letra_origem.as_deref(), Some("transcricao"));
+
+    // fixtures sem o frame: procedência ausente
+    for name in ["sem_letra.mp3", "sem_tags.mp3"] {
+        let outra = songs.iter().find(|s| s.file_path.ends_with(name)).unwrap();
+        assert_eq!(outra.letra_origem, None, "{name} não tem a marca");
+    }
+}
+
+// ---------------------------------------------------------------------------
 // V5 (F12) — o scan preenche songs.pastas com os nomes das subpastas do
 // arquivo relativos à pasta registrada (separados por espaço); arquivo na
 // raiz fica NULL; a busca encontra pelo nome da pasta sem a palavra em

@@ -37,15 +37,18 @@ struct TagData {
     lyrics: Option<String>,
     /// Temas do frame TXXX:TEMAS ("água; cura") — V2, PRD-v2-temas.md.
     temas: Option<String>,
+    /// Procedência da letra atual, do frame TXXX:LETRA_ORIGEM ("transcricao")
+    /// — V5/F14, PRD-v5-transcricao.md.
+    letra_origem: Option<String>,
     /// true se a leitura de tags falhou e usamos fallback
     fallback: bool,
 }
 
-/// Extrai o frame TXXX com descrição "TEMAS" (lofty expõe TXXX desconhecidos
-/// como ItemKey::Unknown(descrição)).
-fn read_temas(tag: &lofty::tag::Tag) -> Option<String> {
+/// Extrai um frame TXXX pela descrição (lofty expõe TXXX desconhecidos como
+/// ItemKey::Unknown(descrição)). Texto em branco conta como ausente.
+fn read_txxx(tag: &lofty::tag::Tag, desc: &str) -> Option<String> {
     tag.items()
-        .find(|item| matches!(item.key(), ItemKey::Unknown(desc) if desc == "TEMAS"))
+        .find(|item| matches!(item.key(), ItemKey::Unknown(d) if d == desc))
         .and_then(|item| item.value().text())
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
@@ -67,6 +70,7 @@ fn read_tags(path: &Path) -> TagData {
         duration_seconds: None,
         lyrics: None,
         temas: None,
+        letra_origem: None,
         fallback: true,
     };
 
@@ -81,7 +85,7 @@ fn read_tags(path: &Path) -> TagData {
     let duration = tagged.properties().duration().as_secs() as i64;
     let tag = tagged.primary_tag().or_else(|| tagged.first_tag());
 
-    let (title, artist, album, lyrics, temas) = match tag {
+    let (title, artist, album, lyrics, temas, letra_origem) = match tag {
         Some(t) => {
             let title = t
                 .title()
@@ -100,10 +104,14 @@ fn read_tags(path: &Path) -> TagData {
                 .get_string(&ItemKey::Lyrics)
                 .map(|s| s.to_string())
                 .filter(|s| !s.trim().is_empty());
-            let temas = read_temas(t);
-            (title, artist, album, lyrics, temas)
+            let temas = read_txxx(t, "TEMAS");
+            // V5/F14 — procedência da letra. A marca acompanha a letra que
+            // está no arquivo (DECISIONS #54): letra sem marca é letra sem
+            // procedência declarada, nunca "oficial" por dedução.
+            let letra_origem = read_txxx(t, "LETRA_ORIGEM");
+            (title, artist, album, lyrics, temas, letra_origem)
         }
-        None => (file_stem_title(path), None, None, None, None),
+        None => (file_stem_title(path), None, None, None, None, None),
     };
 
     TagData {
@@ -113,6 +121,7 @@ fn read_tags(path: &Path) -> TagData {
         duration_seconds: Some(duration),
         lyrics,
         temas,
+        letra_origem,
         fallback: false,
     }
 }
@@ -149,8 +158,9 @@ fn upsert_song(
     conn.execute(
         "INSERT INTO songs
             (file_path, folder_id, title, artist, album, duration_seconds,
-             has_lyrics, lyrics, temas, pastas, file_mtime, file_size, available, indexed_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, 1, datetime('now'))
+             has_lyrics, lyrics, temas, letra_origem, pastas, file_mtime, file_size,
+             available, indexed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 1, datetime('now'))
          ON CONFLICT(file_path) DO UPDATE SET
             folder_id = excluded.folder_id,
             title = excluded.title,
@@ -160,6 +170,7 @@ fn upsert_song(
             has_lyrics = excluded.has_lyrics,
             lyrics = excluded.lyrics,
             temas = excluded.temas,
+            letra_origem = excluded.letra_origem,
             pastas = excluded.pastas,
             file_mtime = excluded.file_mtime,
             file_size = excluded.file_size,
@@ -175,6 +186,7 @@ fn upsert_song(
             has_lyrics as i64,
             tags.lyrics,
             tags.temas,
+            tags.letra_origem,
             pastas,
             mtime,
             size
