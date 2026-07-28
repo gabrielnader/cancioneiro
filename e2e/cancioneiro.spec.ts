@@ -80,6 +80,67 @@ test.describe("Fluxo crítico: indexar → buscar → ver letra → tocar", () =
     expect(errors).toEqual([]);
   });
 
+  // Desde a V6 a altura da linha VARIA (nome do arquivo, snippet). O
+  // virtualizador só remede a lista quando a contagem ou a chave dos itens
+  // muda: trocar de lista mantendo a MESMA quantidade já desenhou as linhas
+  // novas nas fatias das antigas — texto estourando a própria fatia e
+  // sobrepondo a linha seguinte.
+  test("trocar a lista mantendo a mesma quantidade não deixa a linha na fatia da lista anterior", async ({
+    page,
+  }) => {
+    await resetApp(page);
+    await addMockFolder(page);
+
+    /** Cada linha tem de caber na fatia que a virtualização reservou. */
+    async function fatiasComportam(): Promise<void> {
+      const medidas = await page.evaluate(() =>
+        [...document.querySelectorAll('[role="option"]')].map((linha) => {
+          const fatia = linha.parentElement as HTMLElement;
+          return {
+            titulo: linha.textContent?.slice(0, 30) ?? "",
+            fatia: fatia.getBoundingClientRect().height,
+            linha: linha.getBoundingClientRect().height,
+            topoFatia: fatia.getBoundingClientRect().top,
+            baseLinha: linha.getBoundingClientRect().bottom,
+          };
+        }),
+      );
+      expect(medidas.length).toBeGreaterThan(0);
+      for (const m of medidas) {
+        expect(
+          m.fatia,
+          `"${m.titulo}": fatia de ${m.fatia}px para uma linha de ${m.linha}px`,
+        ).toBeGreaterThanOrEqual(m.linha);
+      }
+      // e nenhuma linha invade a fatia da seguinte
+      for (let i = 0; i < medidas.length - 1; i++) {
+        expect(medidas[i].baseLinha).toBeLessThanOrEqual(
+          medidas[i + 1].topoFatia + 0.5,
+        );
+      }
+    }
+
+    const search = page.getByPlaceholder("Buscar por letra, título ou artista…");
+
+    // 1 resultado sem snippet (casa pelo título) → fatia mais baixa
+    await search.fill("sertanejo");
+    await expect(page.getByText("1 resultados")).toBeVisible();
+    await expect(page.locator("mark")).toHaveCount(0);
+    await fatiasComportam();
+
+    // 1 resultado COM snippet (casa só pela letra) → a linha cresce, e a
+    // contagem continua 1: é aqui que as medidas antigas eram reaproveitadas
+    await search.fill(LETRA_TRECHO);
+    await expect(page.getByText("1 resultados")).toBeVisible();
+    await expect(page.locator("mark").first()).toBeVisible();
+    await fatiasComportam();
+
+    // biblioteca inteira de volta (linhas de alturas diferentes entre si)
+    await search.fill("");
+    await expect(page.getByRole("option")).toHaveCount(3);
+    await fatiasComportam();
+  });
+
   test("buscar trecho que existe só na letra destaca o termo; sem acento também encontra", async ({
     page,
   }) => {

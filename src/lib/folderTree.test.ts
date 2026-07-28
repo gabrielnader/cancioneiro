@@ -187,6 +187,32 @@ describe("songFileName — regra de redundância (V6)", () => {
     );
   });
 
+  // O macOS entrega o file_path em NFD ("c" + "~" combinante) enquanto o
+  // título vindo da tag ID3 chega em NFC. São o MESMO texto para quem lê, e
+  // sem normalizar a comparação a palavra sai impressa duas vezes — justo no
+  // sistema que a dona do acervo usa.
+  it("macOS: caminho em NFD e título em NFC são o mesmo texto (não repete)", () => {
+    expect(
+      songFileName(
+        comCaminho("/acervo/Coração.mp3".normalize("NFD"), "Coração".normalize("NFC")),
+      ),
+    ).toBeNull();
+  });
+
+  it("o inverso também: caminho em NFC e título em NFD (não repete)", () => {
+    expect(
+      songFileName(
+        comCaminho("/acervo/Coração.mp3".normalize("NFC"), "Coração".normalize("NFD")),
+      ),
+    ).toBeNull();
+  });
+
+  it("normalizar NÃO apaga a diferença de acento: 'Coracao.mp3' sob o título 'Coração' em NFD continua visível", () => {
+    expect(
+      songFileName(comCaminho("/acervo/Coracao.mp3", "Coração".normalize("NFD"))),
+    ).toBe("Coracao.mp3");
+  });
+
   it("título igual ao nome COM extensão também é redundante (nada é impresso duas vezes)", () => {
     expect(songFileName(comCaminho("/acervo/barco.mp3", "barco.mp3"))).toBeNull();
   });

@@ -58,9 +58,22 @@ export function fileName(path: string): string {
   return lastSegment(path);
 }
 
-/** Comparação de redundância: ignora caixa e espaços em volta (não ignora acento). */
+/**
+ * Comparação de redundância: ignora caixa, espaços em volta e a FORMA de
+ * composição Unicode (não ignora acento).
+ *
+ * O macOS entrega o file_path em NFD ("c" + acento combinante) e a tag ID3
+ * chega em NFC ("ç"): sem normalizar, "Coração.mp3" com o título "Coração"
+ * escaparia da regra e a mesma palavra sairia impressa duas vezes. NFC não
+ * remove acento nenhum — "Coracao.mp3" sob o título "Coração" continua sendo
+ * uma diferença de verdade, e continua aparecendo.
+ */
 function mesmoTexto(a: string, b: string): boolean {
-  return a.trim().toLocaleLowerCase() === b.trim().toLocaleLowerCase();
+  return normalizado(a) === normalizado(b);
+}
+
+function normalizado(s: string): string {
+  return s.normalize("NFC").trim().toLocaleLowerCase();
 }
 
 /**

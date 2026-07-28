@@ -7,6 +7,12 @@ import { usePlayerStore } from "../stores/playerStore";
 import { usePlaylistStore } from "../stores/playlistStore";
 import { useToastStore } from "../stores/toastStore";
 import type { Song } from "../lib/types";
+import {
+  AA_TEXTO_NORMAL,
+  contrastRatio,
+  corDoTexto,
+  FUNDOS_DA_LINHA,
+} from "../test/contrast";
 
 const LYRICS = "Quando o sol amanhecer\nMeu coração vai cantar\n\nNão há noite sem estrela";
 
@@ -120,6 +126,20 @@ describe("LyricsPanel (F3)", () => {
       renderCom(comCaminho("C:\\acervo\\capoeira\\barco - Marinheiro.mp3"));
       const nome = await screen.findByTestId("panel-filename");
       expect(nome.textContent).toBe("barco - Marinheiro.mp3");
+    });
+
+    it("passa em AA (4.5:1) sobre o fundo branco do painel", async () => {
+      renderCom(comCaminho("/acervo/barco - Marinheiro.mp3"));
+      const nome = await screen.findByTestId("panel-filename");
+      const cor = corDoTexto(nome.className);
+      expect(
+        contrastRatio(cor, FUNDOS_DA_LINHA.branco),
+        `${cor} sobre o branco do painel`,
+      ).toBeGreaterThanOrEqual(AA_TEXTO_NORMAL);
+      // secundário em relação ao título (18px, #111827)
+      expect(contrastRatio(cor, FUNDOS_DA_LINHA.branco)).toBeLessThan(
+        contrastRatio("#111827", FUNDOS_DA_LINHA.branco),
+      );
     });
 
     it("música sem tags (título = nome do arquivo): não repete o mesmo texto", async () => {

@@ -1,32 +1,69 @@
-import { render, screen, fireEvent } from "@testing-library/react";
+import { act, render, screen, fireEvent } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SongList } from "./SongList";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlayerStore } from "../stores/playerStore";
 import { usePlaylistStore } from "../stores/playlistStore";
 import type { SearchResult, Song } from "../lib/types";
+import {
+  AA_TEXTO_NORMAL,
+  contrastRatio,
+  corDoTexto,
+  FUNDOS_DA_LINHA,
+} from "../test/contrast";
 
 // Virtualização depende de medidas reais de layout — inexistentes no jsdom.
 // O mock empilha os itens usando estimateSize(index), como o virtualizer real:
 // a altura da linha varia (snippet, nome do arquivo).
-vi.mock("@tanstack/react-virtual", () => ({
-  useVirtualizer: (opts: { count: number; estimateSize: (index: number) => number }) => {
-    const sizes = () =>
-      Array.from({ length: opts.count }, (_, index) => opts.estimateSize(index));
-    return {
-      getTotalSize: () => sizes().reduce((a, b) => a + b, 0),
-      getVirtualItems: () => {
+//
+// E reproduz a MEMOIZAÇÃO do @tanstack/virtual-core 3.17.6: getMeasurements()
+// só recalcula quando as dependências de getMeasurementOptions() mudam de
+// identidade — [count, getItemKey, ...] — e `estimateSize` NÃO está entre elas.
+// Sem isso o mock nunca falharia no defeito real: lista nova, mesma contagem,
+// alturas da lista ANTERIOR.
+vi.mock("@tanstack/react-virtual", async () => {
+  const { useRef } = await import("react");
+  interface Opts {
+    count: number;
+    estimateSize: (index: number) => number;
+    getItemKey?: (index: number) => string | number;
+  }
+  interface Item {
+    index: number;
+    key: string | number;
+    start: number;
+    size: number;
+  }
+  return {
+    useVirtualizer: (opts: Opts) => {
+      const memo = useRef<{ deps: unknown[]; items: Item[] } | null>(null);
+      const deps: unknown[] = [opts.count, opts.getItemKey];
+      const stale =
+        memo.current !== null && memo.current.deps.every((d, i) => d === deps[i]);
+      if (!stale) {
         let start = 0;
-        return sizes().map((size, index) => {
-          const item = { index, key: index, start, size };
+        const items = Array.from({ length: opts.count }, (_, index) => {
+          const size = opts.estimateSize(index);
+          const item: Item = {
+            index,
+            key: opts.getItemKey ? opts.getItemKey(index) : index,
+            start,
+            size,
+          };
           start += size;
           return item;
         });
-      },
-      measureElement: () => {},
-    };
-  },
-}));
+        memo.current = { deps, items };
+      }
+      const items = memo.current!.items;
+      return {
+        getTotalSize: () => items.reduce((a, b) => a + b.size, 0),
+        getVirtualItems: () => items,
+        measureElement: () => {},
+      };
+    },
+  };
+});
 
 function song(id: number, title: string, hasLyrics = true): Song {
   return {
@@ -60,6 +97,7 @@ describe("SongList (F1 UI / F2 / F3)", () => {
       results: results(),
       selectedSongId: null,
       query: "",
+      folderFilter: null,
     });
     usePlayerStore.setState({ current: null, isPlaying: false });
   });
@@ -270,6 +308,28 @@ describe("SongList (F1 UI / F2 / F3)", () => {
       }
     });
 
+    it("o nome do arquivo passa em AA (4.5:1) no fundo branco, no selecionado e no hover", () => {
+      useLibraryStore.setState({
+        results: [comArquivo(10, "Marinheiro só", "/acervo/barco.mp3")],
+      });
+      render(<SongList />);
+      const nome = screen
+        .getByText("Marinheiro só")
+        .closest('[role="option"]')!
+        .querySelector('[data-testid="song-filename"]')!;
+      const cor = corDoTexto(nome.className);
+      for (const [fundoNome, fundo] of Object.entries(FUNDOS_DA_LINHA)) {
+        expect(
+          contrastRatio(cor, fundo),
+          `${cor} sobre ${fundoNome} (${fundo})`,
+        ).toBeGreaterThanOrEqual(AA_TEXTO_NORMAL);
+      }
+      // ...e continua secundário: o olho tem de cair primeiro no título.
+      expect(contrastRatio(cor, FUNDOS_DA_LINHA.branco)).toBeLessThan(
+        contrastRatio("#111827", FUNDOS_DA_LINHA.branco),
+      );
+    });
+
     it("a altura virtualizada acompanha a linha extra do nome do arquivo", () => {
       useLibraryStore.setState({
         results: [
@@ -284,6 +344,84 @@ describe("SongList (F1 UI / F2 / F3)", () => {
         .map((o) => o.parentElement!.style.height);
       expect(parseInt(semNome, 10)).toBeGreaterThan(0);
       expect(parseInt(comNome, 10)).toBeGreaterThan(parseInt(semNome, 10));
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Alturas da virtualização quando a LISTA TROCA mantendo a contagem.
+  // O virtual-core memoiza as medidas em [count, getItemKey, ...] e ignora
+  // `estimateSize`: sem uma chave que acompanhe a música, a lista nova é
+  // desenhada com as alturas da lista anterior (linhas sobrepostas).
+  // ---------------------------------------------------------------------------
+  describe("alturas ao trocar a lista mantendo a mesma contagem", () => {
+    /** Alturas dos invólucros posicionados pela virtualização. */
+    function alturas(): string[] {
+      return screen
+        .getAllByRole("option")
+        .map((o) => o.parentElement!.style.height);
+    }
+
+    /** Deslocamentos verticais (translateY) dos invólucros. */
+    function deslocamentos(): string[] {
+      return screen
+        .getAllByRole("option")
+        .map((o) => o.parentElement!.style.transform);
+    }
+
+    function comCaminho(id: number, title: string, filePath: string): SearchResult {
+      return { song: { ...song(id, title), file_path: filePath }, snippet: null };
+    }
+
+    // /a: título = nome do arquivo → sem segunda linha (40px).
+    // /b: nome do arquivo diferente do título → segunda linha (40 + 16 = 56px).
+    const PASTA_A = [
+      comCaminho(1, "um", "/a/um.mp3"),
+      comCaminho(2, "dois", "/a/dois.mp3"),
+    ];
+    const PASTA_B = [
+      comCaminho(3, "Marinheiro só", "/b/barco - Marinheiro.mp3"),
+      comCaminho(4, "Aurora", "/b/canto - Aurora.mp3"),
+    ];
+
+    it("trocar o filtro entre duas pastas com a MESMA quantidade remede as linhas", () => {
+      useLibraryStore.setState({
+        results: [...PASTA_A, ...PASTA_B],
+        folderFilter: "/a",
+      });
+      render(<SongList />);
+      expect(alturas()).toEqual(["40px", "40px"]);
+
+      act(() => {
+        useLibraryStore.setState({ folderFilter: "/b" });
+      });
+      expect(screen.getByText("Marinheiro só")).toBeInTheDocument();
+      expect(alturas()).toEqual(["56px", "56px"]);
+      expect(deslocamentos()).toEqual([
+        "translateY(0px)",
+        "translateY(56px)",
+      ]);
+    });
+
+    it("repopular os resultados com a mesma contagem (ex.: salvar um título) remede as linhas", () => {
+      useLibraryStore.setState({ results: PASTA_B, folderFilter: null });
+      render(<SongList />);
+      expect(alturas()).toEqual(["56px", "56px"]);
+
+      // título passa a ser o próprio nome do arquivo → a segunda linha some
+      act(() => {
+        useLibraryStore.setState({
+          results: [
+            comCaminho(3, "barco - Marinheiro", "/b/barco - Marinheiro.mp3"),
+            comCaminho(4, "canto - Aurora", "/b/canto - Aurora.mp3"),
+          ],
+        });
+      });
+      expect(screen.getByText("barco - Marinheiro")).toBeInTheDocument();
+      expect(alturas()).toEqual(["40px", "40px"]);
+      expect(deslocamentos()).toEqual([
+        "translateY(0px)",
+        "translateY(40px)",
+      ]);
     });
   });
 

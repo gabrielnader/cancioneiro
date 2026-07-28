@@ -85,7 +85,8 @@ export function LyricsPanel() {
               {nomeArquivo && (
                 <p
                   data-testid="panel-filename"
-                  className="mt-0.5 select-text break-words text-[12px] leading-4 text-[#9CA3AF]"
+                  // mesmo cinza da linha da lista (AA 4.5:1 em 12px, ver SongRow)
+                  className="mt-0.5 select-text break-words text-[12px] leading-4 text-[#5B6472]"
                 >
                   {nomeArquivo}
                 </p>

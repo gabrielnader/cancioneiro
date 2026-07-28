@@ -115,7 +115,11 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
         <p
           data-testid="song-filename"
           title={nomeArquivo}
-          className="truncate text-[12px] leading-4 text-[#9CA3AF]"
+          // #5B6472 e não o cinza-claro de antes: em 12px o texto precisa
+          // passar em AA (4.5:1) nos TRÊS fundos da linha — branco (5.98:1),
+          // selecionado #F0FDFA (5.74:1) e hover #F3F4F6 (5.44:1). Ainda muito
+          // mais claro que o título (#111827, 17.74:1): o olho cai nele primeiro.
+          className="truncate text-[12px] leading-4 text-[#5B6472]"
         >
           {nomeArquivo}
         </p>

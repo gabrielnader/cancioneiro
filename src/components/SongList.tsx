@@ -1,4 +1,4 @@
-import { useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { filterResultsByFolder, songFileName } from "../lib/folderTree";
 import { useLibraryStore } from "../stores/libraryStore";
@@ -40,10 +40,24 @@ export function SongList() {
   );
 
   const parentRef = useRef<HTMLDivElement>(null);
+
+  // Chave da linha = id da música, e NÃO o índice. Isso é obrigatório, não
+  // enfeite: o virtual-core memoiza as medidas em [count, getItemKey, ...] e
+  // `estimateSize` NÃO entra nessa lista. Sem uma chave que troque de
+  // identidade junto com `results`, trocar a lista mantendo a contagem
+  // (alternar entre duas pastas com o mesmo número de músicas, repopular os
+  // resultados depois de salvar um título) reaproveitaria as alturas da lista
+  // ANTERIOR — as linhas sairiam posicionadas por medidas de outras músicas.
+  const getItemKey = useCallback(
+    (index: number) => results[index]?.song.id ?? index,
+    [results],
+  );
+
   const virtualizer = useVirtualizer({
     count: results.length,
     getScrollElement: () => parentRef.current,
     estimateSize: (index) => rowHeight(results[index]),
+    getItemKey,
     overscan: 12,
   });
 
