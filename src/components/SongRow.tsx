@@ -79,12 +79,22 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
             Sem letra
           </span>
         )}
-        {song.temas && (
-          <span className="flex min-w-0 shrink items-center gap-1.5 overflow-hidden">
-            <TemaChips temas={song.temas} />
-          </span>
-        )}
-        <span className="ml-auto flex shrink-0 items-center">
+        {/*
+          Temas e "+" moram JUNTOS à direita, separados do bloco de texto por
+          um respiro fixo (pl-6). Motivo vindo do uso real: com título curto,
+          o chip caía quase em cima de onde a pessoa clica para selecionar a
+          música — e um clique errado no chip não é inofensivo, ele TROCA a
+          busca inteira e derruba a lista onde ela estava. Assim a metade
+          esquerda da linha vira área segura de seleção e a direita concentra
+          as ações, que é a convenção que o "+" já estabelecia.
+        */}
+        <span className="ml-auto flex min-w-0 shrink items-center gap-3 pl-6">
+          {song.temas && (
+            <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
+              <TemaChips temas={song.temas} />
+            </span>
+          )}
+          <span className="flex shrink-0 items-center">
           {playlists.length > 0 && (
             <button
               ref={plusRef}
@@ -109,6 +119,7 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
               +
             </button>
           )}
+          </span>
         </span>
       </div>
       {nomeArquivo && (

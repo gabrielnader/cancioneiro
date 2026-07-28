@@ -141,6 +141,29 @@ describe("SongList (F1 UI / F2 / F3)", () => {
     expect(usePlayerStore.getState().current).toBeNull();
   });
 
+  // Uso real: com título curto, o chip caía quase em cima de onde a pessoa
+  // clica para selecionar — e clique errado no chip TROCA a busca inteira.
+  // Chips e "+" passam a viver no mesmo grupo à direita, separados do bloco
+  // de texto, deixando a esquerda da linha como área segura de seleção.
+  it("chips ficam no grupo de ações à direita, longe do título e do artista", () => {
+    // o "+" só existe havendo playlist, e ele é a outra metade do grupo
+    usePlaylistStore.setState({
+      playlists: [{ id: 1, name: "Culto", song_count: 0 }],
+    });
+    render(<SongList />);
+    const chip = screen.getByRole("button", { name: "Tema: água" });
+    const acoes = chip.closest(".ml-auto")!;
+    expect(acoes).not.toBeNull();
+    // o "+" da mesma linha vive no MESMO grupo
+    const linha = chip.closest('[role="option"]')!;
+    const mais = linha.querySelector('[aria-label="Adicionar à playlist"]');
+    expect(acoes.contains(mais!)).toBe(true);
+    // e o título/artista ficam FORA dele
+    expect(acoes.textContent).not.toContain("Rio Divino");
+    // respiro fixo entre o texto e as ações
+    expect(acoes.className).toContain("pl-6");
+  });
+
   it("música sem temas não exibe chips", () => {
     render(<SongList />);
     const row = screen.getByText("Aurora").closest('[role="option"]')!;
