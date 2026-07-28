@@ -459,6 +459,19 @@ _PLACEHOLDERS_EXATOS = frozenset({
     "no title", "sem titulo", "untitled", "unknown title",
     "titulo desconhecido",
 })
+# Expressões que, aparecendo em QUALQUER posição, denunciam tag de ripador —
+# nenhum artista ou título real as contém. "artista desconheci" sem o final
+# cobre o truncamento de campo do ID3 visto no acervo real.
+_PLACEHOLDERS_TRECHO = (
+    "artista desconheci", "artista desconhecida", "unknown artist",
+    "no artist", "titulo desconheci", "unknown title",
+)
+# Palavras de maquinário: sozinhas (ou só com números) não identificam nada.
+_RUIDO_DE_ARQUIVO = frozenset({
+    "audiotrack", "audio", "track", "faixa", "pista", "converted",
+    "convertido", "copia", "copy", "mp3", "wav", "untitled", "new",
+    "recording", "gravacao", "sem", "titulo", "nome",
+})
 
 
 def eh_placeholder(texto: str) -> bool:
@@ -472,7 +485,19 @@ def eh_placeholder(texto: str) -> bool:
         return True  # vazio, só pontuação/# ou só dígitos
     if chave in _PLACEHOLDERS_EXATOS:
         return True
-    return bool(_RE_PLACEHOLDER_FAIXA.match(chave))
+    if bool(_RE_PLACEHOLDER_FAIXA.match(chave)):
+        return True
+    # Lixo de ripador com sujeira em volta, visto no acervo real:
+    # "04 Faixa 4 Artista Desconheci" (truncado pelo limite do ID3) e
+    # "1-2010 22-17-23)_converted". Nenhum artista ou título de verdade
+    # contém estas expressões, então a busca por trecho é segura.
+    if any(marca in chave for marca in _PLACEHOLDERS_TRECHO):
+        return True
+    # Só números e palavras de maquinário ("converted", "faixa", "track"…):
+    # não sobra nenhuma palavra que identifique a música.
+    palavras = [p for p in chave.split()
+                if not p.isdigit() and p not in _RUIDO_DE_ARQUIVO]
+    return not palavras
 
 
 def _sem_placeholder(texto: str) -> str:
@@ -1075,13 +1100,36 @@ def _ou_travessao(texto: str) -> str:
     return texto if texto else "—"
 
 
+# Acima disto, duas grafias são a MESMA coisa e não há o que conferir.
+# Calibrado no acervo real: "Raízes de América"/"Raíces de América" (0,94) e
+# "Toinho do Alagoas"/"Toinho de Alagoas" (0,94) passam; "Satania"/"Sabrina"
+# (0,57), músicas diferentes do mesmo artista, continua conflito.
+LIMIAR_MESMA_GRAFIA = 0.85
+# Comprimento mínimo para o teste de contenção não absolver coincidência
+# ("Sol" dentro de "Sol Nascente" seriam músicas diferentes).
+_MIN_CONTENCAO = 5
+
+
 def _discorda(atual: str, identificado: str) -> bool:
-    """True quando a tag REAL existente contradiz o que foi identificado
-    (comparação sem acento/caixa/pontuação). Campo vazio ou placeholder não
-    contradiz nada — só espera ser preenchido."""
+    """True quando a tag REAL existente contradiz o que foi identificado.
+
+    Campo vazio ou placeholder não contradiz nada — só espera ser preenchido.
+    Variação de grafia também não: no teste real com 94 arquivos, 6 dos 8
+    conflitos eram a mesma música escrita de outro jeito ("Milionário y José
+    Rico" x "Milionário & José Rico"), e tratá-las como contradição
+    desperdiçava identificação boa. São a mesma coisa quando as chaves
+    normalizadas são muito parecidas OU quando uma contém a outra ("Lampejo"
+    dentro de "Adventício - Lampejo", "Marinheiro So" dentro de "Marinheiro
+    So (dj mitsu remix)"). Diferença de verdade continua conflito."""
     if not atual or not identificado:
         return False
-    return _norm_comparacao(atual) != _norm_comparacao(identificado)
+    a, b = _norm_comparacao(atual), _norm_comparacao(identificado)
+    if a == b:
+        return False
+    curta, longa = sorted((a, b), key=len)
+    if len(curta) >= _MIN_CONTENCAO and curta in longa:
+        return False
+    return similaridade(a, b) < LIMIAR_MESMA_GRAFIA
 
 
 def _instantaneo(info: dict) -> tuple:
@@ -1457,7 +1505,15 @@ def escolher_candidato(resultados: list, duracao_mp3: float,
             log(f"  descartado: pontuação {pontuacao:.2f} abaixo de "
                 f"{PONTUACAO_MINIMA}")
             continue
-        for gravacao in res.get("recordings") or []:
+        gravacoes = res.get("recordings") or []
+        if not gravacoes:
+            # A impressão digital casou, mas o AcoustID não tem título/artista
+            # ligados a ela. Sem esta linha o --verboso dizia "1 resultados" e
+            # depois "SEM RESULTADO", sem explicar nada (teste real).
+            log(f"  descartado: resultado sem metadados de gravação "
+                f"(pontuação {pontuacao:.2f})")
+            continue
+        for gravacao in gravacoes:
             titulo = _nfc(str(gravacao.get("title") or "")).strip()
             artista = _artista_da_gravacao(gravacao)
             if eh_placeholder(titulo) or eh_placeholder(artista):

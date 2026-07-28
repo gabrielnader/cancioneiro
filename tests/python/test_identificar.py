@@ -378,6 +378,68 @@ class TestTravasDeSeguranca:
             in out
         assert titulo_de(alvo) == "TIMONEIRO"   # a grafia do curador fica
 
+    # Teste real (94 arquivos): 6 dos 8 "conflitos" eram a MESMA música com
+    # grafia diferente — "Raízes de América"/"Raíces de América",
+    # "Milionário y José Rico"/"Milionário & José Rico", "Toinho do
+    # Alagoas"/"Toinho de Alagoas". Tratar isso como contradição desperdiça
+    # identificação boa e enche o relatório de ruído.
+    @pytest.mark.parametrize("atual_t, atual_a, id_t, id_a", [
+        ("Disparada", "Raízes de América", "Disparada", "Raíces de América"),
+        ("Mensagem do além", "Milionário y José Rico",
+         "Mensagem do além", "Milionário & José Rico"),
+        ("Balanço da canoa", "Toinho do Alagoas",
+         "Balanço da Canoa", "Toinho de Alagoas"),
+        # prefixo/sufixo: o mesmo título com um rótulo a mais
+        ("Adventício - Lampejo", "Reynaldo Bessa",
+         "Lampejo", "Reynaldo Bessa"),
+        ("Marinheiro So (dj mitsu remix)", "Frankie Valentine",
+         "Marinheiro So", "Frankie Valentine"),
+    ])
+    def test_variacao_de_grafia_nao_e_conflito(self, pasta, capsys,
+                                               atual_t, atual_a, id_t, id_a):
+        alvo = pasta / "Faixa 5.mp3"
+        tag(alvo, title=atual_t, artist=atual_a)
+        identificar(pasta, fetcher=fetcher_de(resposta_acoustid(
+            gravacoes=[gravacao(titulo=id_t, artista=id_a)])))
+        out = capsys.readouterr().out
+        assert "CONFLITO" not in out
+        assert "IDENTIFICADA" in out
+        # a grafia do curador é preservada: nada de tag real sobrescrita
+        assert titulo_de(alvo) == atual_t
+        assert artista_de(alvo) == atual_a
+
+    def test_titulo_parecido_mas_outra_musica_continua_conflito(self, pasta,
+                                                               capsys):
+        # "Satania" x "Sabrina" do mesmo artista: parecidas de letra, músicas
+        # diferentes — este é o conflito que PRECISA continuar aparecendo.
+        alvo = pasta / "Faixa 5.mp3"
+        tag(alvo, title="Satania", artist="Casaca")
+        antes = sha256(alvo)
+        identificar(pasta, fetcher=fetcher_de(resposta_acoustid(
+            gravacoes=[gravacao(titulo="Sabrina", artista="Casaca")])))
+        assert sha256(alvo) == antes
+        assert "| 1 conflitos |" in capsys.readouterr().out
+
+    def test_tag_lixo_de_ripador_nao_bloqueia_identificacao(self, pasta):
+        # Caso real: título "1-2010 22-17-23)_converted" e artista
+        # "04 Faixa 4 Artista Desconheci" viraram CONFLITO e travaram uma
+        # identificação boa. Lixo de ripador é campo vazio, não contradição.
+        alvo = pasta / "Faixa 5.mp3"
+        tag(alvo, title="1-2010 22-17-23)_converted",
+            artist="04 Faixa 4 Artista Desconheci")
+        identificar(pasta)
+        assert titulo_de(alvo) == "Timoneiro"
+        assert artista_de(alvo) == "Paulinho da Viola"
+
+    def test_resultado_sem_metadados_explica_no_verboso(self, pasta, capsys):
+        # Teste real: "1 resultados do AcoustID" seguido de SEM RESULTADO,
+        # sem uma linha sequer dizendo por quê — impossível de depurar.
+        identificar(pasta, verboso=True, fetcher=fetcher_de(
+            resposta_acoustid(gravacoes=[])))
+        out = capsys.readouterr().out
+        assert "sem metadados" in out
+        assert "SEM RESULTADO" in out
+
     def test_tag_placeholder_e_preenchida(self, pasta):
         alvo = pasta / "Faixa 5.mp3"
         tag(alvo, title="AudioTrack 05", artist="no artist")
