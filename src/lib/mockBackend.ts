@@ -37,6 +37,12 @@ export interface MockBackend extends Backend {
    * testes e E2E produzem uma música com letra transcrita.
    */
   _markAsTranscribed(filePath: string): void;
+  /**
+   * Simula o que a curadoria deixa no MP3 de uma música sem voz:
+   * TXXX:INSTRUMENTAL = "1" (V8/F17). Compõe com qualquer seed — é assim que
+   * testes e E2E produzem uma música instrumental.
+   */
+  _markAsInstrumental(filePath: string): void;
   /** Zera o estado em memória e a persistência. */
   _reset(): void;
   /** Valor devolvido pelo próximo pickFolder(). */
@@ -210,6 +216,7 @@ function toSong(record: SongRecord): Song {
     available: record.available,
     temas: record.temas ?? null,
     letra_origem: record.letra_origem ?? null,
+    instrumental: record.instrumental === true,
   };
 }
 
@@ -566,6 +573,7 @@ export function createMockBackend(): MockBackend {
       artist: string | null,
       lyrics: string | null,
       temas: string | null,
+      instrumental?: boolean | null,
     ): Promise<Song> {
       const song = state.songs.find((s) => s.id === songId);
       if (!song) {
@@ -588,6 +596,12 @@ export function createMockBackend(): MockBackend {
       // preserva. Nunca inventa marca em arquivo que não tinha.
       if (song.lyrics !== letraAnterior) {
         song.letra_origem = null;
+      }
+      // A marca de instrumental descreve a MÚSICA, não a letra (V8/F17): só a
+      // escolha explícita mexe nela. `undefined`/null = "não mexer", e por isso
+      // trocar a letra — ou o lote gravando título/artista — não desmarca.
+      if (instrumental === true || instrumental === false) {
+        song.instrumental = instrumental;
       }
       song.temas = normalizeTemas(temas);
       save();
@@ -893,6 +907,13 @@ export function createMockBackend(): MockBackend {
       const song = state.songs.find((s) => s.file_path === filePath);
       if (!song) return;
       song.letra_origem = ORIGEM_TRANSCRICAO;
+      save();
+    },
+
+    _markAsInstrumental(filePath: string): void {
+      const song = state.songs.find((s) => s.file_path === filePath);
+      if (!song) return;
+      song.instrumental = true;
       save();
     },
 

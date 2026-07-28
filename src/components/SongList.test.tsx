@@ -1,6 +1,8 @@
-import { act, render, screen, fireEvent } from "@testing-library/react";
+import { act, render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SongList } from "./SongList";
+import { LyricsPanel } from "./LyricsPanel";
+import { setBackendForTests, type Backend } from "../lib/api";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlayerStore } from "../stores/playerStore";
 import { usePlaylistStore } from "../stores/playlistStore";
@@ -446,6 +448,127 @@ describe("SongList (F1 UI / F2 / F3)", () => {
         "translateY(40px)",
       ]);
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // V8/F17 — marca de instrumental. Uma música sem voz não é pendência: no
+  // lugar do selo cinza "Sem letra" (cobrança que a varredura de letra vai
+  // repetir para sempre) a linha diz "Instrumental" — informação.
+  // -------------------------------------------------------------------------
+  describe("selo de instrumental (V8/F17)", () => {
+    function instrumental(id: number, title: string, hasLyrics = false): SearchResult {
+      return {
+        song: { ...song(id, title, hasLyrics), instrumental: true },
+        snippet: null,
+      };
+    }
+
+    /** O selo (span) com o texto exato, dentro da linha da música. */
+    function selo(title: string, texto: string): HTMLElement | undefined {
+      const row = screen.getByText(title).closest('[role="option"]')!;
+      return Array.from(row.querySelectorAll("span")).find(
+        (el) => el.textContent === texto,
+      );
+    }
+
+    it("música instrumental mostra 'Instrumental' NO LUGAR de 'Sem letra'", () => {
+      useLibraryStore.setState({
+        results: [instrumental(10, "Doce Prelúdio")],
+      });
+      render(<SongList />);
+      expect(selo("Doce Prelúdio", "Instrumental")).toBeDefined();
+      expect(screen.queryByText("Sem letra")).not.toBeInTheDocument();
+    });
+
+    it("música comum sem letra continua com o selo 'Sem letra'", () => {
+      render(<SongList />); // fixture "Brisa" é sem letra e não instrumental
+      expect(screen.getAllByText("Sem letra")).toHaveLength(1);
+      expect(screen.queryByText("Instrumental")).not.toBeInTheDocument();
+    });
+
+    it("instrumental COM letra registrada mostra o selo e nenhuma pendência", () => {
+      useLibraryStore.setState({
+        results: [instrumental(11, "Passeio pelo Jardim", true)],
+      });
+      render(<SongList />);
+      expect(selo("Passeio pelo Jardim", "Instrumental")).toBeDefined();
+      expect(screen.queryByText("Sem letra")).not.toBeInTheDocument();
+    });
+
+    it("é informação, não pendência: não usa o chip cinza preenchido do 'Sem letra'", () => {
+      useLibraryStore.setState({
+        results: [instrumental(10, "Doce Prelúdio"), { song: song(2, "Brisa", false), snippet: null }],
+      });
+      render(<SongList />);
+      const info = selo("Doce Prelúdio", "Instrumental")!;
+      const pendencia = selo("Brisa", "Sem letra")!;
+      expect(pendencia.className).toContain("bg-[#F3F4F6]");
+      expect(info.className).not.toContain("bg-[#F3F4F6]");
+    });
+
+    it("o selo passa em AA (4.5:1) no fundo branco, no selecionado e no hover", () => {
+      useLibraryStore.setState({
+        results: [instrumental(10, "Doce Prelúdio")],
+      });
+      render(<SongList />);
+      const cor = corDoTexto(selo("Doce Prelúdio", "Instrumental")!.className);
+      for (const [fundoNome, fundo] of Object.entries(FUNDOS_DA_LINHA)) {
+        expect(
+          contrastRatio(cor, fundo),
+          `${cor} sobre ${fundoNome} (${fundo})`,
+        ).toBeGreaterThanOrEqual(AA_TEXTO_NORMAL);
+      }
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // V8/F17 — marcar no editor tem de mudar o selo na lista NA HORA: quem
+  // acabou de dizer "isto é instrumental" não pode precisar reiniciar o app
+  // para ver a pendência sumir.
+  // -------------------------------------------------------------------------
+  it("marcar 'Esta música é instrumental' no editor troca o selo da linha sem recarregar", async () => {
+    const writeTags = vi.fn(
+      async (
+        songId: number,
+        title: string,
+        _artist: string | null,
+        lyrics: string | null,
+        _temas: string | null,
+        instrumental?: boolean | null,
+      ): Promise<Song> => ({
+        ...song(songId, title, lyrics !== null),
+        instrumental: instrumental === true,
+      }),
+    );
+    setBackendForTests({
+      getLyrics: vi.fn(async () => null),
+      writeTags,
+    } as unknown as Backend);
+    useLibraryStore.setState({
+      results: [{ song: song(20, "Doce Prelúdio", false), snippet: null }],
+      selectedSongId: 20,
+    });
+
+    render(
+      <>
+        <SongList />
+        <LyricsPanel />
+      </>,
+    );
+    // antes: a música é uma pendência de letra
+    expect(screen.getByText("Sem letra")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Editar" }));
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Esta música é instrumental" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Salvar no arquivo" }));
+
+    await waitFor(() => expect(writeTags).toHaveBeenCalledTimes(1));
+    expect(writeTags.mock.calls[0][5]).toBe(true);
+    // o selo da linha troca na hora, sem reiniciar
+    expect(await screen.findByText("Instrumental")).toBeInTheDocument();
+    expect(screen.queryByText("Sem letra")).not.toBeInTheDocument();
   });
 
   it("lista tem papel de listbox com aria-selected no item selecionado", () => {

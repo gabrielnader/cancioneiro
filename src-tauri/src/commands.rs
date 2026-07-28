@@ -256,8 +256,11 @@ pub fn reorder_playlist(
 // Curadoria no player (F10 — PRD V4)
 // ---------------------------------------------------------------------------
 
-/// Grava TIT2/TPE1/USLT/TXXX:TEMAS no MP3 (nunca renomeia, nunca toca o
-/// áudio), reindexa o arquivo e devolve a Song atualizada.
+/// Grava TIT2/TPE1/USLT/TXXX:TEMAS/TXXX:INSTRUMENTAL no MP3 (nunca renomeia,
+/// nunca toca o áudio), reindexa o arquivo e devolve a Song atualizada.
+///
+/// `instrumental` (V8/F17) tem três estados: `true` marca, `false` desmarca e
+/// `null` (ausente no JSON) significa "não mexer" — ver writer::write_tags.
 #[tauri::command]
 pub fn write_tags(
     state: State<'_, Db>,
@@ -266,6 +269,7 @@ pub fn write_tags(
     artist: Option<String>,
     lyrics: Option<String>,
     temas: Option<String>,
+    instrumental: Option<bool>,
 ) -> Result<Song> {
     let conn = state.lock()?;
     crate::writer::write_tags(
@@ -275,6 +279,7 @@ pub fn write_tags(
         artist.as_deref(),
         lyrics.as_deref(),
         temas.as_deref(),
+        instrumental,
     )
 }
 

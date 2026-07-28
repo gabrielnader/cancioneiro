@@ -302,6 +302,7 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
       "Artista Teste",
       LYRICS,
       "esperança; fé",
+      false, // V8/F17: a música não é instrumental e o editor diz isso sempre
     );
     expect(useToastStore.getState().toasts).toEqual([
       expect.objectContaining({
@@ -333,6 +334,7 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
       "Artista Teste",
       LYRICS,
       "água; esperança; fé",
+      false,
     );
   });
 
@@ -349,6 +351,7 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
       "Artista Teste",
       LYRICS,
       "água; esperança",
+      false,
     );
   });
 
@@ -632,5 +635,121 @@ describe("LyricsPanel — aviso de transcrição automática (V5 F14)", () => {
     expect(
       useLibraryStore.getState().results[0].song.letra_origem,
     ).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V8/F17 — marca de instrumental no editor do player. É a ponta manual da
+// funcionalidade: "Esta música é instrumental", salva junto com o resto do
+// formulário, pelo mesmo write_tags (nenhum caminho de gravação novo).
+// ---------------------------------------------------------------------------
+describe("LyricsPanel — marca de instrumental (V8/F17)", () => {
+  const ROTULO = "Esta música é instrumental";
+
+  /** Música sem voz já marcada no arquivo. */
+  function marcada(over: Partial<Song> = {}): Song {
+    return { ...song(2, false), title: "Doce Prelúdio", instrumental: true, ...over };
+  }
+
+  function montar(s: Song, writeTags: ReturnType<typeof vi.fn>) {
+    setBackendForTests({
+      getLyrics: vi.fn(async () => (s.has_lyrics ? LYRICS : null)),
+      writeTags,
+      fetchLyricsOnline: vi.fn(async () => null),
+    } as unknown as Backend);
+    useLibraryStore.setState({
+      results: [{ song: s, snippet: null }],
+      selectedSongId: s.id,
+    });
+    render(<LyricsPanel />);
+  }
+
+  /** writeTags que devolve a Song com a marca que recebeu (como o backend). */
+  function fakeWriteTags(base: Song) {
+    return vi.fn(
+      async (
+        songId: number,
+        title: string,
+        artist: string | null,
+        lyrics: string | null,
+        temas: string | null,
+        instrumental?: boolean | null,
+      ): Promise<Song> => ({
+        ...base,
+        id: songId,
+        title,
+        artist,
+        temas,
+        has_lyrics: lyrics !== null,
+        instrumental: instrumental === true,
+      }),
+    );
+  }
+
+  beforeEach(() => {
+    useToastStore.setState({ toasts: [] });
+    usePlaylistStore.setState({ items: [], activePlaylistId: null });
+    usePlayerStore.setState({ current: null, isPlaying: false });
+  });
+
+  it("o controle nasce marcado quando a música já é instrumental", async () => {
+    montar(marcada(), fakeWriteTags(marcada()));
+    fireEvent.click(await screen.findByRole("button", { name: "Editar" }));
+    expect(screen.getByRole("checkbox", { name: ROTULO })).toBeChecked();
+  });
+
+  it("marcar à mão: salva pelo write_tags e a Song devolvida volta marcada", async () => {
+    const base = song(2, false);
+    const writeTags = fakeWriteTags(base);
+    montar(base, writeTags);
+    fireEvent.click(await screen.findByRole("button", { name: "Editar" }));
+
+    const controle = screen.getByRole("checkbox", { name: ROTULO });
+    expect(controle).not.toBeChecked();
+    fireEvent.click(controle);
+    fireEvent.click(screen.getByRole("button", { name: "Salvar no arquivo" }));
+
+    await waitFor(() => expect(writeTags).toHaveBeenCalledTimes(1));
+    expect(writeTags.mock.calls[0][5]).toBe(true);
+    // a Song reindexada volta para os stores: o selo da lista muda no ato
+    expect(
+      useLibraryStore.getState().results[0].song.instrumental,
+    ).toBe(true);
+  });
+
+  it("desmarcar à mão manda false — o editor é o único que desfaz a marca", async () => {
+    const base = marcada();
+    const writeTags = fakeWriteTags(base);
+    montar(base, writeTags);
+    fireEvent.click(await screen.findByRole("button", { name: "Editar" }));
+
+    fireEvent.click(screen.getByRole("checkbox", { name: ROTULO }));
+    fireEvent.click(screen.getByRole("button", { name: "Salvar no arquivo" }));
+
+    await waitFor(() => expect(writeTags).toHaveBeenCalledTimes(1));
+    expect(writeTags.mock.calls[0][5]).toBe(false);
+    expect(
+      useLibraryStore.getState().results[0].song.instrumental,
+    ).toBe(false);
+  });
+
+  it("instrumental COM letra registrada continua exibindo a letra normalmente", async () => {
+    const comLetra = marcada({ id: 1, has_lyrics: true });
+    montar(comLetra, fakeWriteTags(comLetra));
+    const body = await screen.findByTestId("lyrics-body");
+    expect(body.textContent).toBe(LYRICS);
+  });
+
+  it("instrumental sem letra: informação, não cobrança de curadoria", async () => {
+    montar(marcada(), fakeWriteTags(marcada()));
+    expect(await screen.findByText("Música instrumental — sem letra.")).toBeInTheDocument();
+    expect(
+      screen.queryByText("Esta música ainda não tem letra registrada."),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        "Use a ferramenta de curadoria para adicionar a letra ao arquivo.",
+      ),
+    ).not.toBeInTheDocument();
   });
 });

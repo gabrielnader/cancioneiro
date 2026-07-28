@@ -102,13 +102,21 @@ export interface Backend {
   pickFolder(): Promise<string | null>;
   fileSrc(filePath: string): string;
   onScanProgress(cb: (p: ScanProgress) => void): Promise<() => void>;
-  /** Grava TIT2/TPE1/USLT/TXXX:TEMAS no MP3 e devolve a Song reindexada (V4 F10). */
+  /**
+   * Grava TIT2/TPE1/USLT/TXXX:TEMAS/TXXX:INSTRUMENTAL no MP3 e devolve a Song
+   * reindexada (V4 F10).
+   *
+   * `instrumental` (V8/F17) tem TRÊS estados: `true` marca, `false` desmarca e
+   * omitido/`null` significa "não mexer" — a marca é escolha humana e nenhuma
+   * gravação de título/letra pode desfazê-la de lado.
+   */
   writeTags(
     songId: number,
     title: string,
     artist: string | null,
     lyrics: string | null,
     temas: string | null,
+    instrumental?: boolean | null,
   ): Promise<Song>;
   /** Busca a letra online por título+artista+duração — único ponto de rede (V4 F10). */
   fetchLyricsOnline(
@@ -222,9 +230,18 @@ function tauriBackend(): Backend {
       const { listen } = await import("@tauri-apps/api/event");
       return listen<ScanProgress>("scan:progress", (e) => cb(e.payload));
     },
-    async writeTags(songId, title, artist, lyrics, temas) {
+    async writeTags(songId, title, artist, lyrics, temas, instrumental) {
       const { invoke } = await import("@tauri-apps/api/core");
-      return invoke<Song>("write_tags", { songId, title, artist, lyrics, temas });
+      return invoke<Song>("write_tags", {
+        songId,
+        title,
+        artist,
+        lyrics,
+        temas,
+        // undefined viraria "ausente" no JSON; o backend espera null explícito
+        // para "não mexer" (Option<bool> = None).
+        instrumental: instrumental ?? null,
+      });
     },
     async fetchLyricsOnline(title, artist, durationSeconds) {
       const { invoke } = await import("@tauri-apps/api/core");

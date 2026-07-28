@@ -167,7 +167,17 @@ export function LyricsPanel() {
                     {lyrics}
                   </p>
                 </>
-              ) : selected.has_lyrics ? null : (
+              ) : selected.has_lyrics ? null : selected.instrumental ? (
+                /*
+                  V8/F17 — instrumental sem letra é informação, não cobrança:
+                  o convite a "adicionar a letra" seria pedir o que a música
+                  não tem. (Instrumental COM letra cai no ramo de cima e
+                  mostra a letra normalmente.)
+                */
+                <div className="pt-4">
+                  <p className="text-[#6B7280]">Música instrumental — sem letra.</p>
+                </div>
+              ) : (
                 <div className="pt-4">
                   <p className="text-[#6B7280]">
                     Esta música ainda não tem letra registrada.

@@ -596,6 +596,9 @@ fn apply_one(conn: &Connection, ap: &EnrichApply) -> Result<Song> {
         artist_final.as_deref(),
         lyrics_final.as_deref(),
         temas_final.as_deref(),
+        // V8/F17 — o lote NUNCA mexe na marca de instrumental: ela é escolha
+        // humana (ou da curadoria olhando o áudio), e nada aqui a examinou.
+        None,
     )
 }
 

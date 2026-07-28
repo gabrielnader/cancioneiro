@@ -42,6 +42,10 @@ export function EditSongForm({
       .filter(Boolean),
   );
   const [temaInput, setTemaInput] = useState("");
+  // V8/F17 — a marca de instrumental é escolha humana e viaja no MP3
+  // (TXXX:INSTRUMENTAL). O formulário sempre envia o valor explícito do
+  // controle (true/false): é o único lugar do app que desfaz a marca.
+  const [instrumental, setInstrumental] = useState(song.instrumental === true);
   const [lyrics, setLyrics] = useState(initialLyrics);
   const [titleError, setTitleError] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -119,6 +123,7 @@ export function EditSongForm({
         artist.trim() ? artist.trim() : null,
         lyrics.trim() ? lyrics : null,
         finalTemas.length > 0 ? finalTemas.join("; ") : null,
+        instrumental,
       );
       useLibraryStore.getState().updateSong(saved);
       usePlaylistStore.getState().updateSongInItems(saved);
@@ -214,6 +219,27 @@ export function EditSongForm({
             className="min-w-28 flex-1 rounded-md border border-[#D1D5DB] bg-white px-2 py-1 text-[13px] text-[#111827] outline-none placeholder:text-[#9CA3AF] focus:border-[#0F766E]"
           />
         </div>
+      </div>
+
+      {/*
+        V8/F17 — fica junto da letra porque é dela que a pessoa está falando:
+        "não tem letra porque não tem voz". Marcar aqui tira a música das
+        varreduras de letra e troca o selo "Sem letra" por "Instrumental".
+      */}
+      <div>
+        <label
+          htmlFor="edit-instrumental"
+          className="flex items-center gap-2 text-[14px] text-[#374151]"
+        >
+          <input
+            id="edit-instrumental"
+            type="checkbox"
+            checked={instrumental}
+            onChange={(e) => setInstrumental(e.target.checked)}
+            className="h-4 w-4 accent-[#0F766E]"
+          />
+          Esta música é instrumental
+        </label>
       </div>
 
       <div className="flex min-h-32 flex-1 flex-col">

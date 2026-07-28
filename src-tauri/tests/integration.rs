@@ -478,6 +478,66 @@ fn scan_reads_letra_origem_marker_and_leaves_unmarked_files_absent() {
 }
 
 // ---------------------------------------------------------------------------
+// V8/F17 — round-trip da marca de instrumental: a curadoria grava
+// TXXX:INSTRUMENTAL = "1" no MP3 e o indexer lê esse frame como os demais
+// TXXX. Arquivo sem a marca (ou com o desmarque explícito "0") NÃO é
+// instrumental — o app nunca deduz isso de "não tem letra".
+// ---------------------------------------------------------------------------
+#[test]
+fn scan_reads_instrumental_marker_and_leaves_unmarked_files_absent() {
+    use lofty::config::{ParseOptions, WriteOptions};
+    use lofty::file::AudioFile;
+    use lofty::tag::TagExt;
+
+    fn marcar(path: &Path, valor: &str) {
+        let mut tag = lofty::mpeg::MpegFile::read_from(
+            &mut fs::File::open(path).unwrap(),
+            ParseOptions::new(),
+        )
+        .unwrap()
+        .id3v2()
+        .cloned()
+        .unwrap_or_default();
+        tag.insert_user_text("INSTRUMENTAL".to_string(), valor.to_string());
+        tag.save_to_path(path, WriteOptions::default()).unwrap();
+    }
+
+    let dir = setup_music_dir(false);
+    // uma música sem voz, marcada pela curadoria
+    marcar(&dir.path().join("sem_letra.mp3"), "1");
+    // e um desmarque explícito ("--nao-instrumental" do embed_lyrics.py)
+    marcar(&dir.path().join("sem_tags.mp3"), "0");
+
+    let conn = test_conn();
+    let folder_id = db::add_folder(&conn, dir.path().to_str().unwrap()).unwrap();
+    indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
+
+    let songs = db::list_songs(&conn).unwrap();
+    let por_nome = |nome: &str| {
+        songs
+            .iter()
+            .find(|s| s.file_path.ends_with(nome))
+            .unwrap_or_else(|| panic!("{nome} deveria estar indexada"))
+    };
+    assert!(por_nome("sem_letra.mp3").instrumental, "marca lida do TXXX");
+    assert!(
+        !por_nome("sem_tags.mp3").instrumental,
+        "\"0\" é desmarque explícito, não marca"
+    );
+    // sem o frame: não é instrumental (mesmo tendo letra ou não)
+    assert!(!por_nome("com_letra.mp3").instrumental);
+
+    // rescan sem mudanças não perde a marca
+    indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
+    let songs = db::list_songs(&conn).unwrap();
+    assert!(songs
+        .iter()
+        .find(|s| s.file_path.ends_with("sem_letra.mp3"))
+        .unwrap()
+        .instrumental);
+}
+
+// ---------------------------------------------------------------------------
 // V5 (F12) — o scan preenche songs.pastas com os nomes das subpastas do
 // arquivo relativos à pasta registrada (separados por espaço); arquivo na
 // raiz fica NULL; a busca encontra pelo nome da pasta sem a palavra em

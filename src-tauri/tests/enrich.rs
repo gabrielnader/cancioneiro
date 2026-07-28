@@ -249,7 +249,7 @@ fn placeholder_tags_are_treated_as_empty_and_never_queried() {
     let (_dir, conn, _folder_id) =
         setup_with(&[("sem_letra.mp3", "Cheganca - Antonio Nobrega.mp3")]);
     let song = song_by_suffix(&conn, "Cheganca - Antonio Nobrega.mp3");
-    writer::write_tags(&conn, song.id, "02 AudioTrack 02", Some("no artist"), None, None)
+    writer::write_tags(&conn, song.id, "02 AudioTrack 02", Some("no artist"), None, None, None)
         .unwrap();
 
     let urls: RefCell<Vec<String>> = RefCell::new(Vec::new());
@@ -328,7 +328,7 @@ fn placeholder_title_still_produces_proposal() {
     let (_dir, conn, _folder_id) =
         setup_with(&[("sem_letra.mp3", "Cheganca - Antonio Nobrega.mp3")]);
     let song = song_by_suffix(&conn, "Cheganca - Antonio Nobrega.mp3");
-    writer::write_tags(&conn, song.id, "Faixa 5", Some("Banda Fixture"), None, None).unwrap();
+    writer::write_tags(&conn, song.id, "Faixa 5", Some("Banda Fixture"), None, None, None).unwrap();
 
     let props = scan_props(&conn, "", |_: &str| Ok("[]".into()));
     assert_eq!(props.len(), 1, "placeholder com palpite diferente é proposta");
@@ -599,6 +599,51 @@ fn apply_with_none_preserves_existing_lyrics_artist_and_temas() {
 }
 
 // ---------------------------------------------------------------------------
+// V8/F17 — o lote NÃO desmarca instrumental: gravar título/artista/letra por
+// cima de um arquivo marcado à mão preserva o TXXX:INSTRUMENTAL. "A escolha
+// humana manda: marcada à mão, nenhuma rotina desmarca sozinha" (PRD V8).
+// ---------------------------------------------------------------------------
+#[test]
+fn apply_never_clears_the_instrumental_mark() {
+    let (_dir, conn, folder_id) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
+    let song = song_by_suffix(&conn, "sem_letra.mp3");
+
+    // marca à mão, pelo mesmo caminho do editor do player
+    writer::write_tags(
+        &conn,
+        song.id,
+        &song.title,
+        song.artist.as_deref(),
+        None,
+        None,
+        Some(true),
+    )
+    .unwrap();
+
+    let results = enrich::apply(
+        &conn,
+        &[EnrichApply {
+            song_id: song.id,
+            title: "Doce Prelúdio".into(),
+            artist: Some("Banda Fixture".into()),
+            lyrics: Some("Letra que o lote achou por aí".into()),
+            add_temas: Some("prelúdio".into()),
+            current_title: song.title.clone(),
+            current_artist: song.artist.clone(),
+        }],
+    )
+    .unwrap();
+
+    let updated = results[0].song.as_ref().expect("gravada");
+    assert!(updated.instrumental, "o lote não pode desmarcar sozinho");
+    assert_eq!(updated.title, "Doce Prelúdio");
+
+    // e o disco concorda: um scan do zero relê a marca
+    indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
+    assert!(song_by_suffix(&conn, "sem_letra.mp3").instrumental);
+}
+
+// ---------------------------------------------------------------------------
 // F13 — arquivo sumido do disco: vira proposta BAIXA com error, sem gastar
 // rede; e apply nele falha com a mensagem padrão de arquivo não encontrado.
 // ---------------------------------------------------------------------------
@@ -849,7 +894,8 @@ fn apply_refuses_stale_proposal_when_title_changed_after_the_scan() {
     let titulo_na_varredura = song.title.clone();
 
     // o usuário corrige a música à mão DEPOIS da varredura
-    writer::write_tags(&conn, song.id, "Título Corrigido à Mão", None, None, None).unwrap();
+    writer::write_tags(&conn, song.id, "Título Corrigido à Mão", None, None, None, None)
+        .unwrap();
     let bytes_antes = fs::read(&song.file_path).unwrap();
 
     let results = enrich::apply(
@@ -888,7 +934,8 @@ fn apply_refuses_stale_proposal_when_only_the_artist_changed() {
     assert!(artista_na_varredura.is_some(), "fixture tem artista");
 
     // só o artista muda entre a varredura e o apply (título idêntico)
-    writer::write_tags(&conn, song.id, &song.title, Some("Outro Artista"), None, None).unwrap();
+    writer::write_tags(&conn, song.id, &song.title, Some("Outro Artista"), None, None, None)
+        .unwrap();
     let bytes_antes = fs::read(&song.file_path).unwrap();
 
     let results = enrich::apply(
@@ -951,7 +998,7 @@ fn apply_batch_mixes_stale_and_fresh_without_aborting() {
     let c = song_by_suffix(&conn, "c_sem_tags.mp3");
 
     // a 2ª foi editada à mão depois da varredura
-    writer::write_tags(&conn, b.id, "B Editada à Mão", None, None, None).unwrap();
+    writer::write_tags(&conn, b.id, "B Editada à Mão", None, None, None, None).unwrap();
     let bytes_b_antes = fs::read(&b.file_path).unwrap();
 
     let results = enrich::apply(

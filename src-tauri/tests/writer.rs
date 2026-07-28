@@ -51,6 +51,8 @@ fn audio_duration(path: &Path) -> Duration {
 // ---------------------------------------------------------------------------
 
 const LETRA_ORIGEM: &str = "LETRA_ORIGEM";
+/// V8/F17 — marca de instrumental gravada pela curadoria (`TXXX:INSTRUMENTAL`).
+const INSTRUMENTAL: &str = "INSTRUMENTAL";
 
 fn id3_tag(path: &Path) -> lofty::id3::v2::Id3v2Tag {
     use lofty::config::ParseOptions;
@@ -84,6 +86,30 @@ fn marcar_transcricao_com_capa(path: &Path) {
 
 fn letra_origem(path: &Path) -> Option<String> {
     id3_tag(path).get_user_text(LETRA_ORIGEM).map(str::to_string)
+}
+
+/// Valor cru do TXXX:INSTRUMENTAL no arquivo (None = frame ausente).
+fn instrumental_frame(path: &Path) -> Option<String> {
+    id3_tag(path).get_user_text(INSTRUMENTAL).map(str::to_string)
+}
+
+/// Marca o arquivo como instrumental do jeito que a curadoria Python marca,
+/// junto dos frames estrangeiros que o app nunca pode perder.
+fn marcar_instrumental_com_capa(path: &Path) {
+    use lofty::config::WriteOptions;
+    use lofty::picture::{MimeType, Picture, PictureType};
+    use lofty::tag::TagExt;
+
+    let mut tag = id3_tag(path);
+    tag.insert_user_text(INSTRUMENTAL.to_string(), "1".to_string());
+    tag.insert_user_text("OUTRA_COISA".to_string(), "valor alheio".to_string());
+    tag.insert_picture(Picture::new_unchecked(
+        PictureType::CoverFront,
+        Some(MimeType::Png),
+        Some("capa".to_string()),
+        b"\x89PNG\r\n\x1a\n-fake".to_vec(),
+    ));
+    tag.save_to_path(path, WriteOptions::default()).unwrap();
 }
 
 /// Os frames estrangeiros que precisam sobreviver a QUALQUER gravação.
@@ -123,6 +149,7 @@ fn write_tags_roundtrip_via_indexer_preserving_audio_and_filename() {
         Some("São João Batista"),
         Some(lyrics),
         Some("Água, CURA; esperança, agua"),
+        None,
     )
     .unwrap();
 
@@ -167,7 +194,7 @@ fn write_tags_leaves_index_in_sync_so_rescan_skips() {
     let (_dir, conn, folder_id) = setup();
     let song = song_by_suffix(&conn, "com_letra.mp3");
 
-    writer::write_tags(&conn, song.id, "Novo Título", None, None, None).unwrap();
+    writer::write_tags(&conn, song.id, "Novo Título", None, None, None, None).unwrap();
 
     let stats = indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
     assert_eq!(stats.indexed, 0, "mtime/size upsertados devem casar com o disco");
@@ -184,7 +211,7 @@ fn write_tags_rejects_empty_title_without_touching_file() {
     let bytes_before = fs::read(&song.file_path).unwrap();
 
     for title in ["", "   ", "\n\t"] {
-        let err = writer::write_tags(&conn, song.id, title, None, None, None)
+        let err = writer::write_tags(&conn, song.id, title, None, None, None, None)
             .expect_err("título vazio deve ser rejeitado");
         assert_eq!(err.to_string(), "título vazio");
     }
@@ -205,11 +232,11 @@ fn write_tags_rejects_empty_title_without_touching_file() {
 fn write_tags_errors_for_unknown_song_and_missing_file() {
     let (dir, conn, _folder_id) = setup();
 
-    assert!(writer::write_tags(&conn, 9999, "T", None, None, None).is_err());
+    assert!(writer::write_tags(&conn, 9999, "T", None, None, None, None).is_err());
 
     let song = song_by_suffix(&conn, "sem_letra.mp3");
     fs::remove_file(&song.file_path).unwrap();
-    let err = writer::write_tags(&conn, song.id, "T", None, None, None)
+    let err = writer::write_tags(&conn, song.id, "T", None, None, None, None)
         .expect_err("arquivo sumido deve falhar");
     // mensagem exata que o frontend usa para arquivo sumido
     assert_eq!(
@@ -237,6 +264,7 @@ fn write_tags_none_or_empty_removes_artist_lyrics_and_temas() {
         Some("  "),
         Some(""),
         Some(" ; , "),
+        None,
     )
     .unwrap();
     assert_eq!(updated.title, "Só Título");
@@ -246,8 +274,9 @@ fn write_tags_none_or_empty_removes_artist_lyrics_and_temas() {
     assert_eq!(db::get_lyrics(&conn, song.id).unwrap(), None);
 
     // regrava com tudo e depois remove com None
-    writer::write_tags(&conn, song.id, "Cheio", Some("A"), Some("letra"), Some("tema")).unwrap();
-    let cleared = writer::write_tags(&conn, song.id, "Cheio", None, None, None).unwrap();
+    writer::write_tags(&conn, song.id, "Cheio", Some("A"), Some("letra"), Some("tema"), None)
+        .unwrap();
+    let cleared = writer::write_tags(&conn, song.id, "Cheio", None, None, None, None).unwrap();
     assert_eq!(cleared.artist, None);
     assert!(!cleared.has_lyrics);
     assert_eq!(cleared.temas, None);
@@ -279,6 +308,7 @@ fn write_tags_updates_fts_immediately() {
         song.artist.as_deref(),
         Some("Uma letra nova que fala de Zimbabué e outras terras"),
         Some("missões"),
+        None,
     )
     .unwrap();
 
@@ -312,8 +342,16 @@ fn write_tags_preserves_pastas_for_file_in_subfolder() {
     indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
     let song = song_by_suffix(&conn, "com_letra.mp3");
 
-    writer::write_tags(&conn, song.id, "Título Editado", None, Some("letra nova"), None)
-        .unwrap();
+    writer::write_tags(
+        &conn,
+        song.id,
+        "Título Editado",
+        None,
+        Some("letra nova"),
+        None,
+        None,
+    )
+    .unwrap();
 
     let pastas: Option<String> = conn
         .query_row(
@@ -349,6 +387,7 @@ fn write_tags_creates_id3_tag_on_untagged_file() {
         Some("Artista Ção"),
         Some("Letra única\ncom acentuação"),
         Some("João; João, joao"),
+        None,
     )
     .unwrap();
     assert_eq!(updated.title, "Título Novo");
@@ -387,6 +426,7 @@ fn write_tags_drops_letra_origem_when_lyrics_are_replaced() {
         song.artist.as_deref(),
         Some("Letra escrita à mão pelo usuário"),
         None,
+        None,
     )
     .unwrap();
 
@@ -410,7 +450,7 @@ fn write_tags_drops_letra_origem_when_lyrics_are_cleared() {
     marcar_transcricao_com_capa(&path);
 
     let updated =
-        writer::write_tags(&conn, song.id, &song.title, song.artist.as_deref(), None, None)
+        writer::write_tags(&conn, song.id, &song.title, song.artist.as_deref(), None, None, None)
             .unwrap();
     assert!(!updated.has_lyrics);
 
@@ -438,6 +478,7 @@ fn write_tags_keeps_letra_origem_when_lyrics_pass_through_unchanged() {
         Some("Outro Artista"),
         Some(&letra), // repasse: a mesma letra que já está no arquivo
         Some("novo tema"),
+        None,
     )
     .unwrap();
 
@@ -485,6 +526,7 @@ fn write_tags_clears_letra_origem_in_the_reindexed_song() {
         song.artist.as_deref(),
         Some("Letra escrita à mão pelo usuário"),
         None,
+        None,
     )
     .unwrap();
 
@@ -508,6 +550,161 @@ fn write_tags_never_invents_letra_origem() {
     let song = song_by_suffix(&conn, "sem_tags.mp3");
     let path = PathBuf::from(&song.file_path);
 
-    writer::write_tags(&conn, song.id, "T", None, Some("letra nova"), None).unwrap();
+    writer::write_tags(&conn, song.id, "T", None, Some("letra nova"), None, None).unwrap();
     assert_eq!(letra_origem(&path), None);
+}
+
+// ---------------------------------------------------------------------------
+// V8/F17 — a marca de instrumental é posta e retirada pelo write_tags:
+// `Some(true)` grava TXXX:INSTRUMENTAL = "1", `Some(false)` REMOVE o frame.
+// Nos dois sentidos os frames estrangeiros (outro TXXX e a capa) sobrevivem,
+// e a Song devolvida já reflete a marca — o selo da lista muda no ato.
+// ---------------------------------------------------------------------------
+#[test]
+fn write_tags_sets_and_clears_instrumental_preserving_foreign_frames() {
+    let (_dir, conn, folder_id) = setup();
+    let song = song_by_suffix(&conn, "sem_letra.mp3");
+    let path = PathBuf::from(&song.file_path);
+    marcar_instrumental_com_capa(&path);
+    // o arquivo entra marcado, mas o banco só sabe disso depois de reler
+    indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
+    assert!(song_by_suffix(&conn, "sem_letra.mp3").instrumental);
+
+    // desmarcar: o frame sai do arquivo
+    let desmarcada = writer::write_tags(
+        &conn,
+        song.id,
+        &song.title,
+        song.artist.as_deref(),
+        None,
+        None,
+        Some(false),
+    )
+    .unwrap();
+    assert!(!desmarcada.instrumental);
+    assert_eq!(instrumental_frame(&path), None, "desmarcar remove o frame");
+    frames_alheios_intactos(&path);
+
+    // marcar de novo: frame canônico "1"
+    let marcada = writer::write_tags(
+        &conn,
+        song.id,
+        &song.title,
+        song.artist.as_deref(),
+        None,
+        None,
+        Some(true),
+    )
+    .unwrap();
+    assert!(marcada.instrumental);
+    assert_eq!(instrumental_frame(&path).as_deref(), Some("1"));
+    frames_alheios_intactos(&path);
+
+    // round-trip: um scan do zero relê exatamente o que foi gravado
+    indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
+    assert!(song_by_suffix(&conn, "sem_letra.mp3").instrumental);
+}
+
+// ---------------------------------------------------------------------------
+// V8/F17 — `None` é "não mexer": nenhuma rotina que não seja a escolha humana
+// (o lote do enrich, uma gravação só de título) pode desmarcar sozinha.
+// É a garantia do PRD: "marcada à mão, nenhuma rotina desmarca sozinha".
+// ---------------------------------------------------------------------------
+#[test]
+fn write_tags_leaves_the_human_mark_untouched_when_instrumental_is_none() {
+    let (_dir, conn, folder_id) = setup();
+    let song = song_by_suffix(&conn, "sem_letra.mp3");
+    let path = PathBuf::from(&song.file_path);
+    marcar_instrumental_com_capa(&path);
+
+    let updated = writer::write_tags(
+        &conn,
+        song.id,
+        "Outro Título",
+        Some("Outro Artista"),
+        None,
+        Some("prelúdio"),
+        None, // não mexe na marca
+    )
+    .unwrap();
+
+    assert_eq!(instrumental_frame(&path).as_deref(), Some("1"));
+    assert!(updated.instrumental, "a Song reindexada continua marcada");
+    frames_alheios_intactos(&path);
+
+    indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
+    assert!(song_by_suffix(&conn, "sem_letra.mp3").instrumental);
+}
+
+// ---------------------------------------------------------------------------
+// V8/F17 — a interação com a regra da letra (DECISIONS #54). A marca
+// LETRA_ORIGEM descreve a LETRA e cai quando a letra muda; INSTRUMENTAL
+// descreve a MÚSICA (não tem voz) e NÃO cai: o PRD prevê explicitamente a
+// instrumental com letra registrada, e a escolha humana não pode ser desfeita
+// de lado, por um efeito colateral de salvar a letra.
+// ---------------------------------------------------------------------------
+#[test]
+fn write_tags_keeps_instrumental_when_lyrics_change_or_are_cleared() {
+    let (_dir, conn, folder_id) = setup();
+    let song = song_by_suffix(&conn, "com_letra.mp3");
+    let path = PathBuf::from(&song.file_path);
+    marcar_transcricao_com_capa(&path);
+    marcar_instrumental_com_capa(&path);
+    indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
+
+    // letra NOVA: derruba a procedência, preserva a marca de instrumental
+    let com_letra_nova = writer::write_tags(
+        &conn,
+        song.id,
+        &song.title,
+        song.artist.as_deref(),
+        Some("Letra escrita à mão pelo usuário"),
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(letra_origem(&path), None, "letra trocada derruba a procedência");
+    assert_eq!(
+        instrumental_frame(&path).as_deref(),
+        Some("1"),
+        "trocar a letra não desmarca o instrumental"
+    );
+    assert!(com_letra_nova.instrumental);
+    // instrumental COM letra registrada é caso previsto no PRD, não contradição
+    assert!(com_letra_nova.has_lyrics);
+    frames_alheios_intactos(&path);
+
+    // apagar a letra também não mexe na marca
+    let sem_letra = writer::write_tags(
+        &conn,
+        song.id,
+        &song.title,
+        song.artist.as_deref(),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    assert!(!sem_letra.has_lyrics);
+    assert!(sem_letra.instrumental);
+    assert_eq!(instrumental_frame(&path).as_deref(), Some("1"));
+}
+
+// ---------------------------------------------------------------------------
+// V8/F17 — arquivo sem marca nunca ganha uma sozinho: gravação comum (e até
+// `Some(false)` num arquivo já sem marca) não inventa TXXX:INSTRUMENTAL.
+// ---------------------------------------------------------------------------
+#[test]
+fn write_tags_never_invents_instrumental() {
+    let (_dir, conn, _folder_id) = setup();
+    let song = song_by_suffix(&conn, "sem_tags.mp3");
+    let path = PathBuf::from(&song.file_path);
+
+    writer::write_tags(&conn, song.id, "T", None, Some("letra nova"), None, None).unwrap();
+    assert_eq!(instrumental_frame(&path), None);
+
+    let updated =
+        writer::write_tags(&conn, song.id, "T", None, None, None, Some(false)).unwrap();
+    assert_eq!(instrumental_frame(&path), None);
+    assert!(!updated.instrumental);
 }

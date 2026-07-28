@@ -685,6 +685,68 @@ describe("mockBackend", () => {
     });
   });
 
+  describe("instrumental — marca de música sem voz (V8 — F17)", () => {
+    /** A fixture sem letra, marcada como instrumental pela curadoria. */
+    async function instrumental(): Promise<Song> {
+      await backend.addFolder("/musicas/teste");
+      backend._markAsInstrumental("/musicas/teste/sem_letra.mp3");
+      const songs = await backend.listSongs();
+      return songs.find((s) => s.file_path === "/musicas/teste/sem_letra.mp3")!;
+    }
+
+    it("músicas indexadas nascem sem a marca (nunca deduzida de 'sem letra')", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      expect(songs.every((s) => s.instrumental === false)).toBe(true);
+    });
+
+    it("_markAsInstrumental marca só o arquivo indicado e a marca chega na Song", async () => {
+      const marcada = await instrumental();
+      expect(marcada.instrumental).toBe(true);
+      const outras = (await backend.listSongs()).filter((s) => s.id !== marcada.id);
+      expect(outras.every((s) => s.instrumental === false)).toBe(true);
+      const [hit] = await backend.search("Instrumental Sem Letra");
+      expect(hit.song.instrumental).toBe(true);
+    });
+
+    it("writeTags marca com true e desmarca com false", async () => {
+      const songs = (await backend.addFolder("/musicas/teste"), await backend.listSongs());
+      const alvo = songs.find((s) => s.title === "sem_tags")!;
+
+      const marcada = await backend.writeTags(alvo.id, alvo.title, null, null, null, true);
+      expect(marcada.instrumental).toBe(true);
+
+      const desmarcada = await backend.writeTags(alvo.id, alvo.title, null, null, null, false);
+      expect(desmarcada.instrumental).toBe(false);
+    });
+
+    it("writeTags sem informar a marca NÃO a desfaz, nem ao trocar a letra", async () => {
+      const marcada = await instrumental();
+
+      // gravação comum (título/artista) — o lote do "Completar dados" faz assim
+      const editada = await backend.writeTags(marcada.id, "Doce Prelúdio", "Banda", null, null);
+      expect(editada.instrumental).toBe(true);
+
+      // e escrever letra também não desmarca: instrumental COM letra é previsto
+      const comLetra = await backend.writeTags(
+        marcada.id,
+        editada.title,
+        editada.artist,
+        "Uma letra que apareceu",
+        null,
+      );
+      expect(comLetra.instrumental).toBe(true);
+      expect(comLetra.has_lyrics).toBe(true);
+    });
+
+    it("persiste em localStorage (sobrevive a reload)", async () => {
+      const marcada = await instrumental();
+      const reborn = createMockBackend();
+      const songs = await reborn.listSongs();
+      expect(songs.find((s) => s.id === marcada.id)!.instrumental).toBe(true);
+    });
+  });
+
   describe("_seedFolderTree (V4 — F11)", () => {
     it("cria /acervo com músicas em /acervo/1 e /acervo/2", async () => {
       backend._seedFolderTree();

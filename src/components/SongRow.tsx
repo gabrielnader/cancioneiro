@@ -74,10 +74,25 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
             {song.artist}
           </span>
         )}
-        {!song.has_lyrics && (
-          <span className="shrink-0 rounded bg-[#F3F4F6] px-1.5 py-0.5 text-[12px] text-[#6B7280]">
-            Sem letra
+        {/*
+          V8/F17 — música sem voz não é pendência. No lugar do selo cinza
+          preenchido "Sem letra" (que a varredura de letra ia recobrar para
+          sempre) vem "Instrumental": contorno leve, sem preenchimento, porque
+          é INFORMAÇÃO e não tarefa. Instrumental COM letra registrada é caso
+          previsto pelo PRD e continua mostrando o selo — a letra aparece
+          normalmente no painel. #5B6472 é o cinza já auditado da linha: passa
+          em AA (4.5:1) nos três fundos — branco, selecionado e hover.
+        */}
+        {song.instrumental ? (
+          <span className="shrink-0 rounded border border-[#D1D5DB] px-1.5 py-0.5 text-[12px] text-[#5B6472]">
+            Instrumental
           </span>
+        ) : (
+          !song.has_lyrics && (
+            <span className="shrink-0 rounded bg-[#F3F4F6] px-1.5 py-0.5 text-[12px] text-[#6B7280]">
+              Sem letra
+            </span>
+          )
         )}
         {/*
           Temas e "+" moram JUNTOS à direita, separados do bloco de texto por

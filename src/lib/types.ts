@@ -17,6 +17,14 @@ export interface Song {
    * no backend (DECISIONS #54), então ela sempre descreve o texto exibido.
    */
   letra_origem?: string | null;
+  /**
+   * Música sem voz, do frame TXXX:INSTRUMENTAL (V8/F17). É informação sobre a
+   * MÚSICA, não sobre a letra: a lista mostra "Instrumental" no lugar do selo
+   * "Sem letra". Instrumental COM letra registrada é caso previsto — a letra
+   * continua sendo exibida. Ausente/false = não marcada (o app nunca deduz a
+   * marca de "não tem letra"; só a curadoria ou a escolha humana a põem).
+   */
+  instrumental?: boolean;
 }
 
 /** Valor de `Song.letra_origem` que a curadoria grava para letra transcrita. */
