@@ -440,7 +440,10 @@ class TestTranscricaoCompleta:
         assert "de áudio em" in linha
 
     def test_milhar_com_ponto_no_padrao_pt_br(self, pasta, capsys):
-        grande = "canta comigo agora\n" * 200
+        # versos DIFERENTES: linha repetida em série seria colapsada pelo
+        # limpador de laço (TestLacoDeRepeticao), e aqui só interessa o
+        # tamanho do texto para conferir o separador de milhar.
+        grande = "".join(f"verso numero {i} da cancao\n" for i in range(200))
         curadoria.cmd_transcrever(pasta, transcritor=FakeTranscritor(
             completo=grande), fetcher=fetcher_vazio, pausa=0)
         linha = next(l for l in capsys.readouterr().out.splitlines()
@@ -1288,3 +1291,42 @@ class TestRefraoPrecisaEstarNaLetra:
             pasta, transcritor=FakeTranscritor(),
             fetcher=lambda url: json.dumps([resultado(letra="")]), pausa=0)
         assert "IDENTIFICADA" not in capsys.readouterr().out
+
+
+# O Whisper entra em laço sobre música e cospe "Valalalala..." por centenas
+# de caracteres (visto no acervo real com o tiny, mesmo sem VAD). Isso vai
+# parar dentro do MP3 e do índice de busca.
+class TestLacoDeRepeticao:
+    def test_silaba_repetida_ate_o_infinito_e_colapsada(self):
+        sujo = "E a lua me olhava\n" + "Vala" + "la" * 200 + "\nFim"
+        limpo = curadoria.limpar_transcricao(sujo)
+        assert len(limpo) < 100
+        assert "E a lua me olhava" in limpo
+        assert "Fim" in limpo
+
+    def test_linha_repetida_em_serie_vira_no_maximo_duas(self):
+        sujo = "\n".join(["Refrão bonito"] * 9 + ["verso final"])
+        limpo = curadoria.limpar_transcricao(sujo)
+        assert limpo.count("Refrão bonito") == 2
+        assert "verso final" in limpo
+
+    def test_repeticao_legitima_curta_sobrevive(self):
+        # refrão que repete de verdade duas vezes não é laço
+        letra = "Marinheiro só\nMarinheiro só\nÔ ô ô ô\nQuem te ensinou a nadar"
+        limpo = curadoria.limpar_transcricao(letra)
+        assert "Quem te ensinou a nadar" in limpo
+        assert limpo.count("Marinheiro só") == 2
+
+    def test_texto_normal_passa_intacto(self):
+        letra = ("Na dança das folhas\nQue o vento sopra\n"
+                 "E me põe a cantar")
+        assert curadoria.limpar_transcricao(letra) == letra
+
+    def test_transcricao_gravada_ja_vem_limpa(self, pasta):
+        alvo = pasta / "Faixa 5.mp3"
+        t = FakeTranscritor(completo="Verso bom\n" + "La" * 300)
+        curadoria.cmd_transcrever(pasta, transcritor=t,
+                                  fetcher=fetcher_vazio, pausa=0)
+        letra = uslt_text(alvo)
+        assert "Verso bom" in letra
+        assert len(letra) < 120

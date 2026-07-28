@@ -1065,6 +1065,46 @@ def _identificar_por_refrao(candidatos: list, duracao_mp3: float, buscar,
     return None if melhor["confianca"] == "BAIXA" else melhor
 
 
+# Laço de repetição do Whisper sobre música: uma sílaba ou palavra curta
+# emendada dezenas de vezes ("Valalalala…" por 200 caracteres, visto no
+# acervo real). Colapsa para duas ocorrências — refrão que repete de verdade
+# continua legível, e o lixo para de poluir a letra e o índice de busca.
+_RE_LACO_SILABA = re.compile(r"(.{1,10}?)\1{2,}", re.DOTALL)
+# Só é laço quando a repetição é longa. Sem este piso, "111" viraria "11" e
+# "aaa" viraria "aa" — repetição curta é texto legítimo, não defeito.
+_MIN_LACO = 20
+# Linha inteira repetida em série; duas bastam para o leitor entender.
+_MAX_LINHAS_IGUAIS = 2
+
+
+def _colapsar(m: "re.Match") -> str:
+    trecho = m.group(0)
+    if len(trecho) < _MIN_LACO:
+        return trecho
+    return m.group(1) * 2
+
+
+def limpar_transcricao(texto: str) -> str:
+    """Tira os laços de repetição do Whisper sem tocar no texto legítimo."""
+    if not texto:
+        return texto
+    linhas = []
+    repetidas = 0
+    anterior = None
+    for linha in texto.split("\n"):
+        limpa = _RE_LACO_SILABA.sub(_colapsar, linha)
+        chave = _norm_comparacao(limpa)
+        if chave and chave == anterior:
+            repetidas += 1
+            if repetidas >= _MAX_LINHAS_IGUAIS:
+                continue
+        else:
+            repetidas = 0
+            anterior = chave
+        linhas.append(limpa)
+    return "\n".join(linhas)
+
+
 def criar_transcritor(modelo: str = "small", idioma: str = "pt"):
     """Fábrica do transcritor real (faster-whisper na CPU). O import é
     PREGUIÇOSO: a biblioteca é dependência opcional; sem ela, explica em uma
@@ -1334,8 +1374,11 @@ def cmd_transcrever(pasta: Path, transcritor=None, fetcher=None,
                     continue
 
                 comeco = time.monotonic()
-                texto = unicodedata.normalize(
-                    "NFC", transcritor(str(p), None, None) or "")
+                # limpar_transcricao vive AQUI, não no transcritor: assim a
+                # letra gravada vem sem laço de repetição seja qual for o
+                # motor por trás (e o teste consegue provar isso).
+                texto = limpar_transcricao(unicodedata.normalize(
+                    "NFC", transcritor(str(p), None, None) or ""))
                 gasto = time.monotonic() - comeco
                 if not texto.strip():
                     print(f"{prefixo}ERRO: {rel} — transcrição vazia")
