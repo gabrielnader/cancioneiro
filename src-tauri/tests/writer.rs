@@ -749,3 +749,136 @@ fn write_tags_never_invents_instrumental() {
     assert_eq!(instrumental_frame(&path), None);
     assert!(!updated.instrumental);
 }
+
+// ---------------------------------------------------------------------------
+// V8/F18 — procedência DECLARADA pelo chamador. O funil sabe de onde a letra
+// veio; o editor do player não sabe e continua no `write_tags` de sempre.
+//
+// `Some("vagalume")` marca `TXXX:LETRA_ORIGEM = "vagalume"` — o mesmo valor
+// que o `tools/embed_lyrics.py` grava, porque o dado viaja no MP3 e os dois
+// stacks precisam falar a mesma língua. `Some("")` declara letra oficial sem
+// marca e LIMPA a herdada. Nos dois casos os frames estrangeiros sobrevivem.
+// ---------------------------------------------------------------------------
+#[test]
+fn write_tags_com_origem_records_the_declared_provenance() {
+    let (_dir, conn, _folder_id) = setup();
+    let song = song_by_suffix(&conn, "com_letra.mp3");
+    let path = PathBuf::from(&song.file_path);
+    marcar_transcricao_com_capa(&path);
+    assert_eq!(letra_origem(&path), Some("transcricao".into()));
+
+    // letra do Vagalume por cima de uma transcrição: a marca vira "vagalume"
+    let atualizada = writer::write_tags_com_origem(
+        &conn,
+        song.id,
+        &song.title,
+        song.artist.as_deref(),
+        Some("letra da base comunitária"),
+        None,
+        None,
+        Some(writer::ORIGEM_VAGALUME),
+    )
+    .unwrap();
+    assert_eq!(letra_origem(&path), Some("vagalume".into()));
+    assert_eq!(atualizada.letra_origem.as_deref(), Some("vagalume"));
+    frames_alheios_intactos(&path);
+
+    // e não duplica o frame ao regravar por cima
+    writer::write_tags_com_origem(
+        &conn,
+        song.id,
+        &song.title,
+        song.artist.as_deref(),
+        Some("outra letra da base"),
+        None,
+        None,
+        Some(writer::ORIGEM_VAGALUME),
+    )
+    .unwrap();
+    assert_eq!(letra_origem(&path), Some("vagalume".into()));
+
+    // declaração vazia = letra oficial SEM marca: limpa a que estava lá
+    let limpa = writer::write_tags_com_origem(
+        &conn,
+        song.id,
+        &song.title,
+        song.artist.as_deref(),
+        Some("letra oficial do lrclib"),
+        None,
+        None,
+        Some(""),
+    )
+    .unwrap();
+    assert_eq!(letra_origem(&path), None);
+    assert_eq!(limpa.letra_origem, None);
+    frames_alheios_intactos(&path);
+}
+
+/// A marca descreve a letra ATUAL: sem letra nova não há procedência a
+/// declarar, e a declaração é IGNORADA — nem inventa marca em arquivo sem
+/// letra, nem derruba a marca legítima de quem só mexeu no título.
+#[test]
+fn write_tags_com_origem_ignores_a_declaration_without_a_new_lyric() {
+    let (_dir, conn, _folder_id) = setup();
+
+    // (a) arquivo COM letra, gravação que só troca o título: marca preservada
+    let com_letra = song_by_suffix(&conn, "com_letra.mp3");
+    let path = PathBuf::from(&com_letra.file_path);
+    marcar_transcricao_com_capa(&path);
+    let letra_atual = db::get_lyrics(&conn, com_letra.id).unwrap();
+    writer::write_tags_com_origem(
+        &conn,
+        com_letra.id,
+        "Outro Título",
+        com_letra.artist.as_deref(),
+        letra_atual.as_deref(), // repasse da MESMA letra
+        None,
+        None,
+        Some(writer::ORIGEM_VAGALUME),
+    )
+    .unwrap();
+    assert_eq!(
+        letra_origem(&path),
+        Some("transcricao".into()),
+        "repasse da mesma letra não muda a procedência dela"
+    );
+
+    // (b) arquivo SEM letra: declaração não inventa marca nenhuma
+    let sem_letra = song_by_suffix(&conn, "sem_letra.mp3");
+    let path2 = PathBuf::from(&sem_letra.file_path);
+    writer::write_tags_com_origem(
+        &conn,
+        sem_letra.id,
+        &sem_letra.title,
+        sem_letra.artist.as_deref(),
+        None,
+        None,
+        None,
+        Some(writer::ORIGEM_VAGALUME),
+    )
+    .unwrap();
+    assert_eq!(letra_origem(&path2), None);
+}
+
+/// `write_tags` (o editor) é exatamente `write_tags_com_origem(..., None)`:
+/// não sabe de procedência e segue valendo a regra da DECISIONS #54.
+#[test]
+fn write_tags_is_write_tags_com_origem_without_a_declaration() {
+    let (_dir, conn, _folder_id) = setup();
+    let song = song_by_suffix(&conn, "com_letra.mp3");
+    let path = PathBuf::from(&song.file_path);
+    marcar_transcricao_com_capa(&path);
+
+    // letra trocada à mão no editor: a marca cai (não é mais transcrição)
+    writer::write_tags(
+        &conn,
+        song.id,
+        &song.title,
+        song.artist.as_deref(),
+        Some("letra digitada à mão"),
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(letra_origem(&path), None);
+}

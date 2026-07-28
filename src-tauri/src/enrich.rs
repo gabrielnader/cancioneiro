@@ -1,13 +1,22 @@
-//! F13 (PRD V5) — enriquecimento em lote pelo app.
+//! F13 (PRD V5) + F18 fase 1 (PRD V8) — o funil de curadoria dentro do app.
 //!
 //! `enrich_scan` seleciona as músicas INCOMPLETAS (sem letra OU com
-//! título/artista placeholder) de uma pasta (prefixo de file_path) — menos
-//! as marcadas como instrumental, que toda etapa de letra pula (V8/F17) —,
-//! monta
-//! palpites (tags não-placeholder > nome de arquivo limpo — porte do
-//! tools/curadoria.py) e consulta o LRCLIB pela mesma infra do lyrics_fetch
-//! (fetcher injetável: os testes rodam sem rede; no comando real é o ureq —
-//! continua sendo ponto de rede EXPLÍCITO, acionado pelo usuário).
+//! título/artista placeholder) de uma pasta (prefixo de file_path) e passa
+//! cada uma pelas etapas do funil, por CUSTO CRESCENTE, cada etapa recebendo
+//! só o que a anterior não resolveu (PRD V6):
+//!
+//! | etapa | `fonte`           | custo       | o que faz                   |
+//! |-------|-------------------|-------------|-----------------------------|
+//! | 1     | "nome do arquivo" | instantâneo | tags não-placeholder > nome de arquivo limpo (porte do tools/curadoria.py) |
+//! | 2     | "LRCLIB"          | ~0,5 s      | LRCLIB por título/artista + DURAÇÃO |
+//! | 3     | "Vagalume"        | ~0,5 s      | Vagalume, só onde o LRCLIB veio vazio |
+//!
+//! As etapas 4 (impressão digital) e 5 (transcrição) são a fase 2 da F18 e
+//! não existem aqui.
+//!
+//! Todo o acesso à rede entra por um `fetch` injetável — os testes rodam sem
+//! rede; no comando real é o `ureq`, e continua sendo ponto de rede
+//! EXPLÍCITO, acionado pelo usuário, limitado a LRCLIB e Vagalume.
 //!
 //! `apply` grava as propostas aceitas via writer::write_tags. Regra do lote
 //! (V3.1): NUNCA apaga dados existentes — campo ausente/vazio na aplicação
@@ -16,11 +25,47 @@
 use crate::db::{self, Song};
 use crate::error::Result;
 use crate::lyrics_fetch::{self, ScoredCandidate};
+use crate::vagalume;
 use crate::writer;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use std::cell::Cell;
 use std::path::Path;
 use std::time::Duration;
+
+// ---------------------------------------------------------------------------
+// Vocabulário do funil (contrato com o frontend — valores ESTÁVEIS)
+// ---------------------------------------------------------------------------
+
+// Os valores são ESTÁVEIS e vão CRUS para a tela: quem cura são ~40 pessoas
+// que não abrem terminal e não têm a quem perguntar, então "lrclib" ou
+// "nome-do-arquivo" apareceriam como código de programa no meio da revisão.
+// São frases curtas em pt-BR, minúsculas (entram no meio de uma linha de
+// status), com os nomes próprios das bases grafados como elas se escrevem.
+
+/// `fonte` — etapa 1: montada aqui mesmo, sem rede, a partir das etiquetas
+/// existentes e do nome do arquivo.
+pub const FONTE_NOME_ARQUIVO: &str = "nome do arquivo";
+/// `fonte` — etapa 2: LRCLIB, com a duração conferida.
+pub const FONTE_LRCLIB: &str = "LRCLIB";
+/// `fonte` — etapa 3: Vagalume, por casamento estrito de texto (não há
+/// duração para conferir).
+pub const FONTE_VAGALUME: &str = "Vagalume";
+/// `fonte` — a música foi tentada e falhou; `error` traz a explicação em
+/// pt-BR e a linha não é aplicável.
+pub const FONTE_ERRO: &str = "erro";
+
+/// `etapa` — escolhendo as músicas e anunciando o total (evento inicial,
+/// `done = 0`).
+pub const ETAPA_PREPARANDO: &str = "preparando";
+/// `etapa` — lendo etiquetas e nome do arquivo (sem rede).
+pub const ETAPA_NOME_ARQUIVO: &str = "lendo etiquetas e nome do arquivo";
+/// `etapa` — consultando o LRCLIB.
+pub const ETAPA_LRCLIB: &str = "procurando no LRCLIB";
+/// `etapa` — consultando o Vagalume.
+pub const ETAPA_VAGALUME: &str = "procurando no Vagalume";
+/// `etapa` — esta música terminou; é o ÚNICO evento que faz `done` crescer.
+pub const ETAPA_CONCLUIDA: &str = "concluída";
 
 /// Proposta de enriquecimento para uma música incompleta. A letra achada vem
 /// na própria proposta (evita segunda rodada de rede no apply).
@@ -36,6 +81,12 @@ pub struct EnrichProposal {
     /// "alta" | "media" | "baixa" (baixa = só palpite de nome de arquivo,
     /// sem letra).
     pub confidence: String,
+    /// Etapa do funil que produziu o dado: `FONTE_NOME_ARQUIVO`,
+    /// `FONTE_LRCLIB`, `FONTE_VAGALUME` ou `FONTE_ERRO`. A UI MOSTRA isto —
+    /// quem revisa precisa saber se a sugestão veio de um palpite de nome de
+    /// arquivo ou de uma base de letras, e o `apply` precisa dela para gravar
+    /// a procedência certa em `TXXX:LETRA_ORIGEM`.
+    pub fonte: String,
     /// Erro por música (ex.: "sem conexão", arquivo sumido) — nunca aborta
     /// o lote.
     pub error: Option<String>,
@@ -70,6 +121,20 @@ pub struct EnrichApply {
     pub add_temas: Option<String>,
     pub current_title: String,
     pub current_artist: Option<String>,
+    /// Eco do `fonte` da proposta (V8/F18) — o frontend copia o campo da
+    /// `EnrichProposal` sem alterar. Só tem efeito quando `lyrics` traz letra
+    /// NOVA, e serve a uma coisa só: gravar a procedência certa em
+    /// `TXXX:LETRA_ORIGEM`. `"Vagalume"` (comparado sem distinguir caixa)
+    /// marca a letra como vinda da base comunitária, com o mesmo valor
+    /// `"vagalume"` que o `tools/curadoria.py` grava; qualquer outra fonte
+    /// LIMPA a marca, porque letra oficial não é transcrição.
+    ///
+    /// Ausente no JSON = `None` = "não sei de onde veio", tratado como
+    /// qualquer-outra-fonte: a marca é limpa, nunca inventada. É por isso que
+    /// o campo é opcional — um payload sem ele nunca grava procedência
+    /// ERRADA, só deixa de gravar a certa.
+    #[serde(default)]
+    pub fonte: Option<String>,
 }
 
 /// Mensagem (pt-BR, curta) que a UI mostra como está quando a proposta ficou
@@ -325,15 +390,20 @@ pub(crate) fn under_prefix(file_path: &str, prefix: &str) -> bool {
     }
 }
 
-/// Proposta BAIXA: só o palpite de nome de arquivo, sem letra. Tag REAL
-/// existente é preservada no palpite (o lote nunca propõe apagar).
+/// Proposta da ETAPA 1 (sem rede): só o palpite de nome de arquivo, sem
+/// letra, confiança BAIXA. Tag REAL existente é preservada no palpite (o lote
+/// nunca propõe apagar). `fonte` é `erro` quando a música foi tentada e
+/// falhou — nesse caso a linha existe para INFORMAR, não para aplicar.
 fn proposta_baixa(
-    song: &Song,
-    titulo_tag: &str,
-    artista_tag: &str,
-    nome: &str,
+    cand: &Candidata,
     error: Option<String>,
 ) -> EnrichProposal {
+    let Candidata {
+        song,
+        titulo_tag,
+        artista_tag,
+        nome,
+    } = cand;
     let (mut titulo_prop, mut artista_prop) = gerar_palpites(nome, "", "")
         .into_iter()
         .next()
@@ -344,6 +414,11 @@ fn proposta_baixa(
     if !artista_tag.is_empty() {
         artista_prop = artista_tag.to_string();
     }
+    let fonte = if error.is_some() {
+        FONTE_ERRO
+    } else {
+        FONTE_NOME_ARQUIVO
+    };
     EnrichProposal {
         song_id: song.id,
         file_path: song.file_path.clone(),
@@ -353,6 +428,7 @@ fn proposta_baixa(
         proposed_artist: (!artista_prop.is_empty()).then_some(artista_prop),
         lyrics: None,
         confidence: "baixa".into(),
+        fonte: fonte.into(),
         error,
     }
 }
@@ -364,36 +440,287 @@ fn registrar(propostas: &mut Vec<EnrichProposal>, proposta: EnrichProposal) {
     }
 }
 
-/// Varre as músicas available sob `folder_prefix` (vazio = todas), consulta
-/// o LRCLIB para as incompletas e devolve as propostas. `pausa` é a cortesia
-/// entre consultas (300 ms no comando real; zero nos testes). Erro de rede
-/// por música vira proposta BAIXA com `error` — nunca aborta o lote.
+/// Cortesia de rede COMPARTILHADA pelas duas fontes: uma pausa antes de cada
+/// consulta, exceto a primeira de toda a varredura. Compartilhada de
+/// propósito — a pausa existe para não atropelar servidor alheio, e uma
+/// varredura que alterna LRCLIB e Vagalume sem pausa entre eles dispararia
+/// duas consultas coladas por música.
+struct Cortesia {
+    pausa: Duration,
+    primeira: Cell<bool>,
+}
+
+impl Cortesia {
+    fn nova(pausa: Duration) -> Self {
+        Cortesia {
+            pausa,
+            primeira: Cell::new(true),
+        }
+    }
+
+    fn esperar(&self) {
+        if !self.primeira.replace(false) && !self.pausa.is_zero() {
+            std::thread::sleep(self.pausa);
+        }
+    }
+}
+
+/// Uma música que entrou na varredura, com o que a etapa 1 já sabe dela:
+/// as tags REAIS (placeholder já virou vazio) e o nome base do arquivo.
+struct Candidata {
+    song: Song,
+    titulo_tag: String,
+    artista_tag: String,
+    nome: String,
+}
+
+/// Filtro de entrada da varredura: devolve `None` para a música que não tem
+/// o que completar (e portanto não conta no total do progresso nem gasta
+/// rede).
 ///
-/// `on_progress(done, total, nome_do_arquivo)` é chamado DEPOIS de cada música
-/// processada, espelhando o `|done, total|` do indexer (evento `scan:progress`).
-/// Um primeiro evento com `done = 0` sai antes de qualquer processamento, para
-/// a UI já mostrar o total. `total` é o número de CANDIDATAS (depois do filtro
-/// de músicas completas, antes do descarte de no-op): mede trabalho, não
-/// resultado — o progresso avança mesmo quando a proposta é descartada, quando
-/// a rede falha ou quando o arquivo sumiu do disco.
+/// Completa = título E artista reais (não-placeholder) mais letra. Para o
+/// INSTRUMENTAL a letra sai da conta (V8/F17): música sem voz não tem letra a
+/// buscar, em fonte nenhuma, e cobrá-la para sempre era exatamente a
+/// pendência eterna que a marca veio resolver. O que ela AINDA pode ganhar é
+/// título e artista — por isso ela não é descartada aqui, e sim nas etapas de
+/// LETRA (ver `processar_musica`): "instrumental sem letra ainda pode (e
+/// deve) ter título e artista corretos" (PRD V8).
+fn candidata(song: Song) -> Option<Candidata> {
+    if !song.available {
+        return None;
+    }
+    let titulo_tag = sem_placeholder(&song.title).to_string();
+    let artista_tag = sem_placeholder(song.artist.as_deref().unwrap_or("")).to_string();
+    let nomes_prontos = !titulo_tag.is_empty() && !artista_tag.is_empty();
+    let completa = nomes_prontos && (song.instrumental || song.has_lyrics);
+    if completa {
+        return None;
+    }
+    let nome = Path::new(&song.file_path)
+        .file_name()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    Some(Candidata {
+        song,
+        titulo_tag,
+        artista_tag,
+        nome,
+    })
+}
+
+/// Passa UMA música pelo funil e devolve a proposta. `None` significa
+/// CANCELADA no meio do caminho — a varredura volta cedo sem contabilizar
+/// esta música (nem proposta, nem progresso).
 ///
-/// `cancelled()` (QA M4) é consultado ANTES de cada música — inclusive antes
-/// da primeira, quando nem o evento inicial de progresso sai. Cancelar faz a
-/// varredura voltar CEDO com as propostas que já tinha (vec vazio se ainda não
-/// havia nenhuma), sem gastar mais rede nem emitir mais progresso: o "Cancelar"
-/// da UI só descarta o resultado, e a varredura zumbi ficava consultando o
-/// LRCLIB por minutos e embaralhando a barra da varredura seguinte.
+/// `etapa(nome)` é chamada ao ENTRAR em cada etapa, para a UI dizer o que
+/// está acontecendo agora; nenhuma delas faz `done` crescer.
+fn processar_musica<F, C, E>(
+    cand: &Candidata,
+    fetch: &F,
+    chave_vagalume: &str,
+    cortesia: &Cortesia,
+    cancelled: &C,
+    etapa: E,
+) -> Option<EnrichProposal>
+where
+    F: Fn(&str) -> Result<String>,
+    C: Fn() -> bool,
+    E: Fn(&str),
+{
+    // --- etapa 1: etiquetas + nome do arquivo (instantânea, sem rede) -----
+    etapa(ETAPA_NOME_ARQUIVO);
+
+    // arquivo sumido do disco: reporta sem gastar rede
+    if !Path::new(&cand.song.file_path).is_file() {
+        return Some(proposta_baixa(
+            cand,
+            Some(format!("arquivo não encontrado: {}", cand.song.file_path)),
+        ));
+    }
+
+    // V8/F17 — as etapas 2 e 3 são etapas de LETRA, e "todas as etapas de
+    // letra pulam o arquivo [...] e a varredura em lote do app". A música
+    // marcada como instrumental para aqui, com o que a etapa 1 achou.
+    //
+    // Não é só economia de rede: um instrumental com título e artista
+    // corretos casa com a versão CANTADA da mesma peça no LRCLIB e sai
+    // ALTA — e ALTA chega pré-marcada na revisão (DECISIONS #49). Um
+    // clique gravaria a letra de outra gravação dentro do arquivo.
+    if cand.song.instrumental {
+        return Some(proposta_baixa(cand, None));
+    }
+
+    // --- etapa 2: LRCLIB (título/artista + duração) -----------------------
+    etapa(ETAPA_LRCLIB);
+    let duracao = cand.song.duration_seconds.unwrap_or(0) as f64;
+    let mut best: Option<ScoredCandidate> = None;
+    let mut erro: Option<String> = None;
+    for (titulo, artista) in gerar_palpites(&cand.nome, &cand.titulo_tag, &cand.artista_tag) {
+        // cancelar precisa parar a REDE, não só a fila de músicas: um único
+        // arquivo chega a render quatro palpites, cada um com sua pausa.
+        if cancelled() {
+            return None;
+        }
+        cortesia.esperar();
+        match lyrics_fetch::query_best(&titulo, &artista, duracao, fetch, |t, a| {
+            !is_placeholder(t) && !is_placeholder(a)
+        }) {
+            Ok(Some(cand_lrclib)) => {
+                if best.as_ref().is_none_or(|b| cand_lrclib.score > b.score) {
+                    best = Some(cand_lrclib);
+                }
+                // para no primeiro palpite que rende ALTA
+                if best
+                    .as_ref()
+                    .is_some_and(|b| lyrics_fetch::classify(b.sim, b.dif) == Some("alta"))
+                {
+                    break;
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                // Por música: nunca aborta o lote. E um candidato válido
+                // (MÉDIA/ALTA) já achado por palpite anterior é mantido —
+                // a proposta de erro só vale se nada aproveitável veio
+                // antes da falha.
+                if best
+                    .as_ref()
+                    .and_then(|b| lyrics_fetch::classify(b.sim, b.dif))
+                    .is_none()
+                {
+                    erro = Some(e.to_string());
+                }
+                break;
+            }
+        }
+    }
+
+    let confianca = best
+        .as_ref()
+        .and_then(|b| lyrics_fetch::classify(b.sim, b.dif));
+    if let (None, Some(b), Some(conf)) = (&erro, &best, confianca) {
+        return Some(EnrichProposal {
+            song_id: cand.song.id,
+            file_path: cand.song.file_path.clone(),
+            current_title: cand.song.title.clone(),
+            current_artist: cand.song.artist.clone(),
+            proposed_title: b.matched_title.clone(),
+            proposed_artist: (!b.matched_artist.is_empty()).then(|| b.matched_artist.clone()),
+            lyrics: Some(b.lyrics.clone()),
+            confidence: conf.to_string(),
+            fonte: FONTE_LRCLIB.into(),
+            error: None,
+        });
+    }
+
+    // --- etapa 3: Vagalume, SÓ onde o LRCLIB veio vazio --------------------
+    //
+    // Três condições, todas herdadas do tools/curadoria.py:
+    // - o LRCLIB não trouxe letra confiável (o funil só passa adiante o que a
+    //   etapa anterior não resolveu) E não falhou (rede caída derruba as duas
+    //   fontes; insistir só gastaria o tempo do usuário);
+    // - há chave (sem chave a etapa é pulada em silêncio);
+    // - há título E artista REAIS para conferir. O Vagalume não tem duração:
+    //   a igualdade de palavras dos dois lados é a única prova que existe, e
+    //   ela precisa de um pedido que já signifique alguma coisa. Palpite de
+    //   nome de arquivo não é isso — identificar quem ainda não tem tag é
+    //   trabalho da impressão digital (fase 2 da F18).
+    let sem_letra_do_lrclib = erro.is_none() && confianca.is_none();
+    let tem_o_que_conferir = !cand.titulo_tag.is_empty() && !cand.artista_tag.is_empty();
+    if sem_letra_do_lrclib && !chave_vagalume.trim().is_empty() && tem_o_que_conferir {
+        if cancelled() {
+            return None;
+        }
+        etapa(ETAPA_VAGALUME);
+        cortesia.esperar();
+        match vagalume::fetch_lyrics_vagalume(
+            &cand.titulo_tag,
+            &cand.artista_tag,
+            chave_vagalume,
+            fetch,
+            |t, a| !is_placeholder(t) && !is_placeholder(a),
+        ) {
+            // A régua estrita garante que o título/artista devolvidos são as
+            // MESMAS palavras das tags atuais; então a etapa não propõe trocar
+            // nome nenhum — a letra é a mudança inteira.
+            //
+            // Confiança MÉDIA, nunca ALTA, e isso é deliberado: ALTA chega
+            // PRÉ-MARCADA na revisão (DECISIONS #49), e ALTA no resto do
+            // produto significa "a duração confirmou". Aqui não há duração
+            // para confirmar nada (DECISIONS #63) — a prova é só textual, e
+            // foi exatamente esta fonte que uma vez gravou "Ponto de Ogum"
+            // dentro de "Ponto de Oxum". A letra chega, com a fonte visível,
+            // e quem cura dá o clique.
+            Ok(Some(m)) => {
+                return Some(EnrichProposal {
+                    song_id: cand.song.id,
+                    file_path: cand.song.file_path.clone(),
+                    current_title: cand.song.title.clone(),
+                    current_artist: cand.song.artist.clone(),
+                    proposed_title: cand.titulo_tag.clone(),
+                    proposed_artist: Some(cand.artista_tag.clone()),
+                    lyrics: Some(m.lyrics),
+                    confidence: "media".into(),
+                    fonte: FONTE_VAGALUME.into(),
+                    error: None,
+                })
+            }
+            Ok(None) => {}
+            Err(e) => erro = Some(e.to_string()),
+        }
+    }
+
+    Some(proposta_baixa(cand, erro))
+}
+
+/// Varre as músicas available sob `folder_prefix` (vazio = todas), passa as
+/// incompletas pelo funil (etiquetas/nome → LRCLIB → Vagalume) e devolve as
+/// propostas.
+///
+/// `chave_vagalume` é a chave gratuita do usuário, guardada pelo frontend e
+/// passada por PARÂMETRO: o Cancioneiro nunca a grava no banco nem em log.
+/// Vazia, a etapa 3 é pulada em silêncio e todo o resto funciona igual.
+///
+/// `pausa` é a cortesia entre consultas, das DUAS fontes (300 ms no comando
+/// real; zero nos testes). Erro de rede por música vira proposta com `error`
+/// — nunca aborta o lote.
+///
+/// `on_progress(done, total, nome_do_arquivo, etapa)` espelha o `|done,
+/// total|` do indexer (evento `scan:progress`) com duas informações a mais
+/// que o acervo real exigiu:
+/// - um primeiro evento com `done = 0` e `etapa = "preparando"` sai antes de
+///   qualquer processamento, para a UI já mostrar o total;
+/// - dentro de cada música sai um evento ao ENTRAR em cada etapa do funil,
+///   com o MESMO `done` (a barra não anda, o texto muda): uma música chega a
+///   levar segundos entre quatro palpites no LRCLIB e a consulta ao Vagalume,
+///   e o PRD V8 pede "a etapa atual do funil e o arquivo do momento" visíveis
+///   o tempo todo. `done` só cresce no evento `etapa = "concluida"`, um por
+///   música — quem só quer a barra pode ignorar os demais.
+///
+/// `total` é o número de CANDIDATAS (depois do filtro de músicas completas,
+/// antes do descarte de no-op): mede trabalho, não resultado — o progresso
+/// avança mesmo quando a proposta é descartada, quando a rede falha ou quando
+/// o arquivo sumiu do disco.
+///
+/// `cancelled()` (QA M4) é consultado ANTES de cada música e ANTES de CADA
+/// consulta de rede — inclusive antes da primeira, quando nem o evento
+/// inicial de progresso sai. Cancelar faz a varredura voltar CEDO com as
+/// propostas que já tinha (vec vazio se ainda não havia nenhuma), sem gastar
+/// mais rede nem emitir mais progresso: o "Cancelar" da UI só descarta o
+/// resultado, e a varredura zumbi ficava consultando por minutos e
+/// embaralhando a barra da varredura seguinte.
 pub fn enrich_scan<F, P, C>(
     conn: &Connection,
     folder_prefix: &str,
     fetch: F,
+    chave_vagalume: &str,
     pausa: Duration,
     on_progress: P,
     cancelled: C,
 ) -> Result<Vec<EnrichProposal>>
 where
     F: Fn(&str) -> Result<String>,
-    P: Fn(usize, usize, &str),
+    P: Fn(usize, usize, &str, &str),
     C: Fn() -> bool,
 {
     if cancelled() {
@@ -402,128 +729,86 @@ where
 
     // 1ª passada (sem rede): seleciona as candidatas para o total do progresso
     // ser conhecido antes da primeira consulta.
-    let mut candidatas: Vec<(Song, String, String, String)> = Vec::new();
-    for song in db::list_songs(conn)? {
-        if !song.available {
-            continue;
-        }
-        if !under_prefix(&song.file_path, folder_prefix) {
-            continue;
-        }
-        // V8/F17 — "todas as etapas de letra pulam o arquivo [...] e a
-        // varredura em lote do app". Fica ANTES do filtro de completude
-        // porque o instrumental é, por definição, "incompleto" (não tem
-        // letra) e seria a primeira candidata de toda varredura.
-        //
-        // Não é só economia de rede: um instrumental com título e artista
-        // corretos casa com a versão CANTADA da mesma peça no LRCLIB e sai
-        // ALTA — e ALTA chega pré-marcada na revisão (DECISIONS #49). Um
-        // clique gravaria a letra de outra gravação dentro do arquivo.
-        if song.instrumental {
-            continue;
-        }
-        let titulo_tag = sem_placeholder(&song.title).to_string();
-        let artista_tag = sem_placeholder(song.artist.as_deref().unwrap_or("")).to_string();
-        let completa = song.has_lyrics && !titulo_tag.is_empty() && !artista_tag.is_empty();
-        if completa {
-            continue;
-        }
-        let nome = Path::new(&song.file_path)
-            .file_name()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default();
-        candidatas.push((song, titulo_tag, artista_tag, nome));
-    }
+    let candidatas: Vec<Candidata> = db::list_songs(conn)?
+        .into_iter()
+        .filter(|s| under_prefix(&s.file_path, folder_prefix))
+        .filter_map(candidata)
+        .collect();
 
     let total = candidatas.len();
-    on_progress(0, total, ""); // total na tela antes da primeira consulta
+    on_progress(0, total, "", ETAPA_PREPARANDO); // total na tela antes da 1ª consulta
 
+    let cortesia = Cortesia::nova(pausa);
     let mut propostas = Vec::new();
-    let mut primeira = true;
-    for (feitas, (song, titulo_tag, artista_tag, nome)) in candidatas.into_iter().enumerate() {
+    for (feitas, cand) in candidatas.iter().enumerate() {
         // cancelamento entre músicas: volta com o que já tem (QA M4)
         if cancelled() {
             return Ok(propostas);
         }
-
-        // arquivo sumido do disco: reporta sem gastar rede
-        if !Path::new(&song.file_path).is_file() {
-            registrar(
-                &mut propostas,
-                proposta_baixa(
-                    &song,
-                    &titulo_tag,
-                    &artista_tag,
-                    &nome,
-                    Some(format!("arquivo não encontrado: {}", song.file_path)),
-                ),
-            );
-            on_progress(feitas + 1, total, &nome);
-            continue;
-        }
-
-        let duracao = song.duration_seconds.unwrap_or(0) as f64;
-        let mut best: Option<ScoredCandidate> = None;
-        let mut erro: Option<String> = None;
-        for (titulo, artista) in gerar_palpites(&nome, &titulo_tag, &artista_tag) {
-            if !primeira && !pausa.is_zero() {
-                std::thread::sleep(pausa); // cortesia com a API entre consultas
-            }
-            primeira = false;
-            match lyrics_fetch::query_best(&titulo, &artista, duracao, &fetch, |t, a| {
-                !is_placeholder(t) && !is_placeholder(a)
-            }) {
-                Ok(Some(cand)) => {
-                    if best.as_ref().is_none_or(|b| cand.score > b.score) {
-                        best = Some(cand);
-                    }
-                    // para no primeiro palpite que rende ALTA
-                    if best
-                        .as_ref()
-                        .is_some_and(|b| lyrics_fetch::classify(b.sim, b.dif) == Some("alta"))
-                    {
-                        break;
-                    }
-                }
-                Ok(None) => {}
-                Err(e) => {
-                    // Por música: nunca aborta o lote. E um candidato válido
-                    // (MÉDIA/ALTA) já achado por palpite anterior é mantido —
-                    // a proposta de erro só vale se nada aproveitável veio
-                    // antes da falha.
-                    if best
-                        .as_ref()
-                        .and_then(|b| lyrics_fetch::classify(b.sim, b.dif))
-                        .is_none()
-                    {
-                        erro = Some(e.to_string());
-                    }
-                    break;
-                }
-            }
-        }
-
-        let confianca = best
-            .as_ref()
-            .and_then(|b| lyrics_fetch::classify(b.sim, b.dif));
-        let proposta = match (erro, best, confianca) {
-            (None, Some(b), Some(conf)) => EnrichProposal {
-                song_id: song.id,
-                file_path: song.file_path.clone(),
-                current_title: song.title.clone(),
-                current_artist: song.artist.clone(),
-                proposed_title: b.matched_title,
-                proposed_artist: (!b.matched_artist.is_empty()).then_some(b.matched_artist),
-                lyrics: Some(b.lyrics),
-                confidence: conf.to_string(),
-                error: None,
-            },
-            (erro, _, _) => proposta_baixa(&song, &titulo_tag, &artista_tag, &nome, erro),
+        let Some(proposta) = processar_musica(
+            cand,
+            &fetch,
+            chave_vagalume,
+            &cortesia,
+            &cancelled,
+            |etapa| on_progress(feitas, total, &cand.nome, etapa),
+        ) else {
+            return Ok(propostas); // cancelada no meio desta música
         };
         registrar(&mut propostas, proposta);
-        on_progress(feitas + 1, total, &nome);
+        on_progress(feitas + 1, total, &cand.nome, ETAPA_CONCLUIDA);
     }
     Ok(propostas)
+}
+
+/// O MESMO funil de `enrich_scan`, numa música só — o "completar dados desta
+/// música" do editor (PRD V8/F18: "no editar de cada música, a versão
+/// individual: rodar o funil só naquele arquivo, para o caso pontual").
+///
+/// Devolve `Ok(None)` quando não há o que propor: música já completa, música
+/// indisponível, nada encontrado ou proposta que não mudaria nada. Música
+/// inexistente é `Err` — o id veio do próprio app, então é defeito, não
+/// resultado. O progresso sai no mesmo formato da varredura em lote (com
+/// `total` 0 ou 1), para a UI reaproveitar o mesmo indicador.
+pub fn enrich_scan_song<F, P, C>(
+    conn: &Connection,
+    song_id: i64,
+    fetch: F,
+    chave_vagalume: &str,
+    pausa: Duration,
+    on_progress: P,
+    cancelled: C,
+) -> Result<Option<EnrichProposal>>
+where
+    F: Fn(&str) -> Result<String>,
+    P: Fn(usize, usize, &str, &str),
+    C: Fn() -> bool,
+{
+    let song = db::get_song(conn, song_id)?.ok_or_else(|| {
+        crate::error::AppError(format!("música não encontrada: {song_id}"))
+    })?;
+    if cancelled() {
+        return Ok(None);
+    }
+    let Some(cand) = candidata(song) else {
+        on_progress(0, 0, "", ETAPA_PREPARANDO); // nada a completar
+        return Ok(None);
+    };
+    on_progress(0, 1, "", ETAPA_PREPARANDO);
+
+    let cortesia = Cortesia::nova(pausa);
+    let Some(proposta) = processar_musica(
+        &cand,
+        &fetch,
+        chave_vagalume,
+        &cortesia,
+        &cancelled,
+        |etapa| on_progress(0, 1, &cand.nome, etapa),
+    ) else {
+        return Ok(None); // cancelada no meio
+    };
+    on_progress(1, 1, &cand.nome, ETAPA_CONCLUIDA);
+    Ok((!e_no_op(&proposta)).then_some(proposta))
 }
 
 /// Aplica as propostas aceitas via writer::write_tags (título obrigatório).
@@ -603,7 +888,20 @@ fn apply_one(conn: &Connection, ap: &EnrichApply) -> Result<Song> {
         (Some(novos), None) => Some(novos.to_string()),
         (None, atuais) => atuais.map(str::to_string),
     };
-    writer::write_tags(
+    // V8/F18 — procedência da letra. Só é DECLARADA quando esta gravação
+    // traz letra nova: o repasse da letra que já estava no arquivo (o caminho
+    // de quem só aceita título/artista) não sabe nada sobre ela e preserva a
+    // marca legítima pela regra da DECISIONS #54. Letra do Vagalume fica
+    // marcada como tal — o mesmo `TXXX:LETRA_ORIGEM = "vagalume"` que o
+    // tools/curadoria.py grava —, e letra de qualquer outra fonte LIMPA a
+    // marca: letra oficial nunca é transcrição.
+    let do_vagalume = ap
+        .fonte
+        .as_deref()
+        .is_some_and(|f| f.eq_ignore_ascii_case(FONTE_VAGALUME));
+    let origem_declarada =
+        lyrics_novo.map(|_| if do_vagalume { writer::ORIGEM_VAGALUME } else { "" });
+    writer::write_tags_com_origem(
         conn,
         ap.song_id,
         &ap.title,
@@ -613,6 +911,7 @@ fn apply_one(conn: &Connection, ap: &EnrichApply) -> Result<Song> {
         // V8/F17 — o lote NUNCA mexe na marca de instrumental: ela é escolha
         // humana (ou da curadoria olhando o áudio), e nada aqui a examinou.
         None,
+        origem_declarada,
     )
 }
 
@@ -721,6 +1020,7 @@ mod tests {
             proposed_artist: proposed_artist.map(str::to_string),
             lyrics: None,
             confidence: "baixa".into(),
+            fonte: FONTE_NOME_ARQUIVO.into(),
             error: None,
         }
     }

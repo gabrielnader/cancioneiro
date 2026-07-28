@@ -14,7 +14,10 @@ use crate::error::{AppError, Result};
 use serde::Serialize;
 use std::collections::HashMap;
 
-const SEARCH_URL: &str = "https://lrclib.net/api/search";
+/// Endereço da busca. Junto com o do Vagalume (V8/F18), é um dos DOIS únicos
+/// destinos de rede de todo o produto — `commands::funil_fetcher` recusa
+/// qualquer outro.
+pub const SEARCH_URL: &str = "https://lrclib.net/api/search";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct LyricsMatch {
@@ -27,7 +30,8 @@ pub struct LyricsMatch {
 
 /// Percent-encode de um valor de query string (RFC 3986: só unreserved
 /// passam sem escape) — evita depender de crate para meia dúzia de bytes.
-fn percent_encode(s: &str) -> String {
+/// Compartilhado com o `vagalume` (V8/F18).
+pub(crate) fn percent_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len() * 3);
     for b in s.bytes() {
         match b {
@@ -65,7 +69,11 @@ fn bigrams(s: &str) -> HashMap<(char, char), usize> {
 /// Similaridade textual em [0, 1]: coeficiente de Dice sobre bigramas de
 /// caracteres das strings normalizadas (sem dependência nova; comparável ao
 /// difflib.ratio usado no curadoria.py).
-fn similarity(a: &str, b: &str) -> f64 {
+///
+/// No Vagalume (V8/F18) ela NÃO decide se o casamento vale — lá a régua é a
+/// igualdade de palavras (`confere_estrito`) — e serve só de desempate entre
+/// entradas que já passaram por ela.
+pub(crate) fn similarity(a: &str, b: &str) -> f64 {
     let (a, b) = (norm(a), norm(b));
     if a == b {
         return if a.is_empty() { 0.0 } else { 1.0 };

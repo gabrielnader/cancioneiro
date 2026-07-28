@@ -38,6 +38,11 @@ const TEMAS_DESC: &str = "TEMAS";
 /// (`TXXX:LETRA_ORIGEM = "transcricao"` = letra saída do áudio). A marca
 /// descreve a letra que está NO ARQUIVO: quem troca a letra derruba a marca.
 const LETRA_ORIGEM_DESC: &str = "LETRA_ORIGEM";
+/// V8/F18 — letra vinda da base comunitária Vagalume. É o MESMO valor que o
+/// `tools/embed_lyrics.py` grava (`ORIGEM_VAGALUME`): o dado viaja no MP3 e
+/// os dois stacks precisam falar a mesma língua. Letra do LRCLIB é oficial
+/// também, mas não leva marca nenhuma — o valor "" limpa o frame.
+pub const ORIGEM_VAGALUME: &str = "vagalume";
 /// V8/F17 — marca de música sem voz. O valor canônico gravado é "1", o mesmo
 /// que o `embed_lyrics.py --instrumental` grava; desmarcar REMOVE o frame.
 const INSTRUMENTAL_DESC: &str = "INSTRUMENTAL";
@@ -85,6 +90,38 @@ pub fn write_tags(
     lyrics: Option<&str>,
     temas: Option<&str>,
     instrumental: Option<bool>,
+) -> Result<Song> {
+    write_tags_com_origem(conn, song_id, title, artist, lyrics, temas, instrumental, None)
+}
+
+/// O mesmo `write_tags`, com a procedência da letra DECLARADA pelo chamador
+/// (V8/F18). Só o funil usa esta porta; o editor do player continua no
+/// `write_tags`, que não sabe de onde a letra veio.
+///
+/// `letra_origem`:
+/// - `None` — "não sei": vale a regra da DECISIONS #54, a marca sobrevive
+///   se e só se a letra do arquivo não mudou;
+/// - `Some("vagalume")` — a letra que está sendo gravada veio da base
+///   comunitária, e é assim que ela fica marcada, exatamente como o
+///   `tools/curadoria.py` faz;
+/// - `Some("")` — declaração de que a letra é oficial e SEM marca (o caminho
+///   do LRCLIB): limpa qualquer marca herdada, inclusive a de transcrição.
+///
+/// A declaração só vale quando a letra MUDA — que é exatamente o momento em
+/// que a marca precisa ser refeita (DECISIONS #54). Gravação que não mexe na
+/// letra (só título/artista/temas, ou o repasse do mesmo texto que o lote
+/// faz) ignora o parâmetro e preserva a marca legítima: a procedência
+/// descreve a letra ATUAL, e essa letra continua sendo a mesma.
+#[allow(clippy::too_many_arguments)]
+pub fn write_tags_com_origem(
+    conn: &Connection,
+    song_id: i64,
+    title: &str,
+    artist: Option<&str>,
+    lyrics: Option<&str>,
+    temas: Option<&str>,
+    instrumental: Option<bool>,
+    letra_origem: Option<&str>,
 ) -> Result<Song> {
     let song = db::get_song(conn, song_id)?
         .ok_or_else(|| AppError(format!("música não encontrada: {song_id}")))?;
@@ -149,8 +186,17 @@ pub fn write_tags(
     // letra que o apply do lote faz (enrich::apply_one) — preserva a marca.
     // Todos os demais frames estrangeiros (capa, outros TXXX) continuam
     // intocados, como sempre.
+    //
+    // V8/F18: a letra MUDOU é o momento em que a marca precisa ser refeita.
+    // Sem declaração ela some (regra acima); com declaração ela passa a ser o
+    // que o funil informou — "" para letra oficial sem marca, "vagalume" para
+    // a base comunitária. O frame antigo cai antes em qualquer caso, para
+    // substituir em vez de duplicar.
     if letra_nova != letra_anterior.as_deref() {
         drop(tag.remove_user_text(LETRA_ORIGEM_DESC));
+        if let Some(origem) = letra_origem.filter(|o| !o.is_empty() && letra_nova.is_some()) {
+            tag.insert_user_text(LETRA_ORIGEM_DESC.to_string(), origem.to_string());
+        }
     }
 
     // TXXX:INSTRUMENTAL (V8/F17) — a marca descreve a MÚSICA (não tem voz),

@@ -42,8 +42,16 @@ impl Db {
     /// Registra uma varredura e devolve sua bandeira de cancelamento.
     /// Reiniciar um `scan_id` em uso substitui a bandeira antiga (a nova
     /// varredura nasce não-cancelada).
+    ///
+    /// Id VAZIO não é registrado: é o "não quero cancelamento" da varredura
+    /// de uma música só (V8/F18). Registrá-lo daria a duas chamadas
+    /// simultâneas a mesma chave, e faria um `enrich_cancel_scan("")`
+    /// perdido derrubar uma varredura que ninguém pediu para parar.
     fn scan_begin(&self, scan_id: &str) -> Result<Arc<AtomicBool>> {
         let flag = Arc::new(AtomicBool::new(false));
+        if scan_id.is_empty() {
+            return Ok(flag);
+        }
         self.scans
             .lock()
             .map_err(|_| AppError("estado das varreduras corrompido (lock poisoned)".into()))?
@@ -113,6 +121,15 @@ pub struct ScanProgress {
 /// `atual` é o NOME BASE do arquivo em processamento (vazio no evento inicial
 /// com `done = 0`, emitido só para a UI já mostrar o total).
 ///
+/// `etapa` (V8/F18) nomeia a etapa do funil em curso, já em pt-BR e pronta
+/// para exibir: `"preparando"`, `"lendo etiquetas e nome do arquivo"`,
+/// `"procurando no LRCLIB"`, `"procurando no Vagalume"` ou `"concluída"` (as
+/// constantes `enrich::ETAPA_*`). O PRD V8 pede status sempre visível "com
+/// contagem e barra, a etapa atual do funil e o arquivo do momento", e uma
+/// música sozinha leva segundos entre os palpites no LRCLIB e a consulta ao
+/// Vagalume. Só o evento `"concluída"` faz `done` crescer; os demais mudam o
+/// texto sem mexer na barra.
+///
 /// `scan_id` (QA M4) identifica a varredura que emitiu o evento: sem ele, uma
 /// varredura antiga que ainda não morreu embaralhava a barra de progresso da
 /// varredura nova. A UI ignora eventos de um id que não é o dela.
@@ -121,6 +138,7 @@ pub struct EnrichProgress {
     pub done: usize,
     pub total: usize,
     pub atual: String,
+    pub etapa: String,
     pub scan_id: String,
 }
 
@@ -283,21 +301,36 @@ pub fn write_tags(
     )
 }
 
-/// Fetcher real (ureq) do LRCLIB, compartilhado por fetch_lyrics_online e
-/// enrich_folder_scan — os ÚNICOS pontos de rede de todo o app, ambos
-/// acionados por cliques explícitos do usuário. GET com timeout de 10 s e
-/// User-Agent "Cancioneiro/0.7"; qualquer falha de rede vira "sem conexão".
-fn lrclib_fetcher(url: &str) -> Result<String> {
+/// Fetcher real (ureq) do funil, compartilhado por `fetch_lyrics_online`,
+/// `enrich_folder_scan` e `enrich_song_scan` — os ÚNICOS pontos de rede de
+/// todo o app, todos acionados por cliques explícitos do usuário. GET com
+/// timeout de 10 s e User-Agent "Cancioneiro/0.7"; qualquer falha de rede
+/// vira "sem conexão".
+///
+/// A primeira coisa que ele faz é conferir o DESTINO: só LRCLIB e Vagalume
+/// passam. A trava é barata e vale como garantia executável do inviolável
+/// "nada do acervo sai da máquina" — um endereço montado errado (ou vindo de
+/// dado do próprio acervo) não consegue virar requisição para outro servidor.
+///
+/// 404 no Vagalume é resposta legítima ("não conheço esta música") e vira
+/// corpo vazio, que o módulo lê como "sem resultado". Chamar isso de falha de
+/// rede transformaria repertório desconhecido em erro na tela do usuário.
+pub(crate) fn funil_fetcher(url: &str) -> Result<String> {
+    let vagalume = url.starts_with(crate::vagalume::SEARCH_URL);
+    if !vagalume && !url.starts_with(crate::lyrics_fetch::SEARCH_URL) {
+        return Err(AppError("endereço de rede não permitido".into()));
+    }
     let agent = ureq::AgentBuilder::new()
         .timeout(std::time::Duration::from_secs(10))
         .user_agent("Cancioneiro/0.7")
         .build();
-    agent
-        .get(url)
-        .call()
-        .map_err(|_| AppError("sem conexão".into()))?
-        .into_string()
-        .map_err(|_| AppError("sem conexão".into()))
+    match agent.get(url).call() {
+        Ok(resp) => resp
+            .into_string()
+            .map_err(|_| AppError("sem conexão".into())),
+        Err(ureq::Error::Status(404, _)) if vagalume => Ok(String::new()),
+        Err(_) => Err(AppError("sem conexão".into())),
+    }
 }
 
 /// Busca a letra no LRCLIB por título+artista+duração.
@@ -315,7 +348,7 @@ pub fn fetch_lyrics_online(
         &title,
         artist.as_deref().unwrap_or(""),
         duration_seconds,
-        lrclib_fetcher,
+        funil_fetcher,
     )
 }
 
@@ -323,52 +356,116 @@ pub fn fetch_lyrics_online(
 // Enriquecimento em lote (F13 — PRD V5)
 // ---------------------------------------------------------------------------
 
-/// Identifica no LRCLIB as músicas incompletas sob `folder_prefix` (vazio =
-/// biblioteca inteira) e devolve as propostas para a UI de revisão.
+/// Cortesia com as APIs entre consultas — das DUAS fontes.
+const PAUSA_CORTESIA: std::time::Duration = std::time::Duration::from_millis(300);
+
+/// Emissor de `enrich:progress` para uma varredura (por `scan_id`).
+fn emissor_de_progresso(
+    app: AppHandle,
+    scan_id: String,
+) -> impl Fn(usize, usize, &str, &str) {
+    move |done, total, atual, etapa| {
+        let _ = app.emit(
+            "enrich:progress",
+            EnrichProgress {
+                done,
+                total,
+                atual: atual.to_string(),
+                etapa: etapa.to_string(),
+                scan_id: scan_id.clone(),
+            },
+        );
+    }
+}
+
+/// A chave do Vagalume como o funil a espera: `None`/vazia = etapa pulada.
+/// Ela vem do frontend a cada chamada (é preferência dele, não dado do
+/// acervo) e NUNCA é gravada — nem no banco, nem em log, nem em mensagem de
+/// erro. Sem chave nada falha: a etapa simplesmente não acontece.
+fn chave(vagalume_key: Option<String>) -> String {
+    vagalume_key.unwrap_or_default().trim().to_string()
+}
+
+/// Passa as músicas incompletas sob `folder_prefix` (vazio = biblioteca
+/// inteira) pelo funil — etiquetas/nome do arquivo → LRCLIB → Vagalume — e
+/// devolve as propostas para a UI de revisão.
 ///
-/// Ponto de rede EXPLÍCITO acionado pelo usuário ("Completar dados desta
-/// pasta"); pausa de cortesia de 300 ms entre consultas. Erro de rede por
-/// música vira proposta BAIXA com `error` — o lote nunca aborta. Usa conexão
-/// dedicada (scan_conn) para não travar busca/listagem durante a varredura.
+/// Ponto de rede EXPLÍCITO acionado pelo usuário (a seção de curadoria em
+/// Configurações); pausa de cortesia de 300 ms entre consultas, valendo para
+/// as duas fontes. `chave_vagalume` é a chave gratuita do usuário, guardada
+/// pelo frontend: ausente ou vazia, a etapa do Vagalume é pulada em silêncio
+/// e todo o resto funciona igual. Erro de rede por música vira proposta com
+/// `error` — o lote nunca aborta. Usa conexão dedicada (scan_conn) para não
+/// travar busca/listagem durante a varredura, que dura minutos.
 ///
-/// Emite `enrich:progress` (EnrichProgress) a cada música processada — no
-/// acervo real são minutos de varredura, e o invoke sozinho não dá sinal de
-/// vida. Mesmo padrão do `scan:progress` da indexação. Todo evento carrega o
-/// `scan_id` (gerado pelo frontend) para a UI descartar o que vier de uma
-/// varredura antiga.
+/// Emite `enrich:progress` (EnrichProgress) a cada etapa e a cada música
+/// concluída — no acervo real são minutos de varredura, e o invoke sozinho
+/// não dá sinal de vida. Todo evento carrega o `scan_id` (gerado pelo
+/// frontend) para a UI descartar o que vier de uma varredura antiga.
 ///
 /// Cancelável por `enrich_cancel_scan(scan_id)`: a varredura verifica a
-/// bandeira entre músicas e volta cedo com as propostas que já tiver.
+/// bandeira entre músicas e antes de cada consulta, e volta cedo com as
+/// propostas que já tiver.
 #[tauri::command]
 pub fn enrich_folder_scan(
     app: AppHandle,
     state: State<'_, Db>,
     folder_prefix: String,
     scan_id: String,
+    vagalume_key: Option<String>,
 ) -> Result<Vec<crate::enrich::EnrichProposal>> {
     let cancel = state.scan_begin(&scan_id)?;
+    let progresso = emissor_de_progresso(app, scan_id.clone());
     let resultado = (|| {
         let conn = state.scan_conn()?;
         crate::enrich::enrich_scan(
             &conn,
             &folder_prefix,
-            lrclib_fetcher,
-            std::time::Duration::from_millis(300),
-            |done, total, atual| {
-                let _ = app.emit(
-                    "enrich:progress",
-                    EnrichProgress {
-                        done,
-                        total,
-                        atual: atual.to_string(),
-                        scan_id: scan_id.clone(),
-                    },
-                );
-            },
+            funil_fetcher,
+            &chave(vagalume_key),
+            PAUSA_CORTESIA,
+            progresso,
             || cancel.load(Ordering::SeqCst),
         )
     })();
     state.scan_end(&scan_id); // a entrada morre sempre — o mapa não cresce
+    resultado
+}
+
+/// O MESMO funil, numa música só: o "completar dados desta música" do editor
+/// (PRD V8/F18). Devolve `null` quando não há o que propor — música já
+/// completa, nada encontrado ou proposta que não mudaria nada. Nada é
+/// gravado aqui; a proposta devolvida entra no mesmo `enrich_apply` do lote.
+///
+/// `scan_id` é OPCIONAL porque o caso pontual do editor são segundos, não
+/// minutos: quem não manda um id não ganha cancelamento e recebe os eventos
+/// de progresso com `scan_id` vazio (que a UI já descarta, por serem de uma
+/// varredura que não é a dela). Quem manda um id ganha os dois, pelo mesmo
+/// `enrich_cancel_scan(scan_id)` do lote.
+#[tauri::command]
+pub fn enrich_song_scan(
+    app: AppHandle,
+    state: State<'_, Db>,
+    song_id: i64,
+    vagalume_key: Option<String>,
+    scan_id: Option<String>,
+) -> Result<Option<crate::enrich::EnrichProposal>> {
+    let scan_id = scan_id.unwrap_or_default();
+    let cancel = state.scan_begin(&scan_id)?;
+    let progresso = emissor_de_progresso(app, scan_id.clone());
+    let resultado = (|| {
+        let conn = state.scan_conn()?;
+        crate::enrich::enrich_scan_song(
+            &conn,
+            song_id,
+            funil_fetcher,
+            &chave(vagalume_key),
+            PAUSA_CORTESIA,
+            progresso,
+            || cancel.load(Ordering::SeqCst),
+        )
+    })();
+    state.scan_end(&scan_id);
     resultado
 }
 
@@ -419,6 +516,22 @@ mod tests {
         assert_eq!(state.scans_vivas(), 0, "entrada limpa no fim da varredura");
     }
 
+    /// V8/F18 — a varredura de UMA música pode vir sem `scan_id` (o editor
+    /// não oferece "Cancelar" para o caso pontual). Id vazio não entra no
+    /// mapa: duas chamadas simultâneas não disputariam a mesma chave, e um
+    /// `enrich_cancel_scan("")` perdido não derruba varredura nenhuma.
+    #[test]
+    fn an_empty_scan_id_is_never_registered() {
+        let state = estado();
+        let flag = state.scan_begin("").unwrap();
+        assert_eq!(state.scans_vivas(), 0, "id vazio não entra no mapa");
+
+        state.cancel_scan("").unwrap();
+        assert!(!flag.load(Ordering::SeqCst), "e não pode ser cancelado");
+        state.scan_end("");
+        assert_eq!(state.scans_vivas(), 0);
+    }
+
     #[test]
     fn cancelling_unknown_scan_id_is_a_harmless_no_op() {
         let state = estado();
@@ -456,11 +569,12 @@ mod tests {
     // (snake_case, sem renames: é o contrato com o frontend).
     // -----------------------------------------------------------------------
     #[test]
-    fn enrich_progress_event_carries_the_scan_id() {
+    fn enrich_progress_event_carries_the_scan_id_and_the_stage() {
         let json = serde_json::to_value(EnrichProgress {
             done: 2,
             total: 7,
             atual: "Falamansa - Oh! Chuva.mp3".into(),
+            etapa: crate::enrich::ETAPA_VAGALUME.into(),
             scan_id: "scan-42".into(),
         })
         .unwrap();
@@ -468,7 +582,185 @@ mod tests {
         assert_eq!(json["done"], 2);
         assert_eq!(json["total"], 7);
         assert_eq!(json["atual"], "Falamansa - Oh! Chuva.mp3");
+        assert_eq!(json["etapa"], "procurando no Vagalume");
         assert_eq!(json["scan_id"], "scan-42");
+        // o evento tem exatamente estes cinco campos, em snake_case
+        let campos: Vec<&String> = json.as_object().unwrap().keys().collect();
+        assert_eq!(campos, ["atual", "done", "etapa", "scan_id", "total"]);
+    }
+
+    // -----------------------------------------------------------------------
+    // V8/F18 — o vocabulário de `etapa` é FECHADO e estável: a UI traduz cada
+    // valor para uma frase em pt-BR, e um valor novo apareceria cru na tela de
+    // quem não tem a quem perguntar.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn the_stage_vocabulary_is_closed_and_stable() {
+        use crate::enrich::*;
+        assert_eq!(
+            [
+                ETAPA_PREPARANDO,
+                ETAPA_NOME_ARQUIVO,
+                ETAPA_LRCLIB,
+                ETAPA_VAGALUME,
+                ETAPA_CONCLUIDA
+            ],
+            [
+                "preparando",
+                "lendo etiquetas e nome do arquivo",
+                "procurando no LRCLIB",
+                "procurando no Vagalume",
+                "concluída"
+            ]
+        );
+        assert_eq!(
+            [
+                FONTE_NOME_ARQUIVO,
+                FONTE_LRCLIB,
+                FONTE_VAGALUME,
+                FONTE_ERRO
+            ],
+            ["nome do arquivo", "LRCLIB", "Vagalume", "erro"]
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // V8/F18 — a proposta chega ao frontend com `fonte`, em snake_case e sem
+    // renames, junto dos campos que a revisão já usava.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn enrich_proposal_serializes_the_source_of_the_data() {
+        let json = serde_json::to_value(crate::enrich::EnrichProposal {
+            song_id: 7,
+            file_path: "/m/a.mp3".into(),
+            current_title: "Faixa 5".into(),
+            current_artist: None,
+            proposed_title: "Chegança".into(),
+            proposed_artist: Some("Antônio Nóbrega".into()),
+            lyrics: Some("letra".into()),
+            confidence: "alta".into(),
+            fonte: crate::enrich::FONTE_VAGALUME.into(),
+            error: None,
+        })
+        .unwrap();
+
+        assert_eq!(json["fonte"], "Vagalume");
+        assert_eq!(json["confidence"], "alta");
+        let campos: Vec<&String> = json.as_object().unwrap().keys().collect();
+        assert_eq!(
+            campos,
+            [
+                "confidence",
+                "current_artist",
+                "current_title",
+                "error",
+                "file_path",
+                "fonte",
+                "lyrics",
+                "proposed_artist",
+                "proposed_title",
+                "song_id",
+            ]
+        );
+    }
+
+    /// O eco de `fonte` é OPCIONAL: um payload sem ele continua válido e vale
+    /// como "não sei de onde veio" (a marca de procedência é limpa, nunca
+    /// inventada).
+    #[test]
+    fn enrich_apply_accepts_the_source_echo_and_survives_without_it() {
+        let com: crate::enrich::EnrichApply = serde_json::from_str(
+            r#"{"song_id": 7, "title": "T", "artist": null, "lyrics": "L",
+                "add_temas": null, "current_title": "T", "current_artist": null,
+                "fonte": "Vagalume"}"#,
+        )
+        .unwrap();
+        assert_eq!(com.fonte.as_deref(), Some("Vagalume"));
+
+        let sem: crate::enrich::EnrichApply = serde_json::from_str(
+            r#"{"song_id": 7, "title": "T", "artist": null, "lyrics": "L",
+                "add_temas": null, "current_title": "T", "current_artist": null}"#,
+        )
+        .unwrap();
+        assert_eq!(sem.fonte, None);
+    }
+
+    // -----------------------------------------------------------------------
+    // V8/F18 — "nenhuma telemetria, nada do acervo sai da máquina": o único
+    // fetcher do produto recusa qualquer destino que não seja LRCLIB ou
+    // Vagalume, ANTES de abrir conexão. Roda offline: nenhuma das URLs abaixo
+    // chega a virar requisição.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn the_fetcher_refuses_any_host_other_than_lrclib_and_vagalume() {
+        for url in [
+            "https://exemplo.invalido/coleta",
+            "http://localhost:9/x",
+            "file:///etc/passwd",
+            "https://lrclib.net.exemplo.invalido/api/search?q=x",
+            "https://api.vagalume.com.br.exemplo.invalido/search.php",
+            "",
+        ] {
+            let err = funil_fetcher(url).expect_err("destino {url} deveria ser recusado");
+            assert_eq!(err.to_string(), "endereço de rede não permitido");
+        }
+    }
+
+    /// ...e os dois destinos legítimos passam pela trava (o erro que sobra é
+    /// de rede, não de permissão — a suíte roda sem internet).
+    #[test]
+    fn the_two_legitimate_destinations_pass_the_guard() {
+        for url in [
+            crate::lyrics_fetch::SEARCH_URL,
+            crate::vagalume::SEARCH_URL,
+        ] {
+            if let Err(e) = funil_fetcher(url) {
+                assert_ne!(
+                    e.to_string(),
+                    "endereço de rede não permitido",
+                    "{url} é destino legítimo"
+                );
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // DECISIONS #15/#48 — a JANELA DE ESCRITA não pode crescer com a F18. A
+    // varredura, que dura minutos, roda em conexão DEDICADA e não segura o
+    // mutex que busca/listagem usam; o apply, que são segundos, continua no
+    // lock compartilhado. As duas varreduras novas (pasta e música) usam a
+    // mesma `scan_conn`, então valem para as duas.
+    // -----------------------------------------------------------------------
+    #[test]
+    fn a_running_scan_never_holds_the_lock_that_search_needs() {
+        let dir = tempfile::tempdir().unwrap();
+        let caminho = dir.path().join("cancioneiro.db");
+        let state = Db::new(db::open_at(&caminho).unwrap(), Some(caminho.clone()));
+
+        let varredura = state.scan_conn().unwrap();
+        // com a varredura em curso, a busca continua entrando
+        let busca = state.lock().expect("o lock da busca continua livre");
+        assert!(db::list_songs(&busca).is_ok());
+        drop(busca);
+        // e a conexão da varredura é OUTRA, não o guard compartilhado
+        assert!(matches!(varredura, ScanConn::Owned(_)));
+    }
+
+    /// Banco in-memory (só nos testes) não tem arquivo para reabrir: aí a
+    /// varredura cai no lock compartilhado mesmo — comportamento inalterado.
+    #[test]
+    fn an_in_memory_database_falls_back_to_the_shared_lock() {
+        let state = estado();
+        assert!(matches!(state.scan_conn().unwrap(), ScanConn::Shared(_)));
+    }
+
+    /// A chave do Vagalume é normalizada num lugar só, e ausente/vazia
+    /// significa "pule a etapa" — nunca erro.
+    #[test]
+    fn a_missing_or_blank_key_becomes_the_empty_key() {
+        assert_eq!(chave(None), "");
+        assert_eq!(chave(Some("   ".into())), "");
+        assert_eq!(chave(Some("  minha-chave \n".into())), "minha-chave");
     }
 
     // -----------------------------------------------------------------------

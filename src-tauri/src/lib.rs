@@ -5,6 +5,7 @@ pub mod error;
 pub mod indexer;
 pub mod lyrics_fetch;
 pub mod search;
+pub mod vagalume;
 pub mod writer;
 
 use tauri::Manager;
@@ -53,6 +54,7 @@ pub fn run() {
             commands::write_tags,
             commands::fetch_lyrics_online,
             commands::enrich_folder_scan,
+            commands::enrich_song_scan,
             commands::enrich_cancel_scan,
             commands::enrich_apply,
         ])
