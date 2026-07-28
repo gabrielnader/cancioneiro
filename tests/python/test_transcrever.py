@@ -1219,3 +1219,72 @@ class TestPontasSoltas:
                                   csv_out=saida, pausa=0)
         linha = read_csv(saida)[0]
         assert linha["acao"] == "NÃO IDENTIFICADA"
+
+
+# --------------------------------------------- achados do 2º teste real
+# Rodada com --modelo tiny em 94 arquivos: 33 "transcrição vazia", tempos
+# absurdos (3s para 3m24s de áudio) e saídas de 13-51 caracteres para
+# músicas inteiras. Causa: vad_filter=True. O VAD do Whisper é detector de
+# FALA; sobre canto com instrumentação ele descarta o áudio quase todo.
+class TestVadNaoEstrangulaCanto:
+    def test_transcritor_real_nao_usa_vad(self, monkeypatch):
+        chamadas = {}
+
+        class ModeloFalso:
+            def transcribe(self, caminho, **kwargs):
+                chamadas.update(kwargs)
+                seg = type("S", (), {"text": "canto"})()
+                return [seg], None
+
+        monkeypatch.setitem(
+            sys.modules, "faster_whisper",
+            type("M", (), {"WhisperModel": lambda *a, **k: ModeloFalso()}))
+        t = curadoria.criar_transcritor(modelo="tiny")
+        assert t("x.mp3") == "canto"
+        assert chamadas.get("vad_filter") is False, (
+            "VAD ligado engole canto: 33 de 94 arquivos vieram vazios")
+        # laços de repetição são a outra praga do Whisper sobre música
+        assert chamadas.get("condition_on_previous_text") is False
+
+    def test_trecho_de_identificacao_continua_recortando(self, monkeypatch):
+        chamadas = {}
+
+        class ModeloFalso:
+            def transcribe(self, caminho, **kwargs):
+                chamadas.update(kwargs)
+                return [], None
+
+        monkeypatch.setitem(
+            sys.modules, "faster_whisper",
+            type("M", (), {"WhisperModel": lambda *a, **k: ModeloFalso()}))
+        curadoria.criar_transcritor()("x.mp3", inicio=20, duracao=90)
+        assert chamadas.get("clip_timestamps") == "20,110"
+
+
+# Ainda na mesma rodada: o refrão gerou 4 casamentos confiantes e ERRADOS
+# ("Lampejo" -> "Vou Chegar Mais Cedo em Casa / Roberto Carlos"). Bater a
+# duração não prova nada; a prova é o refrão que ouvimos estar na letra.
+class TestRefraoPrecisaEstarNaLetra:
+    def test_letra_que_nao_contem_o_refrao_e_recusada(self, pasta, capsys):
+        outra = ("Vou chegar mais cedo em casa\n"
+                 "Pra te ver sorrir de novo\n")
+        curadoria.cmd_transcrever(
+            pasta, transcritor=FakeTranscritor(),
+            fetcher=lambda url: json.dumps(
+                [resultado(track="Me Apresento", letra=outra)]),
+            pausa=0)
+        out = capsys.readouterr().out
+        assert "IDENTIFICADA" not in out
+        assert titulo_de(pasta / "Faixa 5.mp3") != "Me Apresento"
+
+    def test_letra_que_contem_o_refrao_e_aceita(self, pasta, capsys):
+        curadoria.cmd_transcrever(pasta, transcritor=FakeTranscritor(),
+                                  fetcher=fetcher_apresento, pausa=0)
+        assert "IDENTIFICADA" in capsys.readouterr().out
+        assert titulo_de(pasta / "Faixa 5.mp3") == "Me Apresento"
+
+    def test_resultado_sem_letra_nao_identifica(self, pasta, capsys):
+        curadoria.cmd_transcrever(
+            pasta, transcritor=FakeTranscritor(),
+            fetcher=lambda url: json.dumps([resultado(letra="")]), pausa=0)
+        assert "IDENTIFICADA" not in capsys.readouterr().out

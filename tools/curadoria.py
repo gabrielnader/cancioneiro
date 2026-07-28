@@ -1034,6 +1034,16 @@ def _identificar_por_refrao(candidatos: list, duracao_mp3: float, buscar,
             + (f" ({len(resultados) - len(validos)} descartados: placeholder)"
                if len(validos) < len(resultados) else ""))
         for res in validos:
+            # PROVA do casamento: o refrão que ouvimos tem de estar na letra
+            # devolvida. Título parecido + duração próxima não prova nada —
+            # no 2º teste real isso casou "Lampejo" com "Vou Chegar Mais
+            # Cedo em Casa / Roberto Carlos" e mais três absurdos. Resultado
+            # sem letra também não serve: a letra é o objetivo da F14.1.
+            if _norm_comparacao(candidato) not in _norm_comparacao(
+                    res.get("plainLyrics") or ""):
+                log(f'  descartado (refrão não está na letra): '
+                    f'"{res.get("trackName")}"')
+                continue
             sim = similaridade(candidato, res.get("trackName") or "")
             duracao = res.get("duration")
             dif = (abs(duracao_mp3 - float(duracao))
@@ -1073,7 +1083,16 @@ def criar_transcritor(modelo: str = "small", idioma: str = "pt"):
     model = WhisperModel(modelo, device="cpu", compute_type="int8")
 
     def transcritor(caminho: str, inicio=None, duracao=None) -> str:
-        kwargs = {"language": idioma, "vad_filter": True}
+        # vad_filter FICA DESLIGADO. O VAD do Whisper é detector de FALA;
+        # sobre canto com instrumentação ele classifica quase tudo como
+        # "sem voz". No 2º teste real (94 arquivos, modelo tiny) isso
+        # produziu 33 "transcrição vazia", tempos absurdos (3 s para 3m24s
+        # de áudio, porque quase nada chegava ao modelo) e músicas inteiras
+        # resumidas a 13-51 caracteres. Sem VAD, o modelo ouve a música toda.
+        # condition_on_previous_text=False corta os laços de repetição, a
+        # outra praga conhecida do Whisper sobre música.
+        kwargs = {"language": idioma, "vad_filter": False,
+                  "condition_on_previous_text": False}
         if inicio is not None and duracao is not None:
             kwargs["clip_timestamps"] = f"{inicio:.0f},{inicio + duracao:.0f}"
         segmentos, _info = model.transcribe(str(caminho), **kwargs)
