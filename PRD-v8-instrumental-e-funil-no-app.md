@@ -54,6 +54,20 @@ processamento. Então:
 2. **No editar de cada música**, a versão individual: rodar o funil só naquele
    arquivo, para o caso pontual.
 
+E, pela mesma razão, **o ✎ sai da árvore de pastas**. Ele nasceu na V5/F13
+como único caminho para a varredura em lote, mas a lateral é para **navegar**:
+um botão que dispara horas de processamento no meio da navegação diária é
+convite a clique acidental — o mesmo problema que tirou os chips de tema de
+perto do título. Com a curadoria tendo endereço próprio, ele vira redundante.
+
+**Ordem obrigatória**: a remoção acontece **no mesmo lançamento** que traz a
+seção em Configurações, nunca antes. Tirar primeiro deixaria uma versão em que
+a varredura em lote não existe em lugar nenhum.
+
+Para não perder o contexto que o ✎ dava de graça, a seção em Configurações
+**começa com a pasta que estiver selecionada na lateral** — quem estava
+olhando "Barco" e vai curar não precisa procurar "Barco" de novo.
+
 ### Como se comporta
 
 - **Roda em segundo plano.** A pessoa continua usando o app normalmente —
