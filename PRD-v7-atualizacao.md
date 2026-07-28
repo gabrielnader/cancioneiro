@@ -75,21 +75,25 @@ os binários não forem assinados, esses avisos continuam possíveis.
 A chave pública minisign já está em `src-tauri/tauri.conf.json`. Falta só a
 privada, que **nunca** entra no repositório — ela vive como segredo do GitHub.
 
+É **um segredo só**, em *Repository secrets* (não em *Environment secrets*):
+
 1. Em `https://github.com/gabrielnader/cancioneiro/settings/secrets/actions`,
-   clique em **New repository secret**.
+   na seção **Repository secrets**, clique em **New repository secret**.
 2. Nome: `TAURI_SIGNING_PRIVATE_KEY`. Valor: o **conteúdo inteiro** do arquivo
-   de chave privada gerado com o par que está no `tauri.conf.json` (o texto que
-   começa com `untrusted comment: rsign encrypted secret key`). Colar o
-   conteúdo, não o caminho do arquivo.
-3. Nome: `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`. Valor: a senha da chave. **A
-   chave desta rodada foi gerada sem senha** — cadastre o segredo mesmo assim,
-   com valor vazio, para o `env:` do workflow não ficar indefinido.
-4. Guardar uma cópia da chave privada fora do GitHub (gerenciador de senhas).
+   de chave privada gerado junto com a pública que está no `tauri.conf.json`.
+   Colar o conteúdo, não o caminho do arquivo.
+3. Guardar uma cópia da chave privada fora do GitHub (gerenciador de senhas).
    Perder a chave significa que nenhum app já instalado aceitará atualizações:
    seria preciso publicar uma versão com chave nova e pedir reinstalação manual
    a todo mundo — exatamente o problema que a V7 resolve.
 
-Se os segredos não existirem, o build da release **falha** (o
+**Não** cadastrar `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: a chave desta rodada foi
+gerada sem senha, e o GitHub não aceita segredo com valor vazio. O `env:` do
+workflow referencia o segredo mesmo assim — segredo inexistente chega como
+string vazia, que é exatamente o que uma chave sem senha espera. Só cadastre
+esse segundo segredo se um dia gerarem um par novo **com** senha.
+
+Se o segredo da chave não existir, o build da release **falha** (o
 `createUpdaterArtifacts` exige assinatura). Isso é proposital: uma release sem
 assinatura seria recusada pelo updater de quem já tem o app instalado, e o erro
 apareceria só meses depois.
