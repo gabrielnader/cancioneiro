@@ -302,7 +302,9 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
       "Artista Teste",
       LYRICS,
       "esperança; fé",
-      false, // V8/F17: a música não é instrumental e o editor diz isso sempre
+      // V8/F17: ninguém tocou no controle de instrumental, então o editor
+      // não manda nada — a marca do MP3 fica como está.
+      undefined,
     );
     expect(useToastStore.getState().toasts).toEqual([
       expect.objectContaining({
@@ -334,7 +336,7 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
       "Artista Teste",
       LYRICS,
       "água; esperança; fé",
-      false,
+      undefined,
     );
   });
 
@@ -351,7 +353,7 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
       "Artista Teste",
       LYRICS,
       "água; esperança",
-      false,
+      undefined,
     );
   });
 
@@ -731,6 +733,53 @@ describe("LyricsPanel — marca de instrumental (V8/F17)", () => {
     expect(
       useLibraryStore.getState().results[0].song.instrumental,
     ).toBe(false);
+  });
+
+  // O motivo do três-estados existir: a View do banco pode estar ATRASADA em
+  // relação ao MP3 (a curadoria marcou o arquivo com o app aberto, ou antes
+  // da varredura de inicialização). Aí o controle nasce desmarcado sem que
+  // ninguém tenha desmarcado nada, e salvar uma correção de título apagaria
+  // do MP3 uma marca feita à mão — "marcada à mão, nenhuma rotina desmarca
+  // sozinha" (PRD V8/F17).
+  it("salvar sem tocar no controle não manda instrumental — nem true, nem false", async () => {
+    const base = song(2, false);
+    const writeTags = fakeWriteTags(base);
+    montar(base, writeTags);
+    fireEvent.click(await screen.findByRole("button", { name: "Editar" }));
+
+    fireEvent.change(screen.getByLabelText("Título"), {
+      target: { value: "Doce Prelúdio" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Salvar no arquivo" }));
+
+    await waitFor(() => expect(writeTags).toHaveBeenCalledTimes(1));
+    expect(writeTags.mock.calls[0][5]).toBeUndefined();
+  });
+
+  it("música já marcada, salva sem tocar no controle: também não manda nada", async () => {
+    const base = marcada();
+    const writeTags = fakeWriteTags(base);
+    montar(base, writeTags);
+    fireEvent.click(await screen.findByRole("button", { name: "Editar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Salvar no arquivo" }));
+
+    await waitFor(() => expect(writeTags).toHaveBeenCalledTimes(1));
+    expect(writeTags.mock.calls[0][5]).toBeUndefined();
+  });
+
+  it("marcar e desmarcar de volta manda o valor explícito, não 'não mexer'", async () => {
+    const base = song(2, false);
+    const writeTags = fakeWriteTags(base);
+    montar(base, writeTags);
+    fireEvent.click(await screen.findByRole("button", { name: "Editar" }));
+
+    const controle = screen.getByRole("checkbox", { name: ROTULO });
+    fireEvent.click(controle); // marca
+    fireEvent.click(controle); // e desmarca — decisão humana, vale false
+    fireEvent.click(screen.getByRole("button", { name: "Salvar no arquivo" }));
+
+    await waitFor(() => expect(writeTags).toHaveBeenCalledTimes(1));
+    expect(writeTags.mock.calls[0][5]).toBe(false);
   });
 
   it("instrumental COM letra registrada continua exibindo a letra normalmente", async () => {

@@ -76,6 +76,11 @@ Subcomandos:
         antes de qualquer transcrição, inclusive com --forcar-tudo.
         Alucinações do motor ("música", "legendas pela comunidade
         Amara.org") e frases de uma palavra nunca viram consulta.
+        V8.2: transcrição RALA só marca instrumental quando a duração do
+        áudio pôde ser PROVADA (medida pelo transcritor ou quadro a quadro
+        no MP3 — o cabeçalho sozinho não é medição, ver
+        `duracao_confirmada`); sem prova o arquivo sai como ADIADA, com
+        balde próprio, e nada é gravado.
 
     identificar PASTA [--chave CHAVE] [--com-letra] [--csv saida.csv]
                 [--sobrescrever-tags] [--verboso]
@@ -103,7 +108,9 @@ Subcomandos:
         Não grava nada e não baixa nada: sem fpcalc a identificação sai da
         média publicada e a transcrição sai sempre da proporção publicada
         do faster-whisper — a saída diz quando o número é medido e quando
-        é projetado.
+        é projetado. A média de duração sai da duração CONFIRMADA de cada
+        arquivo da amostra (V8.2), e o instrumental (F17) não conta como
+        pendência: as duas coisas inflavam a projeção.
 
     temas-de-pastas PASTA [--aplicar]
         Cada subpasta do caminho relativo vira um tema (normalizado, V2),
@@ -119,6 +126,7 @@ import csv
 import difflib
 import html
 import json
+import mmap
 import os
 import re
 import shutil
@@ -200,6 +208,219 @@ def ler_info(path: Path) -> dict:
         # V8/F17: a marca viaja no MP3 e todo subcomando enxerga daqui
         "instrumental": el.read_instrumental(tags),
     }
+
+
+# ------------------------------------------- a duração que se pode PROVAR
+#
+# Achado CRÍTICO do QA (V8.2). `mutagen.mp3.MP3().info.length` NÃO é uma
+# medição: quando o MP3 não tem cabeçalho Xing/Info/VBRI — arquivo
+# remontado, cortado, editado à mão ou com uma entrada de bitrate baixo,
+# tudo rotina num acervo montado à mão — o mutagen ESTIMA a duração
+# assumindo que o arquivo inteiro tem o bitrate do PRIMEIRO quadro. O QA
+# mediu `real 300 s -> mutagen 2260,3 s` (7,5x) e reproduziu a consequência:
+# uma música cantada, com 631 caracteres de letra legítima, foi marcada
+# como INSTRUMENTAL por "0,28 caractere por segundo" e perdeu a letra para
+# sempre (a marca vence até o --forcar-tudo; desfazer é comando de
+# terminal, no produto que promete não ter terminal).
+#
+# Nem o `sketchy` do mutagen denuncia isso: ele fica False assim que
+# quatro quadros válidos aparecem seguidos, o que o arquivo remontado tem.
+#
+# A saída é medir. A duração de um MP3 é a soma da duração de CADA quadro
+# MPEG, e cada quadro DIZ a sua no próprio cabeçalho de 4 bytes (amostras
+# por quadro / taxa de amostragem). Percorrer os cabeçalhos é offline, não
+# depende de dependência opcional nenhuma, não decodifica áudio e custa
+# poucos milissegundos por arquivo (medido: ~0,25 ms por 250 kB) — barato
+# o bastante para rodar antes de cada decisão que dependa da duração, e
+# caro demais para rodar em varredura que não precisa dela (por isso é
+# chamada no ponto de uso, e não dentro do `ler_info`).
+#
+# Ordem de autoridade das fontes de duração, da mais forte para a mais
+# fraca:
+#   1. o TRANSCRITOR, que decodificou o áudio inteiro (verdade de campo, e
+#      de graça: ele já sabe — ver `criar_transcritor`);
+#   2. esta medição por quadros;
+#   3. o `fpcalc`, que também devolve a duração real (já é a fonte
+#      preferida do `identificar`, ver cmd_identificar);
+#   4. o cabeçalho — que só vale quando alguma das anteriores o confirma.
+#
+# Sem nenhuma das três primeiras, a duração NÃO é prova de nada, e a ação
+# segura é não marcar: o erro de deixar um instrumental na fila custa uma
+# nova passada; o erro de marcar uma música cantada custa a letra dela,
+# para sempre, na máquina de alguém que não tem a quem pedir socorro.
+
+# Tabelas do padrão MPEG-1/2/2.5 Layer I-III (bitrate em kbps por índice).
+_BITRATES_MPEG = {
+    (1, 1): [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384,
+             416, 448],
+    (1, 2): [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320,
+             384],
+    (1, 3): [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256,
+             320],
+    (2, 1): [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224,
+             256],
+    (2, 2): [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160],
+}
+_BITRATES_MPEG[(2, 3)] = _BITRATES_MPEG[(2, 2)]
+_TAXAS_MPEG = {1: [44100, 48000, 32000], 2: [22050, 24000, 16000],
+               2.5: [11025, 12000, 8000]}
+# Quadro estranho no meio do fluxo acontece (tag alheia, resto de corte).
+# Acima desta fração de bytes ignorados a medição não é confiável e o
+# arquivo sai SEM duração provada — melhor nenhuma resposta que uma errada.
+# O teto absoluto existe para o pior caso (arquivo grande e todo
+# corrompido) não virar um laço de milhões de passos: passar dele é
+# desistir, que é justamente o lado seguro.
+_MAX_FRACAO_LIXO = 0.05
+_MAX_LIXO_BYTES = 1 << 20
+_MIN_QUADROS = 8
+
+
+def _ler_quadro(cab: bytes):
+    """(bytes do quadro, segundos do quadro) do cabeçalho MPEG de 4 bytes,
+    ou None se aqueles 4 bytes não são um cabeçalho válido."""
+    if len(cab) < 4:
+        return None
+    b1, b2 = cab[1], cab[2]
+    if cab[0] != 0xFF or (b1 & 0xE0) != 0xE0:
+        return None
+    versao = (2.5, None, 2, 1)[(b1 >> 3) & 0x03]
+    camada = 4 - ((b1 >> 1) & 0x03)
+    if versao is None or camada == 4:
+        return None
+    indice_bitrate = (b2 >> 4) & 0x0F
+    indice_taxa = (b2 >> 2) & 0x03
+    padding = (b2 >> 1) & 0x01
+    # 0 = formato livre (não dá para calcular o tamanho), 15 = inválido
+    if indice_bitrate in (0, 15) or indice_taxa == 3:
+        return None
+    bitrate = _BITRATES_MPEG[(1 if versao == 1 else 2, camada)][indice_bitrate]
+    bitrate *= 1000
+    taxa = _TAXAS_MPEG[versao][indice_taxa]
+    if camada == 1:
+        amostras = 384
+        tamanho = ((12 * bitrate) // taxa + padding) * 4
+    else:
+        amostras = 1152 if (camada == 2 or versao == 1) else 576
+        tamanho = (amostras // 8 * bitrate) // taxa + padding
+    if tamanho < 4:
+        return None
+    return tamanho, amostras / float(taxa)
+
+
+def _pular_id3(dados, pos: int, total: int) -> int:
+    """Se em `pos` começa um bloco ID3v2, devolve a posição depois dele."""
+    if dados[pos:pos + 3] != b"ID3" or pos + 10 > total:
+        return pos
+    tamanho = 0
+    for byte in dados[pos + 6:pos + 10]:
+        tamanho = (tamanho << 7) | (byte & 0x7F)
+    fim = pos + 10 + tamanho
+    if dados[pos + 5] & 0x10:   # bit de rodapé
+        fim += 10
+    return fim
+
+
+def medir_duracao_por_quadros(path) -> float | None:
+    """Duração REAL do MP3 em segundos, somando quadro a quadro — ou None
+    quando o fluxo não pôde ser percorrido com confiança.
+
+    Só LÊ o arquivo (nunca escreve, nunca renomeia) e nunca levanta: um
+    arquivo que não é MP3 devolve None, como qualquer outro problema.
+
+    A leitura é por `mmap`: percorrer cabeçalhos não exige carregar o
+    arquivo inteiro na memória, e um acervo tem arquivos de centenas de MB
+    (set de duas horas) em máquinas modestas.
+    """
+    try:
+        with open(str(path), "rb") as fh:
+            try:
+                dados = mmap.mmap(fh.fileno(), 0, access=mmap.ACCESS_READ)
+            except (ValueError, OSError):   # arquivo vazio, /proc, etc.
+                return _somar_quadros(fh.read())
+            try:
+                return _somar_quadros(dados)
+            finally:
+                dados.close()
+    except OSError:
+        return None
+
+
+def _somar_quadros(dados) -> float | None:
+    """O laço de medição, sobre bytes ou sobre um mmap."""
+    total = len(dados)
+    if total < 4:
+        return None
+    limite_lixo = max(64, min(int(total * _MAX_FRACAO_LIXO),
+                              _MAX_LIXO_BYTES))
+    pos = _pular_id3(dados, 0, total)
+    segundos = 0.0
+    quadros = 0
+    lixo = 0
+    while pos + 4 <= total:
+        quadro = _ler_quadro(dados[pos:pos + 4])
+        if quadro is None:
+            depois = _pular_id3(dados, pos, total)
+            if depois > pos:            # tag ID3 no meio do fluxo
+                pos = depois
+                continue
+            if dados[pos:pos + 3] == b"TAG" and total - pos <= 128:
+                break                   # ID3v1 no fim: acabou o áudio
+            # ressincroniza no próximo 0xFF possível, contando o desperdício
+            seguinte = dados.find(b"\xff", pos + 1)
+            if seguinte < 0:
+                lixo += total - pos
+                break
+            lixo += seguinte - pos
+            if lixo > limite_lixo:
+                return None
+            pos = seguinte
+            continue
+        tamanho, duracao_quadro = quadro
+        if pos + tamanho > total:       # último quadro cortado
+            break
+        segundos += duracao_quadro
+        quadros += 1
+        pos += tamanho
+    if quadros < _MIN_QUADROS or lixo > limite_lixo or segundos <= 0:
+        return None
+    return segundos
+
+
+# O cabeçalho é aceito como prova quando a medição concorda com ele. A
+# folga cobre o quadro do próprio Xing e o atraso do codificador (dezenas
+# de milissegundos), não erro de ordem de grandeza.
+TOLERANCIA_DURACAO_S = 1.0
+TOLERANCIA_DURACAO_FRACAO = 0.02
+
+
+def _duracoes_batem(cabecalho: float, medida: float) -> bool:
+    folga = max(TOLERANCIA_DURACAO_S, TOLERANCIA_DURACAO_FRACAO * medida)
+    return abs(float(cabecalho or 0.0) - medida) <= folga
+
+
+def duracao_confirmada(path, info: dict, medida: float | None = None,
+                       do_transcritor: float = 0.0) -> float:
+    """A duração em segundos que este programa consegue PROVAR — ou 0,0.
+
+    0,0 é o valor que o resto do código já trata como "sem duração": o
+    `_identificar`, o `_identificar_por_refrao` e o `escolher_candidato`
+    não classificam por duração quando ela é falsa, e o `sem_conteudo` não
+    mede densidade. Ou seja: sem prova, nada de decisão automática.
+
+    Quando o cabeçalho concorda com a medição, devolve o número DO
+    CABEÇALHO — assim nenhum arquivo saudável muda de duração por causa
+    desta rotina.
+    """
+    if do_transcritor and do_transcritor > 0:
+        return float(do_transcritor)
+    if info.get("ilegivel"):
+        return 0.0
+    if medida is None:
+        medida = medir_duracao_por_quadros(path)
+    if not medida or medida <= 0:
+        return 0.0
+    cabecalho = float(info.get("duracao") or 0.0)
+    return cabecalho if _duracoes_batem(cabecalho, medida) else float(medida)
 
 
 def rotulo_letra(info: dict) -> str:
@@ -851,7 +1072,7 @@ def cmd_enriquecer(pasta: Path, csv_out: Path | None = None,
                    fetcher=None, pausa: float = PAUSA_S,
                    verboso: bool = False) -> None:
     contagem = {"ALTA": 0, "MÉDIA": 0, "BAIXA": 0}
-    aplicados = erros = 0
+    aplicados = erros = instrumentais = 0
     linhas_csv = []
     estado = {"primeira": True}
     log = print if verboso else None
@@ -877,13 +1098,19 @@ def cmd_enriquecer(pasta: Path, csv_out: Path | None = None,
             continue
         temas_novos = temas_da_pasta(rel) if temas_pastas else []
         palpites = gerar_palpites(p.name, titulo_tag, artista_tag)
+        # V8.2: a duração é PROVA do casamento no LRCLIB (é ela que sustenta
+        # a tolerância de grafia do `_discorda`, decisão 63) — e a do
+        # cabeçalho não é medição. Sem confirmação, `duracao_confirmada`
+        # devolve 0,0 e o `classificar` deixa de dar o bônus de duração:
+        # continua identificando por similaridade, nunca por número falso.
+        dur_prova = duracao_confirmada(p, info)
         try:
-            melhor = _identificar(palpites, info["duracao"], buscar, log=log)
+            melhor = _identificar(palpites, dur_prova, buscar, log=log)
         except Exception:
             print(f"ERRO DE REDE: {rel}")
             erros += 1
             continue
-        dur_mp3 = f"{info['duracao']:.0f}"
+        dur_mp3 = f"{(dur_prova or info['duracao']):.0f}"
         if verboso and melhor is not None:
             res_v = melhor["res"]
             dur_v = (f"{float(res_v.get('duration')):.0f}"
@@ -915,9 +1142,24 @@ def cmd_enriquecer(pasta: Path, csv_out: Path | None = None,
             lrclib_id = str(res.get("id") or "")
             dur_enc = (f"{float(res.get('duration')):.0f}"
                        if res.get("duration") is not None else "")
+        # V8/F17, achado MÉDIO do QA: esta era a única perna de LETRA sem a
+        # trava do instrumental — a proposta trazia a letra do LRCLIB e a
+        # gravava dentro de uma música marcada como SEM VOZ. O arquivo NÃO
+        # é pulado inteiro (como no buscar-letra): título, artista e temas
+        # valem para instrumental também, e é o desenho do `identificar`.
+        # Só a letra sai da proposta — e sai também do CSV, para o
+        # aplicar-proposta não reabrir o buraco pelo lrclib_id.
+        nota_instrumental = ""
+        if info["instrumental"]:
+            instrumentais += 1
+            if letra_prop:
+                letra_prop = ""
+                nota_instrumental = ", instrumental: letra não aplicada"
+        if conf != "BAIXA":
             print(f"{conf}: {rel} → {titulo_prop} / {artista_prop} "
                   f"(mp3 {dur_mp3}s, lrclib {dur_enc}s, "
-                  f"letra {'SIM' if letra_prop else 'NÃO'})")
+                  f"letra {'SIM' if letra_prop else 'NÃO'}"
+                  f"{nota_instrumental})")
         contagem[conf] += 1
         linhas_csv.append([rel, info["titulo"], info["artista"], titulo_prop,
                            artista_prop, conf, dur_mp3, dur_enc,
@@ -959,7 +1201,11 @@ def cmd_enriquecer(pasta: Path, csv_out: Path | None = None,
 
     print(f"Resumo: {contagem['ALTA']} confiança alta | "
           f"{contagem['MÉDIA']} média | {contagem['BAIXA']} baixa | "
-          f"{aplicados} aplicados | {erros} erros de rede")
+          f"{aplicados} aplicados | {erros} erros de rede | "
+          # RECORTE, não balde (mesma forma do identificar): o instrumental
+          # é proposto como qualquer outro e cai na confiança que merecer;
+          # o que ele não recebe é letra
+          f"{instrumentais} instrumentais")
     if csv_out is not None:
         gravar_csv(csv_out, ENRIQUECER_COLUNAS, linhas_csv)
 
@@ -1001,8 +1247,12 @@ def cmd_aplicar_proposta(pasta: Path, csv_path: Path, dry_run: bool = False,
             temas_novos = (el.normalize_temas(el.split_temas_input(temas_raw))
                            if temas_raw else [])
             # letra re-buscada na hora de aplicar; nunca sobrescreve letra
-            # existente não-vazia sem --forcar (nem gasta rede à toa)
-            busca_letra = bool(lrclib_id) and (forcar or not info["letra"])
+            # existente não-vazia sem --forcar (nem gasta rede à toa).
+            # V8/F17: e nunca em música marcada como SEM VOZ — o CSV pode
+            # ser de antes da marca, ou ter sido editado à mão, e é aqui
+            # que o round-trip reabriria o buraco fechado no enriquecer.
+            busca_letra = (bool(lrclib_id) and (forcar or not info["letra"])
+                           and not info["instrumental"])
             letra = ""
             if busca_letra and not dry_run:
                 if not primeira and pausa:
@@ -1409,8 +1659,16 @@ def criar_transcritor(modelo: str = "small", idioma: str = "pt"):
     com todos os outros subcomandos seguindo normais.
 
     O transcritor devolvido tem a assinatura injetável usada pelos testes:
-    (caminho, inicio, duracao) -> texto puro. Com inicio/duracao transcreve
-    só o trecho (F14.1); sem eles, o arquivo inteiro (F14.2)."""
+    (caminho, inicio, duracao) -> (texto puro, segundos de áudio que o motor
+    processou). Com inicio/duracao transcreve só o trecho (F14.1); sem eles,
+    o arquivo inteiro (F14.2).
+
+    Informar a duração é a correção CRÍTICA da V8.2: quem decodifica o áudio
+    SABE quanto áudio existe, e isso não custa nada — o faster-whisper já
+    devolve `info.duration` junto com os segmentos. É a fonte mais forte de
+    duração que o programa tem, e a única que não depende de o MP3 ter um
+    cabeçalho honesto (ver `duracao_confirmada`). Motor injetado que devolva
+    só o texto continua valendo: quem normaliza é o `_texto_e_duracao`."""
     try:
         from faster_whisper import WhisperModel  # dependência opcional
     except ImportError:
@@ -1432,10 +1690,35 @@ def criar_transcritor(modelo: str = "small", idioma: str = "pt"):
                   "condition_on_previous_text": False}
         if inicio is not None and duracao is not None:
             kwargs["clip_timestamps"] = f"{inicio:.0f},{inicio + duracao:.0f}"
-        segmentos, _info = model.transcribe(str(caminho), **kwargs)
-        return "\n".join(s.text.strip() for s in segmentos if s.text.strip())
+        segmentos, info_motor = model.transcribe(str(caminho), **kwargs)
+        texto = "\n".join(s.text.strip() for s in segmentos if s.text.strip())
+        # `info.duration` é a duração do ÁUDIO que o motor abriu, medida na
+        # decodificação. Versão de biblioteca que não a traga devolve 0,0 e
+        # o programa cai nas outras fontes — nunca quebra por causa disto.
+        try:
+            medida = float(getattr(info_motor, "duration", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            medida = 0.0
+        return texto, max(0.0, medida)
 
     return transcritor
+
+
+def _texto_e_duracao(saida) -> tuple:
+    """Normaliza o retorno do transcritor em (texto, duração medida).
+
+    O motor pode devolver só o TEXTO — assinatura histórica, e a que
+    qualquer transcritor injetado (ou de outro projeto) cumpre — ou a tupla
+    (texto, segundos de áudio processados). Sem o número, a duração medida
+    é 0,0 e quem decide cai nas outras fontes de prova."""
+    if isinstance(saida, tuple):
+        texto = saida[0] if saida else ""
+        try:
+            medida = float(saida[1] or 0.0) if len(saida) > 1 else 0.0
+        except (TypeError, ValueError):
+            medida = 0.0
+        return (texto or ""), max(0.0, medida)
+    return (saida or ""), 0.0
 
 
 def _fmt_milhar(n: int) -> str:
@@ -1552,7 +1835,8 @@ def cmd_transcrever(pasta: Path, transcritor=None, fetcher=None,
         transcritor = criar_transcritor(modelo, idioma)
 
     contagem = {"identificadas": 0, "transcritas": 0, "nao_identificadas": 0,
-                "pulados": 0, "conflitos": 0, "erros": 0, "instrumentais": 0}
+                "pulados": 0, "conflitos": 0, "erros": 0, "instrumentais": 0,
+                "adiadas": 0}
     linhas_csv = []
     interrompido = None   # (arquivo, índice) onde o Ctrl-C parou o lote
     posicao = ("", 0)
@@ -1606,8 +1890,19 @@ def cmd_transcrever(pasta: Path, transcritor=None, fetcher=None,
             gravou = False
             fase = "transcrição do áudio"
             try:
+                # V8.2: a duração do cabeçalho não é prova (ver
+                # `duracao_confirmada`). Medida UMA vez por arquivo, aqui —
+                # depois dos pulos, para não gastar leitura com quem nem
+                # vai ser processado, dentro do try para o Ctrl-C cair no
+                # mesmo lugar do resto, e antes de qualquer decisão que
+                # dependa dela.
+                dur_prova = duracao_confirmada(p, info)
                 if fazer_identificacao:
-                    texto_trecho = transcritor(str(p), inicio, trecho)
+                    # a duração informada pelo motor no TRECHO não entra na
+                    # conta: recorte não é o arquivo, e o que a F14.1
+                    # precisa confirmar é a duração da MÚSICA
+                    texto_trecho, _ = _texto_e_duracao(
+                        transcritor(str(p), inicio, trecho))
                     if verboso:
                         print("  trecho transcrito:")
                         for linha in (texto_trecho or "").strip().splitlines():
@@ -1619,7 +1914,7 @@ def cmd_transcrever(pasta: Path, transcritor=None, fetcher=None,
                     if candidatos:  # sem candidato não há o que consultar
                         try:
                             melhor = _identificar_por_refrao(
-                                candidatos, info["duracao"], buscar, log=log)
+                                candidatos, dur_prova, buscar, log=log)
                         except KeyboardInterrupt:
                             raise
                         except Exception:
@@ -1642,7 +1937,7 @@ def cmd_transcrever(pasta: Path, transcritor=None, fetcher=None,
                     # nesta linha a duração sai em segundos puros (padrão do
                     # enriquecer: "mp3 214s, lrclib 216s")
                     duracao_res = res.get("duration")
-                    durs = (f"mp3 {info['duracao']:.0f}s, lrclib "
+                    durs = (f"mp3 {dur_prova:.0f}s, lrclib "
                             + (f"{float(duracao_res):.0f}s"
                                if duracao_res is not None else "?"))
                     pode_sobrescrever = (sobrescrever_tags
@@ -1708,9 +2003,25 @@ def cmd_transcrever(pasta: Path, transcritor=None, fetcher=None,
                     continue
 
                 comeco = time.monotonic()
-                bruto = unicodedata.normalize(
-                    "NFC", transcritor(str(p), None, None) or "")
+                texto_motor, dur_motor = _texto_e_duracao(
+                    transcritor(str(p), None, None))
+                bruto = unicodedata.normalize("NFC", texto_motor or "")
                 gasto = time.monotonic() - comeco
+                # o motor decodificou o áudio: se ele disse quanto ouviu,
+                # essa é a melhor prova que existe (V8.2)
+                if dur_motor > 0:
+                    dur_prova = duracao_confirmada(p, info,
+                                                   do_transcritor=dur_motor)
+                # a saída só cita a fonte quando ela CONTRADIZ o cabeçalho:
+                # é o único caso em que o número surpreende quem lê
+                nota_dur = ""
+                if dur_prova and not _duracoes_batem(info["duracao"],
+                                                     dur_prova):
+                    fonte = ("medida pelo transcritor" if dur_motor > 0
+                             else "medida no fluxo do MP3")
+                    nota_dur = (f" [duração {fonte}; o cabeçalho do MP3 diz "
+                                f"{_fmt_dur(info['duracao'])}]")
+                dur_saida = dur_prova or info["duracao"]
                 # limpar_transcricao vive AQUI, não no transcritor: assim a
                 # letra gravada vem sem laço de repetição seja qual for o
                 # motor por trás (e o teste consegue provar isso).
@@ -1721,7 +2032,41 @@ def cmd_transcrever(pasta: Path, transcritor=None, fetcher=None,
                 # refrão repetido cinquenta vezes — depois de colapsado
                 # sobrariam 200 caracteres e a música viraria "instrumental".
                 # O que se quer medir é quanto o MOTOR ouviu.
-                if sem_conteudo(bruto, info["duracao"], densidade_minima):
+                caracteres = len(bruto.strip())
+                # V8.2: a densidade só decide com duração PROVADA. Texto
+                # vazio não depende de duração nenhuma e continua marcando
+                # como sempre; texto ralo medido contra duração provada
+                # marca; texto ralo SEM prova de duração não marca nem vira
+                # letra — fica para o humano (ver ADIADA, logo abaixo).
+                rala_com_prova = bool(dur_prova) and sem_conteudo(
+                    bruto, dur_prova, densidade_minima)
+                if (caracteres and not dur_prova
+                        and sem_conteudo(bruto, info["duracao"],
+                                         densidade_minima)):
+                    # A ÚNICA coisa que acusa "instrumental" aqui é a
+                    # duração do cabeçalho — e ela não é medição. Marcar
+                    # tira o arquivo da fila para sempre (a marca vence até
+                    # o --forcar-tudo) e desfazer é comando de terminal:
+                    # errar para este lado é destruir dado de alguém que
+                    # não tem a quem recorrer. Nada é gravado; o arquivo
+                    # continua na fila e a linha explica o que fazer.
+                    print(f"{prefixo}ADIADA: {rel} — "
+                          f"{_fmt_milhar(caracteres)} caracteres seriam "
+                          "pouco para a duração deste áudio, mas a duração "
+                          "NÃO pôde ser confirmada: o cabeçalho do MP3 diz "
+                          f"{_fmt_dur(info['duracao'])} e o fluxo do "
+                          "arquivo não pôde ser medido. Nada foi gravado. "
+                          "Se a música realmente não tem voz, marque como "
+                          "instrumental no editor do player, ou com "
+                          "embed_lyrics.py ARQUIVO --instrumental")
+                    contagem["adiadas"] += 1
+                    linhas_csv.append(
+                        [rel, "ADIADA", info["titulo"], info["artista"], "",
+                         "; ".join(candidatos), caracteres,
+                         "transcrição rala, mas a duração do áudio não pôde "
+                         "ser confirmada — nada gravado"])
+                    continue
+                if not caracteres or rala_com_prova:
                     # V8/F17 + V8.1. O áudio foi LIDO até o fim (ilegível
                     # teria parado lá em cima, e motor que explode cai no
                     # except como erro): voltar vazio — ou quase — daqui é
@@ -1729,16 +2074,17 @@ def cmd_transcrever(pasta: Path, transcritor=None, fetcher=None,
                     # fila para sempre; gravar o ruído como letra também
                     # tirava, só que mentindo e sem a marca.
                     fase = "gravação da marca de instrumental"
-                    caracteres = len(bruto.strip())
                     if not caracteres:
                         motivo = "transcrição vazia com áudio legível"
                         motivo_csv = "transcrição vazia"
                     else:
-                        # a linha DIZ a regra: o curador precisa ver por que
-                        # este arquivo saiu da fila de letra
-                        densidade = caracteres / float(info["duracao"])
+                        # a linha DIZ a regra, e DIZ qual duração usou: o
+                        # curador precisa ver por que este arquivo saiu da
+                        # fila de letra
+                        densidade = caracteres / float(dur_prova)
                         motivo = (f"{_fmt_milhar(caracteres)} caracteres em "
-                                  f"{_fmt_dur(info['duracao'])} de áudio = "
+                                  f"{_fmt_dur(dur_prova)} de áudio"
+                                  f"{nota_dur} = "
                                   f"{_fmt_decimal(densidade)} caractere por "
                                   "segundo, abaixo do mínimo de "
                                   f"{_fmt_decimal(densidade_minima)}")
@@ -1764,8 +2110,8 @@ def cmd_transcrever(pasta: Path, transcritor=None, fetcher=None,
                 gravou = True
                 print(f"{prefixo}TRANSCRITA: {rel} "
                       f"({_fmt_milhar(len(texto))} caracteres, "
-                      f"{_fmt_dur(info['duracao'])} de áudio em "
-                      f"{_fmt_dur(gasto)})")
+                      f"{_fmt_dur(dur_saida)} de áudio em "
+                      f"{_fmt_dur(gasto)}){nota_dur}")
                 contagem["transcritas"] += 1
                 linhas_csv.append([rel, "TRANSCRITA", info["titulo"],
                                    info["artista"], "", "; ".join(candidatos),
@@ -1809,7 +2155,12 @@ def cmd_transcrever(pasta: Path, transcritor=None, fetcher=None,
               f"{contagem['erros']} erros | "
               # balde próprio (F17): quem foi marcado agora e quem já
               # estava marcado — nenhum deles é erro nem pulo de letra
-              f"{contagem['instrumentais']} instrumentais")
+              f"{contagem['instrumentais']} instrumentais | "
+              # balde próprio (V8.2): transcrição rala que NÃO virou marca
+              # porque a duração do áudio não pôde ser confirmada. Não é
+              # erro (o arquivo está inteiro), não é pulo (foi ouvido) e
+              # não é instrumental (ninguém provou que não tem voz)
+              f"{contagem['adiadas']} adiadas")
         if interrompido is not None:
             parou_em, indice_parada = interrompido
             print(f"Interrompido em: {parou_em} (arquivo {indice_parada} de "
@@ -2281,9 +2632,16 @@ def cmd_identificar(pasta: Path, impressao_digital=None, fetcher=None,
             fase = "leitura da impressão digital"
             try:
                 duracao_fp, fingerprint = impressao_digital(str(p))
+                # V8.2: e quando nem o fpcalc dá o número, o que vale é a
+                # duração CONFIRMADA (medida no fluxo), nunca o cabeçalho
+                # cru — aqui a duração é a trava que desqualifica o
+                # homônimo, e trava calibrada por número falso não é trava.
                 # o fpcalc devolve a duração REAL do arquivo; sem ela, vale
-                # a que o mutagen leu do cabeçalho
-                duracao = float(duracao_fp or 0.0) or info["duracao"]
+                # a medida no fluxo (e 0,0 quando nem essa dá, o que faz o
+                # `escolher_candidato` simplesmente não classificar por
+                # duração, em vez de classificar errado)
+                duracao = (float(duracao_fp or 0.0)
+                           or duracao_confirmada(p, info))
                 fase = "consulta ao AcoustID"
                 cortesia()
                 resultados = consultar_acoustid(duracao, fingerprint, chave,
@@ -2494,8 +2852,15 @@ def _fmt_estimativa(segundos: float) -> str:
 
 
 def _incompleto(info: dict) -> bool:
-    """Falta letra, título ou artista REAIS (placeholder conta como vazio)."""
-    return not (info["letra"] and _sem_placeholder(info["titulo"])
+    """Falta letra, título ou artista REAIS (placeholder conta como vazio).
+
+    V8/F17: música marcada como INSTRUMENTAL não tem letra a buscar — para
+    ela, completo é ter título e artista. Contá-la como pendência inflava a
+    estimativa com arquivos que todas as etapas de letra vão PULAR, e com
+    40 pessoas curando cada uma o seu acervo em máquinas modestas, a conta
+    de horas de CPU precisa ser honesta (PRD V8)."""
+    tem_letra = bool(info["letra"]) or bool(info.get("instrumental"))
+    return not (tem_letra and _sem_placeholder(info["titulo"])
                 and _sem_placeholder(info["artista"]))
 
 
@@ -2536,9 +2901,14 @@ def cmd_estimar(pasta: Path, amostra: int = AMOSTRA_PADRAO,
     infos = [(p, ler_info(p)) for p in mp3s]
     legiveis = [(p, info) for p, info in infos if not info["ilegivel"]]
     incompletos = sum(1 for _p, info in legiveis if _incompleto(info))
-    sem_letra = sum(1 for _p, info in legiveis if not info["letra"])
+    instrumentais = sum(1 for _p, info in legiveis if info["instrumental"])
+    # "sem letra" é a fila da TRANSCRIÇÃO, e é ela que vira horas de CPU:
+    # o instrumental (F17) não entra nessa fila, e contá-lo aqui inflava a
+    # projeção com arquivos que o funil pula.
+    sem_letra = sum(1 for _p, info in legiveis
+                    if not info["letra"] and not info["instrumental"])
     print(f"Acervo: {total} arquivos | {incompletos} incompletos | "
-          f"{sem_letra} sem letra")
+          f"{sem_letra} sem letra | {instrumentais} instrumentais")
 
     escolhidos = _amostrar(legiveis, amostra)
     if impressao_digital is None and shutil.which("fpcalc"):
@@ -2547,8 +2917,18 @@ def cmd_estimar(pasta: Path, amostra: int = AMOSTRA_PADRAO,
     avisos = []
     medidos = gasto_id = 0
     duracao_amostra = 0.0
+    com_duracao = sem_prova = 0
     for p, info in escolhidos:
-        duracao_amostra += info["duracao"]
+        # V8.2: a duração do cabeçalho não é medição (ver
+        # `duracao_confirmada`). Um único MP3 remontado na amostra —
+        # 300 s reais lidos como 2260 s — multiplicava por 7 a projeção da
+        # média, e a estimativa existe justamente para a pessoa DECIDIR.
+        confirmada = duracao_confirmada(p, info)
+        if confirmada > 0:
+            duracao_amostra += confirmada
+            com_duracao += 1
+        else:
+            sem_prova += 1
         if impressao_digital is None:
             continue
         comeco = relogio()
@@ -2562,7 +2942,24 @@ def cmd_estimar(pasta: Path, amostra: int = AMOSTRA_PADRAO,
             print(f"  medido: {p.relative_to(pasta).as_posix()}")
 
     n_amostra = len(escolhidos)
-    media_duracao = (duracao_amostra / n_amostra) if n_amostra else 0.0
+    if com_duracao:
+        media_duracao = duracao_amostra / com_duracao
+        if sem_prova:
+            avisos.append(
+                f"AVISO: {sem_prova} arquivo(s) da amostra ficaram de fora "
+                "da média — a duração deles não pôde ser confirmada.")
+    else:
+        # nenhuma duração confirmada: dizer o número do cabeçalho é melhor
+        # que não dizer número nenhum, DESDE QUE a saída avise que ele
+        # pode estar muito errado
+        media_duracao = ((sum(info["duracao"] for _p, info in escolhidos)
+                          / n_amostra) if n_amostra else 0.0)
+        if n_amostra:
+            avisos.append(
+                "AVISO: a duração dos arquivos da amostra não pôde ser "
+                "confirmada — a projeção usa a duração declarada no "
+                "cabeçalho do MP3, que em arquivo remontado ou cortado "
+                "erra por muito.")
     if medidos:
         por_musica = gasto_id / medidos
     else:
@@ -2705,7 +3102,9 @@ def main(argv: list[str] | None = None) -> None:
                        help="modelo do faster-whisper (padrão: small)")
     p_trs.add_argument("--idioma", default="pt",
                        help="idioma do áudio (padrão: pt)")
-    p_trs.add_argument("--trecho", type=float, default=TRECHO_PADRAO_S,
+    # default=None para o programa SABER se a pessoa digitou a flag: sem
+    # isso não dá para avisar que ela virou no-op (ver a validação em main)
+    p_trs.add_argument("--trecho", type=float, default=None,
                        metavar="SEGUNDOS",
                        help="duração do trecho de identificação "
                             "(padrão: 90, a partir de 20s); só vale com "
@@ -2834,8 +3233,36 @@ def main(argv: list[str] | None = None) -> None:
         if args.identificar_por_refrao and args.so_transcrever:
             die("ERRO: --identificar-por-refrao e --so-transcrever se "
                 "contradizem — escolha um dos dois")
+        # V8.2, achado MÉDIO do QA: com a F14.1 opt-in, --sobrescrever-tags
+        # e --trecho só significam alguma coisa quando a identificação pelo
+        # refrão roda. Sozinhas, não faziam NADA — e não faziam nada em
+        # SILÊNCIO. As duas recebem tratamento diferente de propósito:
+        #
+        #  --sobrescrever-tags é AUTORIZAÇÃO DESTRUTIVA. Quem a digita
+        #    acredita ter permitido trocar título/artista reais; ignorá-la
+        #    calado deixa a pessoa com uma crença falsa sobre o que este
+        #    comando pode fazer com o acervo dela. Por isso RECUSA, como a
+        #    contradição acima.
+        #  --trecho só regula o tamanho do trecho de identificação: não
+        #    autoriza nem destrói nada, e recusar quebraria linha de comando
+        #    antiga (ou copiada do README) que ainda faz a coisa certa. Por
+        #    isso AVISA, alto e claro, e segue.
+        fara_identificacao = ((args.identificar_por_refrao
+                               or args.so_identificar)
+                              and not args.so_transcrever)
+        if args.sobrescrever_tags and not fara_identificacao:
+            die("ERRO: --sobrescrever-tags só tem efeito com "
+                "--identificar-por-refrao (ou --so-identificar) — sem a "
+                "identificação pelo refrão o transcrever não grava título "
+                "nem artista, e a flag não autorizaria nada. Acrescente "
+                "--identificar-por-refrao ou tire a flag")
+        if args.trecho is not None and not fara_identificacao:
+            print("AVISO: --trecho vale só para a identificação pelo refrão "
+                  "(--identificar-por-refrao), que está desligada — o valor "
+                  "foi ignorado e a música é transcrita inteira.")
         cmd_transcrever(pasta, modelo=args.modelo, idioma=args.idioma,
-                        trecho=args.trecho,
+                        trecho=(TRECHO_PADRAO_S if args.trecho is None
+                                else args.trecho),
                         identificar_por_refrao=args.identificar_por_refrao,
                         so_identificar=args.so_identificar,
                         so_transcrever=args.so_transcrever,

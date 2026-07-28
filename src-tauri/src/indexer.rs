@@ -47,10 +47,26 @@ struct TagData {
 }
 
 /// Lê a marca TXXX:INSTRUMENTAL (V8/F17). O frame é uma BANDEIRA, não um
-/// texto: a curadoria grava "1" e o desmarque explícito do
-/// `embed_lyrics.py --nao-instrumental` grava "0" (ou remove o frame).
-/// Qualquer outro valor não-vazio conta como marca — um arquivo marcado por
-/// outra ferramenta com "true"/"sim" não pode ser lido como "não é".
+/// texto: as duas ferramentas do produto gravam "1" para marcar, e DESMARCAR
+/// é REMOVER o frame — nem o `embed_lyrics.py --nao-instrumental` nem o
+/// `writer::write_tags` chegam a escrever "0" em lugar nenhum. Ausência do
+/// frame, portanto, é o estado "não é instrumental".
+///
+/// Ainda assim os valores falsos são reconhecidos, porque o arquivo é o
+/// banco de dados e ele passa por outras mãos: um "0" gravado por outro
+/// tagger tem de ser lido como "não é". Simetricamente, "1", "true", "sim"
+/// ou qualquer outro texto não-vazio contam como marca — na dúvida
+/// respeita-se a marca, porque desrespeitá-la devolve o arquivo à fila de
+/// letra e ele acaba recebendo a letra da versão cantada.
+///
+/// Conjunto reconhecido como NÃO marcado (o resto é marca): "0", "false",
+/// "nao", "não", e o frame vazio/ausente. É o MESMO conjunto do
+/// `INSTRUMENTAL_NAO` do `tools/embed_lyrics.py`, e tem de continuar sendo:
+/// os dois stacks leem o mesmo arquivo e não podem discordar sobre o que ele
+/// diz — divergir aqui põe o selo "Instrumental" na tela enquanto o script
+/// segue transcrevendo o arquivo em toda execução. `integration.rs`
+/// (`instrumental_marker_recognizes_the_same_value_set_as_the_python_tool`)
+/// fixa o conjunto deste lado.
 fn read_instrumental(tag: &lofty::tag::Tag) -> bool {
     read_txxx(tag, "INSTRUMENTAL")
         .map(|v| !matches!(v.to_lowercase().as_str(), "0" | "false" | "nao" | "não"))
@@ -513,6 +529,29 @@ mod tests {
         assert_eq!(
             arquivo_para_busca(Path::new("/acervo/barco - coração.mp3"), "Coração").as_deref(),
             Some("barco - coração")
+        );
+    }
+
+    // O macOS — a plataforma que o dono do produto usa — entrega os caminhos
+    // em NFD: "Coração.mp3" chega como "Corac<U+0327>a<U+0303>o.mp3", enquanto
+    // o TIT2 lido da tag vem em NFC. São o mesmo texto na tela, e o
+    // tokenizador da FTS (unicode61 remove_diacritics 2) produz o mesmo token
+    // para os dois — então indexar os dois é indexar duas vezes a mesma
+    // palavra, que é exatamente o que esta função existe para evitar.
+    #[test]
+    fn arquivo_para_busca_treats_nfd_path_and_nfc_title_as_the_same_name() {
+        let nfd = Path::new("/acervo/Corac\u{0327}a\u{0303}o.mp3");
+        assert_eq!(arquivo_para_busca(nfd, "Coração"), None);
+        // e o contrário (path NFC, título NFD vindo de uma tag decomposta)
+        assert_eq!(
+            arquivo_para_busca(Path::new("/acervo/Coração.mp3"), "Corac\u{0327}a\u{0303}o"),
+            None
+        );
+        // nome diferente continua entrando, venha em que forma vier
+        assert_eq!(
+            arquivo_para_busca(Path::new("/acervo/barco - Corac\u{0327}a\u{0303}o.mp3"), "Coração")
+                .as_deref(),
+            Some("barco - Corac\u{0327}a\u{0303}o")
         );
     }
 

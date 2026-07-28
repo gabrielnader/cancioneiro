@@ -881,7 +881,11 @@ def estimar(pasta, **kwargs):
 
 @pytest.fixture
 def acervo_longo(tmp_path, base_mp3, monkeypatch):
-    """10 MP3s que a leitura de tags reporta como 4 minutos cada."""
+    """10 MP3s que REALMENTE duram 4 minutos cada.
+
+    V8.2: a duração é falsificada no cabeçalho (`ler_info`) e na medição
+    quadro a quadro, porque o `estimar` passou a projetar pela duração
+    CONFIRMADA — cabeçalho sozinho não é medição (defeito CRÍTICO do QA)."""
     p = tmp_path / "acervo"
     p.mkdir()
     for i in range(10):
@@ -894,6 +898,8 @@ def acervo_longo(tmp_path, base_mp3, monkeypatch):
         return info
 
     monkeypatch.setattr(curadoria, "ler_info", quatro_minutos)
+    monkeypatch.setattr(curadoria, "medir_duracao_por_quadros",
+                        lambda _p: 240.0)
     return p
 
 
@@ -907,6 +913,47 @@ class TestEstimar:
         out = capsys.readouterr().out
         # a.mp3 está completa; b.mp3 (placeholder) e c.mp3 (vazia), não
         assert "Acervo: 3 arquivos | 2 incompletos | 2 sem letra" in out
+
+    def test_instrumental_nao_conta_como_pendencia(self, tmp_path, base_mp3,
+                                                   capsys):
+        """Achado BAIXO do QA: o instrumental (F17) entrava na conta de
+        "incompletos" e de "sem letra" e inflava as horas de CPU
+        projetadas com arquivos que TODAS as etapas de letra pulam. Com o
+        custo por pessoa dentro do fluxo (PRD V8, 40 curadores), estimativa
+        inflada é estimativa que ninguém pode usar para decidir."""
+        p = pasta_com(tmp_path, base_mp3, "a.mp3", "b.mp3")
+        tag(p / "a.mp3", title="Doce Prelúdio", artist="Coral Novo")
+        el.write_instrumental(p / "a.mp3", True)
+        estimar(p, amostra=2)
+        out = capsys.readouterr().out
+        assert "Acervo: 2 arquivos | 1 incompletos | 1 sem letra" in out
+        assert "| 1 instrumentais" in out
+
+    def test_instrumental_sai_da_projecao_da_transcricao(self, acervo_longo,
+                                                         capsys):
+        """A projeção da transcrição é 'o restante': o instrumental não
+        entra nela."""
+        for i in range(4):
+            el.write_instrumental(acervo_longo / f"{i:02d}.mp3", True)
+        estimar(acervo_longo, amostra=5, relogio=Relogio(passo=2.0))
+        out = capsys.readouterr().out
+        seis = curadoria.RAZAO_TRANSCRICAO["small"] * 240.0 * 6
+        assert f"transcrever o restante: {curadoria._fmt_estimativa(seis)} " \
+               f"(modelo small)" in out
+
+    def test_instrumental_sem_titulo_continua_incompleto(self):
+        """A economia é só de LETRA: falta de título/artista segue sendo
+        pendência (a impressão digital roda no instrumental)."""
+        def info(letra="", titulo="", artista="", instrumental=False):
+            return {"letra": letra, "titulo": titulo, "artista": artista,
+                    "instrumental": instrumental}
+
+        assert curadoria._incompleto(info(instrumental=True)) is True
+        assert curadoria._incompleto(
+            info(titulo="Doce Prelúdio", artista="Coral Novo",
+                 instrumental=True)) is False
+        assert curadoria._incompleto(
+            info(titulo="Doce Prelúdio", artista="Coral Novo")) is True
 
     def test_projecao_do_identificar_usa_o_tempo_medido(self, acervo_longo,
                                                         capsys):

@@ -172,15 +172,39 @@ python3 tools/embed_lyrics.py --check musica.mp3              # confere (linha I
   ```
   INSTRUMENTAL: doce preludio.mp3 (13 caracteres em 2m55s de áudio = 0,07 caractere por segundo, abaixo do mínimo de 0,30 — marcado como instrumental)
   ```
+- **A duração precisa ser PROVADA antes de marcar.** A densidade é
+  caracteres por *segundo de áudio*, e a duração declarada no MP3 **não é
+  uma medição**: sem cabeçalho Xing/Info — arquivo remontado, cortado ou com
+  uma entrada de bitrate baixo — o leitor de tags *estima* a duração pelo
+  bitrate do primeiro quadro. Medido num arquivo real: **300 s viraram
+  2.260 s**, e uma música cantada com 631 caracteres de letra legítima
+  (2,1 c/s) foi marcada como instrumental por "0,28 c/s" — perdendo a letra
+  para sempre, já que a marca vence até o `--forcar-tudo`. Agora a duração
+  vem, nesta ordem, do **transcritor** (que decodificou o áudio e sabe
+  quanto ouviu), da **medição quadro a quadro** do MP3 (offline, alguns
+  milissegundos) e só então do cabeçalho, **quando a medição o confirma**.
+  Quando as duas discordam, a linha diz qual foi usada. E quando nenhuma
+  prova existe, o arquivo **não é marcado**: sai como `ADIADA`, com balde
+  próprio no `Resumo:`, sem nada gravado — errar para o lado de marcar
+  destrói dado; errar para o lado de adiar custa uma nova passada.
+
+  ```
+  ADIADA: ponto_de_ogum.mp3 — 631 caracteres seriam pouco para a duração deste áudio, mas a duração NÃO pôde ser confirmada: o cabeçalho do MP3 diz 37m40s e o fluxo do arquivo não pôde ser medido. Nada foi gravado. Se a música realmente não tem voz, marque como instrumental no editor do player, ou com embed_lyrics.py ARQUIVO --instrumental
+  ```
 - **A escolha humana manda**: nenhuma rotina desmarca sozinha, nem com
   `--forcar` ou `--forcar-tudo` (essas flags falam de *letra* a refazer, não de
   rediscutir se a música tem voz). Para reprocessar um arquivo marcado, desmarque
   antes com `--nao-instrumental`.
 - **Economia**: todas as etapas de **letra** pulam o arquivo — `buscar-letra`
-  (inclusive a perna do Vagalume), `identificar --com-letra` e `transcrever` —,
-  cada uma com sua contagem `N instrumentais` no `Resumo:`. A **impressão
-  digital** (`identificar`) **continua rodando**: instrumental sem letra ainda
-  pode e deve ter título e artista corretos.
+  (inclusive a perna do Vagalume), `identificar --com-letra`, `transcrever` e
+  também o `enriquecer`/`aplicar-proposta` (que consultavam o LRCLIB e
+  gravavam letra dentro de uma música marcada como sem voz) —, cada uma com
+  sua contagem `N instrumentais` no `Resumo:`. A **impressão digital**
+  (`identificar`) **continua rodando**, e o `enriquecer` continua propondo
+  título, artista e temas: instrumental sem letra ainda pode e deve ter
+  título e artista corretos. Pela mesma razão, o `estimar` **não** conta o
+  instrumental como pendência — ele não entra na fila de transcrição, e
+  projetar horas de CPU com ele dentro é enganar quem vai decidir.
 - **No relatório**, a coluna `letra` mostra `INSTRUMENTAL` no lugar do `NÃO` —
   informação, não cobrança. Um instrumental que ainda assim tenha letra
   registrada (raro, mas possível) mostra a letra normalmente (`SIM`,
@@ -249,13 +273,18 @@ python3 tools/curadoria.py transcrever ~/Musicas --csv feito.csv
   --idioma pt                        padrão: pt
   --identificar-por-refrao           liga a identificação pelo refrão (F14.1),
                                      DESLIGADA por padrão — veja abaixo
-  --trecho SEGUNDOS                  trecho de identificação (padrão: 90)
+  --trecho SEGUNDOS                  trecho de identificação (padrão: 90); só
+                                     com --identificar-por-refrao — sozinho,
+                                     avisa que foi ignorado
   --so-identificar                   nunca transcreve a música inteira
                                      (implica --identificar-por-refrao)
   --so-transcrever                   pula a identificação (é o padrão)
   --forcar                           refaz só as letras que vieram de transcrição
   --forcar-tudo                      refaz qualquer letra (apaga letra oficial!)
-  --sobrescrever-tags                deixa a identificação ALTA trocar tag real
+  --sobrescrever-tags                deixa a identificação ALTA trocar tag real;
+                                     sem --identificar-por-refrao o comando
+                                     RECUSA (autorização que não autorizaria
+                                     nada não pode passar em silêncio)
   --densidade-minima C_POR_S         piso de caracteres por segundo de áudio
                                      abaixo do qual a transcrição é ruído e o
                                      arquivo vira instrumental (padrão: 0,30;
@@ -404,7 +433,7 @@ python3 tools/curadoria.py estimar ~/Musicas --amostra 10
 ```
 
 ```
-Acervo: 94 arquivos | 63 incompletos | 71 sem letra
+Acervo: 94 arquivos | 61 incompletos | 69 sem letra | 2 instrumentais
 Amostra: 10 arquivos (média de 3m52s por música)
 Projeção: identificar: ~4 min | transcrever o restante: ~1h20 (modelo small) ou ~18 min (modelo tiny)
 ```
@@ -412,8 +441,13 @@ Projeção: identificar: ~4 min | transcrever o restante: ~1h20 (modelo small) o
 Ele não grava nada e **não baixa nada** — nem o modelo do Whisper. Quando um
 número não pôde ser medido aqui (sem `fpcalc`, ou sem o modelo baixado), a saída
 diz com todas as letras que aquela etapa saiu de média/proporção publicada, e
-não de medição. São estimativas: o tempo real varia com o processador, a rede,
-a duração das músicas e quanto o `identificar` resolver antes.
+não de medição. A média de duração usa só as durações **confirmadas** (medidas
+no fluxo do MP3, não o número declarado no cabeçalho), e o que ficou de fora é
+dito num `AVISO:` — um único arquivo remontado na amostra multiplicava a
+projeção por sete. Marcados como **instrumental** não entram nem em
+"incompletos" nem em "sem letra": nenhuma etapa de letra vai tocá-los. São
+estimativas: o tempo real varia com o processador, a rede, a duração das
+músicas e quanto o `identificar` resolver antes.
 
 ### Vagalume: a segunda fonte de letra (V6.1)
 

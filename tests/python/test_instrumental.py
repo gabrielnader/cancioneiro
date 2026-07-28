@@ -526,11 +526,17 @@ def ruido(caracteres: int) -> str:
 
 @pytest.fixture
 def duracao_real(monkeypatch):
-    """Faz o `ler_info` devolver a duração de uma faixa de verdade.
+    """Finge um MP3 que REALMENTE dura N segundos.
 
     O MP3 de teste tem ~1,5 s; o defeito medido é sobre faixas de minutos,
     e é a razão entre caracteres e SEGUNDOS que decide. Só a duração é
     falsificada — tags, letra e a marca continuam vindo do arquivo real.
+
+    V8.2: a duração é falsificada nas DUAS pontas — o cabeçalho (`ler_info`)
+    e a medição quadro a quadro (`medir_duracao_por_quadros`) —, porque
+    agora o programa exige que elas concordem antes de marcar instrumental.
+    Falsificar só uma delas simularia um arquivo remontado (o cenário do
+    defeito CRÍTICO do QA), que tem testes próprios em test_duracao.py.
     """
     real = curadoria.ler_info
 
@@ -542,6 +548,8 @@ def duracao_real(monkeypatch):
             return info
 
         monkeypatch.setattr(curadoria, "ler_info", falso)
+        monkeypatch.setattr(curadoria, "medir_duracao_por_quadros",
+                            lambda _p: float(segundos))
 
     return usar
 
@@ -843,6 +851,101 @@ class TestEconomiaTranscrever:
         assert "instrumental" in linha["detalhe"]
 
 
+class TestEconomiaEnriquecer:
+    """Achado MÉDIO do QA: o `enriquecer` era a ÚNICA perna de letra sem a
+    trava da F17 — consultava o LRCLIB e GRAVAVA letra dentro de um arquivo
+    marcado como música sem voz.
+
+    Aqui ele segue o mesmo desenho do `identificar` (e não o do
+    `buscar-letra`): o arquivo NÃO é pulado inteiro, porque título, artista
+    e temas valem para instrumental também ("instrumental sem letra ainda
+    pode e deve ter título e artista corretos", PRD V8/F17). O que some é
+    só a letra."""
+
+    @pytest.fixture
+    def pasta(self, tmp_path, base_mp3) -> Path:
+        """Instrumental SEM título/artista: a proposta tem o que propor."""
+        p = tmp_path / "acervo"
+        p.mkdir()
+        alvo = p / "Água Viva.mp3"
+        shutil.copyfile(base_mp3, alvo)
+        marcar(alvo)
+        return p
+
+    def test_nao_grava_letra_no_instrumental(self, pasta):
+        alvo = pasta / "Água Viva.mp3"
+        curadoria.cmd_enriquecer(
+            pasta, auto=True, pausa=0,
+            fetcher=fetcher_de(lrclib=lrclib_search(duracao=2.0)))
+        assert uslt_text(alvo) is None
+        assert instrumental_de(alvo) is True
+
+    def test_titulo_e_artista_continuam_sendo_gravados(self, pasta):
+        """A economia é só de LETRA: a identificação continua valendo."""
+        alvo = pasta / "Água Viva.mp3"
+        curadoria.cmd_enriquecer(
+            pasta, auto=True, pausa=0,
+            fetcher=fetcher_de(lrclib=lrclib_search(duracao=2.0)))
+        assert titulo_de(alvo) == "Água Viva"
+        assert artista_de(alvo) == "Coral Novo"
+
+    def test_a_linha_diz_que_a_letra_nao_foi_aplicada(self, pasta, capsys):
+        curadoria.cmd_enriquecer(
+            pasta, auto=True, pausa=0,
+            fetcher=fetcher_de(lrclib=lrclib_search(duracao=2.0)))
+        out = capsys.readouterr().out
+        assert "instrumental" in out.lower()
+        assert "letra SIM" not in out
+
+    def test_resumo_conta_os_instrumentais(self, pasta, base_mp3, capsys):
+        outro = pasta / "com voz.mp3"
+        shutil.copyfile(base_mp3, outro)
+        curadoria.cmd_enriquecer(
+            pasta, pausa=0,
+            fetcher=fetcher_de(lrclib=lrclib_search(duracao=2.0)))
+        assert "| 1 instrumentais" in resumo_de(capsys.readouterr().out)
+
+    def test_csv_nao_promete_letra_para_o_instrumental(self, pasta,
+                                                       tmp_path):
+        saida = tmp_path / "proposta.csv"
+        curadoria.cmd_enriquecer(
+            pasta, csv_out=saida, pausa=0,
+            fetcher=fetcher_de(lrclib=lrclib_search(duracao=2.0)))
+        linha = read_csv(saida)[0]
+        assert linha["letra"] == "NÃO"
+        assert linha["titulo_proposto"] == "Água Viva"
+
+    def test_aplicar_proposta_tambem_nao_escreve_letra(self, pasta,
+                                                       tmp_path):
+        """O round-trip pelo CSV não pode reabrir o buraco: o
+        aplicar-proposta rebusca a letra pelo lrclib_id."""
+        alvo = pasta / "Água Viva.mp3"
+        plano = tmp_path / "proposta.csv"
+        plano.write_text(
+            "arquivo,titulo_atual,artista_atual,titulo_proposto,"
+            "artista_proposto,confianca,duracao_mp3,duracao_encontrada,"
+            "letra,temas_propostos,lrclib_id,aceitar\n"
+            "Água Viva.mp3,,,Água Viva,Coral Novo,ALTA,2,2,SIM,,42,SIM\n",
+            encoding="utf-8-sig")
+        urls = []
+        curadoria.cmd_aplicar_proposta(
+            pasta, plano, pausa=0,
+            fetcher=fetcher_de(urls=urls, lrclib=lrclib_search(duracao=2.0)))
+        assert uslt_text(alvo) is None
+        assert not any("/api/get" in u for u in urls)
+        assert titulo_de(alvo) == "Água Viva"
+
+    def test_arquivo_normal_continua_recebendo_letra(self, pasta, base_mp3):
+        (pasta / "cantos").mkdir()
+        outro = pasta / "cantos" / "Água Viva.mp3"   # mesmo palpite, com voz
+        shutil.copyfile(base_mp3, outro)
+        curadoria.cmd_enriquecer(
+            pasta, auto=True, pausa=0,
+            fetcher=fetcher_de(lrclib=lrclib_search(duracao=2.0)))
+        assert uslt_text(outro) == LETRA_OFICIAL
+        assert uslt_text(pasta / "Água Viva.mp3") is None
+
+
 class TestEconomiaIdentificar:
     """A impressão digital CONTINUA rodando: instrumental sem letra ainda
     pode (e deve) ter título e artista corretos. Só a letra é pulada."""
@@ -964,13 +1067,14 @@ class TestResumosFecham:
         # d.mp3 já está marcado, quebrado.mp3 dá erro
         transcrever(p, transcritor=FakeTranscritor(completo=""))
         out = capsys.readouterr().out
-        (total, ident, transc, nao_ident, pulad, confl, erros,
-         instrum) = numeros_do_resumo(out)
+        (total, ident, transc, nao_ident, pulad, confl, erros, instrum,
+         adiadas) = numeros_do_resumo(out)
         assert total == 5
         assert (ident + transc + nao_ident + pulad + confl + erros
-                + instrum) == total
+                + instrum + adiadas) == total
         assert instrum == 3
         assert erros == 1
+        assert adiadas == 0
 
     def test_buscar_letra_soma_com_os_instrumentais(self, tmp_path, base_mp3,
                                                     capsys):
@@ -1007,6 +1111,73 @@ class TestResumosFecham:
 
 
 # ==================================================== compatibilidade 3.9
+
+class TestContratoDaMarcaComOApp:
+    """Achado MÉDIO do QA: os dois lados liam o frame de um jeito
+    diferente. O Python só aceitava "1"; o Rust (indexer.rs) aceita
+    qualquer valor fora de {0, false, nao, não}. Um frame com "sim" ou
+    "true" — de outra ferramenta, ou de uma versão futura — punha o selo
+    "Instrumental" na tela do app enquanto os scripts seguiam transcrevendo
+    o arquivo em toda execução: parece resolvido, e não está.
+
+    O contrato agora é um só, e vale para os DOIS stacks: o frame é uma
+    BANDEIRA. Quem grava escreve sempre "1"; quem lê aceita qualquer valor
+    não vazio que não seja uma negativa conhecida."""
+
+    def escrever_valor(self, path: Path, valor):
+        try:
+            tags = ID3(str(path))
+        except ID3NoHeaderError:
+            tags = ID3()
+        tags.delall("TXXX:INSTRUMENTAL")
+        if valor is not None:
+            tags.add(TXXX(encoding=Encoding.UTF8, desc="INSTRUMENTAL",
+                          text=[valor]))
+        tags.save(str(path), v2_version=4)
+
+    @pytest.mark.parametrize("valor", ["1", "sim", "true", "True", "SIM",
+                                       "yes", "instrumental", " 1 "])
+    def test_valores_que_o_app_le_como_marcado(self, limpo, valor):
+        self.escrever_valor(limpo, valor)
+        assert instrumental_de(limpo) is True
+        assert curadoria.ler_info(limpo)["instrumental"] is True
+
+    @pytest.mark.parametrize("valor", ["0", "false", "False", "nao", "não",
+                                       "NÃO", "", "   "])
+    def test_valores_que_o_app_le_como_nao_marcado(self, limpo, valor):
+        self.escrever_valor(limpo, valor)
+        assert instrumental_de(limpo) is False
+
+    def test_frame_ausente_continua_nao_marcado(self, limpo):
+        self.escrever_valor(limpo, None)
+        assert instrumental_de(limpo) is False
+
+    def test_a_gravacao_continua_escrevendo_so_o_1_do_prd(self, limpo):
+        """A tolerância é de LEITURA. Escrever variação seria criar o
+        problema do outro lado."""
+        el.write_instrumental(limpo, True)
+        assert valor_instrumental(limpo) == "1"
+
+    def test_valor_estranho_faz_as_etapas_de_letra_pularem(self, tmp_path,
+                                                           base_mp3, capsys):
+        """O defeito de verdade: com "sim" no frame, o app mostrava o selo
+        e o script transcrevia o arquivo de novo, e de novo."""
+        pasta = tmp_path / "acervo"
+        pasta.mkdir()
+        alvo = pasta / "doce preludio.mp3"
+        shutil.copyfile(base_mp3, alvo)
+        self.escrever_valor(alvo, "sim")
+        t = FakeTranscritor(completo=TEXTO_COMPLETO)
+        transcrever(pasta, transcritor=t)
+        assert t.chamadas == []
+        assert uslt_text(alvo) is None
+        assert "| 1 instrumentais" in resumo_de(capsys.readouterr().out)
+
+    def test_o_contrato_esta_escrito_no_codigo(self):
+        """Contrato compartilhado sem comentário volta a divergir."""
+        fonte = (TOOLS_DIR / "embed_lyrics.py").read_text(encoding="utf-8")
+        assert "indexer.rs" in fonte
+
 
 class TestCompatibilidade:
     @pytest.mark.parametrize("nome", ["curadoria.py", "embed_lyrics.py",

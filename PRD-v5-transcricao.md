@@ -172,6 +172,58 @@ arquivo saiu da fila:
 INSTRUMENTAL: doce preludio.mp3 (13 caracteres em 2m55s de áudio = 0,07 caractere por segundo, abaixo do mínimo de 0,30 — marcado como instrumental)
 ```
 
+### V8.2 — a duração precisa ser PROVADA (achado CRÍTICO do QA)
+
+A regra de densidade divide por uma duração, e a duração declarada no MP3
+**não é uma medição**. Sem cabeçalho Xing/Info — arquivo remontado, cortado,
+editado à mão ou com uma entrada de bitrate baixo, tudo rotina num acervo
+montado à mão — o leitor de tags *estima* a duração assumindo que o arquivo
+inteiro tem o bitrate do **primeiro quadro**. Medido: **300 s reais lidos como
+2.260,3 s** (7,5×). A consequência, reproduzida ponta a ponta:
+
+```
+INSTRUMENTAL: ponto_de_ogum.mp3 (631 caracteres em 37m40s de áudio = 0,28 caractere por segundo, abaixo do mínimo de 0,30 — marcado como instrumental)
+# na execução seguinte:
+INSTRUMENTAL: ponto_de_ogum.mp3 (já marcado como instrumental — nada a transcrever)
+```
+
+Uma música **cantada**, com 631 caracteres de letra legítima (2,1 c/s reais),
+perde a letra **para sempre**: a marca vence até o `--forcar-tudo` e o único
+desfazer é um comando de terminal, no produto cujo requisito declarado é que o
+terminal desapareça. A folga de 4× do piso é irrelevante contra um erro de
+**uma ordem de grandeza**.
+
+Regra nova: **nenhuma música é marcada como instrumental por causa de uma
+duração que ninguém confirmou.** A duração usada na densidade vem, nesta ordem:
+
+1. **o transcritor** — ele decodificou o áudio e sabe quanto ouviu
+   (`info.duration` do faster-whisper). Verdade de campo, e de graça;
+2. **a medição quadro a quadro do MP3** — a duração de um MP3 é a soma da
+   duração de cada quadro MPEG, e cada quadro a declara no próprio cabeçalho
+   de 4 bytes. Offline, sem dependência nenhuma, alguns milissegundos por
+   arquivo;
+3. **o cabeçalho**, e só quando a medição concorda com ele (então nenhum
+   arquivo saudável muda de número por causa desta regra).
+
+Sem nenhuma das duas primeiras, e com o cabeçalho sozinho acusando "ralo", o
+arquivo **não é marcado**: sai como `ADIADA`, com balde próprio no `Resumo:`, e
+**nada é gravado** — nem a marca, nem o ruído como letra. Errar para o lado de
+marcar destrói dado de alguém que não tem a quem recorrer; errar para o lado de
+adiar custa uma nova passada. Texto **vazio** não depende de duração nenhuma e
+continua marcando como sempre.
+
+Quando a duração usada contradiz o cabeçalho, a linha **diz as duas**:
+
+```
+TRANSCRITA: ponto_de_ogum.mp3 (631 caracteres, 5m00s de áudio em 4m12s) [duração medida no fluxo do MP3; o cabeçalho do MP3 diz 37m40s]
+ADIADA: outra.mp3 — 8 caracteres seriam pouco para a duração deste áudio, mas a duração NÃO pôde ser confirmada: o cabeçalho do MP3 diz 39m25s e o fluxo do arquivo não pôde ser medido. Nada foi gravado. Se a música realmente não tem voz, marque como instrumental no editor do player, ou com embed_lyrics.py ARQUIVO --instrumental
+```
+
+A mesma prova vale onde quer que a duração seja usada como **evidência
+objetiva**: a confirmação de casamento da F14.1 e do `enriquecer` (sem duração
+provada, o resultado do LRCLIB não ganha o bônus de duração) e a projeção do
+`estimar`.
+
 ## Interface
 
 ```bash
@@ -196,6 +248,18 @@ python3 tools/curadoria.py transcrever ~/Musicas [opções]
 recusada; `--so-identificar` e `--so-transcrever` continuam mutuamente
 exclusivas.
 
+Com a F14.1 desligada por padrão, duas flags passaram a **não fazer nada** — e
+não faziam nada em silêncio (achado do QA). Elas recebem tratamentos
+diferentes, de propósito:
+
+- `--sobrescrever-tags` sem a identificação ligada é **recusado**. É uma
+  autorização destrutiva: quem a digita acredita ter permitido trocar
+  título/artista reais, e ignorá-la calado deixa a pessoa com uma crença falsa
+  sobre o que o comando pode fazer com o acervo dela;
+- `--trecho` sem a identificação ligada **avisa** e segue. Ele não autoriza nem
+  destrói nada, e recusar quebraria linha de comando antiga que ainda faz a
+  coisa certa.
+
 Saída por música, no padrão dos outros subcomandos (a linha `IDENTIFICADA`
 mostra o que foi **aplicado** no arquivo, com a confiança do casamento; a linha
 `INSTRUMENTAL` mostra a **regra** que tirou o arquivo da fila de letra):
@@ -209,7 +273,7 @@ CONFLITO: barco - remo.mp3 — tag atual "Segura o Remo / Mestre Irineu" difere 
 NÃO IDENTIFICADA: barco - Timoneiro.mp3
 PULADO: barco - Timoneiro.mp3 (já tem letra)
 ERRO: arquivo.mp3 — áudio ilegível
-Resumo: 94 arquivos | 6 identificadas | 71 transcritas | 0 não identificadas | 13 puladas | 0 conflitos | 4 erros | 2 instrumentais
+Resumo: 94 arquivos | 6 identificadas | 71 transcritas | 0 não identificadas | 13 puladas | 0 conflitos | 4 erros | 2 instrumentais | 0 adiadas
 ```
 
 **Segurança do lote** (roda horas, sem ninguém olhando, e o candidato vem do

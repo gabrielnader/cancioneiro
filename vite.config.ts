@@ -74,7 +74,17 @@ export default defineConfig(async () => ({
       : undefined,
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      //
+      // `fixtures/` também fica de fora, e por um motivo que custou caro para
+      // descobrir: a suíte Python REGENERA os MP3s de fixtures/ (make_fixtures
+      // + os testes que gravam tags), e o dev server serve essa mesma pasta em
+      // /fixtures/*. Com o watcher ligado nela, uma execução de pytest em
+      // paralelo recarregava a página NO MEIO do teste E2E — falha diferente a
+      // cada rodada, cada uma passando sozinha, que é o retrato da instabilidade
+      // que ensina a ignorar a suíte. Os MP3s são servidos por middleware
+      // próprio (nada de HMR neles), então observá-los nunca teve utilidade.
+      // Mesma família do isolamento de fixtures feito para o cargo test.
+      ignored: ["**/src-tauri/**", "**/fixtures/**", "**/test-results/**"],
     },
   },
 

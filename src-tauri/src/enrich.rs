@@ -1,7 +1,9 @@
 //! F13 (PRD V5) — enriquecimento em lote pelo app.
 //!
 //! `enrich_scan` seleciona as músicas INCOMPLETAS (sem letra OU com
-//! título/artista placeholder) de uma pasta (prefixo de file_path), monta
+//! título/artista placeholder) de uma pasta (prefixo de file_path) — menos
+//! as marcadas como instrumental, que toda etapa de letra pula (V8/F17) —,
+//! monta
 //! palpites (tags não-placeholder > nome de arquivo limpo — porte do
 //! tools/curadoria.py) e consulta o LRCLIB pela mesma infra do lyrics_fetch
 //! (fetcher injetável: os testes rodam sem rede; no comando real é o ureq —
@@ -406,6 +408,18 @@ where
             continue;
         }
         if !under_prefix(&song.file_path, folder_prefix) {
+            continue;
+        }
+        // V8/F17 — "todas as etapas de letra pulam o arquivo [...] e a
+        // varredura em lote do app". Fica ANTES do filtro de completude
+        // porque o instrumental é, por definição, "incompleto" (não tem
+        // letra) e seria a primeira candidata de toda varredura.
+        //
+        // Não é só economia de rede: um instrumental com título e artista
+        // corretos casa com a versão CANTADA da mesma peça no LRCLIB e sai
+        // ALTA — e ALTA chega pré-marcada na revisão (DECISIONS #49). Um
+        // clique gravaria a letra de outra gravação dentro do arquivo.
+        if song.instrumental {
             continue;
         }
         let titulo_tag = sem_placeholder(&song.title).to_string();

@@ -652,6 +652,11 @@ export function createMockBackend(): MockBackend {
         if (folderPrefix && !isUnderFolder(song.file_path, folderPrefix)) {
           return false;
         }
+        // V8/F17 — instrumental é pulado por TODA etapa de letra, inclusive
+        // esta (mesma regra do enrich_scan do Rust). Sem isso, a varredura
+        // propõe a letra da versão cantada para uma peça sem voz — e ALTA
+        // chega pré-marcada na revisão (DECISIONS #49).
+        if (song.instrumental === true) return false;
         // incompleta = sem letra OU sem artista (regra simplificada do Rust)
         return !(song.has_lyrics && song.artist !== null);
       });

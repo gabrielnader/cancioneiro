@@ -60,6 +60,11 @@ ORIGEM_ROTULOS = {ORIGEM_TRANSCRICAO: "transcrição automática",
 INSTRUMENTAL_DESC = "INSTRUMENTAL"
 INSTRUMENTAL_KEY = f"TXXX:{INSTRUMENTAL_DESC}"  # HashKey do mutagen
 INSTRUMENTAL_SIM = "1"
+# Negativas reconhecidas na LEITURA do frame (ver read_instrumental). A
+# mesma lista existe no Rust, em src-tauri/src/indexer.rs — os dois lados
+# precisam enxergar a mesma marca, ou o app diz "Instrumental" enquanto o
+# script segue transcrevendo o arquivo.
+INSTRUMENTAL_NAO = ("0", "false", "nao", "não")
 
 
 def die(message: str) -> None:
@@ -148,16 +153,31 @@ def read_letra_origem(tags: ID3) -> str:
 
 
 def read_instrumental(tags: ID3) -> bool:
-    """Lê TXXX:INSTRUMENTAL. True SÓ para o valor "1" do PRD.
+    """Lê TXXX:INSTRUMENTAL — o contrato COMPARTILHADO com o app.
 
-    Qualquer outro valor (um "0" antigo, um "sim" de uma versão futura)
-    conta como NÃO marcado: na dúvida o arquivo continua na fila de letra,
-    que é o comportamento de sempre — o erro barato. O erro caro seria
-    calar um arquivo por causa de um valor que ninguém especificou."""
+    CONTRATO (vale igual aqui e no Rust, `src-tauri/src/indexer.rs`,
+    função `read_instrumental` — mexer em um lado sem mexer no outro é o
+    defeito que este comentário existe para evitar):
+
+        marcado = o frame existe, tem texto, e esse texto NÃO é uma das
+                  negativas conhecidas (INSTRUMENTAL_NAO), sem caixa
+        não marcado = frame ausente, texto vazio ou uma negativa
+
+    O frame é uma BANDEIRA, não um texto livre. Quem GRAVA escreve sempre
+    INSTRUMENTAL_SIM ("1", o valor do PRD) — a tolerância é só de LEITURA,
+    para arquivo vindo de outra ferramenta ou de uma versão futura.
+
+    Achado MÉDIO do QA (V8.2): antes, aqui, SÓ "1" contava como marcado,
+    enquanto o app já aceitava qualquer valor fora da lista de negativas.
+    Um frame com "sim"/"true" punha o selo "Instrumental" na tela e, ao
+    mesmo tempo, deixava o script transcrevendo o arquivo em toda execução
+    — parece resolvido e não está, que é o pior estado possível para quem
+    não tem a quem perguntar."""
     frames = [f for f in tags.getall("TXXX") if f.desc == INSTRUMENTAL_DESC]
     if not frames or not frames[0].text:
         return False
-    return str(frames[0].text[0]).strip() == INSTRUMENTAL_SIM
+    valor = str(frames[0].text[0]).strip()
+    return bool(valor) and valor.lower() not in INSTRUMENTAL_NAO
 
 
 def write_instrumental(path: Path, marcado: bool) -> None:

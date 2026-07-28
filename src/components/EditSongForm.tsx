@@ -43,9 +43,18 @@ export function EditSongForm({
   );
   const [temaInput, setTemaInput] = useState("");
   // V8/F17 — a marca de instrumental é escolha humana e viaja no MP3
-  // (TXXX:INSTRUMENTAL). O formulário sempre envia o valor explícito do
-  // controle (true/false): é o único lugar do app que desfaz a marca.
+  // (TXXX:INSTRUMENTAL). O editor é o único lugar do app que a desfaz, mas
+  // só quando alguém MEXE no controle: `write_tags` recebe `undefined`
+  // ("não mexer") enquanto ninguém tocou nele.
+  //
+  // Por que não basta mandar o estado do checkbox: a Song vem do banco, e o
+  // banco pode estar atrasado em relação ao MP3 — a curadoria marcou o
+  // arquivo com o app aberto, ou antes da varredura de inicialização. Aí o
+  // controle nasce desmarcado sem que ninguém tenha desmarcado nada, e
+  // salvar uma correção de título apagaria do arquivo uma marca feita à mão.
+  // "Marcada à mão, nenhuma rotina desmarca sozinha" (PRD V8/F17).
   const [instrumental, setInstrumental] = useState(song.instrumental === true);
+  const [instrumentalTocado, setInstrumentalTocado] = useState(false);
   const [lyrics, setLyrics] = useState(initialLyrics);
   const [titleError, setTitleError] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -123,7 +132,8 @@ export function EditSongForm({
         artist.trim() ? artist.trim() : null,
         lyrics.trim() ? lyrics : null,
         finalTemas.length > 0 ? finalTemas.join("; ") : null,
-        instrumental,
+        // três estados (V8/F17): undefined = "não mexer na marca"
+        instrumentalTocado ? instrumental : undefined,
       );
       useLibraryStore.getState().updateSong(saved);
       usePlaylistStore.getState().updateSongInItems(saved);
@@ -235,7 +245,10 @@ export function EditSongForm({
             id="edit-instrumental"
             type="checkbox"
             checked={instrumental}
-            onChange={(e) => setInstrumental(e.target.checked)}
+            onChange={(e) => {
+              setInstrumental(e.target.checked);
+              setInstrumentalTocado(true);
+            }}
             className="h-4 w-4 accent-[#0F766E]"
           />
           Esta música é instrumental

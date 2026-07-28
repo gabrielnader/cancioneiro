@@ -805,6 +805,24 @@ describe("mockBackend", () => {
       ]);
     });
 
+    // V8/F17 — a varredura em lote é etapa de LETRA e pula o instrumental,
+    // igual ao enrich_scan do Rust. O mock precisa da mesma regra: é ele que
+    // o E2E e os testes de store enxergam como "o backend".
+    it("pula músicas instrumentais — nem candidata, nem no total do progresso", async () => {
+      await backend.addFolder("/musicas/teste");
+      backend._markAsInstrumental("/musicas/teste/sem_letra.mp3");
+
+      const totais: number[] = [];
+      const un = await backend.onEnrichProgress((p) => totais.push(p.total));
+      const proposals = await backend.enrichFolderScan("", "s1");
+      un();
+
+      expect(proposals.map((p) => p.file_path)).toEqual([
+        "/musicas/teste/sem_tags.mp3",
+      ]);
+      expect(new Set(totais)).toEqual(new Set([1]));
+    });
+
     it("filtra por prefixo de pasta; '' = biblioteca inteira", async () => {
       await backend.addFolder("/a");
       await backend.addFolder("/b");

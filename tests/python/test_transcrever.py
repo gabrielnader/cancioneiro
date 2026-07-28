@@ -324,6 +324,10 @@ class TestIdentificacao:
             return info
 
         monkeypatch.setattr(curadoria, "ler_info", musica_longa)
+        # V8.2: a duração só confirma casamento quando a medição concorda
+        # com o cabeçalho — aqui a música REALMENTE tem 214 s
+        monkeypatch.setattr(curadoria, "medir_duracao_por_quadros",
+                            lambda _p: 214.0)
         identificando(
             pasta, transcritor=FakeTranscritor(),
             fetcher=lambda url: json.dumps([resultado(duration=216.0)]))
@@ -670,13 +674,14 @@ class TestCsvEResumo:
         linha = next(l for l in out.splitlines() if l.startswith("Resumo:"))
         numeros = [int(t) for t in linha.replace("|", " ").split()
                    if t.isdigit()]
-        (total, ident, transc, nao_ident, pulad, confl, erros,
-         instrum) = numeros
+        (total, ident, transc, nao_ident, pulad, confl, erros, instrum,
+         adiadas) = numeros
         assert total == 4
         # todo arquivo cai em exatamente um balde (o de instrumentais, da
-        # F17, é mais um deles: nem erro, nem pulo de letra)
+        # F17, e o de adiadas, da V8.2, são mais dois deles: nem erro, nem
+        # pulo de letra)
         assert (ident + transc + nao_ident + pulad + confl + erros
-                + instrum) == total
+                + instrum + adiadas) == total
 
     def test_contador_de_progresso_por_arquivo(self, tmp_path, base_mp3,
                                                capsys):
@@ -1267,7 +1272,8 @@ class TestVadNaoEstrangulaCanto:
             sys.modules, "faster_whisper",
             type("M", (), {"WhisperModel": lambda *a, **k: ModeloFalso()}))
         t = curadoria.criar_transcritor(modelo="tiny")
-        assert t("x.mp3") == "canto"
+        # V8.2: o transcritor devolve (texto, duração processada)
+        assert t("x.mp3") == ("canto", 0.0)
         assert chamadas.get("vad_filter") is False, (
             "VAD ligado engole canto: 33 de 94 arquivos vieram vazios")
         # laços de repetição são a outra praga do Whisper sobre música
@@ -1444,9 +1450,14 @@ def fetcher_de(resultados):
 
 @pytest.fixture
 def duracao_real(monkeypatch):
-    """Faz o `ler_info` devolver a duração de uma faixa de verdade — os
-    números do defeito são de músicas de minutos, o MP3 de teste tem 1,5 s.
-    Só a duração é falsificada."""
+    """Finge um MP3 que REALMENTE dura N segundos — os números do defeito
+    são de músicas de minutos, o MP3 de teste tem 1,5 s. Só a duração é
+    falsificada.
+
+    V8.2: falsificada nas DUAS pontas (cabeçalho e medição quadro a quadro),
+    porque a duração só vale como prova quando as duas concordam. Cabeçalho
+    mentindo sozinho é o arquivo remontado do defeito CRÍTICO do QA, que
+    tem testes próprios em test_duracao.py."""
     real = curadoria.ler_info
 
     def usar(segundos: float):
@@ -1457,6 +1468,8 @@ def duracao_real(monkeypatch):
             return info
 
         monkeypatch.setattr(curadoria, "ler_info", falso)
+        monkeypatch.setattr(curadoria, "medir_duracao_por_quadros",
+                            lambda _p: float(segundos))
 
     return usar
 
@@ -1550,6 +1563,77 @@ class TestFlagsNaLinhaDeComando:
         result = run_curadoria("transcrever", pasta, "--so-identificar",
                                "--so-transcrever")
         assert result.returncode != 0
+
+
+class TestFlagsQueViraramNoOp:
+    """Achado MÉDIO do QA: com a F14.1 opt-in, `--sobrescrever-tags` e
+    `--trecho` sozinhos não fazem NADA — e faziam nada em silêncio."""
+
+    def test_sobrescrever_tags_sozinho_e_recusado(self, pasta):
+        """É AUTORIZAÇÃO DESTRUTIVA: quem a digita acredita ter permitido
+        trocar título/artista reais. Ignorar calado deixa a pessoa com uma
+        crença falsa sobre o que o comando pode fazer."""
+        antes = shas_mp3(pasta)
+        result = run_curadoria("transcrever", pasta, "--sobrescrever-tags")
+        assert result.returncode != 0
+        saida = result.stderr + result.stdout
+        assert "--sobrescrever-tags" in saida
+        assert "--identificar-por-refrao" in saida
+        assert shas_mp3(pasta) == antes
+
+    def test_sobrescrever_tags_com_so_transcrever_tambem_e_recusado(self,
+                                                                    pasta):
+        result = run_curadoria("transcrever", pasta, "--sobrescrever-tags",
+                               "--so-transcrever")
+        assert result.returncode != 0
+        assert "--sobrescrever-tags" in (result.stderr + result.stdout)
+
+    def test_sobrescrever_tags_com_a_identificacao_ligada_passa(self, pasta):
+        """Ligada a F14.1, a flag volta a significar alguma coisa — o
+        comando só para depois, por falta do faster-whisper."""
+        result = run_curadoria("transcrever", pasta, "--sobrescrever-tags",
+                               "--identificar-por-refrao")
+        saida = result.stderr + result.stdout
+        assert "só tem efeito" not in saida
+        assert "faster-whisper" in saida        # morreu pela dependência
+
+    def test_sobrescrever_tags_com_so_identificar_passa(self, pasta):
+        result = run_curadoria("transcrever", pasta, "--sobrescrever-tags",
+                               "--so-identificar")
+        assert "só tem efeito" not in (result.stderr + result.stdout)
+
+    def test_trecho_sozinho_avisa_alto_e_claro(self, pasta):
+        """`--trecho` não autoriza nem destrói nada: recusar quebraria
+        linha de comando antiga que ainda faz a coisa certa. Mas ignorar em
+        silêncio é o defeito — então avisa."""
+        result = run_curadoria("transcrever", pasta, "--trecho", "120")
+        saida = result.stderr + result.stdout
+        assert "AVISO" in saida
+        assert "--trecho" in saida
+        assert "--identificar-por-refrao" in saida
+
+    def test_trecho_igual_ao_padrao_tambem_avisa(self, pasta):
+        """Digitar o valor padrão continua sendo pedir uma coisa que não
+        vai acontecer."""
+        saida = run_curadoria("transcrever", pasta, "--trecho", "90")
+        assert "AVISO" in (saida.stderr + saida.stdout)
+
+    def test_sem_trecho_nao_avisa_nada(self, pasta):
+        result = run_curadoria("transcrever", pasta)
+        assert "--trecho" not in (result.stderr + result.stdout)
+
+    def test_trecho_com_a_identificacao_ligada_nao_avisa(self, pasta):
+        result = run_curadoria("transcrever", pasta, "--trecho", "120",
+                               "--identificar-por-refrao")
+        assert "AVISO" not in (result.stderr + result.stdout)
+
+    def test_o_valor_do_trecho_continua_chegando_na_etapa(self, pasta):
+        """Nada disto pode mudar o que a F14.1 faz quando está ligada."""
+        t = FakeTranscritor()
+        curadoria.cmd_transcrever(pasta, transcritor=t, fetcher=fetcher_vazio,
+                                  identificar_por_refrao=True, trecho=120.0,
+                                  pausa=0)
+        assert t.chamadas[0][2] == 120.0
 
 
 class TestTravaMaisDuraQuandoLigada:

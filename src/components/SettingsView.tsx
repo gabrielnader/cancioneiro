@@ -48,8 +48,22 @@ export function SettingsView() {
   }
 
   return (
-    <div className="flex h-full min-w-0 flex-1 flex-col overflow-y-auto bg-[#F9FAFB] p-6 pr-36">
-      <h1 className="text-[22px] font-semibold text-[#111827]">Configurações</h1>
+    <div className="flex h-full min-w-0 flex-1 flex-col overflow-y-auto bg-[#F9FAFB] p-6">
+      {/*
+        A faixa do botão flutuante (App.tsx) é reservada SÓ na linha do
+        título, não na página inteira. Antes o `pr-36` estava no container:
+        reservava de menos para o botão (144 px contra os 167 que ele ocupa)
+        e de mais para o resto — a 1024 com o painel aberto, "Adicionar
+        pasta" e "Reindexar tudo" perdiam 38 px de largura cada um por causa
+        de um botão que está lá em cima.
+
+        Hoje nada de Configurações fica na altura do botão; isso é sorte, não
+        projeto — a seção de curadoria da F18 nasce exatamente aqui. O E2E
+        mede esta view junto com as outras duas.
+      */}
+      <h1 className="pr-[var(--faixa-detalhes)] text-[22px] font-semibold text-[#111827]">
+        Configurações
+      </h1>
 
       <section className="mt-6">
         <h2 className="text-[15px] font-medium text-[#111827]">

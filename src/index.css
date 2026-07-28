@@ -4,6 +4,27 @@
   --font-sans: "Inter", system-ui, sans-serif;
 }
 
+:root {
+  /*
+    Faixa horizontal reservada para o botão flutuante "Ocultar/Mostrar
+    detalhes" (App.tsx). Ele é `absolute` e existe em TODAS as views
+    (decisão 25), então cada cabeçalho de view tem de deixar essa faixa
+    livre — e a conta precisa morar num lugar só, porque ela já foi feita
+    errado três vezes em views diferentes.
+
+    Conta (medida no Chromium, fonte Inter 15px):
+      "Mostrar detalhes"  151 px  (o rótulo mais largo dos dois)
+    + `right-4` do botão   16 px
+    = 167 px mínimos. 12rem = 192 px deixa 25 px de folga para o rótulo
+    crescer um pouco sem voltar a cobrir botão de ninguém.
+
+    Quem depende disto: LibraryView (linha da busca), PlaylistView
+    (título + ações) e SettingsView (título). O E2E mede as três, com o
+    painel aberto e fechado, a 1280 e a 1024 (o minWidth do tauri.conf).
+  */
+  --faixa-detalhes: 12rem;
+}
+
 html,
 body,
 #root {

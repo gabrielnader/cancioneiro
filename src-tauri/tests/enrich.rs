@@ -9,8 +9,10 @@ use cancioneiro_lib::{db, indexer, writer};
 use rusqlite::Connection;
 use std::cell::RefCell;
 use std::fs;
-use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+mod common;
+use common::copy_fixture;
 
 const ZERO: Duration = Duration::ZERO;
 
@@ -30,13 +32,6 @@ fn scan_props(
     enrich::enrich_scan(conn, prefixo, fetch, ZERO, SEM_PROGRESSO, SEM_CANCELAMENTO).unwrap()
 }
 
-fn fixtures_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("fixtures")
-}
-
 /// Copia fixtures para um tempdir com os nomes/subpastas pedidos, registra a
 /// pasta e indexa. Devolve (tempdir, conn, folder_id).
 fn setup_with(files: &[(&str, &str)]) -> (tempfile::TempDir, Connection, i64) {
@@ -44,7 +39,7 @@ fn setup_with(files: &[(&str, &str)]) -> (tempfile::TempDir, Connection, i64) {
     for (src, dst) in files {
         let dest = dir.path().join(dst);
         fs::create_dir_all(dest.parent().unwrap()).unwrap();
-        fs::copy(fixtures_dir().join(src), dest).unwrap();
+        copy_fixture(src, &dest);
     }
     let conn = db::open_in_memory().unwrap();
     let folder_id = db::add_folder(&conn, dir.path().to_str().unwrap()).unwrap();
@@ -641,6 +636,121 @@ fn apply_never_clears_the_instrumental_mark() {
     // e o disco concorda: um scan do zero relê a marca
     indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
     assert!(song_by_suffix(&conn, "sem_letra.mp3").instrumental);
+}
+
+// ---------------------------------------------------------------------------
+// V8/F17 — a varredura em lote do app é uma ETAPA DE LETRA e, como todas as
+// outras ("buscar-letra, identificar --com-letra, transcrever, Vagalume e a
+// varredura em lote do app"), PULA o arquivo marcado como instrumental.
+//
+// Dois danos concretos quando não pulava: (1) um instrumental com título e
+// artista corretos casa com a versão CANTADA da mesma peça no LRCLIB, sai
+// ALTA, e ALTA chega pré-marcada na revisão (DECISIONS #49) — um clique
+// grava a letra de outra gravação dentro do arquivo; (2) queima rede em todo
+// instrumental, em toda varredura, que é exatamente a economia prometida
+// pela F17.
+// ---------------------------------------------------------------------------
+#[test]
+fn scan_skips_instrumental_songs_without_network_or_proposal() {
+    let (_dir, conn, _folder_id) = setup_with(&[
+        ("sem_letra.mp3", "Doce Prelúdio.mp3"),
+        ("sem_tags.mp3", "Falamansa - Oh! Chuva.mp3"),
+    ]);
+    let preludio = song_by_suffix(&conn, "Doce Prelúdio.mp3");
+
+    // marcada à mão no editor do player — com título e artista CORRETOS, que
+    // é justamente o caso perigoso (a impressão digital deve preenchê-los).
+    writer::write_tags(
+        &conn,
+        preludio.id,
+        "Doce Prelúdio",
+        Some("Banda Fixture"),
+        None,
+        None,
+        Some(true),
+    )
+    .unwrap();
+
+    // o stub devolve um casamento PERFEITO para qualquer consulta: se a
+    // instrumental for consultada, ela vira proposta ALTA com letra.
+    let dur = preludio.duration_seconds.expect("fixture tem duração") as f64;
+    let body = format!(
+        r#"[{{"trackName": "Doce Prelúdio", "artistName": "Banda Fixture",
+             "duration": {dur}, "plainLyrics": "Letra da versão cantada"}}]"#
+    );
+    let urls: RefCell<Vec<String>> = RefCell::new(Vec::new());
+    let props = enrich::enrich_scan(
+        &conn,
+        "",
+        |url: &str| {
+            urls.borrow_mut().push(url.to_string());
+            Ok(body.clone())
+        },
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+
+    assert!(
+        !props.iter().any(|p| p.song_id == preludio.id),
+        "instrumental não pode virar proposta: {:?}",
+        props
+            .iter()
+            .filter(|p| p.song_id == preludio.id)
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !urls.borrow().iter().any(|u| u.contains("Prel")),
+        "instrumental não pode gastar rede: {:?}",
+        urls.borrow()
+    );
+
+    // a vizinha incompleta continua sendo processada normalmente — pular o
+    // instrumental não pode virar pular a pasta.
+    assert!(
+        props.iter().any(|p| p.file_path.ends_with("Oh! Chuva.mp3")),
+        "a música incompleta ao lado continua sendo proposta"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// V8/F17 — o instrumental sai também da CONTAGEM do progresso: `total` mede
+// trabalho a fazer, e uma barra que conta arquivos que ninguém vai consultar
+// para em "3 de 5" para sempre.
+// ---------------------------------------------------------------------------
+#[test]
+fn scan_progress_total_excludes_instrumental_songs() {
+    let (_dir, conn, _folder_id) = setup_with(&[
+        ("sem_letra.mp3", "Doce Prelúdio.mp3"),
+        ("sem_tags.mp3", "Falamansa - Oh! Chuva.mp3"),
+    ]);
+    let preludio = song_by_suffix(&conn, "Doce Prelúdio.mp3");
+    writer::write_tags(
+        &conn,
+        preludio.id,
+        "Doce Prelúdio",
+        Some("Banda Fixture"),
+        None,
+        None,
+        Some(true),
+    )
+    .unwrap();
+
+    let progresso: RefCell<Vec<(usize, usize)>> = RefCell::new(Vec::new());
+    enrich::enrich_scan(
+        &conn,
+        "",
+        |_: &str| Ok("[]".into()),
+        ZERO,
+        |done, total, _| progresso.borrow_mut().push((done, total)),
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+
+    let p = progresso.borrow();
+    assert_eq!(p.first().copied(), Some((0, 1)), "total anunciado: {p:?}");
+    assert_eq!(p.last().copied(), Some((1, 1)), "progresso completa: {p:?}");
 }
 
 // ---------------------------------------------------------------------------

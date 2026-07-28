@@ -44,6 +44,23 @@ jobs:
       - name: Fixtures
         run: python3 tools/make_fixtures.py
 
+      # As fixtures MP3 são um artefato COMPARTILHADO e MUTÁVEL: a suíte
+      # Python roda o make_fixtures.py de novo (test_fixtures.py) e reescreve
+      # fixtures/ do zero, enquanto a suíte Rust copia esses mesmos arquivos
+      # para tempdirs. Encavalar as duas produzia falhas fantasmas em
+      # enrich.rs ("failed to fill whole buffer") que somem ao rodar de novo —
+      # o pior tipo de defeito para uma release automatizada.
+      #
+      # Aqui o Rust lê de um retrato tirado agora, que a suíte Python não
+      # toca. Os testes Rust também sabem se defender sozinhos (ver
+      # src-tauri/tests/common/mod.rs), mas depender só disso seria depender
+      # de detecção; isto elimina a corrida por construção.
+      - name: Retrato das fixtures para a suíte Rust
+        run: |
+          mkdir -p "$RUNNER_TEMP/fixtures-ci"
+          cp fixtures/*.mp3 "$RUNNER_TEMP/fixtures-ci/"
+          echo "CANCIONEIRO_FIXTURES_DIR=$RUNNER_TEMP/fixtures-ci" >> "$GITHUB_ENV"
+
       - name: Suíte completa (pytest + cargo + vitest com cobertura)
         run: npm run test:all
 

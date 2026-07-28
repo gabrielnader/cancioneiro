@@ -105,13 +105,15 @@ function App() {
           )}
           {/*
             Flutuante porque precisa existir em TODAS as views (decisão 25):
-            escondido o painel, é o único caminho de volta. Mas as medidas
-            têm de casar com a linha da busca da LibraryView — antes ficava
-            4px acima e mais baixo que o campo, e o espaço reservado lá
-            (pr-*) era menor que a largura do texto "Ocultar detalhes", então
-            o botão montava em cima do campo. top-4/right-4 alinham com o
-            p-4 do cabeçalho e py-2/text-[15px] igualam a altura do input; o
-            E2E mede as duas caixas e falha se voltarem a se sobrepor.
+            escondido o painel, é o único caminho de volta. Sendo flutuante,
+            ele passa POR CIMA do cabeçalho de quem estiver embaixo — as três
+            views reservam a faixa dele com `pr-[var(--faixa-detalhes)]`, e a
+            medida dessa faixa vive num lugar só (index.css). Mexer em
+            `right-4`, no `px-3` ou no rótulo é mexer na conta que está lá.
+
+            top-4/right-4 alinham com o p-4 do cabeçalho da LibraryView e
+            py-2/text-[15px] igualam a altura do campo de busca. O E2E mede
+            as três views, a 1280 e a 1024, com o painel aberto e fechado.
           */}
           <button
             type="button"

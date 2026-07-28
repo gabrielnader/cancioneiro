@@ -54,8 +54,29 @@ export function PlaylistView() {
 
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col bg-[#F9FAFB]">
-      <div className="flex shrink-0 items-center gap-3 p-4 pr-36">
-        <h1 className="min-w-0 truncate text-[22px] font-semibold text-[#111827]">
+      {/*
+        `pr-[var(--faixa-detalhes)]` reserva a faixa do botão flutuante
+        "Ocultar/Mostrar detalhes" (App.tsx) — este cabeçalho ficava com
+        `pr-36` e o "Excluir playlist" saía 20 px por baixo do botão a 1280
+        e 72 px a 1024 (o minWidth da janela).
+
+        `flex-wrap` é a outra metade do conserto: o título mais os dois
+        botões não CABEM na faixa livre a 1024 com o painel aberto, e sem
+        wrap o flex transborda para a direita — de volta para debaixo do
+        botão. Com wrap, o "Excluir playlist" desce para a linha de baixo:
+        cabeçalho mais alto, mas o botão inteiro visível e clicável — em vez
+        de 72 px dele escondidos atrás de outro botão.
+      */}
+      <div className="flex shrink-0 flex-wrap items-center gap-3 p-4 pr-[var(--faixa-detalhes)]">
+        {/*
+          `flex-1` (base 0), e não só `min-w-0`: a quebra de linha do flex é
+          decidida pelo tamanho NATURAL do item, então um nome de playlist
+          comprido empurrava os dois botões para baixo mesmo sobrando espaço
+          para eles. Com base 0 o título cede a largura primeiro (truncando,
+          que é o que ele já fazia) e só quando os botões realmente não cabem
+          é que o último desce de linha.
+        */}
+        <h1 className="min-w-0 flex-1 truncate text-[22px] font-semibold text-[#111827]">
           {playlist.name}
         </h1>
         <button

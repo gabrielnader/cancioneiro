@@ -8,20 +8,15 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-fn fixtures_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("fixtures")
-}
+mod common;
+use common::copy_fixture;
 
 /// Copia fixtures para um tempdir, registra a pasta e indexa. Devolve
 /// (tempdir, conn, folder_id).
 fn setup() -> (tempfile::TempDir, Connection, i64) {
     let dir = tempfile::tempdir().unwrap();
-    let src = fixtures_dir();
     for name in ["com_letra.mp3", "sem_letra.mp3", "sem_tags.mp3"] {
-        fs::copy(src.join(name), dir.path().join(name)).unwrap();
+        copy_fixture(name, &dir.path().join(name));
     }
     let conn = db::open_in_memory().unwrap();
     let folder_id = db::add_folder(&conn, dir.path().to_str().unwrap()).unwrap();
@@ -335,7 +330,7 @@ fn write_tags_preserves_pastas_for_file_in_subfolder() {
     let dir = tempfile::tempdir().unwrap();
     let sub = dir.path().join("Barco");
     fs::create_dir_all(&sub).unwrap();
-    fs::copy(fixtures_dir().join("com_letra.mp3"), sub.join("com_letra.mp3")).unwrap();
+    copy_fixture("com_letra.mp3", &sub.join("com_letra.mp3"));
 
     let conn = db::open_in_memory().unwrap();
     let folder_id = db::add_folder(&conn, dir.path().to_str().unwrap()).unwrap();

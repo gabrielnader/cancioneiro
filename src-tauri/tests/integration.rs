@@ -7,13 +7,8 @@ use rusqlite::Connection;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-fn fixtures_dir() -> PathBuf {
-    // src-tauri/tests -> repo root/fixtures
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("fixtures")
-}
+mod common;
+use common::{copy_fixture, fixtures_dir};
 
 fn test_conn() -> Connection {
     let conn = db::open_in_memory().expect("open in-memory db");
@@ -23,12 +18,11 @@ fn test_conn() -> Connection {
 /// Copia as 3 fixtures MP3 válidas + a corrompida para um tempdir.
 fn setup_music_dir(include_corrupt: bool) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
-    let src = fixtures_dir();
     for name in ["com_letra.mp3", "sem_letra.mp3", "sem_tags.mp3"] {
-        fs::copy(src.join(name), dir.path().join(name)).unwrap();
+        copy_fixture(name, &dir.path().join(name));
     }
     if include_corrupt {
-        fs::copy(src.join("corrompido.mp3"), dir.path().join("corrompido.mp3")).unwrap();
+        copy_fixture("corrompido.mp3", &dir.path().join("corrompido.mp3"));
     }
     dir
 }
@@ -477,36 +471,39 @@ fn scan_reads_letra_origem_marker_and_leaves_unmarked_files_absent() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// V8/F17 — round-trip da marca de instrumental: a curadoria grava
-// TXXX:INSTRUMENTAL = "1" no MP3 e o indexer lê esse frame como os demais
-// TXXX. Arquivo sem a marca (ou com o desmarque explícito "0") NÃO é
-// instrumental — o app nunca deduz isso de "não tem letra".
-// ---------------------------------------------------------------------------
-#[test]
-fn scan_reads_instrumental_marker_and_leaves_unmarked_files_absent() {
+/// Grava TXXX:INSTRUMENTAL = `valor` no MP3, preservando os demais frames —
+/// o jeito como uma ferramenta QUALQUER (não a nossa) deixaria a marca.
+fn marcar_instrumental(path: &Path, valor: &str) {
     use lofty::config::{ParseOptions, WriteOptions};
     use lofty::file::AudioFile;
     use lofty::tag::TagExt;
 
-    fn marcar(path: &Path, valor: &str) {
-        let mut tag = lofty::mpeg::MpegFile::read_from(
-            &mut fs::File::open(path).unwrap(),
-            ParseOptions::new(),
-        )
-        .unwrap()
-        .id3v2()
-        .cloned()
-        .unwrap_or_default();
-        tag.insert_user_text("INSTRUMENTAL".to_string(), valor.to_string());
-        tag.save_to_path(path, WriteOptions::default()).unwrap();
-    }
+    let mut tag =
+        lofty::mpeg::MpegFile::read_from(&mut fs::File::open(path).unwrap(), ParseOptions::new())
+            .unwrap()
+            .id3v2()
+            .cloned()
+            .unwrap_or_default();
+    tag.insert_user_text("INSTRUMENTAL".to_string(), valor.to_string());
+    tag.save_to_path(path, WriteOptions::default()).unwrap();
+}
 
+// ---------------------------------------------------------------------------
+// V8/F17 — round-trip da marca de instrumental: a curadoria grava
+// TXXX:INSTRUMENTAL = "1" no MP3 e o indexer lê esse frame como os demais
+// TXXX. Arquivo SEM o frame não é instrumental — o app nunca deduz isso de
+// "não tem letra", e remover o frame é como as duas ferramentas do produto
+// desmarcam (nenhuma delas escreve "0" em lugar nenhum).
+// ---------------------------------------------------------------------------
+#[test]
+fn scan_reads_instrumental_marker_and_leaves_unmarked_files_absent() {
     let dir = setup_music_dir(false);
     // uma música sem voz, marcada pela curadoria
-    marcar(&dir.path().join("sem_letra.mp3"), "1");
-    // e um desmarque explícito ("--nao-instrumental" do embed_lyrics.py)
-    marcar(&dir.path().join("sem_tags.mp3"), "0");
+    marcar_instrumental(&dir.path().join("sem_letra.mp3"), "1");
+    // e um "0" de OUTRO tagger: as nossas ferramentas desmarcam removendo o
+    // frame, mas o arquivo passa por outras mãos e um "0" tem de ser lido
+    // como "não é" — não como um valor desconhecido que vira marca.
+    marcar_instrumental(&dir.path().join("sem_tags.mp3"), "0");
 
     let conn = test_conn();
     let folder_id = db::add_folder(&conn, dir.path().to_str().unwrap()).unwrap();
@@ -522,7 +519,7 @@ fn scan_reads_instrumental_marker_and_leaves_unmarked_files_absent() {
     assert!(por_nome("sem_letra.mp3").instrumental, "marca lida do TXXX");
     assert!(
         !por_nome("sem_tags.mp3").instrumental,
-        "\"0\" é desmarque explícito, não marca"
+        "\"0\" é valor falso, não marca"
     );
     // sem o frame: não é instrumental (mesmo tendo letra ou não)
     assert!(!por_nome("com_letra.mp3").instrumental);
@@ -535,6 +532,67 @@ fn scan_reads_instrumental_marker_and_leaves_unmarked_files_absent() {
         .find(|s| s.file_path.ends_with("sem_letra.mp3"))
         .unwrap()
         .instrumental);
+}
+
+// ---------------------------------------------------------------------------
+// V8/F17 — o conjunto EXATO de valores que conta como marca. Não é preciosismo
+// de parser: os dois stacks leem o mesmo arquivo, e uma divergência aqui faz o
+// Python mandar para a fila de letra um arquivo que o app mostra como
+// instrumental (ou o contrário). O critério da assimetria é o custo do erro:
+// desrespeitar a marca devolve a peça sem voz à varredura e ela acaba
+// recebendo a letra da versão cantada — por isso, na dúvida, é marca.
+// ---------------------------------------------------------------------------
+#[test]
+fn instrumental_marker_recognizes_the_same_value_set_as_the_python_tool() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = fixtures_dir().join("sem_letra.mp3");
+
+    // (valor gravado no frame, é marca?)
+    let casos: &[(&str, bool)] = &[
+        ("1", true),
+        ("true", true),
+        ("sim", true),
+        ("SIM", true),
+        ("yes", true),
+        ("0", false),
+        ("false", false),
+        ("FALSE", false),
+        ("nao", false),
+        ("não", false),
+        ("NÃO", false),
+        ("  1  ", true),  // espaço em volta não muda nada
+        ("   ", false),   // frame em branco conta como ausente
+    ];
+
+    for (i, (valor, _)) in casos.iter().enumerate() {
+        let dest = dir.path().join(format!("caso{i}.mp3"));
+        fs::copy(&src, &dest).unwrap();
+        marcar_instrumental(&dest, valor);
+    }
+    // e um arquivo SEM o frame: o estado normal, e o que sobra depois de
+    // desmarcar em qualquer uma das duas ferramentas
+    fs::copy(&src, dir.path().join("sem_frame.mp3")).unwrap();
+
+    let conn = test_conn();
+    let folder_id = db::add_folder(&conn, dir.path().to_str().unwrap()).unwrap();
+    indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
+    let songs = db::list_songs(&conn).unwrap();
+    let por_nome = |nome: &str| {
+        songs
+            .iter()
+            .find(|s| s.file_path.ends_with(nome))
+            .unwrap_or_else(|| panic!("{nome} deveria estar indexada"))
+            .instrumental
+    };
+
+    for (i, (valor, esperado)) in casos.iter().enumerate() {
+        assert_eq!(
+            por_nome(&format!("caso{i}.mp3")),
+            *esperado,
+            "TXXX:INSTRUMENTAL = {valor:?}"
+        );
+    }
+    assert!(!por_nome("sem_frame.mp3"), "sem frame não é instrumental");
 }
 
 // ---------------------------------------------------------------------------
@@ -720,4 +778,83 @@ fn duration_is_extracted_for_valid_fixtures() {
         .unwrap();
     let d = com_letra.duration_seconds.expect("duração extraída");
     assert!((1..=6).contains(&d), "duração fora do esperado: {d}");
+}
+
+// ---------------------------------------------------------------------------
+// V8/F17 — round-trip REAL da marca de instrumental, atravessando os dois
+// stacks: quem marca é o `tools/embed_lyrics.py --instrumental` (o caminho
+// da curadoria), quem lê é o indexer.
+//
+// Por que este teste e não só o de leitura: os outros dois round-trips
+// (USLT, TXXX:TEMAS) cobrem campos que, se divergirem, produzem uma letra
+// faltando ou um tema a menos. A marca de instrumental decide se um arquivo
+// entra ou não em toda etapa de letra — se o Python gravar de um jeito que o
+// Rust não reconhece, a marca simplesmente não faz nada, e a peça sem voz
+// volta a receber a letra da versão cantada. Até aqui ela só era testada com
+// um frame escrito pelo próprio lofty, o que não prova nada sobre a Python.
+//
+// E o desmarque também: `--nao-instrumental` REMOVE o frame (não escreve
+// "0"), e o indexer tem de voltar a ler "não é instrumental".
+// ---------------------------------------------------------------------------
+#[test]
+fn roundtrip_instrumental_mark_written_by_the_python_script() {
+    use std::process::Command;
+
+    let script = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .join("tools/embed_lyrics.py");
+
+    let dir = setup_music_dir(false);
+    let alvo = dir.path().join("sem_letra.mp3");
+
+    let rodar = |flag: &str| {
+        let out = Command::new("python3")
+            .arg(&script)
+            .arg(&alvo)
+            .arg(flag)
+            .output()
+            .unwrap_or_else(|e| panic!("python3 {script:?} {flag}: {e}"));
+        assert!(
+            out.status.success(),
+            "embed_lyrics.py {flag} falhou: {}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+
+    let conn = test_conn();
+    let folder_id = db::add_folder(&conn, dir.path().to_str().unwrap()).unwrap();
+    let instrumental_agora = |conn: &Connection| {
+        indexer::scan_folder(conn, folder_id, |_, _| {}).unwrap();
+        db::list_songs(conn)
+            .unwrap()
+            .into_iter()
+            .find(|s| s.file_path.ends_with("sem_letra.mp3"))
+            .expect("sem_letra.mp3 indexada")
+            .instrumental
+    };
+
+    assert!(!instrumental_agora(&conn), "sem a marca, não é instrumental");
+
+    rodar("--instrumental");
+    assert!(
+        instrumental_agora(&conn),
+        "o indexer não reconheceu a marca gravada pelo embed_lyrics.py"
+    );
+
+    rodar("--nao-instrumental");
+    assert!(
+        !instrumental_agora(&conn),
+        "o desmarque do embed_lyrics.py (remoção do frame) não foi lido"
+    );
+
+    // e a marca não é dedução de "não tem letra": o arquivo continua sem
+    // letra nos três estados acima
+    assert!(!db::list_songs(&conn)
+        .unwrap()
+        .into_iter()
+        .find(|s| s.file_path.ends_with("sem_letra.mp3"))
+        .unwrap()
+        .has_lyrics);
 }

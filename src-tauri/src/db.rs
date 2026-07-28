@@ -170,11 +170,30 @@ fn strip_diacritic(c: char) -> char {
     }
 }
 
+/// Marca combinante do bloco "Combining Diacritical Marks" (U+0300–U+036F):
+/// o acento SOLTO da forma decomposta (NFD), onde "ç" é "c" + U+0327.
+///
+/// Isto existe porque o macOS — a plataforma do dono do produto — entrega os
+/// caminhos de arquivo em NFD, enquanto as tags ID3 e o Windows usam a forma
+/// precomposta (NFC). `strip_diacritic` só conhece os caracteres
+/// precompostos; sem descartar as marcas soltas, `fold_pt("Coração")` daria
+/// duas chaves diferentes para a mesma palavra dependendo de onde ela veio.
+fn is_combining_mark(c: char) -> bool {
+    matches!(c, '\u{0300}'..='\u{036F}')
+}
+
 /// Minúsculas + sem acento — chave de comparação/ordenação pt-BR. Reusada
-/// pelo writer (normalização de temas, F10) e pelo lyrics_fetch (similaridade).
+/// pelo writer (normalização de temas, F10), pelo lyrics_fetch (similaridade)
+/// e pelo indexer (nome de arquivo redundante).
+///
+/// "Sem acento" vale para as DUAS formas Unicode: o acento precomposto sai
+/// pelo `strip_diacritic` e o decomposto (NFD) sai como marca combinante.
+/// Sem isso, o mesmo "Coração" gera chaves diferentes conforme venha de um
+/// caminho de arquivo do macOS ou de uma tag ID3.
 pub(crate) fn fold_pt(s: &str) -> String {
     s.chars()
         .flat_map(char::to_lowercase)
+        .filter(|c| !is_combining_mark(*c))
         .map(strip_diacritic)
         .collect()
 }
@@ -560,6 +579,31 @@ pub fn get_playlist_items(conn: &Connection, playlist_id: i64) -> Result<Vec<Pla
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Um "ç" pode chegar como U+00E7 (NFC, o que o Windows e as tags ID3
+    // costumam usar) ou como "c" + U+0327 (NFD, o que o macOS entrega nos
+    // caminhos de arquivo) — e o macOS é a plataforma que o dono do produto
+    // usa. Para uma pessoa lendo a tela é a MESMA palavra, e fold_pt promete
+    // exatamente "minúsculas + sem acento": tem de devolver a mesma chave
+    // para as duas formas, senão toda comparação construída sobre ela
+    // (ordenação ptbr, dedup de temas, similaridade de letra, supressão do
+    // nome de arquivo redundante) trata uma palavra como duas.
+    #[test]
+    fn fold_pt_gives_the_same_key_for_nfc_and_nfd() {
+        let nfc = "Coração"; // C-o-r-a-ç-ã-o precomposto
+        let nfd = "Corac\u{0327}a\u{0303}o"; // como o macOS entrega no path
+        assert_eq!(fold_pt(nfc), "coracao");
+        assert_eq!(fold_pt(nfd), "coracao");
+        assert_eq!(fold_pt(nfd), fold_pt(nfc));
+
+        // e a chave continua distinguindo palavras que são mesmo diferentes
+        assert_ne!(fold_pt("Ponto de Ogum"), fold_pt("Ponto de Oxum"));
+
+        // ordenação ptbr: NFD não pode ir parar depois de tudo
+        let mut nomes = vec!["Zebra", nfd, "Barco"];
+        nomes.sort_by(|a, b| fold_pt(a).cmp(&fold_pt(b)));
+        assert_eq!(nomes, vec!["Barco", nfd, "Zebra"]);
+    }
 
     #[test]
     fn schema_initializes_with_fts5_and_foreign_keys() {

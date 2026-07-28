@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
 
 /**
  * E2E dos fluxos críticos (seção 8 do PRD) — frontend real + IPC mockado.
@@ -335,11 +336,135 @@ test.describe("Fluxo crítico: indexar → buscar → ver letra → tocar", () =
   });
 });
 
-test.describe("Cabeçalho: botão de detalhes x campo de busca", () => {
+test.describe("Cabeçalho: o botão flutuante de detalhes x o conteúdo das views", () => {
   // Relato de uso real: o botão "Ocultar/Mostrar detalhes" montava em cima do
-  // campo de busca e ficava desalinhado. Ele é flutuante (precisa existir em
-  // todas as views), então a única garantia real é medir as duas caixas.
-  test("o botão não invade o campo de busca, com o painel aberto ou fechado", async ({
+  // campo de busca. Ele é FLUTUANTE (precisa existir em todas as views —
+  // decisão 25), então cada view tem de reservar a faixa dele, e a única
+  // garantia real é medir as caixas.
+  //
+  // A primeira versão deste teste media SÓ a LibraryView, SÓ a 1280 — e
+  // passava enquanto a Playlist tinha o "Excluir playlist" 72 px por baixo do
+  // botão a 1024. Um teste que cobre uma view de uma família de três dá
+  // exatamente a confiança errada. Agora: as TRÊS views, nas duas pontas da
+  // largura suportada, com o painel aberto e fechado, contra QUALQUER
+  // elemento interativo da faixa do botão.
+  //
+  // As duas larguras: 1280 é a janela típica (o padrão do app é 1200) e 1024
+  // é o `minWidth` do tauri.conf.json — o mais estreito que a janela do
+  // produto chega a ser. Abaixo disso não é caso do produto (ver o teste
+  // seguinte).
+  const LARGURAS = [1280, 1024];
+
+  // A faixa reservada (--faixa-detalhes, index.css) foi dimensionada para a
+  // janela do produto, cujo piso é o `minWidth` do tauri.conf.json. Abaixo
+  // dele, com o painel aberto, o botão flutuante chega a cobrir o campo de
+  // busca inteiro — mas a janela não pode ficar tão estreita, e o modo web
+  // (onde ela pode) é ferramenta de desenvolvimento, não o produto.
+  //
+  // Só que essa justificativa depende de um número que mora em OUTRO
+  // arquivo. Se alguém baixar o minWidth, este teste passa a mentir em
+  // silêncio — então ele confere o número.
+  test("a largura mínima testada é mesmo o piso da janela do produto", () => {
+    const conf = JSON.parse(
+      readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf-8"),
+    );
+    const minWidth = conf.app.windows[0].minWidth;
+    expect(
+      minWidth,
+      "o minWidth da janela mudou: refaça a conta de --faixa-detalhes e " +
+        "ajuste LARGURAS — abaixo de 1024 o botão flutuante cobre a busca",
+    ).toBe(Math.min(...LARGURAS));
+  });
+
+  /** Sobreposição em px entre duas caixas (0 quando não se tocam). */
+  function sobreposicao(a: Box, b: Box) {
+    return {
+      x: Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x),
+      y: Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y),
+    };
+  }
+
+  type Box = { x: number; y: number; width: number; height: number };
+
+  /**
+   * Falha se qualquer elemento interativo do <main> encostar no botão.
+   * Não é uma lista de elementos conhecidos de propósito: um controle novo
+   * no cabeçalho de qualquer view tem de acordar este teste sozinho.
+   */
+  async function semSobreposicaoCom(page: Page, contexto: string) {
+    const botao = page.getByTestId("toggle-detalhes");
+    await expect(botao).toBeVisible();
+    const t = (await botao.boundingBox())!;
+
+    const alvos = await page.locator("main button, main input, main a").all();
+    const colisoes: string[] = [];
+    for (const alvo of alvos) {
+      if ((await alvo.getAttribute("data-testid")) === "toggle-detalhes") continue;
+      const b = await alvo.boundingBox();
+      if (!b) continue;
+      const o = sobreposicao(t, b);
+      if (o.x > 0 && o.y > 0) {
+        const nome =
+          (await alvo.getAttribute("aria-label")) ??
+          (await alvo.getAttribute("placeholder")) ??
+          ((await alvo.textContent()) || "?").trim();
+        colisoes.push(
+          `"${nome}" coberto em ${Math.round(o.x)}x${Math.round(o.y)} px` +
+            ` (elemento x=${Math.round(b.x)}..${Math.round(b.x + b.width)},` +
+            ` botão x=${Math.round(t.x)}..${Math.round(t.x + t.width)})`,
+        );
+      }
+    }
+    expect(colisoes, `${contexto}: o botão flutuante cobre controles`).toEqual([]);
+  }
+
+  test("nenhuma das três views deixa o botão cobrir um controle, em 1280 e 1024", async ({
+    page,
+  }) => {
+    await resetApp(page);
+    await addMockFolder(page);
+    // uma playlist de verdade: é o cabeçalho mais cheio das três views
+    await page.getByRole("button", { name: "Nova playlist" }).click();
+    await page.getByPlaceholder("Nome da playlist").fill("Encontro de sábado");
+    await page.getByRole("button", { name: "Criar" }).click();
+
+    const views: [string, () => Promise<void>][] = [
+      [
+        "Biblioteca",
+        async () => {
+          await page.getByRole("button", { name: "Biblioteca", exact: true }).click();
+        },
+      ],
+      [
+        "Playlist",
+        async () => {
+          await page.getByRole("button", { name: /Encontro de sábado/ }).first().click();
+        },
+      ],
+      [
+        "Configurações",
+        async () => {
+          await page.getByRole("button", { name: "Configurações" }).click();
+        },
+      ],
+    ];
+
+    for (const largura of LARGURAS) {
+      await page.setViewportSize({ width: largura, height: 760 });
+      for (const painel of ["aberto", "fechado"]) {
+        for (const [nome, abrir] of views) {
+          await abrir();
+          await semSobreposicaoCom(page, `${nome} @ ${largura}px, painel ${painel}`);
+        }
+        if (painel === "aberto") {
+          await page.getByTestId("toggle-detalhes").click();
+        }
+      }
+      await page.getByTestId("toggle-detalhes").click(); // reabre para a próxima largura
+    }
+  });
+
+  test("na Biblioteca o botão fica alinhado com o campo de busca, aberto ou fechado", async ({
     page,
   }) => {
     await resetApp(page);
@@ -348,20 +473,27 @@ test.describe("Cabeçalho: botão de detalhes x campo de busca", () => {
     const busca = page.getByPlaceholder("Buscar por letra, título ou artista…");
     const botao = page.getByTestId("toggle-detalhes");
 
-    for (const estado of ["aberto", "fechado"]) {
-      const b = (await busca.boundingBox())!;
-      const t = (await botao.boundingBox())!;
-      expect(
-        t.x,
-        `[${estado}] botão invade o campo de busca`,
-      ).toBeGreaterThanOrEqual(b.x + b.width);
-      // alinhados na mesma linha: topos coincidem e alturas batem
-      expect(Math.abs(t.y - b.y), `[${estado}] topos desalinhados`).toBeLessThanOrEqual(2);
-      expect(
-        Math.abs(t.height - b.height),
-        `[${estado}] alturas diferentes`,
-      ).toBeLessThanOrEqual(2);
-      if (estado === "aberto") await botao.click();
+    for (const largura of LARGURAS) {
+      await page.setViewportSize({ width: largura, height: 760 });
+      for (const estado of ["aberto", "fechado"]) {
+        const contexto = `[${largura}px, ${estado}]`;
+        const b = (await busca.boundingBox())!;
+        const t = (await botao.boundingBox())!;
+        expect(t.x, `${contexto} botão invade o campo de busca`).toBeGreaterThanOrEqual(
+          b.x + b.width,
+        );
+        // alinhados na mesma linha: topos coincidem e alturas batem
+        expect(Math.abs(t.y - b.y), `${contexto} topos desalinhados`).toBeLessThanOrEqual(2);
+        expect(
+          Math.abs(t.height - b.height),
+          `${contexto} alturas diferentes`,
+        ).toBeLessThanOrEqual(2);
+        // o campo continua utilizável: reservar a faixa não pode espremer a
+        // busca a ponto de não caber nem uma palavra
+        expect(b.width, `${contexto} campo de busca espremido`).toBeGreaterThanOrEqual(160);
+        if (estado === "aberto") await botao.click();
+      }
+      await botao.click(); // reabre para a próxima largura
     }
   });
 });
@@ -955,6 +1087,47 @@ test.describe("V8 — Marca de instrumental (F17)", () => {
 
     await expect(lista.getByText("Instrumental", { exact: true })).toHaveCount(2);
     await expect(lista.getByText("Sem letra", { exact: true })).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+
+  // "Todas as etapas de letra pulam o arquivo — [...] e a varredura em lote
+  // do app" (PRD V8/F17). Este é o caminho onde errar custa mais caro: uma
+  // peça sem voz com título e artista certos casa com a versão CANTADA no
+  // LRCLIB, sai com confiança ALTA — e ALTA chega PRÉ-MARCADA na tela de
+  // revisão (DECISIONS #49). Um clique em "Aplicar" e a letra de outra
+  // gravação entra no arquivo de quem não pediu nada.
+  test("a varredura em lote não propõe letra para música instrumental", async ({
+    page,
+  }) => {
+    const errors = trackErrors(page);
+    await resetApp(page);
+    await addMockFolder(page);
+
+    // sem a marca, esta música é a candidata MÉDIA "com letra encontrada"
+    // (é assim que o teste da F13 a usa) — o contraste é o ponto do teste
+    await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__CANCIONEIRO_MOCK__._markAsInstrumental(
+        "/musicas/mock/sem_letra.mp3",
+      );
+    });
+    await page.reload();
+
+    await page
+      .getByRole("button", { name: "Completar dados da biblioteca" })
+      .click();
+
+    const dialog = page.getByRole("dialog", { name: "Completar dados" });
+    // sobra só a sem_tags: a instrumental não é candidata nem no total
+    await expect(
+      dialog.getByText("1 proposta — 0 alta, 0 média, 1 baixa"),
+    ).toBeVisible();
+    await expect(dialog.getByText("Instrumental Sem Letra")).toHaveCount(0);
+    await expect(
+      dialog.getByRole("checkbox", {
+        name: "Aplicar proposta: Instrumental Sem Letra",
+      }),
+    ).toHaveCount(0);
     expect(errors).toEqual([]);
   });
 });

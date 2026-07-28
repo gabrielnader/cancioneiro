@@ -31,11 +31,10 @@ export function LibraryView() {
 
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col bg-[#F9FAFB]">
-      {/* pr reserva a faixa do botão flutuante "Ocultar/Mostrar detalhes"
-          (App.tsx). Com pr-36 o texto do botão não cabia e ele invadia o
-          campo de busca; a folga aqui é proposital e o E2E mede a
-          sobreposição das duas caixas. */}
-      <div className="shrink-0 p-4 pb-2 pr-56">
+      {/* Reserva a faixa do botão flutuante "Ocultar/Mostrar detalhes"
+          (App.tsx) — a mesma medida das outras duas views, definida uma vez
+          só em index.css. O E2E mede a sobreposição das caixas. */}
+      <div className="shrink-0 p-4 pb-2 pr-[var(--faixa-detalhes)]">
         <SearchBar />
         {isRealSearch && !isEmptyLibrary && (
           <p className="mt-2 text-[13px] text-[#6B7280]">
