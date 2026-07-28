@@ -82,6 +82,31 @@ Resumo: 94 arquivos | 31 identificadas | 12 letras oficiais | 48 sem resultado |
   quando a API permitir.
 - Progresso `[12/94]` por arquivo; Ctrl-C encerra com `Resumo:` e CSV gravado.
 
+## Resultado medido no acervo real (94 arquivos, Mac M2)
+
+```
+Resumo: 94 arquivos | 15 identificadas | 1 letras oficiais | 76 sem resultado | 1 conflitos | 2 erros
+```
+
+**23 segundos** para os 94 arquivos — a estimativa previu o mesmo. 16% de
+identificação num acervo majoritariamente de nicho, contra ~3% do LRCLIB
+sozinho, e a um trigésimo do custo da transcrição. Conclusões que mudaram o
+código nesta rodada:
+
+- Dos 8 "conflitos" da primeira execução, **6 eram a mesma música com outra
+  grafia** ("Raízes de América"/"Raíces de América"). Comparação exata era
+  rígida demais: virou similaridade + contenção, e a contagem caiu para 1 —
+  justamente "Satania"/"Sabrina", músicas diferentes do mesmo artista.
+- Tag de ripador **com sujeira em volta** ("04 Faixa 4 Artista Desconheci",
+  truncada pelo ID3) não era reconhecida como lixo e bloqueava identificação
+  boa.
+- ~14 arquivos deram impressão digital casada com pontuação alta (0,88–0,98)
+  mas **sem metadados de gravação** no AcoustID: a base conhece o áudio e não
+  sabe o nome dele. Nada a fazer do nosso lado — é o teto da técnica para este
+  repertório, e o motivo de a transcrição continuar necessária.
+- Só **1 letra oficial** entre as 15 identificadas: o LRCLIB não tem este
+  repertório, como o experimento da V5 já indicava.
+
 ## F15.1 — Estimativa antes de rodar
 
 Acervos grandes não podem ser encarados às cegas. Um modo de amostragem mede em
