@@ -81,24 +81,76 @@ olhando "Barco" e vai curar não precisa procurar "Barco" de novo.
   pasta": propostas com confiança, ALTA pré-marcada, conflito nunca aplicado
   sozinho.
 
-### O problema difícil: as dependências pesadas
+### Quem cura: 40 pessoas, não uma (decisão do dono do produto)
 
-`fpcalc` (impressão digital) e o modelo do Whisper (transcrição) não cabem no
-instalador de 5 MB, e compilá-los para as quatro plataformas do release é
-justamente o que a V5 evitou. Caminhos possíveis, a decidir com medição e não
-por gosto:
+Premissa corrigida no meio do projeto. O desenho anterior supunha **um**
+curador preparando acervos para os outros usarem. A realidade: são cerca de
+**40 pessoas, cada uma com seu próprio acervo**, e algumas coleções o dono do
+produto **não pode nem ver** — saber de antemão qual música alguém vai tocar
+numa sessão estragaria justamente o que aquele momento tem de bonito.
 
-1. **Só as etapas leves no app** (tags/nome, LRCLIB, Vagalume) e as pesadas
-   seguem no script. Entrega hoje, resolve a maior parte dos casos, mas deixa
-   a transcrição — que é a que mais rende neste acervo — de fora.
-2. **Baixar as dependências sob demanda**, na primeira vez que a pessoa pedir,
-   com aviso claro de tamanho e tempo. Mantém o instalador pequeno e o app
-   honesto sobre o que está fazendo.
-3. **Embutir tudo**, com instalador de centenas de MB. Simples de usar, caro de
-   distribuir e de manter em quatro plataformas.
+Consequências, todas obrigatórias:
 
-A recomendação é começar pela 1 e medir; a 2 é a evolução natural se o uso
-provar que vale.
+- **A curadoria é de cada um.** Não existe curadoria centralizada para
+  distribuir depois; cada pessoa cura o próprio acervo, na própria máquina.
+- **O terminal precisa desaparecer por completo.** Não é conforto: é
+  requisito. São pessoas que não sabem o que é um terminal, e não haverá
+  ninguém por perto para ajudar — o dono do produto sequer pode olhar o acervo
+  delas.
+- **Privacidade deixa de ser princípio abstrato e vira requisito de uso.**
+  Nada de telemetria, nada de acervo saindo da máquina, e as mensagens de erro
+  precisam se explicar sozinhas: não há suporte possível olhando os arquivos.
+- **O custo por pessoa importa mais.** Quarenta máquinas transcrevendo, várias
+  possivelmente modestas. A estimativa antes de rodar (F15.1) deixa de ser
+  conveniência e passa a ser parte do fluxo.
+
+### As dependências pesadas: baixar sob demanda (caminho 2)
+
+`fpcalc` (impressão digital) e o motor de transcrição não cabem num instalador
+de 5 MB, e embutir os dois para as quatro plataformas é o que a V5 evitou. Dos
+três caminhos considerados, o dono do produto escolheu o **2**: instalador
+pequeno, e o que for preciso é baixado na primeira vez que a pessoa pede.
+
+Como fica:
+
+1. A pessoa manda varrer uma pasta. O app diz, **antes**, o que vai precisar
+   baixar, quanto ocupa e quanto tempo estima — e só continua se ela aceitar.
+2. O download roda **em segundo plano**, sem travar busca nem reprodução, com
+   progresso visível e possibilidade de cancelar.
+3. Baixado uma vez, fica em cache no perfil do usuário. As varreduras seguintes
+   começam direto.
+
+**Nada de Python na máquina do usuário final.** O motor de transcrição precisa
+ser um executável autocontido por plataforma (whisper.cpp), publicado como
+artefato da release e baixado como acessório — não a biblioteca Python que o
+`curadoria.py` usa hoje. O mesmo vale para o `fpcalc`.
+
+**Integridade é obrigatória**: baixar e executar um binário exige verificação.
+O projeto já assina os pacotes de atualização (V7); os acessórios seguem o
+mesmo caminho — soma de verificação publicada na release e conferida antes de
+executar. Sem isso, um download comprometido viraria execução de código
+arbitrário na máquina de 40 pessoas.
+
+### Reindexação: automática, sem pedir nada
+
+Curadoria feita **dentro** do app já reindexa o arquivo na hora — é assim que
+a edição individual funciona desde a V4 (`write_tags` regrava a tag e
+reindexa). Portanto **não haverá popup pedindo para reindexar nem para
+reiniciar**: ao fim da varredura a biblioteca já está atualizada, e o aviso
+diz o que mudou ("47 músicas ganharam letra"), não uma tarefa a fazer.
+
+Pedir reindexação manual é resquício da época em que a curadoria acontecia
+fora do app. Enquanto o script existir, o botão "Reindexar tudo" continua em
+Configurações para quem mexeu nos arquivos por fora.
+
+### Ordem de entrega
+
+1. **Fase 1 — o que não precisa de acessório**: tags/nome de arquivo, LRCLIB e
+   Vagalume, mais a estimativa, o progresso em segundo plano e a tela de
+   revisão. Já tira o terminal de boa parte do caminho.
+2. **Fase 2 — os acessórios sob demanda**: `fpcalc` e o transcritor, com
+   download verificado, cache e cancelamento. É o que fecha a promessa de
+   "nunca mais um terminal".
 
 ## Invioláveis (inalterados)
 
