@@ -215,3 +215,50 @@ fn remedir_os_78_por_cento_com_o_whisper_cpp() {
          não-quantizado volta à mesa.\n"
     );
 }
+
+/// Imprime o JSON exato de tudo que a v0.10.0 faz cruzar para o frontend.
+/// Não é uma asserção — é documentação executável, para o contrato não
+/// precisar ser deduzido de `struct`s espalhadas por dois arquivos.
+#[test]
+#[ignore = "documentação: cargo test --test remedicao contrato -- --ignored --nocapture"]
+fn contrato_com_o_frontend() {
+    use cancioneiro_lib::enrich;
+    let mostrar = |nome: &str, v: serde_json::Value| {
+        println!("\n// {nome}\n{}", serde_json::to_string_pretty(&v).unwrap());
+    };
+    mostrar(
+        "enrich_count -> Contagem",
+        serde_json::to_value(enrich::Contagem {
+            total: 150,
+            sem_letra: 80,
+            segundos_estimados: 1020,
+            etapas: enrich::contar(
+                &db::open_in_memory().unwrap(),
+                "",
+                enrich::EtapasLigadas { som: true, vagalume: true, transcricao: true },
+            )
+            .unwrap()
+            .etapas,
+            transcricao_disponivel: true,
+        })
+        .unwrap(),
+    );
+    mostrar(
+        "enrich_folder_scan -> EnrichScanResult",
+        serde_json::to_value(enrich::EnrichScanResult {
+            propostas: vec![],
+            sem_perguntar_ao_som: 0,
+            sem_letra_no_fim: vec![12, 47],
+            segundos_de_transcricao: 10_800,
+        })
+        .unwrap(),
+    );
+    mostrar(
+        "transcrever_musicas -> TranscricaoResultado",
+        serde_json::to_value(enrich::TranscricaoResultado {
+            propostas: vec![],
+            razao_medida: Some(1.37),
+        })
+        .unwrap(),
+    );
+}
