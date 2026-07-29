@@ -461,3 +461,81 @@ opção mais simples que passa nos Acceptance Checks do PRD.
     é `#[tauri::command(async)]`. E a lição maior, que já tinha aparecido com
     o `vad_filter` e com o botão de detalhes: **suíte verde mede o que a
     suíte alcança — e nenhuma delas alcançava o app de verdade.**
+
+## V9/F18 fase 2 — os acessórios sob demanda e o funil em duas fases
+
+93. **O funil não é uma fila por custo: são DUAS FASES.** A impressão digital
+    estava ordenada no meio das fontes de letra, e isso era erro de
+    categoria — ela não devolve letra nenhuma, devolve **identidade**, que é
+    *entrada* de todas as outras. Fase A (que música é esta): etiquetas/nome
+    e som. Fase B (qual é a letra): LRCLIB, Vagalume, transcrição. Também sai
+    mais barato: sem nome conhecido são até 7 consultas ao LRCLIB, uma por
+    palpite; com o nome verdadeiro é **uma**. A ideia de um RETORNO (voltar às
+    etapas de letra depois do som), que chegou a entrar no PRD, some — a ordem
+    por fases resolve o mesmo problema sem o ciclo.
+94. **Inverter a ordem criou um risco novo, e ele está escrito**: o AcoustID e
+    o LRCLIB conferem pela MESMA evidência — duração. Quando o primeiro erra,
+    o segundo **confirma** o erro e devolve ALTA. Não são duas contas
+    independentes; é a mesma conta feita duas vezes. Por isso a régua de
+    aceitação do AcoustID não é afrouxável, nome recusado por ela não vaza
+    para a fase B, e letra achada por nome vindo do som tem **teto MÉDIA** —
+    MÉDIA não chega pré-marcada. Não temos taxa de falso positivo do AcoustID
+    neste repertório (16% é acerto, não é o mesmo número): **isso só se
+    reverte com medição, não com argumento.**
+95. **Etiqueta ERRADA é modo de falha distinto de etiqueta faltando.** Caso
+    real: "Te ver feliz, te ver contente" / "Caetano Veloso" que é "Viver
+    Feliz" do Nilson Chaves. Nada ali é placeholder, então a música era
+    julgada completa e o erro ficava invisível **para sempre** — e quem não
+    conhece o repertório nunca desconfia; a música só não aparece quando
+    procuram. Duas populações que o projeto tratava como uma: nunca publicada
+    (só a transcrição resolve) e publicada mal etiquetada (todas as bases
+    têm; nós é que procurávamos pelo nome errado). Daí o **modo de
+    conferência**, que é trabalho distinto, com custo distinto, disparado de
+    propósito — e o **conflito**, que mostra os dois lados e nunca corrige
+    sozinho.
+96. **Baixar e executar binário exige provar as três coisas separadamente**:
+    que baixou, que é o arquivo certo, e que **executa**. Hash confere as duas
+    primeiras e não diz nada sobre a terceira — o macOS recusa executável sem
+    assinatura, com regra mais estrita no Apple Silicon. Daí um fluxo de
+    fumaça que baixa, confere e **roda** o acessório sobre um MP3 real em
+    macOS Apple Silicon, macOS Intel, Windows e Linux. Mesma família da
+    decisão 92: defeito que só existe dentro do binário, no sistema
+    operacional real, onde nenhuma das quatro suítes alcança.
+97. **O arquivo só entra no cache depois de conferido**, e a guarda que apaga
+    o temporário roda em qualquer saída que não seja sucesso, inclusive
+    pânico. Um quarto estado, `Indisponivel`, foi acrescentado ao trio
+    ausente/pronto/corrompido: baixar 5 MB para então dizer "o arquivo não
+    confere" é **acusação falsa** quando o problema é que este build não tem
+    chave para usá-lo. É a família das decisões 84 e 86 — não afirmar o que
+    não se sabe — aplicada a um estado de máquina.
+98. **`option_env!` lê variável de ambiente de compilação, e segredo de
+    repositório não vira variável sozinho.** O PRD dizia que a chave entrava
+    no binário em tempo de build; o código lia o lugar certo; **o passo do
+    fluxo que põe o valor lá nunca foi escrito**. Toda build do CI saía sem
+    chave — o que desligava a etapa do som, o que marcava o acessório como
+    indisponível, o que recusava o download: a entrega inteira nasceria
+    inerte. Nenhuma suíte veria, porque todas injetam a chave nos testes.
+    **Especificação e implementação podem estar certas e o produto errado, se
+    ninguém escreveu o pedaço que liga as duas.**
+99. **A tag agora tem de bater com a versão do aplicativo, e o CI recusa
+    quando não bate.** O `latest.json` sai com a versão do `tauri.conf.json`,
+    não com a tag: taguear v0.9.0 esquecendo o bump publicaria um manifesto
+    dizendo 0.8.1, o updater compararia `0.8.1 > 0.8.1`, daria falso, e a
+    release ficaria **publicada e invisível** — ninguém atualizaria e ninguém
+    perceberia, porque não há suporte a quem perguntar. Aconteceu nesta
+    rodada e só não saiu porque o QA pegou. **Lembrança não é mecanismo.**
+100. **Texto que ninguém lê não explica nada.** A copy foi escrita para
+    resolver "não existe suporte" e passou do ponto — relatado em campo como
+    "as mensagens estão muito longas". Régua nova, com teste: a primeira
+    frase diz o que é; o resto só existe se responder a uma pergunta que a
+    pessoa faria naquele momento; os desfechos cabem em 2 frases e 210
+    caracteres; e jargão nosso ("ferramentas de curadoria") não aparece. Duas
+    salvaguardas aprendidas no próprio passe: **conferir antes de encurtar**
+    (uma frase dizia que o app não reconhece música pelo som, e isso deixou
+    de ser verdade nesta versão) e **encurtar não é jogar fora** — os fatos
+    sobre onde a chave fica ficaram todos (decisão 84).
+101. **A tela lista o que ESTA máquina faz, não o que o produto sabe fazer.**
+    Sem o acessório baixado, a etapa do som não aparece no funil: listá-la
+    seria prometer trabalho que não vai acontecer. O princípio vale para
+    todas as etapas — inclusive as que dependem de chave embutida no build —,
+    e aplicá-lo a uma só foi o defeito que o QA apontou.
