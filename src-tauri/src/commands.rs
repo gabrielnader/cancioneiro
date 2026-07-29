@@ -757,12 +757,11 @@ pub fn transcrever_musicas(
     // O relógio da fila: é dele que sai o "faltam N minutos" honesto. Começa
     // antes da primeira música porque é isso que a pessoa está esperando.
     let inicio = std::time::Instant::now();
-    let restantes = std::sync::Mutex::new(song_ids.len());
     let id_evento = scan_id.clone();
     let progresso = |done: usize, total: usize, atual: &str, porcento: u8| {
-        if let Ok(mut r) = restantes.lock() {
-            *r = total.saturating_sub(done);
-        }
+        // a média por música JÁ FEITA — medição, não referência. Antes da
+        // primeira não há o que medir, e um número inventado seria pior que
+        // nenhum (DECISIONS #85).
         let segundos_restantes = (done > 0).then(|| {
             let por_musica = inicio.elapsed().as_secs_f64() / done as f64;
             (por_musica * (total - done) as f64).ceil() as u64
@@ -1363,12 +1362,19 @@ mod tests {
             sem_letra: 80,
             segundos_estimados: 1_020,
             etapas: vec!["lendo etiquetas e nome do arquivo".into()],
+            transcricao_disponivel: false,
         };
         let json = serde_json::to_value(&contagem).unwrap();
         let campos: Vec<&String> = json.as_object().unwrap().keys().collect();
         assert_eq!(
             campos,
-            ["etapas", "segundos_estimados", "sem_letra", "total"],
+            [
+                "etapas",
+                "segundos_estimados",
+                "sem_letra",
+                "total",
+                "transcricao_disponivel"
+            ],
             "a contagem virou objeto: só o total não diz mais o tamanho do trabalho"
         );
         assert!(!json.as_object().unwrap().contains_key("modo"));

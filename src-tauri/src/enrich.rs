@@ -264,6 +264,11 @@ pub struct Contagem {
     /// As etapas que vão rodar, em pt-BR e na ordem do funil. A etapa 5 nunca
     /// está aqui: ela é perguntada no fim.
     pub etapas: Vec<String>,
+    /// A etapa 5 pode ser oferecida nesta máquina? (transcritor E modelo
+    /// prontos). É o que decide se a pergunta do fim existe ou se o que a tela
+    /// oferece é o download — combinar dois estados de acessório é uma regra, e
+    /// regra duplicada em duas linguagens diverge (DECISIONS #80).
+    pub transcricao_disponivel: bool,
 }
 
 /// A conta da estimativa, num lugar só.
@@ -1236,6 +1241,7 @@ pub fn contar(
         sem_letra,
         segundos_estimados: segundos_da_varredura(total, sem_letra, etapas),
         etapas: nomes_das_etapas(etapas),
+        transcricao_disponivel: etapas.transcricao,
     })
 }
 
@@ -1961,9 +1967,10 @@ where
         } else if cand.song.has_lyrics {
             // Letra existente não é substituída sem consentimento
             // (DECISIONS #79). A varredura já não manda estas músicas para cá;
-            // esta é a trava para quando alguém mandar mesmo assim.
+            // esta é a trava para quando alguém mandar mesmo assim — e as
+            // horas de CPU que ela economiza são reais.
             Desfecho::Erro {
-                mensagem: AVISO_LETRA_EXISTENTE.into(),
+                mensagem: AVISO_JA_TEM_LETRA.into(),
             }
         } else if !Path::new(&cand.song.file_path).is_file() {
             Desfecho::Erro {
@@ -2027,6 +2034,14 @@ pub struct TranscricaoResultado {
 /// Mensagem (pt-BR) de quem não é transcrito por já ter sido julgado sem voz.
 pub const AVISO_INSTRUMENTAL_NAO_TRANSCREVE: &str =
     "esta música está marcada como instrumental — não há letra a escrever";
+
+/// Mensagem (pt-BR) de quem não é transcrito por já ter letra. É frase
+/// própria, e não a da revisão em lote: aqui não há caixa de "substituir a
+/// letra atual" para marcar, e mandar procurar uma que não existe é pior que
+/// não dizer nada.
+pub const AVISO_JA_TEM_LETRA: &str =
+    "esta música já tem letra — apague a letra atual no editor se quiser \
+     escrevê-la de novo ouvindo o áudio";
 
 /// Converte o desfecho da etapa 5 numa proposta da MESMA forma que o resto do
 /// funil: a revisão é uma só.

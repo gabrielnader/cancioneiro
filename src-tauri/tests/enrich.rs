@@ -4405,9 +4405,16 @@ fn a_etapa_5_recusa_o_instrumental_e_a_musica_que_ja_tem_letra() {
     );
     assert_eq!(
         r.propostas[1].error.as_deref(),
-        Some(enrich::AVISO_LETRA_EXISTENTE)
+        Some(enrich::AVISO_JA_TEM_LETRA)
     );
     assert!(r.propostas.iter().all(|p| p.lyrics.is_none()));
+    // as duas frases são texto corrido, sem a quebra de linha do código
+    for msg in [
+        enrich::AVISO_INSTRUMENTAL_NAO_TRANSCREVE,
+        enrich::AVISO_JA_TEM_LETRA,
+    ] {
+        assert!(!msg.contains("  ") && !msg.contains('\n'), "{msg:?}");
+    }
 }
 
 /// Binário que não sobe é veredito sobre a MÁQUINA: reporta e desliga a etapa
