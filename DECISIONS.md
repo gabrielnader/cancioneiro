@@ -448,3 +448,16 @@ opção mais simples que passa nos Acceptance Checks do PRD.
     mesmo defeito — título assim, com artista real e letra, ainda é julgado
     "completo" e some da curadoria —, porque mexer nisso muda a contagem de
     candidatas e o gasto de rede de toda varredura: é trabalho da fase 2.
+92. **Comando síncrono do Tauri roda na thread principal, e a thread
+    principal desenha a janela**: as varreduras, a indexação e a gravação em
+    lote congelavam o app inteiro enquanto rodavam — sem repintura, sem
+    interação, com o cursor de "ocupado" do sistema. Relatado em campo como
+    "não vi barra de progresso em lugar algum". A barra existia, os eventos
+    estavam sendo emitidos e o E2E os cobria: **o E2E roda contra o mock no
+    navegador, onde não existe thread principal do Tauri para bloquear**.
+    Quatro suítes verdes, 205 testes no Rust, e nenhuma delas podia pegar
+    isto — é defeito que só existe dentro do binário. A regra ficou escrita
+    no `commands.rs`: comando que faz rede, percorre disco ou escreve arquivo
+    é `#[tauri::command(async)]`. E a lição maior, que já tinha aparecido com
+    o `vad_filter` e com o botão de detalhes: **suíte verde mede o que a
+    suíte alcança — e nenhuma delas alcançava o app de verdade.**

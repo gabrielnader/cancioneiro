@@ -10,6 +10,31 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use tauri::{AppHandle, Emitter, State};
 
+// ---------------------------------------------------------------------------
+// Por que alguns comandos são `#[tauri::command(async)]`
+// ---------------------------------------------------------------------------
+//
+// Comando SEM `async` roda na THREAD PRINCIPAL — a mesma que desenha a
+// janela. Enquanto ele não volta, o WebView não repinta e não recebe evento
+// nenhum: o app inteiro congela e o sistema operacional troca o cursor pelo
+// de "ocupado".
+//
+// Isso passou despercebido até o teste em campo da v0.8.0, e foi relatado
+// como "não vi barra de progresso em lugar algum, só o cursor rodando". A
+// barra existia, os eventos de progresso estavam sendo emitidos o tempo todo
+// e o E2E os cobria — mas o E2E roda contra o mock no navegador, onde não há
+// thread principal do Tauri para bloquear. **Nenhuma das quatro suítes podia
+// pegar isto**: é um defeito que só existe dentro do binário.
+//
+// A marca vai em todo comando que pode demorar mais que um quadro de vídeo:
+// as duas varreduras do funil (minutos, com rede), a indexação (que percorre
+// o disco) e a gravação de etiquetas — `enrich_apply` reescreve dezenas de
+// MP3s numa chamada só. Os demais são consultas de milissegundos ao SQLite, e
+// pagar uma troca de thread neles só somaria latência.
+//
+// A regra para quem vier depois: se o comando faz rede, percorre disco ou
+// escreve arquivo, ele é `(async)`.
+
 /// Estado global: conexão SQLite protegida por mutex + caminho do arquivo do
 /// banco (quando file-backed), para abrir conexões dedicadas de scan, + o
 /// registro das varreduras de enriquecimento em andamento (QA M4).
@@ -151,7 +176,7 @@ pub struct ScanResult {
     pub missing_folders: Vec<String>,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn add_folder(app: AppHandle, state: State<'_, Db>, path: String) -> Result<ScanResult> {
     let conn = state.scan_conn()?;
     let folder_id = db::add_folder(&conn, &path)?;
@@ -181,7 +206,7 @@ pub fn list_folders(state: State<'_, Db>) -> Result<Vec<Folder>> {
 
 /// Rescan incremental de todas as pastas (rodado na abertura e no botão
 /// "Reindexar tudo").
-#[tauri::command]
+#[tauri::command(async)]
 pub fn scan(app: AppHandle, state: State<'_, Db>) -> Result<ScanResult> {
     let conn = state.scan_conn()?;
     let outcome = indexer::scan_all(&conn, |done, total| {
@@ -288,7 +313,7 @@ pub fn reorder_playlist(
 /// salva pelo editor perdia, na volta, a marca que o funil tinha acabado de
 /// gravar. Ver `writer::write_tags_com_origem`.
 #[allow(clippy::too_many_arguments)]
-#[tauri::command]
+#[tauri::command(async)]
 pub fn write_tags(
     state: State<'_, Db>,
     song_id: i64,
@@ -430,7 +455,7 @@ fn chave(vagalume_key: Option<String>) -> String {
 /// Cancelável por `enrich_cancel_scan(scan_id)`: a varredura verifica a
 /// bandeira entre músicas e antes de cada consulta, e volta cedo com as
 /// propostas que já tiver.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn enrich_folder_scan(
     app: AppHandle,
     state: State<'_, Db>,
@@ -484,7 +509,7 @@ pub fn enrich_count(state: State<'_, Db>, folder_prefix: String) -> Result<usize
 /// de progresso com `scan_id` vazio (que a UI já descarta, por serem de uma
 /// varredura que não é a dela). Quem manda um id ganha os dois, pelo mesmo
 /// `enrich_cancel_scan(scan_id)` do lote.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn enrich_song_scan(
     app: AppHandle,
     state: State<'_, Db>,
@@ -528,7 +553,7 @@ pub fn enrich_cancel_scan(state: State<'_, Db>, scan_id: String) -> Result<()> {
 /// resultado por música (`song` = gravada e reindexada; `error` = falhou):
 /// falha numa música NÃO aborta o lote, então a UI fica em sincronia com o
 /// que realmente foi para o disco.
-#[tauri::command]
+#[tauri::command(async)]
 pub fn enrich_apply(
     state: State<'_, Db>,
     aplicacoes: Vec<crate::enrich::EnrichApply>,
