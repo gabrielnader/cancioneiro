@@ -66,14 +66,22 @@ jobs:
             -DWHISPER_BUILD_EXAMPLES=ON
           cmake --build build --config Release -j 4
 
-      - name: Achar o executável (o caminho muda entre plataformas e versões)
+      - name: Achar o executável (na ORDEM certa, que não é a do find)
+        # O whisper.cpp deixa um `main` obsoleto ao lado do `whisper-cli`: ele
+        # só imprime um aviso de depreciação e sai com erro. Um `find ... |
+        # head -1` pega o que o sistema de arquivos devolver primeiro — no
+        # macOS veio o certo, no Linux e no Windows veio o atalho, e a build
+        # "falhou" por um motivo que não tinha nada a ver com o whisper.
+        # Ordem explícita, do certo para o legado.
         shell: bash
         run: |
           set -euo pipefail
-          encontrado=$(find whisper/build -type f \
-            \( -name 'whisper-cli' -o -name 'whisper-cli.exe' \
-               -o -name 'main' -o -name 'main.exe' \) \
-            -not -path '*/CMakeFiles/*' | head -1)
+          encontrado=""
+          for padrao in whisper-cli whisper-cli.exe main main.exe; do
+            achado=$(find whisper/build -type f -name "$padrao" \
+              -not -path '*/CMakeFiles/*' | sort | head -1)
+            if [ -n "$achado" ]; then encontrado="$achado"; break; fi
+          done
           if [ -z "$encontrado" ]; then
             echo "::error::não achei o executável do whisper.cpp"
             find whisper/build -type f -perm -u+x | head -40
@@ -84,8 +92,19 @@ jobs:
           chmod +x "${{ matrix.nome }}" || true
 
       - name: Provar que EXECUTA aqui mesmo (decisão 96)
+        # Vários programas de linha de comando imprimem a ajuda e saem com
+        # código diferente de zero — o que prova é a SAÍDA falar de whisper,
+        # não o código de retorno.
         shell: bash
-        run: ./${{ matrix.nome }} --help > /dev/null
+        run: |
+          set -uo pipefail
+          saida=$(./${{ matrix.nome }} --help 2>&1 || true)
+          printf '%s\n' "$saida" | head -5
+          printf '%s' "$saida" | grep -qi 'whisper' || {
+            echo "::error::o binário não se identifica como whisper"; exit 1; }
+          printf '%s' "$saida" | grep -qi 'deprecated' && {
+            echo "::error::isto é o atalho obsoleto, não o whisper-cli"; exit 1; }
+          echo "ok"
 
       - uses: actions/upload-artifact@v4
         with:
