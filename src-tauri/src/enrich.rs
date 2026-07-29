@@ -1479,7 +1479,7 @@ where
 
     let cortesia = Cortesia::nova(pausa);
     // QA MÉDIO-6 — vive pela varredura inteira, ao lado da cortesia: assim
-    // que a API recusa a chave, a etapa 3 se desliga para as músicas
+    // que a API recusa a chave, a etapa 4 se desliga para as músicas
     // seguintes.
     let chave_recusada = Cell::new(false);
     // ...e a mesma ideia para o som: acessório quebrado ou aplicativo

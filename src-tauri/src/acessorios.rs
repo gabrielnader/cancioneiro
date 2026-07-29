@@ -43,7 +43,7 @@ use std::path::{Path, PathBuf};
 //
 // TROCAR UMA SOMA DESLIGA O ACESSÓRIO PARA QUEM JÁ BAIXOU: o arquivo que
 // está no cache passa a ser considerado corrompido, e quem receber a
-// atualização vê a etapa 4 sumir sem ter a quem perguntar. Se o Chromaprint
+// atualização vê a etapa 2 sumir sem ter a quem perguntar. Se o Chromaprint
 // for atualizado um dia, o caminho é publicar `acessorios-v2` com tag NOVA e
 // trocar URL e somas de uma vez — nunca sobrescrever os ativos da v1 (o
 // próprio fluxo diz isso).
@@ -97,7 +97,7 @@ pub const CATALOGO: &[Acessorio] = &[
 //  fim do bloco a preencher
 // ===========================================================================
 
-/// Nome do acessório da etapa 4. É o que o frontend manda em
+/// Nome do acessório da etapa 2. É o que o frontend manda em
 /// `acessorio_baixar(nome)` e o que aparece nas mensagens.
 pub const FPCALC: &str = "fpcalc";
 
@@ -466,7 +466,7 @@ mod tests {
 
     /// Guarda de regressão: o catálogo publicado NÃO pode voltar a ter soma
     /// pendente nem tamanho zero. Uma soma zerada por um merge desligaria a
-    /// etapa 4 de todo mundo, e um tamanho zerado faria a tela prometer um
+    /// etapa 2 de todo mundo, e um tamanho zerado faria a tela prometer um
     /// download de 0 byte antes de baixar 5 MB.
     #[test]
     fn o_catalogo_publicado_nao_tem_nada_pendente() {

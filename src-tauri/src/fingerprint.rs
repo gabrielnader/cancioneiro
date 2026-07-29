@@ -1,4 +1,4 @@
-//! V9/F18 fase 2 — etapa 4 do funil: a impressão digital acústica.
+//! V9/F18 fase 2 — etapa 2 do funil: a impressão digital acústica.
 //!
 //! Porte do subcomando `identificar` do `tools/curadoria.py`
 //! (`criar_impressao_digital`, `consultar_acoustid`, `escolher_candidato`,
@@ -8,7 +8,7 @@
 //!
 //! # Por que esta etapa é diferente de todas as outras
 //!
-//! As etapas 2 e 3 partem da ETIQUETA e procuram a letra. Esta parte do SOM e
+//! As etapas 3 e 4 partem da ETIQUETA e procuram a letra. Esta parte do SOM e
 //! ignora a etiqueta por completo. É a única capaz de descobrir que a
 //! etiqueta MENTE — um arquivo com `title = "Te ver feliz, te ver contente"`
 //! e `artist = "Caetano Veloso"` que é, de verdade, "Viver Feliz" do Nilson
@@ -85,6 +85,23 @@ const TIMEOUT_FPCALC: Duration = Duration::from_secs(120);
 /// Acima disto, duas grafias são o MESMO nome ("Milionário & José Rico" x
 /// "Milionário y José Rico"). Calibrado no acervo real de 94 arquivos, onde
 /// 6 dos 8 conflitos eram a mesma música escrita de outro jeito.
+///
+/// **O número só vale porque `similarity` agora é o `difflib.ratio` do
+/// `tools/curadoria.py`** — foi contra ele que o 0,85 foi medido. Até a
+/// v0.9.0 a métrica daqui era outra (Dice de bigramas), e sete pares de nome
+/// curto do repertório viravam conflito à toa: ver a medição no cabeçalho de
+/// `lyrics_fetch`. Quem mexer numa das duas coisas mexe nas duas.
+///
+/// **O que esta régua NÃO faz**, e é preciso estar escrito: ela não distingue
+/// "Ponto de Oxum" de "Ponto de Ogum" (0,923) nem "Iemanjá" de "Iansã"
+/// dentro do mesmo título (0,867). São músicas diferentes e passam como
+/// mesma grafia, nas duas métricas testadas — a diferença entre dois orixás é
+/// semântica, e nenhuma comparação de caracteres a alcança. O modo de
+/// conferência, portanto, acha etiqueta MUITO errada, não etiqueta errada por
+/// uma letra. Absolver é o lado certo de errar: a etiqueta real é preservada
+/// de qualquer jeito (`identidade_do_som`), nada errado é gravado, e o que se
+/// perde é um aviso — enquanto condenar à toa faz o funil voltar antes das
+/// etapas de letra e deixa a música sem letra nenhuma.
 const LIMIAR_MESMA_GRAFIA: f64 = 0.85;
 
 /// Comprimento mínimo para o teste de contenção não absolver coincidência
@@ -126,7 +143,7 @@ pub struct Impressao {
     pub fingerprint: String,
 }
 
-/// O que a etapa 4 devolve: nomes, e só. Nunca letra.
+/// O que a etapa 2 devolve: nomes, e só. Nunca letra.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Identificacao {
     pub titulo: String,
@@ -353,14 +370,27 @@ pub fn discorda(atual: &str, identificado: &str) -> bool {
     if a == b {
         return false;
     }
-    let (curta, longa) = if a.len() <= b.len() { (&a, &b) } else { (&b, &a) };
-    if curta.chars().count() >= MIN_CONTENCAO && longa.contains(curta.as_str()) {
+    let (curta, longa) = curta_e_longa(&a, &b);
+    if curta.chars().count() >= MIN_CONTENCAO && longa.contains(curta) {
         return false;
     }
     similarity(&a, &b) < LIMIAR_MESMA_GRAFIA
 }
 
-/// Etapa 4 inteira, já com a impressão calculada: consulta o AcoustID e
+/// O par ordenado do menor para o maior, medindo em CARACTERES — o
+/// `sorted((a, b), key=len)` do Python, onde `len` de string conta
+/// caracteres. Ver o teste: a medida em bytes não muda veredito nenhum, mas
+/// duas linguagens que dizem a mesma regra precisam dizê-la igual
+/// (DECISIONS #80).
+fn curta_e_longa<'t>(a: &'t str, b: &'t str) -> (&'t str, &'t str) {
+    if a.chars().count() <= b.chars().count() {
+        (a, b)
+    } else {
+        (b, a)
+    }
+}
+
+/// Etapa 2 inteira, já com a impressão calculada: consulta o AcoustID e
 /// devolve a identificação confirmada, ou nada.
 ///
 /// Sem chave, nada acontece e nada falha (`Ok(None)`, zero rede).
@@ -664,13 +694,85 @@ mod tests {
         ));
         // música diferente do mesmo artista: continua conflito
         assert!(discorda("Satania", "Sabrina"));
-        assert!(discorda("Ponto de Oxum", "Ponto de Ogum"));
+        assert!(discorda("Asa Branca", "Asa Morena"));
+        assert!(discorda("Tim Maia", "Tom Jobim"));
         // contenção curta demais não absolve
         assert!(discorda("Sol", "Sol Nascente"));
         // campo vazio ou placeholder não contradiz nada
         assert!(!discorda("", "Asa Branca"));
         assert!(!discorda("Faixa 05", "Asa Branca"));
         assert!(!discorda("Asa Branca", ""));
+    }
+
+    /// QA A1 — a troca de UM caractere em nome curto, que é o modo de falha
+    /// mais comum de etiqueta brasileira, NÃO é contradição.
+    ///
+    /// Estes sete pares foram medidos dos dois lados: com o Dice de bigramas
+    /// que estava aqui, todos caíam abaixo de 0,85 e viravam CONFLITO; com o
+    /// `difflib.ratio` do `tools/curadoria.py` — o número que calibrou o 0,85
+    /// — todos passam. Um MP3 etiquetado "Asa Branca"/"Luis Gonzaga" que o
+    /// AcoustID identificava como "Luiz Gonzaga" saía em conflito, e o
+    /// conflito faz o funil voltar ANTES das etapas de letra: baixar o
+    /// acessório piorava o resultado da música (0 consultas ao LRCLIB, letra
+    /// nenhuma), e a tela acusava a etiqueta certa de estar errada.
+    #[test]
+    fn variacao_de_um_caractere_em_nome_curto_nao_e_conflito() {
+        const PARES: &[(&str, &str, f64, f64)] = &[
+            // (atual, identificado, difflib medido, Dice que condenava)
+            ("Luiz Gonzaga", "Luis Gonzaga", 0.9167, 0.8182),
+            ("Nilson Chaves", "Nilton Chaves", 0.9231, 0.8333),
+            ("Cabocla Jurema", "Cabocla Jurama", 0.9286, 0.8462),
+            ("Zé Pilintra", "Zé Pelintra", 0.9091, 0.8000),
+            ("Roda Viva", "Roda Vida", 0.8889, 0.7500),
+            ("Ponto de Oxum", "Ponto de Ogum", 0.9231, 0.8333),
+            ("Ponto de Iemanjá", "Ponto de Iansã", 0.8667, 0.7143),
+        ];
+        for (a, b, difflib, dice) in PARES {
+            assert!(*dice < LIMIAR_MESMA_GRAFIA, "{a:?}: o Dice condenava");
+            assert!(*difflib >= LIMIAR_MESMA_GRAFIA, "{a:?}: o difflib absolve");
+            assert!(!discorda(a, b), "{a:?} x {b:?} não é contradição");
+            assert!(!discorda(b, a), "e a régua é simétrica");
+        }
+    }
+
+    /// QA B7 — a ordenação do par mede em CARACTERES, como o Python.
+    ///
+    /// **Este não é um defeito com veredito observável, e o comentário diz
+    /// isso de propósito.** `longa.contains(curta)` só pode dar `true` quando
+    /// `curta` é subcadeia de `longa`, e subcadeia implica MENOS bytes; então
+    /// a ordenação por bytes escolhia sempre o mesmo lado que a por
+    /// caracteres escolheria — busca exaustiva sobre 160 mil pares de um
+    /// alfabeto misto (caracteres de 1 e de 3 bytes) devolveu ZERO
+    /// divergências de veredito. O que se conserta aqui é o PORTE: a próxima
+    /// pessoa que comparar as duas linguagens não deve gastar meia hora
+    /// provando de novo que a diferença é inócua. O `MIN_CONTENCAO` já media
+    /// em caracteres — era só a ordenação que destoava.
+    #[test]
+    fn a_ordenacao_do_par_mede_em_caracteres_como_o_python() {
+        // 3 caracteres e 9 bytes contra 8 caracteres e 8 bytes: por bytes o
+        // "curto" seria o de 8 caracteres
+        let poucos_caracteres_muitos_bytes = "愛の歌";
+        let muitos_caracteres_poucos_bytes = "cancoesx";
+        assert!(poucos_caracteres_muitos_bytes.len() > muitos_caracteres_poucos_bytes.len());
+        assert!(
+            poucos_caracteres_muitos_bytes.chars().count()
+                < muitos_caracteres_poucos_bytes.chars().count()
+        );
+        let (curta, _longa) = curta_e_longa(
+            poucos_caracteres_muitos_bytes,
+            muitos_caracteres_poucos_bytes,
+        );
+        assert_eq!(curta, poucos_caracteres_muitos_bytes, "a curta é por chars");
+        // simétrico: a ordem dos argumentos não decide
+        let (curta, _) = curta_e_longa(
+            muitos_caracteres_poucos_bytes,
+            poucos_caracteres_muitos_bytes,
+        );
+        assert_eq!(curta, poucos_caracteres_muitos_bytes);
+
+        // e a contenção que o porte precisa continuar reconhecendo
+        assert!(!discorda("Adventício - Lampejo", "Lampejo"));
+        assert!(!discorda("Lampejo", "Adventício - Lampejo"));
     }
 
     // -----------------------------------------------------------------------
