@@ -56,10 +56,45 @@ jobs:
       - name: Dependências npm
         run: npm ci
 
+      - name: A tag tem de bater com a versão do aplicativo
+        # O `latest.json` sai com a versão do tauri.conf.json, NÃO com a tag.
+        # Taguear v0.9.0 esquecendo o bump publica um manifesto dizendo 0.8.1,
+        # o updater compara 0.8.1 > 0.8.1, dá falso, e a release fica
+        # publicada e INVISÍVEL: ninguém atualiza e ninguém percebe, porque
+        # não há suporte a quem perguntar. Aconteceu na v0.9.0 e só não saiu
+        # porque o QA pegou. Lembrança não é mecanismo.
+        shell: bash
+        run: |
+          set -euo pipefail
+          tag="${{ github.event.inputs.tag || github.ref_name }}"
+          versao=$(node -p "require('./src-tauri/tauri.conf.json').version")
+          echo "tag=$tag  tauri.conf.json=$versao"
+          if [ "$tag" != "v$versao" ]; then
+            echo "::error::a tag ($tag) não corresponde à versão do aplicativo (v$versao)."
+            echo "::error::atualize package.json, src-tauri/tauri.conf.json e src-tauri/Cargo.toml antes de publicar."
+            exit 1
+          fi
+          for arquivo in package.json src-tauri/Cargo.toml; do
+            grep -q "$versao" "$arquivo" || {
+              echo "::error::$arquivo não está na versão $versao"; exit 1; }
+          done
+
       - name: Build e publicação na release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # V9/PRD §2 — as chaves das etapas de rede entram no BINÁRIO em
+          # tempo de compilação, via `option_env!`. Segredo de repositório não
+          # vira variável de ambiente sozinho: sem estas duas linhas o
+          # `option_env!` devolve None e a etapa some — a v0.9.0 inteira
+          # (máquina de acessórios + etapa do som) nasceria inerte, e nenhuma
+          # suíte veria, porque todas injetam a chave nos testes.
+          #
+          # Ausente = etapa pulada em silêncio, que é o comportamento correto
+          # para build de desenvolvimento e para fork. O que NÃO pode é a tela
+          # prometer uma etapa que esta build não tem.
+          ACOUSTID_API_KEY: ${{ secrets.ACOUSTID_API_KEY }}
+          VAGALUME_API_KEY: ${{ secrets.VAGALUME_API_KEY }}
           # V7/F16 — assinatura minisign do pacote de atualização. Sem estes
           # segredos o build FALHA (createUpdaterArtifacts está ligado): é de
           # propósito, uma release sem assinatura seria recusada pelo updater
