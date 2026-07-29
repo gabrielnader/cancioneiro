@@ -9,25 +9,39 @@ import {
   type EnrichApplyResult,
   type EnrichProgress,
   type EnrichProposal,
+  type TranscricaoProgresso,
 } from "../lib/api";
 import {
+  AVISO_LETRA_DE_MAQUINA,
+  AVISO_MARCAR_INSTRUMENTAL,
   AVISO_NOME_ESCRITO,
+  EXPLICACAO_DA_CONFIANCA_DO_SOM,
   LABEL_SOM_DIZ,
   LABEL_SUA_ETIQUETA_DIZ,
   LABEL_SUBSTITUIR_LETRA,
+  ROTULO_COMECAR_TRANSCRICAO,
   avisoLetraExistente,
   avisoSemPerguntarAoSom,
   rotuloAceitarSom,
+  rotuloDoRefrao,
   textoAplicado,
+  textoDaOfertaDeTranscricao,
+  textoDaTranscricaoIndisponivel,
+  textoDoTempoDaTranscricao,
   textoSemPropostas,
 } from "../lib/curadoria";
-import type { Modo, Song } from "../lib/types";
+import { FONTE_TRANSCRICAO, type Song } from "../lib/types";
 import { useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlayerStore } from "../stores/playerStore";
 import { usePlaylistStore } from "../stores/playlistStore";
 import { useToastStore } from "../stores/toastStore";
-import { AA_TEXTO_NORMAL, contrastRatio, corDoTexto } from "../test/contrast";
+import {
+  AA_TEXTO_NORMAL,
+  FUNDOS_DA_LINHA,
+  contrastRatio,
+  corDoTexto,
+} from "../test/contrast";
 import { EnrichReview } from "./EnrichReview";
 
 function song(id: number, title: string): Song {
@@ -62,6 +76,11 @@ function proposal(overrides: Partial<EnrichProposal>): EnrichProposal {
     // V9 — dois avisos novos, ORTOGONAIS entre si e desligados por padrão
     conflito: null,
     substitui_nome_escrito: false,
+    // V10 — três campos novos, todos desligados por padrão: a varredura não
+    // marca instrumental, não extrai refrão e não tem aviso a dar
+    marcar_instrumental: false,
+    refrao: null,
+    aviso: null,
     error: null,
     ...overrides,
   };
@@ -120,6 +139,15 @@ const COM_ERRO = proposal({
   error: "sem conexão",
 });
 
+/**
+ * Abre o grupo dobrado (V10). Ele nasce FECHADO — 72 linhas iguais viram uma
+ * frase —, e os testes que precisam ver as linhas o abrem, que é exatamente o
+ * que a pessoa faz.
+ */
+function abrirDobrado() {
+  fireEvent.click(screen.getByRole("button", { name: /abrir para ver/i }));
+}
+
 function ok(song: Song): EnrichApplyResult {
   return { song_id: song.id, song, error: null };
 }
@@ -133,7 +161,13 @@ function renderReview(
   scannedTotal = 0,
   /** Quantas a etapa 2 deixou de perguntar (QA A2) — zero é o caso normal. */
   semPerguntarAoSom = 0,
-  modo: Modo = "completar",
+  /** V10 — a pergunta do fim, quando houve quem sobrasse sem letra. */
+  fim: {
+    semLetraNoFim?: number[];
+    segundosDeTranscricao?: number;
+    disponivel?: boolean;
+    download?: { bytes: number; segundos: number } | null;
+  } = {},
 ) {
   useEnrichStore.setState({
     status: "review",
@@ -143,7 +177,14 @@ function renderReview(
     progress: null,
     scannedTotal,
     semPerguntarAoSom,
-    modo,
+    semLetraNoFim: fim.semLetraNoFim ?? [],
+    segundosDeTranscricao: fim.segundosDeTranscricao ?? 0,
+    transcricao: {
+      disponivel: fim.disponivel ?? false,
+      download: fim.download ?? null,
+    },
+    transcricaoDispensada: false,
+    transcricaoProgress: null,
     applyErrors: {},
   });
   return render(<EnrichReview />);
@@ -180,6 +221,12 @@ describe("EnrichReview (V5 — F13)", () => {
       progress: null,
       scanId: "",
       scannedTotal: 0,
+      semPerguntarAoSom: 0,
+      semLetraNoFim: [],
+      segundosDeTranscricao: 0,
+      transcricao: { disponivel: false, download: null },
+      transcricaoProgress: null,
+      transcricaoDispensada: false,
       applyErrors: {},
       scanInFlight: false,
     });
@@ -292,7 +339,7 @@ describe("EnrichReview (V5 — F13)", () => {
 
   it("resultado vazio SEM candidatas: diz que não havia nada incompleto, com Fechar", () => {
     renderReview([], 0);
-    expect(screen.getByText(textoSemPropostas(0, "completar"))).toBeInTheDocument();
+    expect(screen.getByText(textoSemPropostas(0))).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Fechar" }));
     expect(useEnrichStore.getState().status).toBe("idle");
   });
@@ -301,13 +348,13 @@ describe("EnrichReview (V5 — F13)", () => {
   // ler "pasta completa" — o texto tem que dizer o que aconteceu de verdade.
   it("resultado vazio COM candidatas: diz quantas foram conferidas e aponta a transcrição", () => {
     renderReview([], 81);
-    expect(screen.getByText(textoSemPropostas(81, "completar"))).toBeInTheDocument();
-    expect(screen.queryByText(textoSemPropostas(0, "completar"))).not.toBeInTheDocument();
+    expect(screen.getByText(textoSemPropostas(81))).toBeInTheDocument();
+    expect(screen.queryByText(textoSemPropostas(0))).not.toBeInTheDocument();
   });
 
   it("resultado vazio com UMA candidata: texto no singular", () => {
     renderReview([], 1);
-    expect(screen.getByText(textoSemPropostas(1, "completar"))).toBeInTheDocument();
+    expect(screen.getByText(textoSemPropostas(1))).toBeInTheDocument();
   });
 
   // MÉDIO-12 — as linhas de ERRO entravam na conta por confiança: com o lote
@@ -316,14 +363,22 @@ describe("EnrichReview (V5 — F13)", () => {
   // (0)", desabilitado, sem uma linha de explicação.
   it("header conta só as OFERTAS; as linhas com erro são ditas à parte", () => {
     renderReview([ALTA, MEDIA, BAIXA, COM_ERRO]);
-    expect(
-      screen.getByText("3 propostas — 1 alta, 1 média, 1 baixa"),
-    ).toBeInTheDocument();
+    expect(screen.getByText("3 propostas para conferir")).toBeInTheDocument();
     expect(
       screen.getByText(
-        "1 música não pôde ser consultada — o motivo está na linha dela.",
+        "1 música não pôde ser consultada — o motivo está na linha dela",
       ),
     ).toBeInTheDocument();
+  });
+
+  // V10 — o cabeçalho contava por CONFIANÇA ("0 alta, 0 média, 95 baixa"), e
+  // era ele ensinando a ignorar as de baixa. Quem diz o que cada coisa é agora
+  // é o título de cada grupo; aqui fica só o tamanho do trabalho.
+  it("o cabeçalho não fala mais em confiança", () => {
+    renderReview([ALTA, MEDIA, BAIXA]);
+    const h2 = screen.getByRole("heading", { level: 2 });
+    expect(h2.textContent ?? "").not.toContain("baixa");
+    expect(h2.textContent ?? "").not.toContain("alta");
   });
 
   it("todas com erro: o header não promete proposta nenhuma", () => {
@@ -333,7 +388,7 @@ describe("EnrichReview (V5 — F13)", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        "1 música não pôde ser consultada — o motivo está na linha dela.",
+        "1 música não pôde ser consultada — o motivo está na linha dela",
       ),
     ).toBeInTheDocument();
   });
@@ -350,16 +405,16 @@ describe("EnrichReview (V5 — F13)", () => {
 
   it("header no singular quando sobra uma proposta só", () => {
     renderReview([ALTA]);
-    expect(
-      screen.getByText("1 proposta — 1 alta, 0 média, 0 baixa"),
-    ).toBeInTheDocument();
+    expect(screen.getByText("1 proposta para conferir")).toBeInTheDocument();
   });
 
-  it("ALTA vem pré-marcada; MÉDIA e BAIXA desmarcadas; linha com erro desabilitada", () => {
+  // V10 — a letra em ALTA continua pré-marcada (DECISIONS #49); a letra em
+  // MÉDIA, não. A BAIXA sem letra saiu desta conversa: ela só preenche campo
+  // vazio, então mora no grupo dobrado e chega MARCADA (o corte é por risco).
+  it("letra em ALTA vem pré-marcada; em MÉDIA não; linha com erro desabilitada", () => {
     renderReview([ALTA, MEDIA, BAIXA, COM_ERRO]);
     expect(screen.getByRole("checkbox", { name: /faixa 1/ })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: /faixa 2/ })).not.toBeChecked();
-    expect(screen.getByRole("checkbox", { name: /faixa 3/ })).not.toBeChecked();
     const errored = screen.getByRole("checkbox", { name: /faixa 4/ });
     expect(errored).not.toBeChecked();
     expect(errored).toBeDisabled();
@@ -368,6 +423,7 @@ describe("EnrichReview (V5 — F13)", () => {
 
   it("mostra badges de confiança em maiúsculas e o indicador de letra", () => {
     renderReview([ALTA, MEDIA, BAIXA]);
+    abrirDobrado();
     expect(screen.getByText("ALTA")).toBeInTheDocument();
     expect(screen.getByText("MÉDIA")).toBeInTheDocument();
     expect(screen.getByText("BAIXA")).toBeInTheDocument();
@@ -391,6 +447,7 @@ describe("EnrichReview (V5 — F13)", () => {
         fonte: "nome do arquivo",
       }),
     ]);
+    abrirDobrado();
     expect(screen.getByText("via LRCLIB")).toBeInTheDocument();
     expect(screen.getByText("via nome do arquivo")).toBeInTheDocument();
   });
@@ -401,18 +458,23 @@ describe("EnrichReview (V5 — F13)", () => {
     expect(screen.queryByText(/^via /)).not.toBeInTheDocument();
   });
 
-  it("BAIXA é marcável (quem decide é o humano)", () => {
+  // V10 — BAIXA sem letra é preenchimento de campo vazio: ela chega MARCADA,
+  // no grupo dobrado, e continua DESMARCÁVEL uma a uma (dobrado ≠ escondido).
+  it("a linha do grupo dobrado é desmarcável uma a uma", () => {
     renderReview([BAIXA]);
+    abrirDobrado();
     const checkbox = screen.getByRole("checkbox", { name: /faixa 3/ });
-    fireEvent.click(checkbox);
     expect(checkbox).toBeChecked();
+    fireEvent.click(checkbox);
+    expect(checkbox).not.toBeChecked();
     expect(
-      screen.getByRole("button", { name: "Aplicar selecionadas (1)" }),
-    ).toBeEnabled();
+      screen.getByRole("button", { name: "Aplicar selecionadas (0)" }),
+    ).toBeDisabled();
   });
 
   it("Marcar todas marca só as linhas sem erro; Desmarcar todas zera", () => {
     renderReview([ALTA, MEDIA, BAIXA, COM_ERRO]);
+    abrirDobrado();
     fireEvent.click(screen.getByRole("button", { name: "Marcar todas" }));
     expect(screen.getByRole("checkbox", { name: /faixa 1/ })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: /faixa 2/ })).toBeChecked();
@@ -436,8 +498,11 @@ describe("EnrichReview (V5 — F13)", () => {
     setBackendForTests({ enrichApply } as unknown as Backend);
     renderReview([ALTA, MEDIA, BAIXA, COM_ERRO]);
 
-    // seleção: ALTA (pré) + BAIXA (manual); MÉDIA fica de fora
-    fireEvent.click(screen.getByRole("checkbox", { name: /faixa 3/ }));
+    // seleção: ALTA (letra, pré-marcada) + BAIXA (preenchimento, marcada por
+    // padrão no grupo dobrado); MÉDIA fica de fora
+    expect(
+      screen.getByRole("button", { name: "Aplicar selecionadas (2)" }),
+    ).toBeEnabled();
     await act(async () => {
       fireEvent.click(
         screen.getByRole("button", { name: "Aplicar selecionadas (2)" }),
@@ -506,6 +571,7 @@ describe("EnrichReview (V5 — F13)", () => {
       textoAplicado({
         ganharamLetra: 1,
         letraSubstituida: 0,
+        marcadasInstrumental: 0,
         nomeCorrigido: 0,
         gravadas: 1,
       }),
@@ -540,6 +606,7 @@ describe("EnrichReview (V5 — F13)", () => {
       textoAplicado({
         ganharamLetra: 2,
         letraSubstituida: 0,
+        marcadasInstrumental: 0,
         nomeCorrigido: 0,
         gravadas: 2,
       }),
@@ -579,6 +646,7 @@ describe("EnrichReview (V5 — F13)", () => {
       textoAplicado({
         ganharamLetra: 1,
         letraSubstituida: 0,
+        marcadasInstrumental: 0,
         nomeCorrigido: 0,
         gravadas: 1,
       }),
@@ -876,6 +944,7 @@ describe("EnrichReview (V5 — F13)", () => {
         textoAplicado({
           ganharamLetra: 1,
           letraSubstituida: 1,
+          marcadasInstrumental: 0,
           nomeCorrigido: 0,
           gravadas: 2,
         }),
@@ -943,17 +1012,17 @@ describe("EnrichReview (V5 — F13)", () => {
     });
 
     it("com propostas, o aviso aparece com o número", () => {
-      renderReview([ALTA], 40, 37, "conferencia");
+      renderReview([ALTA], 40, 37);
       expect(
-        screen.getByText(avisoSemPerguntarAoSom(37, "conferencia")!),
+        screen.getByText(avisoSemPerguntarAoSom(37)!),
       ).toBeVisible();
     });
 
     // A lista rola: um aviso sobre o ALCANCE da varredura embaixo de 95 linhas
     // é um aviso que ninguém lê. Ele fica acima do cabeçalho de contagem.
     it("o aviso vem antes do cabeçalho de contagem, e não no fim da lista", () => {
-      renderReview([ALTA], 40, 37, "conferencia");
-      const aviso = screen.getByText(avisoSemPerguntarAoSom(37, "conferencia")!);
+      renderReview([ALTA], 40, 37);
+      const aviso = screen.getByText(avisoSemPerguntarAoSom(37)!);
       const cabecalho = screen.getByRole("heading", { level: 2 });
       // Node.DOCUMENT_POSITION_FOLLOWING = o cabeçalho vem DEPOIS do aviso.
       // Comparar posição no DOM, e não índice no texto, porque a região viva
@@ -967,26 +1036,26 @@ describe("EnrichReview (V5 — F13)", () => {
     // Sem propostas o desfecho é UM texto só: o de sempre já passa a contar as
     // não perguntadas, então dois avisos seriam a mesma coisa dita duas vezes.
     it("sem propostas, o desfecho vazio é quem conta — sem texto repetido", () => {
-      renderReview([], 40, 37, "conferencia");
+      renderReview([], 40, 37);
       expect(
-        screen.getByText(textoSemPropostas(40, "conferencia", 37)),
+        screen.getByText(textoSemPropostas(40, 37)),
       ).toBeVisible();
       expect(
-        screen.queryByText(avisoSemPerguntarAoSom(37, "conferencia")!),
+        screen.queryByText(avisoSemPerguntarAoSom(37)!),
       ).not.toBeInTheDocument();
     });
 
     // Quem ouve a tela em vez de vê-la recebe o mesmo desfecho, não um resumo
     // otimista: a região viva é o único texto que o leitor de tela anuncia.
     it("a região viva anuncia o desfecho junto com o número", () => {
-      renderReview([ALTA], 40, 37, "conferencia");
+      renderReview([ALTA], 40, 37);
       const vivo = document.querySelector("[role='status']");
       expect(vivo?.textContent ?? "").toContain("37");
     });
 
     it("o aviso passa em AA sobre o próprio fundo", () => {
-      renderReview([ALTA], 40, 37, "conferencia");
-      const aviso = screen.getByText(avisoSemPerguntarAoSom(37, "conferencia")!);
+      renderReview([ALTA], 40, 37);
+      const aviso = screen.getByText(avisoSemPerguntarAoSom(37)!);
       // #854D0E sobre #FEF3C7 — o mesmo par do selo CONFLITO, já medido
       expect(contrastRatio("#854D0E", "#FEF3C7")).toBeGreaterThanOrEqual(
         AA_TEXTO_NORMAL,
@@ -1024,14 +1093,17 @@ describe("EnrichReview (V5 — F13)", () => {
       expect(texto.indexOf(LABEL_SUA_ETIQUETA_DIZ)).toBeLessThan(
         texto.indexOf(LABEL_SOM_DIZ),
       );
+      // V10 — os dois lados aparecem CAMPO A CAMPO, e não como duas linhas de
+      // "título — artista": aqui os dois campos diferem, então os dois são
+      // comparados lado a lado.
+      expect(texto).toContain("Te ver feliz, te ver contente");
+      expect(texto).toContain("Caetano Veloso");
+      expect(texto).toContain("Viver Feliz");
+      expect(texto).toContain("Nilson Chaves");
+      // e a confiança MOSTRADA é a do reconhecimento, dizendo sobre o que fala
       expect(
-        screen.getByText("Te ver feliz, te ver contente — Caetano Veloso"),
+        screen.getByText("gravação reconhecida com confiança alta"),
       ).toBeInTheDocument();
-      expect(
-        screen.getByText("Viver Feliz — Nilson Chaves"),
-      ).toBeInTheDocument();
-      // e a confiança MOSTRADA é a do reconhecimento, não a da linha
-      expect(screen.getByText("confiança alta")).toBeInTheDocument();
     });
 
     // "Atual → proposto" diria que o app já escolheu um lado. Não escolheu:
@@ -1182,19 +1254,23 @@ describe("EnrichReview (V5 — F13)", () => {
         textoAplicado({
           ganharamLetra: 0,
           letraSubstituida: 0,
+          marcadasInstrumental: 0,
           nomeCorrigido: 1,
           gravadas: 1,
         }),
       );
     });
 
-    it("o cabeçalho conta as divergências à parte das propostas", () => {
-      renderReview([CONFLITO, MEDIA]);
-      expect(
-        screen.getByText(
-          "1 proposta — 0 alta, 1 média, 0 baixa; e 1 em que o som discorda da etiqueta",
-        ),
-      ).toBeInTheDocument();
+    // V10 — a divergência deixou de ser um número no cabeçalho e virou o
+    // PRIMEIRO grupo da lista: ela é a coisa mais arriscada da tela, e o lugar
+    // dela é o topo, não um sufixo de contagem.
+    it("a divergência é o primeiro grupo, com título próprio", () => {
+      renderReview([MEDIA, CONFLITO]);
+      const grupos = screen
+        .getAllByRole("heading", { level: 3 })
+        .map((h) => h.textContent ?? "");
+      expect(grupos[0]).toBe("1 música em que o som discorda da etiqueta");
+      expect(screen.getByText("2 propostas para conferir")).toBeInTheDocument();
     });
   });
 
@@ -1427,7 +1503,7 @@ describe("EnrichReview (V5 — F13)", () => {
     it("varredura sem resultado: a região viva conta o desfecho honesto", () => {
       renderReview([], 81);
       expect(screen.getByRole("status")).toHaveTextContent(
-        "Busca concluída. Conferimos as 81 músicas incompletas desta pasta",
+        "Busca concluída. Conferimos as 81 músicas desta pasta",
       );
     });
 
@@ -1446,6 +1522,750 @@ describe("EnrichReview (V5 — F13)", () => {
       first.focus();
       fireEvent.keyDown(dialog, { key: "Tab", shiftKey: true });
       expect(document.activeElement).toBe(last);
+    });
+  });
+  // ---------------------------------------------------------------------------
+  // V10 — a revisão ordenada por RISCO
+  // ---------------------------------------------------------------------------
+  //
+  // "Eu nem li as sugestões em baixa — não deu vontade de ler mesmo", numa
+  // revisão de 53 músicas. Não é preferência: é o que 40 pessoas vão fazer.
+
+  describe("a ordem por risco", () => {
+    const CONFLITO_R = proposal({
+      song_id: 20,
+      current_title: "Meninos",
+      current_artist: "Renato Teixeira & Xangai",
+      proposed_title: "Meninos",
+      proposed_artist: "Renato Teixeira & Xangai",
+      lyrics: null,
+      confidence: "baixa",
+      fonte: "reconhecimento pelo som",
+      conflito: {
+        titulo: "Meninos",
+        artista: "Xangai & Quinteto da Paraíba",
+        confianca: "alta",
+      },
+    });
+    const COM_LETRA = proposal({ song_id: 21, lyrics: "uma letra" });
+    const SEM_VOZ = proposal({
+      song_id: 22,
+      lyrics: null,
+      confidence: "media",
+      fonte: "transcrição do áudio",
+      marcar_instrumental: true,
+      aviso: "20 caracteres em 5m00s de áudio dão 0,07, abaixo do mínimo de 0,30",
+    });
+    const NOME_ESCRITO = proposal({
+      song_id: 23,
+      lyrics: null,
+      substitui_nome_escrito: true,
+    });
+    const VAZIO = proposal({
+      song_id: 24,
+      current_title: "sem_tags",
+      current_artist: null,
+      proposed_title: "Oh! Chuva",
+      proposed_artist: "Falamansa",
+      lyrics: null,
+      confidence: "baixa",
+      fonte: "nome do arquivo",
+    });
+
+    /** Os cabeçalhos de grupo, na ordem em que aparecem na tela. */
+    function gruposNaTela(): string[] {
+      return screen
+        .getAllByRole("heading", { level: 3 })
+        .map((h) => h.textContent ?? "");
+    }
+
+    it("de cima para baixo: conflitos, letras, sem voz, nomes escritos, dobrado", () => {
+      renderReview([VAZIO, NOME_ESCRITO, SEM_VOZ, COM_LETRA, CONFLITO_R, COM_ERRO]);
+      const grupos = gruposNaTela();
+      expect(grupos[0]).toContain("o som discorda da etiqueta");
+      expect(grupos[1]).toContain("letra encontrada");
+      expect(grupos[2]).toContain("sem voz no áudio");
+      expect(grupos[3]).toContain("troca de nome");
+      expect(grupos[4]).toContain("sem título ou artista");
+      expect(grupos[5]).toContain("não pôde ser consultada");
+    });
+
+    it("grupo que não tem linha não vira cabeçalho vazio", () => {
+      renderReview([VAZIO]);
+      expect(gruposNaTela()).toHaveLength(1);
+    });
+
+    // O grupo dobrado é a resposta ao "não deu vontade de ler": 72 linhas
+    // iguais viram UMA frase que diz o número e o que o clique fará.
+    describe("o grupo dobrado", () => {
+      const muitos = Array.from({ length: 72 }, (_, i) =>
+        proposal({
+          song_id: 100 + i,
+          current_title: `sem_tags_${i}`,
+          proposed_title: `Canção ${i}`,
+          proposed_artist: "Artista",
+          lyrics: null,
+          confidence: "baixa",
+          fonte: "nome do arquivo",
+        }),
+      );
+
+      it("fechado por padrão: a frase com o número, e nenhuma das 72 linhas", () => {
+        renderReview(muitos);
+        expect(
+          screen.getByText(
+            "72 músicas sem título ou artista vão receber o nome que está no arquivo",
+          ),
+        ).toBeVisible();
+        expect(screen.queryByText("Canção 0")).not.toBeInTheDocument();
+      });
+
+      // Dobrado NÃO é escondido: nada é gravado sem revisão, e esconder seria
+      // perder a correção. Continua abrível, visível e desmarcável.
+      it("abrir mostra as linhas, uma a uma", () => {
+        renderReview(muitos);
+        fireEvent.click(screen.getByRole("button", { name: /abrir para ver/i }));
+        expect(screen.getByText(/Canção 0/)).toBeVisible();
+        expect(
+          screen.getByRole("checkbox", { name: "Aplicar proposta: sem_tags_0" }),
+        ).toBeVisible();
+      });
+
+      // Marcado por padrão: preencher um campo vazio não tem nada a perder, e
+      // a frase com o número é a conferência.
+      it("marcado por padrão, e o número do botão inclui as 72", () => {
+        renderReview(muitos);
+        expect(
+          screen.getByRole("button", { name: "Aplicar selecionadas (72)" }),
+        ).toBeEnabled();
+      });
+
+      it("desmarcar o grupo inteiro é um clique", () => {
+        renderReview(muitos);
+        fireEvent.click(
+          screen.getByRole("checkbox", { name: /72 músicas sem título ou artista/ }),
+        );
+        expect(
+          screen.getByRole("button", { name: "Aplicar selecionadas (0)" }),
+        ).toBeDisabled();
+      });
+    });
+
+    // O corte é por RISCO: baixa confiança não quer dizer "provavelmente
+    // errado", quer dizer "sem prova externa".
+    it("preencher campo vazio chega marcado mesmo em BAIXA", () => {
+      renderReview([VAZIO]);
+      // marcado com o grupo ainda fechado: a frase com o número é a
+      // conferência, e o botão já conta a linha
+      expect(
+        screen.getByRole("button", { name: "Aplicar selecionadas (1)" }),
+      ).toBeEnabled();
+      fireEvent.click(screen.getByRole("button", { name: /abrir para ver/i }));
+      expect(
+        screen.getByRole("checkbox", { name: "Aplicar proposta: sem_tags" }),
+      ).toBeChecked();
+    });
+
+    it("trocar nome escrito por gente continua desmarcado, em qualquer confiança", () => {
+      renderReview([
+        proposal({
+          song_id: 30,
+          current_title: "Ponto de Oxum",
+          confidence: "alta",
+          lyrics: null,
+          substitui_nome_escrito: true,
+        }),
+      ]);
+      expect(
+        screen.getByRole("checkbox", { name: "Aplicar proposta: Ponto de Oxum" }),
+      ).not.toBeChecked();
+    });
+
+    it("marcar instrumental nunca chega marcado, nem entra no 'Marcar todas'", () => {
+      renderReview([SEM_VOZ, VAZIO]);
+      // o rótulo diz o que a linha decide, e não "aplicar proposta"
+      const caixa = screen.getByRole("checkbox", {
+        name: "Marcar como instrumental: faixa 1",
+      });
+      expect(caixa).not.toBeChecked();
+      fireEvent.click(screen.getByRole("button", { name: "Marcar todas" }));
+      expect(caixa).not.toBeChecked();
+    });
+  });
+
+  describe("o conflito destaca o que difere (V10)", () => {
+    const CONFLITO_R = proposal({
+      song_id: 20,
+      current_title: "Meninos",
+      current_artist: "Renato Teixeira & Xangai",
+      proposed_title: "Meninos",
+      proposed_artist: "Renato Teixeira & Xangai",
+      lyrics: null,
+      confidence: "baixa",
+      fonte: "reconhecimento pelo som",
+      conflito: {
+        titulo: "Meninos",
+        artista: "Xangai & Quinteto da Paraíba",
+        confianca: "alta",
+      },
+    });
+
+    // O título se repetia nas duas linhas e a pessoa tinha de comparar dois
+    // textos com o olho.
+    it("o que é igual aparece uma vez só", () => {
+      renderReview([CONFLITO_R]);
+      expect(screen.getAllByText("Meninos")).toHaveLength(1);
+    });
+
+    it("o campo que difere aparece dos dois lados, nomeado por quem disse", () => {
+      renderReview([CONFLITO_R]);
+      expect(screen.getByText(`${LABEL_SUA_ETIQUETA_DIZ}:`)).toBeVisible();
+      expect(screen.getByText(`${LABEL_SOM_DIZ}:`)).toBeVisible();
+      expect(screen.getByText("Quinteto")).toBeVisible();
+      expect(screen.getByText("Renato")).toBeVisible();
+    });
+
+    // "Xangai" está nos dois créditos: é o que faz os dois textos parecerem
+    // iguais de relance, e por isso não é destacado.
+    it("a palavra que os dois lados repetem não é destacada", () => {
+      renderReview([CONFLITO_R]);
+      const repetida = screen.getAllByText("Xangai");
+      for (const p of repetida) {
+        expect(p.className).not.toContain("font-semibold");
+      }
+      expect(screen.getByText("Quinteto").className).toContain("font-semibold");
+    });
+
+    // "confiança alta" enganava: ela é sobre QUAL GRAVAÇÃO é esta.
+    it("a confiança diz sobre o que ela fala, e uma frase explica o resto", () => {
+      renderReview([CONFLITO_R]);
+      expect(
+        screen.getByText("gravação reconhecida com confiança alta"),
+      ).toBeVisible();
+      expect(screen.getByText(EXPLICACAO_DA_CONFIANCA_DO_SOM)).toBeVisible();
+    });
+
+    it("a explicação aparece UMA vez, e não por linha", () => {
+      renderReview([CONFLITO_R, { ...CONFLITO_R, song_id: 21 }]);
+      expect(screen.getAllByText(EXPLICACAO_DA_CONFIANCA_DO_SOM)).toHaveLength(1);
+    });
+  });
+
+  describe("os três campos novos da proposta (V10)", () => {
+    const TRANSCRITA = proposal({
+      song_id: 40,
+      current_title: "sem_tags",
+      proposed_title: "sem_tags",
+      proposed_artist: null,
+      lyrics: "na beira do mar sagrado",
+      confidence: "media",
+      fonte: FONTE_TRANSCRICAO,
+      refrao: "na beira do mar sagrado",
+    });
+    const SEM_VOZ = proposal({
+      song_id: 41,
+      current_title: "Chorinho",
+      proposed_title: "Chorinho",
+      lyrics: null,
+      confidence: "media",
+      fonte: FONTE_TRANSCRICAO,
+      marcar_instrumental: true,
+      aviso: "20 caracteres em 5m00s de áudio dão 0,07, abaixo do mínimo de 0,30",
+    });
+
+    it("o refrão fica na linha, para reconhecer a música sem abrir a letra", () => {
+      renderReview([TRANSCRITA]);
+      expect(
+        screen.getByText(rotuloDoRefrao("na beira do mar sagrado")),
+      ).toBeVisible();
+    });
+
+    it("letra de máquina avisa que precisa de conferência antes de aplicar", () => {
+      renderReview([TRANSCRITA]);
+      expect(screen.getByText(AVISO_LETRA_DE_MAQUINA)).toBeVisible();
+    });
+
+    it("letra do LRCLIB não puxa o aviso de máquina", () => {
+      renderReview([ALTA]);
+      expect(screen.queryByText(AVISO_LETRA_DE_MAQUINA)).not.toBeInTheDocument();
+    });
+
+    it("a linha de instrumental diz o que a marca faz, e mostra o motivo medido", () => {
+      renderReview([SEM_VOZ]);
+      expect(screen.getByText(AVISO_MARCAR_INSTRUMENTAL)).toBeVisible();
+      expect(screen.getByText(SEM_VOZ.aviso!)).toBeVisible();
+    });
+
+    // `aviso` é diferente de `error`: a linha CONTINUA aplicável.
+    it("o aviso não desabilita a linha", () => {
+      renderReview([SEM_VOZ]);
+      expect(
+        screen.getByRole("checkbox", { name: "Marcar como instrumental: Chorinho" }),
+      ).toBeEnabled();
+    });
+
+    it("aceitar a linha manda marcar_instrumental ao backend", async () => {
+      const enrichApply = vi.fn(async (aps: EnrichApply[]) =>
+        aps.map((a) => ok(song(a.song_id, a.title))),
+      );
+      setBackendForTests({ enrichApply } as unknown as Backend);
+      renderReview([SEM_VOZ]);
+      fireEvent.click(
+        screen.getByRole("checkbox", { name: "Marcar como instrumental: Chorinho" }),
+      );
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Aplicar selecionadas (1)" }),
+        );
+      });
+      expect(enrichApply.mock.calls[0][0][0]).toMatchObject({
+        song_id: 41,
+        marcar_instrumental: true,
+        lyrics: null,
+      });
+    });
+
+    it("linha comum nunca manda marcar_instrumental", async () => {
+      const enrichApply = vi.fn(async (aps: EnrichApply[]) =>
+        aps.map((a) => ok(song(a.song_id, a.title))),
+      );
+      setBackendForTests({ enrichApply } as unknown as Backend);
+      renderReview([ALTA]);
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Aplicar selecionadas (1)" }),
+        );
+      });
+      expect(enrichApply.mock.calls[0][0][0].marcar_instrumental).toBeUndefined();
+    });
+
+    it("o aviso e o refrão passam em AA sobre o fundo da linha", () => {
+      renderReview([SEM_VOZ, TRANSCRITA]);
+      for (const texto of [
+        AVISO_MARCAR_INSTRUMENTAL,
+        rotuloDoRefrao("na beira do mar sagrado"),
+      ]) {
+        const cor = corDoTexto(screen.getByText(texto).className);
+        for (const fundo of Object.values(FUNDOS_DA_LINHA)) {
+          expect(contrastRatio(cor, fundo), `${texto} sobre ${fundo}`).
+            toBeGreaterThanOrEqual(AA_TEXTO_NORMAL);
+        }
+      }
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // V10 — duas linhas da MESMA música, uma gravação só
+  // ---------------------------------------------------------------------------
+  //
+  // A etapa 5 acrescenta propostas à revisão que já está aberta, e a música que
+  // sobrou sem letra é justamente a que costuma ter uma proposta de NOME
+  // pendente (foi por não ter etiqueta que ela não achou letra em base
+  // nenhuma). Então a mesma música aparece em dois grupos: o nome no dobrado, a
+  // letra em "letras encontradas".
+  //
+  // Cada linha continua sendo uma decisão — é o modelo da tela inteira. O que
+  // não pode é virarem DUAS gravações: o `apply` confere o eco
+  // `current_title`/`current_artist` contra o disco (QA A5), então a segunda
+  // seria recusada com "a música mudou depois da busca" — uma falha inventada
+  // por nós, num lote que a pessoa marcou inteiro.
+
+  describe("duas linhas da mesma música", () => {
+    const NOME = proposal({
+      song_id: 60,
+      current_title: "sem_tags",
+      current_artist: null,
+      proposed_title: "Oh! Chuva",
+      proposed_artist: "Falamansa",
+      lyrics: null,
+      confidence: "baixa",
+      fonte: "nome do arquivo",
+    });
+    const LETRA_DE_MAQUINA = proposal({
+      song_id: 60,
+      current_title: "sem_tags",
+      current_artist: null,
+      // a etapa 5 não propõe nome: ela repete o que está no arquivo
+      proposed_title: "sem_tags",
+      proposed_artist: null,
+      lyrics: "na beira do mar sagrado",
+      confidence: "media",
+      fonte: FONTE_TRANSCRICAO,
+      refrao: "na beira do mar sagrado",
+    });
+
+    it("as duas aparecem, cada uma no seu grupo e com a sua marcação", () => {
+      renderReview([NOME, LETRA_DE_MAQUINA]);
+      expect(screen.getByText("1 letra encontrada")).toBeVisible();
+      expect(screen.getByText(/1 música sem título ou artista/)).toBeVisible();
+    });
+
+    it("aplicar as duas grava UMA vez, com o nome e a letra juntos", async () => {
+      const enrichApply = vi.fn(async (aps: EnrichApply[]) =>
+        aps.map((a) => ok(song(a.song_id, a.title))),
+      );
+      setBackendForTests({ enrichApply } as unknown as Backend);
+      renderReview([NOME, LETRA_DE_MAQUINA]);
+
+      // o grupo dobrado já chega marcado; a letra de máquina, não — e o rótulo
+      // dela diz o que ela é
+      fireEvent.click(
+        screen.getByRole("checkbox", {
+          name: "Aplicar a letra escrita ouvindo o áudio: sem_tags",
+        }),
+      );
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Aplicar selecionadas (2)" }),
+        );
+      });
+
+      const enviadas = enrichApply.mock.calls[0][0];
+      expect(enviadas).toHaveLength(1);
+      expect(enviadas[0]).toMatchObject({
+        song_id: 60,
+        // o nome vem da linha que propõe nome...
+        title: "Oh! Chuva",
+        artist: "Falamansa",
+        // ...e a letra da linha que traz letra, com a procedência DELA (é o
+        // `fonte` que decide o TXXX:LETRA_ORIGEM)
+        lyrics: "na beira do mar sagrado",
+        fonte: FONTE_TRANSCRICAO,
+      });
+    });
+
+    it("marcar só uma das duas grava só o que ela decide", async () => {
+      const enrichApply = vi.fn(async (aps: EnrichApply[]) =>
+        aps.map((a) => ok(song(a.song_id, a.title))),
+      );
+      setBackendForTests({ enrichApply } as unknown as Backend);
+      renderReview([NOME, LETRA_DE_MAQUINA]);
+
+      // só o nome (o dobrado vem marcado; a letra fica de fora)
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Aplicar selecionadas (1)" }),
+        );
+      });
+      const enviadas = enrichApply.mock.calls[0][0];
+      expect(enviadas).toHaveLength(1);
+      expect(enviadas[0].title).toBe("Oh! Chuva");
+      expect(enviadas[0].lyrics).toBeNull();
+    });
+
+    // A marca de instrumental é a outra saída da etapa 5, e ela também não
+    // pode brigar com a proposta de nome pendente.
+    it("nome mais 'sem voz' também viram uma gravação só", async () => {
+      const enrichApply = vi.fn(async (aps: EnrichApply[]) =>
+        aps.map((a) => ok(song(a.song_id, a.title))),
+      );
+      setBackendForTests({ enrichApply } as unknown as Backend);
+      const semVoz = proposal({
+        song_id: 60,
+        current_title: "sem_tags",
+        current_artist: null,
+        proposed_title: "sem_tags",
+        proposed_artist: null,
+        lyrics: null,
+        confidence: "media",
+        fonte: FONTE_TRANSCRICAO,
+        marcar_instrumental: true,
+        aviso: "o áudio foi ouvido inteiro e não há voz nenhuma nele",
+      });
+      renderReview([NOME, semVoz]);
+      fireEvent.click(
+        screen.getByRole("checkbox", { name: "Marcar como instrumental: sem_tags" }),
+      );
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Aplicar selecionadas (2)" }),
+        );
+      });
+      const enviadas = enrichApply.mock.calls[0][0];
+      expect(enviadas).toHaveLength(1);
+      expect(enviadas[0]).toMatchObject({
+        title: "Oh! Chuva",
+        marcar_instrumental: true,
+      });
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // V10 — a ressalva do lyrics.ovh (DECISIONS #110)
+  // ---------------------------------------------------------------------------
+  //
+  // Esta fonte NÃO devolve o nome da música: é a única etapa do funil cujo
+  // casamento o programa não tem como conferir. Ela pode entregar a letra de
+  // "Ponto de Ogum" para um pedido de "Ponto de Oxum" e ninguém percebe.
+  //
+  // O teto MÉDIA tira a pré-marcação, mas só protege quem saiba POR QUÊ — e a
+  // medição de campo foi "eu nem li as sugestões em baixa, não deu vontade de
+  // ler mesmo". A ressalva tem de estar VISÍVEL na linha.
+
+  describe("a ressalva da fonte que não dá para conferir", () => {
+    const RESSALVA =
+      "este site não diz a que música a letra pertence, então não deu para" +
+      " conferir se ela é desta — vale ler antes de aplicar";
+    const DO_OVH = proposal({
+      song_id: 50,
+      current_title: "Ponto de Oxum",
+      current_artist: "Grupo Fixture",
+      proposed_title: "Ponto de Oxum",
+      proposed_artist: "Grupo Fixture",
+      lyrics: "uma letra qualquer",
+      confidence: "media",
+      fonte: "lyrics.ovh",
+      aviso: RESSALVA,
+    });
+
+    it("aparece na linha, com as palavras do backend", () => {
+      renderReview([DO_OVH]);
+      expect(screen.getByText(RESSALVA)).toBeVisible();
+    });
+
+    // Nem `title=`, nem atrás de expandir: a linha dela mora no grupo das
+    // letras encontradas, que é aberto por padrão.
+    it("não depende de abrir nada para ser lida", () => {
+      renderReview([DO_OVH]);
+      expect(screen.getByText("1 letra encontrada")).toBeVisible();
+      expect(screen.getByText(RESSALVA)).toBeVisible();
+    });
+
+    // É AVISO, não `error`: a linha continua aplicável — quem revisou e leu a
+    // letra pode aplicá-la.
+    it("não desabilita a linha, e ela não chega marcada", () => {
+      renderReview([DO_OVH]);
+      const caixa = screen.getByRole("checkbox", {
+        name: "Aplicar proposta: Ponto de Oxum",
+      });
+      expect(caixa).toBeEnabled();
+      expect(caixa).not.toBeChecked();
+    });
+
+    // Ela é RESSALVA, e tem o peso das outras ressalvas da linha (a de trocar
+    // nome escrito, a de substituir letra): quem varre a lista rápido precisa
+    // ver que esta linha pede leitura, não só um clique.
+    it("tem o peso visual de uma ressalva, e passa em AA em todos os fundos", () => {
+      renderReview([DO_OVH]);
+      const cor = corDoTexto(screen.getByText(RESSALVA).className);
+      expect(cor).toBe("#854D0E");
+      for (const fundo of Object.values(FUNDOS_DA_LINHA)) {
+        expect(contrastRatio(cor, fundo), `ressalva sobre ${fundo}`).
+          toBeGreaterThanOrEqual(AA_TEXTO_NORMAL);
+      }
+    });
+
+    // ...e o `aviso` da etapa 5 é outra coisa: "20 caracteres em 5m00s dão
+    // 0,07, abaixo do mínimo de 0,30" é a MEDIÇÃO que sustenta a conclusão,
+    // logo abaixo da ressalva que já está em âmbar. Duas linhas âmbar seguidas
+    // na mesma proposta é o ruído que ensina a ignorar as duas.
+    it("a medição que acompanha o instrumental fica em tom secundário", () => {
+      const semVoz = proposal({
+        song_id: 51,
+        current_title: "Chorinho",
+        proposed_title: "Chorinho",
+        lyrics: null,
+        confidence: "media",
+        fonte: FONTE_TRANSCRICAO,
+        marcar_instrumental: true,
+        aviso: "20 caracteres em 5m00s de áudio dão 0,07, abaixo do mínimo de 0,30",
+      });
+      renderReview([semVoz]);
+      expect(corDoTexto(screen.getByText(semVoz.aviso!).className)).toBe("#5B6472");
+    });
+
+    // Aviso em toda linha ensina a ignorar todos: a linha do LRCLIB (que
+    // confere pela duração) não recebe ressalva nenhuma.
+    it("linha de outra fonte não ganha ressalva", () => {
+      renderReview([ALTA]);
+      expect(screen.queryByText(RESSALVA)).not.toBeInTheDocument();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // V10 — a pergunta do fim, e as horas de trabalho
+  // ---------------------------------------------------------------------------
+
+  describe("a pergunta do fim", () => {
+    it("com músicas sobrando e a etapa 5 pronta: oferece começar agora", () => {
+      renderReview([ALTA], 50, 0, {
+        semLetraNoFim: [1, 2, 3],
+        segundosDeTranscricao: 10_800,
+        disponivel: true,
+      });
+      expect(
+        screen.getByText(textoDaOfertaDeTranscricao(3, 10_800)),
+      ).toBeVisible();
+      expect(
+        screen.getByRole("button", { name: ROTULO_COMECAR_TRANSCRICAO }),
+      ).toBeEnabled();
+    });
+
+    it("sem ninguém sobrando, não pergunta nada", () => {
+      renderReview([ALTA], 50);
+      expect(
+        screen.queryByRole("button", { name: ROTULO_COMECAR_TRANSCRICAO }),
+      ).not.toBeInTheDocument();
+    });
+
+    // Para 180 MB a dispensa do tempo acabou: quem não tem os acessórios vê o
+    // caminho do download, com tamanho E tempo.
+    it("sem os acessórios: oferece o download, com tamanho e tempo", () => {
+      renderReview([ALTA], 50, 0, {
+        semLetraNoFim: [1, 2, 3],
+        segundosDeTranscricao: 10_800,
+        disponivel: false,
+        download: { bytes: 183_000_000, segundos: 183 },
+      });
+      expect(
+        screen.getByText(
+          textoDaTranscricaoIndisponivel(3, { bytes: 183_000_000, segundos: 183 }),
+        ),
+      ).toBeVisible();
+      expect(
+        screen.queryByRole("button", { name: ROTULO_COMECAR_TRANSCRICAO }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("'Agora não' cala a pergunta sem fechar a revisão", () => {
+      renderReview([ALTA], 50, 0, {
+        semLetraNoFim: [1],
+        segundosDeTranscricao: 300,
+        disponivel: true,
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Agora não" }));
+      expect(
+        screen.queryByRole("button", { name: ROTULO_COMECAR_TRANSCRICAO }),
+      ).not.toBeInTheDocument();
+      expect(useEnrichStore.getState().status).toBe("review");
+    });
+
+    it("começar dispara a etapa 5 com os ids que a varredura devolveu", async () => {
+      const transcreverMusicas = vi.fn(async () => ({
+        propostas: [],
+        razao_medida: null,
+      }));
+      setBackendForTests({
+        transcreverMusicas,
+        onTranscricaoProgresso: vi.fn(async () => () => {}),
+      } as unknown as Backend);
+      renderReview([ALTA], 50, 0, {
+        semLetraNoFim: [7, 8],
+        segundosDeTranscricao: 600,
+        disponivel: true,
+      });
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: ROTULO_COMECAR_TRANSCRICAO }),
+        );
+      });
+      expect(transcreverMusicas).toHaveBeenCalledWith([7, 8], expect.any(String));
+    });
+  });
+
+  describe("acompanhar horas de trabalho", () => {
+    function renderTranscrevendo(
+      p: Partial<TranscricaoProgresso> | null = null,
+    ) {
+      useEnrichStore.setState({
+        status: "transcribing",
+        overlayOpen: true,
+        proposals: [],
+        progress: null,
+        scanId: "t1",
+        semLetraNoFim: [1, 2],
+        segundosDeTranscricao: 600,
+        transcricao: { disponivel: true, download: null },
+        transcricaoProgress:
+          p === null
+            ? null
+            : {
+                done: 0,
+                total: 47,
+                atual: "",
+                porcento_da_musica: 0,
+                segundos_restantes: null,
+                scan_id: "t1",
+                ...p,
+              },
+        applyErrors: {},
+      });
+      return render(<EnrichReview />);
+    }
+
+    it("antes do primeiro evento, não inventa número nenhum", () => {
+      renderTranscrevendo(null);
+      expect(screen.getByText(/Escrevendo as letras/)).toBeVisible();
+      expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+    });
+
+    it("mostra a fila, o arquivo e o quanto da música já foi", () => {
+      renderTranscrevendo({
+        done: 3,
+        total: 47,
+        atual: "Oh! Chuva.mp3",
+        porcento_da_musica: 45,
+        segundos_restantes: 9800,
+      });
+      expect(screen.getByText("Escrevendo as letras… 3 de 47")).toBeVisible();
+      expect(screen.getByText("Oh! Chuva.mp3")).toBeVisible();
+      expect(screen.getByText(textoDoTempoDaTranscricao(9800))).toBeVisible();
+    });
+
+    // Uma música leva MINUTOS: a barra tem de andar DENTRO dela, ou parece
+    // travada por quatro minutos (a lição da v0.8.1).
+    it("a barra anda dentro da música, e não só entre músicas", () => {
+      const { rerender } = renderTranscrevendo({
+        done: 3,
+        total: 47,
+        atual: "a.mp3",
+        porcento_da_musica: 0,
+      });
+      const antes = Number(
+        screen.getByRole("progressbar").getAttribute("aria-valuenow"),
+      );
+      act(() => {
+        useEnrichStore.setState({
+          transcricaoProgress: {
+            done: 3,
+            total: 47,
+            atual: "a.mp3",
+            porcento_da_musica: 90,
+            segundos_restantes: null,
+            scan_id: "t1",
+          },
+        });
+      });
+      rerender(<EnrichReview />);
+      const depois = Number(
+        screen.getByRole("progressbar").getAttribute("aria-valuenow"),
+      );
+      expect(depois).toBeGreaterThan(antes);
+    });
+
+    // `segundos_restantes` é null até a primeira música terminar: inventar um
+    // número antes disso é a DECISIONS #85.
+    it("sem medição, diz QUANDO o número vai aparecer", () => {
+      renderTranscrevendo({ done: 0, total: 47, atual: "a.mp3" });
+      expect(screen.getByText(textoDoTempoDaTranscricao(null))).toBeVisible();
+    });
+
+    it("dá para deixar rodando em segundo plano, e para cancelar", () => {
+      renderTranscrevendo({ done: 1, total: 47, atual: "a.mp3" });
+      fireEvent.click(
+        screen.getByRole("button", { name: "Deixar rodando em segundo plano" }),
+      );
+      expect(useEnrichStore.getState().overlayOpen).toBe(false);
+      expect(useEnrichStore.getState().status).toBe("transcribing");
+    });
+
+    it("cancelar para a fila e volta a idle", () => {
+      setBackendForTests({
+        enrichCancelScan: vi.fn(async () => {}),
+      } as unknown as Backend);
+      renderTranscrevendo({ done: 1, total: 47, atual: "a.mp3" });
+      fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
+      expect(useEnrichStore.getState().status).toBe("idle");
     });
   });
 });

@@ -14,16 +14,16 @@ import {
   ACESSORIO_INDISPONIVEL,
   ACESSORIO_PRONTO,
   ACESSORIO_SEM_BINARIO,
+  ROTULO_DO_DISPARO,
+  TRANSCRICAO_NO_FIM,
   estimativaTexto,
-  motivoDaConferencia,
   rotuloBaixarAcessorio,
   textoDoAcessorioAusente,
   textoDoDownload,
-  VAGALUME_URL,
+  tituloDoAcessorio,
 } from "../lib/curadoria";
-import type { ContagemCandidatas, EtapasLigadas } from "../lib/curadoria";
-import type { AcessorioInfo, AcessorioProgresso } from "../lib/api";
-import type { Modo } from "../lib/types";
+import type { EstadoDaContagem } from "../lib/curadoria";
+import type { AcessorioInfo, AcessorioProgresso, Contagem } from "../lib/api";
 import type { Song } from "../lib/types";
 import { useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
@@ -34,39 +34,80 @@ import { SettingsView } from "./SettingsView";
 /** Fundo da tela de Configurações — todo texto novo é lido em cima dele. */
 const FUNDO_CONFIGURACOES = "#F9FAFB";
 
-/** Contagem já respondida pelo backend. */
-const pronta = (total: number): ContagemCandidatas => ({ estado: "pronta", total });
-
 /**
- * Instalação nova: o acessório do som não está aqui e o campo da chave do
- * Vagalume está vazio — então nenhuma das duas etapas condicionais roda, e
- * nenhuma das duas entra na conta (MÉDIO-2).
+ * A CONTAGEM que o backend devolve (V10): total, quantas sem letra, a
+ * estimativa PRONTA e as etapas que vão rodar. O frontend não recalcula nada
+ * disso — a cópia em TypeScript já divergiu duas vezes (DECISIONS #80/#102).
+ *
+ * Instalação nova: sem o acessório do som e sem chave do Vagalume, só as
+ * etapas 1 e 3 rodam.
  */
-const SEM_SOM: EtapasLigadas = { som: false, vagalume: false };
+function contagem(over: Partial<Contagem> = {}): Contagem {
+  return {
+    total: 2,
+    sem_letra: 2,
+    segundos_estimados: 14,
+    etapas: ["lendo etiquetas e nome do arquivo", "procurando no LRCLIB"],
+    transcricao_disponivel: false,
+    ...over,
+  };
+}
 
-/** A mesma máquina depois de colar uma chave pessoal do Vagalume. */
-const CHAVE_PESSOAL = "minha-chave-do-vagalume";
+const pronta = (over: Partial<Contagem> = {}): EstadoDaContagem => ({
+  estado: "pronta",
+  contagem: contagem(over),
+});
 
 /** O texto que a tela deve mostrar, montado com os mesmos parâmetros dela. */
 function estimativa(
-  contagem: ContagemCandidatas,
+  contagemAtual: EstadoDaContagem,
   musicasNaPasta: number,
-  modo: Modo = "completar",
-  etapas: EtapasLigadas = SEM_SOM,
 ): string {
-  return estimativaTexto({ contagem, musicasNaPasta, modo, etapas });
+  return estimativaTexto({ contagem: contagemAtual, musicasNaPasta });
 }
 
-/** O acessório desta máquina, no estado pedido. */
+/** O acessório do SOM desta máquina, no estado pedido. */
 function acessorio(estado: AcessorioInfo["estado"]): AcessorioInfo {
   return {
     nome: "fpcalc",
     para_que_serve: "reconhecer a música pelo som",
     arquivo: "fpcalc-linux-x86_64",
     tamanho_bytes: 5_538_312,
+    segundos_estimados: 6,
+    executavel: true,
     estado,
     origem:
       "https://github.com/gabrielnader/cancioneiro/releases/download/acessorios-v1/fpcalc-linux-x86_64",
+  };
+}
+
+/** O PROGRAMA da etapa 5 (V10) — 2 MB. */
+function whisper(estado: AcessorioInfo["estado"]): AcessorioInfo {
+  return {
+    nome: "whisper-cli",
+    para_que_serve: "escrever a letra ouvindo o áudio",
+    arquivo: "whisper-cli-linux-x86_64",
+    tamanho_bytes: 2_000_000,
+    segundos_estimados: 2,
+    executavel: true,
+    estado,
+    origem:
+      "https://github.com/gabrielnader/cancioneiro/releases/download/acessorios-v1/whisper-cli-linux-x86_64",
+  };
+}
+
+/** O MODELO da etapa 5 (V10) — 181 MB de DADO, que ninguém executa. */
+function modelo(estado: AcessorioInfo["estado"]): AcessorioInfo {
+  return {
+    nome: "modelo-de-transcricao",
+    para_que_serve: "entender o que é cantado — é o que o transcritor consulta",
+    arquivo: "ggml-small-q5_1.bin",
+    tamanho_bytes: 181_000_000,
+    segundos_estimados: 181,
+    executavel: false,
+    estado,
+    origem:
+      "https://github.com/gabrielnader/cancioneiro/releases/download/acessorios-v1/ggml-small-q5_1.bin",
   };
 }
 
@@ -98,7 +139,13 @@ let emitirProgressoDoAcessorio: ((p: AcessorioProgresso) => void) | null;
 function estadoBase() {
   // a contagem de candidatas vem do BACKEND (mesma função da varredura):
   // por padrão, as duas incompletas do acervo de teste
-  enrichCount = vi.fn(async (prefix: string) => (prefix === "/acervo/1" ? 1 : 2));
+  enrichCount = vi.fn(async (prefix: string) =>
+    contagem(
+      prefix === "/acervo/1"
+        ? { total: 1, sem_letra: 1, segundos_estimados: 7 }
+        : {},
+    ),
+  );
   acessoriosEstado = vi.fn(async () => [acessorio("ausente")]);
   acessorioBaixar = vi.fn(async () => ({
     cancelado: false,
@@ -117,7 +164,7 @@ function estadoBase() {
       return () => {};
     }),
   } as unknown as Backend);
-  useUiStore.setState({ view: "settings", vagalumeApiKey: "" });
+  useUiStore.setState({ view: "settings" });
   useLibraryStore.setState({
     folders: [{ id: 1, path: "/acervo", last_scanned_at: null }],
     allSongs: [
@@ -136,6 +183,11 @@ function estadoBase() {
     progress: null,
     scanId: "",
     scannedTotal: 0,
+    semLetraNoFim: [],
+    segundosDeTranscricao: 0,
+    transcricao: { disponivel: false, download: null },
+    transcricaoProgress: null,
+    transcricaoDispensada: false,
     applyErrors: {},
     scanInFlight: false,
     startScan: vi.fn(async () => {}),
@@ -149,44 +201,58 @@ function secaoCuradoria(): HTMLElement {
 describe("SettingsView — seção de curadoria (V8 F18)", () => {
   beforeEach(estadoBase);
 
-  it("explica o funil ANTES de qualquer clique, etapa por etapa e na ordem", () => {
+  it("explica o funil ANTES de qualquer clique, etapa por etapa e na ordem", async () => {
     render(<SettingsView />);
+    await screen.findByText(estimativa(pronta(), 3));
     const secao = secaoCuradoria();
     const texto = secao.textContent ?? "";
-    expect(texto.indexOf("O que já está no arquivo")).toBeGreaterThan(-1);
-    expect(texto.indexOf("O que já está no arquivo")).toBeLessThan(
-      texto.indexOf("LRCLIB"),
+    // os nomes das etapas vêm do backend (`Contagem.etapas`), com maiúscula
+    expect(texto.indexOf("Lendo etiquetas e nome do arquivo")).toBeGreaterThan(-1);
+    expect(texto.indexOf("Lendo etiquetas e nome do arquivo")).toBeLessThan(
+      texto.indexOf("Procurando no LRCLIB"),
     );
-    expect(texto.indexOf("LRCLIB")).toBeLessThan(texto.indexOf("Vagalume"));
     // nada é gravado sem revisão (DECISIONS #49/#58)
     expect(texto).toContain("Nada é gravado sem você conferir");
     // roda em segundo plano, e isso é dito antes de começar
     expect(texto).toContain("segundo plano");
   });
 
-  // V9 — o app passou a reconhecer pelo som, e o texto que negava as duas
-  // etapas pesadas foi CONFERIDO antes de ser encurtado: hoje ele nega uma só.
-  it("é honesta sobre o que ainda NÃO é feito dentro do app", () => {
+  // V10 — o texto que dizia "escrever a letra ouvindo o áudio ainda não é
+  // feito aqui dentro" deixou de ser verdade nesta versão. Ele foi CONFERIDO
+  // antes de ser reusado (DECISIONS #100): virou o anúncio da pergunta do fim.
+  it("anuncia a etapa 5 como pergunta do FIM, sem prometê-la como etapa", () => {
     render(<SettingsView />);
     const texto = secaoCuradoria().textContent ?? "";
-    expect(texto).toContain("Escrever a letra ouvindo o áudio ainda não é feito");
-    // e não manda mais ninguém para uma ferramenta de terminal que ela não tem
+    expect(texto).toContain(TRANSCRICAO_NO_FIM);
+    expect(texto).not.toContain("ainda não é feito");
+    // e não manda ninguém para uma ferramenta de terminal que ela não tem
     expect(texto).not.toContain("ferramentas de curadoria");
   });
 
   // Sem o acessório baixado a etapa 2 não roda: listá-la seria prometer
-  // trabalho que não vai acontecer.
-  it("a etapa do som só é listada quando o acessório está pronto", async () => {
-    render(<SettingsView />);
-    await screen.findByText(estimativa(pronta(2), 3));
-    expect(secaoCuradoria().textContent).not.toContain("Reconhecer pelo som");
+  // trabalho que não vai acontecer (DECISIONS #101). Quem decide é o backend.
+  it("a etapa do som só é listada quando o backend a manda", async () => {
+    const primeira = render(<SettingsView />);
+    await screen.findByText(estimativa(pronta(), 3));
+    expect(secaoCuradoria().textContent).not.toContain("Reconhecendo pelo som");
+    primeira.unmount();
 
-    acessoriosEstado.mockResolvedValue([acessorio("pronto")]);
-    const { unmount } = render(<SettingsView />);
-    await screen.findAllByText(ACESSORIO_PRONTO);
-    expect(screen.getAllByRole("region", { name: "Curadoria do acervo" })[1]
-      .textContent).toContain("Reconhecer pelo som");
-    unmount();
+    enrichCount.mockResolvedValue(
+      contagem({
+        etapas: [
+          "lendo etiquetas e nome do arquivo",
+          "reconhecendo pelo som",
+          "procurando no LRCLIB",
+        ],
+        // um número que muda a FRASE, e não só o número: senão o texto da
+        // estimativa antiga e o da nova seriam idênticos e o `findByText`
+        // resolveria antes de a contagem nova chegar
+        segundos_estimados: 1020,
+      }),
+    );
+    render(<SettingsView />);
+    await screen.findByText(estimativa(pronta({ segundos_estimados: 1020 }), 3));
+    expect(secaoCuradoria().textContent).toContain("Reconhecendo pelo som");
   });
 
   it("começa na pasta selecionada na lateral — o contexto que o ✎ dava de graça", () => {
@@ -219,15 +285,19 @@ describe("SettingsView — seção de curadoria (V8 F18)", () => {
   // subcontava até zero e desabilitava o único ponto de entrada do produto.
   it("a estimativa vem do backend e acompanha a pasta escolhida", async () => {
     render(<SettingsView />);
-    expect(await screen.findByText(estimativa(pronta(2), 3))).toBeInTheDocument();
-    // a contagem viaja com o MODO: a conferência olha outra população
-    expect(enrichCount).toHaveBeenCalledWith("", "completar");
+    expect(await screen.findByText(estimativa(pronta(), 3))).toBeInTheDocument();
+    // a contagem leva a PASTA e nada mais (V10: não há modo nem credencial)
+    expect(enrichCount).toHaveBeenCalledWith("");
 
     fireEvent.change(screen.getByLabelText("Pasta a curar"), {
       target: { value: "/acervo/1" },
     });
-    expect(await screen.findByText(estimativa(pronta(1), 2))).toBeInTheDocument();
-    expect(enrichCount).toHaveBeenCalledWith("/acervo/1", "completar");
+    expect(
+      await screen.findByText(
+        estimativa(pronta({ total: 1, sem_letra: 1, segundos_estimados: 7 }), 2),
+      ),
+    ).toBeInTheDocument();
+    expect(enrichCount).toHaveBeenCalledWith("/acervo/1");
   });
 
   // A contagem virou uma chamada: enquanto ela não volta, a tela diz o que
@@ -262,15 +332,20 @@ describe("SettingsView — seção de curadoria (V8 F18)", () => {
       target: { value: "/acervo/2" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Buscar dados desta pasta" }));
-    expect(startScan).toHaveBeenCalledWith("/acervo/2", "completar");
+    expect(startScan).toHaveBeenCalledWith("/acervo/2", {
+      disponivel: false,
+      download: null,
+    });
   });
 
-  it("pasta sem nenhuma música incompleta: não deixa disparar e diz por quê", async () => {
-    enrichCount.mockResolvedValue(0);
+  it("pasta sem nenhuma música disponível: não deixa disparar e diz por quê", async () => {
+    enrichCount.mockResolvedValue(contagem({ total: 0, sem_letra: 0 }));
     useLibraryStore.setState({ allSongs: [song(1, "/acervo/1/completa.mp3")] });
     render(<SettingsView />);
     expect(
-      await screen.findByText(estimativa(pronta(0), 1)),
+      await screen.findByText(
+        estimativa(pronta({ total: 0, sem_letra: 0, segundos_estimados: 14 }), 1),
+      ),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Buscar dados desta pasta" }),
@@ -280,7 +355,7 @@ describe("SettingsView — seção de curadoria (V8 F18)", () => {
   // MÉDIO-11 — sem pasta nenhuma a tela dizia "nenhuma música desta pasta
   // está sem título, artista ou letra": descrevia ZERO músicas como completas.
   it("biblioteca sem música: não afirma completude, diz o que fazer", async () => {
-    enrichCount.mockResolvedValue(0);
+    enrichCount.mockResolvedValue(contagem({ total: 0, sem_letra: 0 }));
     useLibraryStore.setState({ allSongs: [], folders: [] });
     render(<SettingsView />);
     const secao = secaoCuradoria();
@@ -351,7 +426,10 @@ describe("SettingsView — acessório do reconhecimento pelo som (V9)", () => {
   beforeEach(estadoBase);
 
   function blocoDoAcessorio(): HTMLElement {
-    return screen.getByRole("region", { name: "Reconhecer música pelo som" });
+    // o título do bloco é o "para que serve" que vem PRONTO do backend
+    return screen.getByRole("region", {
+      name: tituloDoAcessorio(acessorio("ausente")),
+    });
   }
 
   it("ausente: diz para que serve, quanto ocupa e de onde vem — e só então oferece", async () => {
@@ -395,8 +473,9 @@ describe("SettingsView — acessório do reconhecimento pelo som (V9)", () => {
     acessoriosEstado.mockResolvedValue([]);
     render(<SettingsView />);
     expect(await screen.findByText(ACESSORIO_SEM_BINARIO)).toBeInTheDocument();
+    // não há bloco de acessório nenhum, e portanto nada para baixar
     expect(
-      within(blocoDoAcessorio()).queryByRole("button", { name: /Baixar/ }),
+      within(secaoCuradoria()).queryByRole("button", { name: /Baixar/ }),
     ).not.toBeInTheDocument();
   });
 
@@ -414,7 +493,7 @@ describe("SettingsView — acessório do reconhecimento pelo som (V9)", () => {
     render(<SettingsView />);
     expect(await screen.findByText(ACESSORIO_INDETERMINADO)).toBeInTheDocument();
     expect(
-      within(blocoDoAcessorio()).queryByRole("button", { name: /Baixar/ }),
+      within(secaoCuradoria()).queryByRole("button", { name: /Baixar/ }),
     ).not.toBeInTheDocument();
   });
 
@@ -441,11 +520,12 @@ describe("SettingsView — acessório do reconhecimento pelo som (V9)", () => {
         nome: "fpcalc",
         baixados: 1_048_576,
         total: 5_538_312,
+        segundos_restantes: null,
         download_id: acessorioBaixar.mock.calls[0][1] as string,
       });
     });
     expect(
-      screen.getByText(textoDoDownload(1_048_576, 5_538_312)),
+      screen.getByText(textoDoDownload(1_048_576, 5_538_312, null)),
     ).toBeInTheDocument();
     expect(screen.getByRole("progressbar", { name: /download/i })).toHaveAttribute(
       "aria-valuenow",
@@ -475,11 +555,12 @@ describe("SettingsView — acessório do reconhecimento pelo som (V9)", () => {
         nome: "fpcalc",
         baixados: 4_000_000,
         total: 5_538_312,
+        segundos_restantes: null,
         download_id: "de-outra-janela",
       });
     });
     expect(
-      screen.queryByText(textoDoDownload(4_000_000, 5_538_312)),
+      screen.queryByText(textoDoDownload(4_000_000, 5_538_312, null)),
     ).not.toBeInTheDocument();
   });
 
@@ -498,10 +579,11 @@ describe("SettingsView — acessório do reconhecimento pelo som (V9)", () => {
         nome: "fpcalc",
         baixados: 1_048_576,
         total: null,
+        segundos_restantes: null,
         download_id: acessorioBaixar.mock.calls[0][1] as string,
       });
     });
-    expect(screen.getByText(textoDoDownload(1_048_576, null))).toBeInTheDocument();
+    expect(screen.getByText(textoDoDownload(1_048_576, null, null))).toBeInTheDocument();
     expect(screen.queryByRole("progressbar", { name: /download/i })).toBeNull();
   });
 
@@ -528,13 +610,14 @@ describe("SettingsView — acessório do reconhecimento pelo som (V9)", () => {
         nome: "fpcalc",
         baixados: 6_000_000,
         total: 5_538_312,
+        segundos_restantes: null,
         download_id: acessorioBaixar.mock.calls[0][1] as string,
       });
     });
     // nenhuma barra determinada: nem >100%, nem 100% mentiroso
     expect(screen.queryByRole("progressbar", { name: /download/i })).toBeNull();
     // e o que já veio continua sendo contado — é o fato de que dispomos
-    expect(screen.getByText(textoDoDownload(6_000_000, null))).toBeInTheDocument();
+    expect(screen.getByText(textoDoDownload(6_000_000, null, null))).toBeInTheDocument();
   });
 
   // Enquanto o total é confiável, a barra é barra: valores dentro da faixa e
@@ -553,6 +636,7 @@ describe("SettingsView — acessório do reconhecimento pelo som (V9)", () => {
         nome: "fpcalc",
         baixados: 2_000_000,
         total: 5_538_312,
+        segundos_restantes: null,
         download_id: acessorioBaixar.mock.calls[0][1] as string,
       });
     });
@@ -580,6 +664,7 @@ describe("SettingsView — acessório do reconhecimento pelo som (V9)", () => {
         nome: "fpcalc",
         baixados: 0,
         total: 0,
+        segundos_restantes: null,
         download_id: acessorioBaixar.mock.calls[0][1] as string,
       });
     });
@@ -676,277 +761,364 @@ describe("SettingsView — acessório do reconhecimento pelo som (V9)", () => {
 // ---------------------------------------------------------------------------
 // V9 — os dois trabalhos: completar o que falta x conferir a etiqueta
 // ---------------------------------------------------------------------------
-describe("SettingsView — o modo de conferência (V9)", () => {
+// ---------------------------------------------------------------------------
+// V10 — o caminho único: os modos sumiram (DECISIONS #102)
+// ---------------------------------------------------------------------------
+//
+// Modo é escolha, e escolha é pedágio para quem não tem a quem perguntar. Com
+// os 2 s por música MEDIDOS em campo, separar "completar" de "conferir"
+// custava 2 minutos e meio num acervo de 150 — e cobrava por eles que alguém
+// que não sabe o que é terminal escolhesse entre dois nomes que não entende.
+// Pior: a conferência era a única coisa que achava etiqueta ERRADA, e recurso
+// que depende de o usuário adivinhar que existe é recurso que não existe.
+
+describe("SettingsView — o caminho único (V10)", () => {
   beforeEach(estadoBase);
 
-  function opcaoConferir(): HTMLElement {
-    return screen.getByRole("radio", { name: /Conferir se a etiqueta/ });
-  }
-
-  it("o padrão é completar o que falta, e nunca a conferência", async () => {
+  it("há UM botão, e nenhuma escolha de trabalho a fazer antes", async () => {
     acessoriosEstado.mockResolvedValue([acessorio("pronto")]);
     render(<SettingsView />);
-    await screen.findByText(ACESSORIO_PRONTO);
+    await screen.findAllByText(ACESSORIO_PRONTO);
+    expect(screen.queryAllByRole("radio")).toHaveLength(0);
+    const secao = secaoCuradoria();
+    expect(secao.textContent ?? "").not.toContain("Conferir se a etiqueta");
+    expect(secao.textContent ?? "").not.toContain("Completar o que falta");
     expect(
-      screen.getByRole("radio", { name: /Completar o que falta/ }),
-    ).toBeChecked();
-    expect(opcaoConferir()).not.toBeChecked();
-  });
-
-  // Sem o acessório a conferência é impossível: o motivo é TEXTO na tela, e
-  // não `title=` num controle desabilitado (DECISIONS #87).
-  it("sem o acessório, a conferência fica indisponível com o motivo visível", async () => {
-    render(<SettingsView />);
-    await screen.findByText(estimativa(pronta(2), 3));
-    expect(opcaoConferir()).toBeDisabled();
-    const motivo = screen.getByText(motivoDaConferencia("ausente")!);
-    expect(motivo).toBeVisible();
-    expect(opcaoConferir()).toHaveAttribute("aria-describedby", motivo.id);
-  });
-
-  // MÉDIO-1 — os quatro estados eram VISITADOS pelos testes de contraste, e
-  // nenhum deles LIA o texto: a decisão 87 tinha sido cumprida pela metade
-  // (visitou-se o pixel, não a frase). Em três deles a tela mandava "baixe o
-  // acessório abaixo" e o bloco de baixo dizia que não havia nada para baixar.
-  describe("o motivo do bloqueio bate com o estado do acessório (MÉDIO-1)", () => {
-    const casos: Array<[string, () => void, "indisponivel" | "sem-binario" | "indeterminado" | "ausente" | "corrompido"]> = [
-      [
-        "indisponível nesta versão",
-        () => acessoriosEstado.mockResolvedValue([acessorio("indisponivel")]),
-        "indisponivel",
-      ],
-      [
-        "sem binário para este computador",
-        () => acessoriosEstado.mockResolvedValue([]),
-        "sem-binario",
-      ],
-      [
-        "consulta falhou",
-        () => acessoriosEstado.mockRejectedValue(new Error("sem perfil")),
-        "indeterminado",
-      ],
-      [
-        "ausente (dá para baixar)",
-        () => acessoriosEstado.mockResolvedValue([acessorio("ausente")]),
-        "ausente",
-      ],
-      [
-        "corrompido (dá para baixar de novo)",
-        () => acessoriosEstado.mockResolvedValue([acessorio("corrompido")]),
-        "corrompido",
-      ],
-    ];
-
-    for (const [nome, preparar, estado] of casos) {
-      it(`${nome}: o motivo é o do estado, e a conferência fica bloqueada`, async () => {
-        preparar();
-        render(<SettingsView />);
-        await act(async () => {});
-        const esperado = motivoDaConferencia(estado)!;
-        const motivo = screen.getByText(esperado);
-        expect(motivo).toBeVisible();
-        expect(opcaoConferir()).toBeDisabled();
-        expect(opcaoConferir()).toHaveAttribute("aria-describedby", motivo.id);
-      });
-    }
-
-    // O defeito em uma frase: mandar procurar um botão que não está lá. Este
-    // teste varre a seção inteira, e não só o parágrafo do motivo — a
-    // contradição vale entre quaisquer dois textos da mesma tela.
-    it("onde não há botão de baixar, nada na seção manda baixar", async () => {
-      for (const preparar of [
-        () => acessoriosEstado.mockResolvedValue([acessorio("indisponivel")]),
-        () => acessoriosEstado.mockResolvedValue([]),
-        () => acessoriosEstado.mockRejectedValue(new Error("sem perfil")),
-      ]) {
-        estadoBase();
-        preparar();
-        const { unmount } = render(<SettingsView />);
-        await act(async () => {});
-        const secao = secaoCuradoria();
-        expect(
-          within(secao).queryByRole("button", { name: /Baixar/ }),
-        ).not.toBeInTheDocument();
-        expect(secao.textContent ?? "").not.toMatch(/baixe o acessório/i);
-        unmount();
-      }
-    });
-
-    // Enquanto a resposta não chega nada é afirmado — nem que dá, nem que não
-    // dá. O rádio já está desabilitado, e o motivo precisa existir mesmo aí
-    // (DECISIONS #86/#87).
-    it("com a pergunta ainda em curso, o motivo diz que estamos conferindo", () => {
-      acessoriosEstado.mockImplementation(() => new Promise(() => {}));
-      render(<SettingsView />);
-      expect(
-        screen.getByText(motivoDaConferencia("perguntando")!),
-      ).toBeVisible();
-      expect(opcaoConferir()).toBeDisabled();
-    });
-
-    it("com o som pronto, não sobra motivo nenhum na tela", async () => {
-      acessoriosEstado.mockResolvedValue([acessorio("pronto")]);
-      render(<SettingsView />);
-      await screen.findByText(ACESSORIO_PRONTO);
-      for (const estado of ["ausente", "sem-binario", "indisponivel", "indeterminado"] as const) {
-        expect(
-          screen.queryByText(motivoDaConferencia(estado)!),
-        ).not.toBeInTheDocument();
-      }
-      expect(opcaoConferir()).toBeEnabled();
-    });
-  });
-
-  it("com o acessório, escolher a conferência troca contagem, texto e botão", async () => {
-    acessoriosEstado.mockResolvedValue([acessorio("pronto")]);
-    enrichCount.mockImplementation(async (_prefixo: string, modo?: Modo) =>
-      modo === "conferencia" ? 150 : 2,
-    );
-    render(<SettingsView />);
-    await screen.findByText(ACESSORIO_PRONTO);
-
-    fireEvent.click(opcaoConferir());
-    expect(
-      await screen.findByText(
-        estimativa(pronta(150), 3, "conferencia", { som: true, vagalume: true }),
-      ),
-    ).toBeInTheDocument();
-    expect(enrichCount).toHaveBeenCalledWith("", "conferencia");
-    // o botão diz qual dos dois trabalhos vai começar
-    expect(
-      screen.getByRole("button", { name: "Conferir esta pasta" }),
+      screen.getByRole("button", { name: ROTULO_DO_DISPARO }),
     ).toBeEnabled();
   });
 
-  // "Nenhuma música precisa de busca agora" seria falso aqui: a conferência
-  // não olha completude nenhuma. Estado raro, mas só é verdade sobre a tela o
-  // que o teste visitou (DECISIONS #87).
-  it("conferência sem nada a conferir: o motivo fala a língua do modo", async () => {
-    acessoriosEstado.mockResolvedValue([acessorio("pronto")]);
-    enrichCount.mockImplementation(async (_prefixo: string, modo?: Modo) =>
-      modo === "conferencia" ? 0 : 2,
-    );
+  it("a contagem é pedida com a PASTA e nada mais", async () => {
     render(<SettingsView />);
-    await screen.findByText(ACESSORIO_PRONTO);
-
-    fireEvent.click(opcaoConferir());
-    expect(
-      await screen.findByText("Não há o que conferir nesta pasta."),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByRole("button", { name: "Conferir esta pasta" }),
-    ).toBeDisabled();
+    await screen.findByText(estimativa(pronta(), 3));
+    expect(enrichCount).toHaveBeenCalledWith("");
+    expect(enrichCount.mock.calls[0]).toHaveLength(1);
   });
 
-  it("disparar em conferência leva o modo à varredura", async () => {
+  // DECISIONS #101 — a tela lista o que ESTA máquina faz. Quem decide isso é o
+  // backend, na `Contagem.etapas`: aqui a lista só ganha a frase que explica.
+  it("as etapas listadas são as que o backend disse que vão rodar", async () => {
+    enrichCount.mockResolvedValue(
+      contagem({
+        etapas: [
+          "lendo etiquetas e nome do arquivo",
+          "reconhecendo pelo som",
+          "procurando no LRCLIB",
+          "procurando no Vagalume",
+        ],
+        segundos_estimados: 1020,
+      }),
+    );
+    render(<SettingsView />);
+    await screen.findByText(estimativa(pronta({ segundos_estimados: 1020 }), 3));
+    const texto = secaoCuradoria().textContent ?? "";
+    expect(texto.indexOf("Lendo etiquetas e nome do arquivo")).toBeLessThan(
+      texto.indexOf("Reconhecendo pelo som"),
+    );
+    expect(texto.indexOf("Reconhecendo pelo som")).toBeLessThan(
+      texto.indexOf("Procurando no LRCLIB"),
+    );
+    expect(texto).toContain("Procurando no Vagalume");
+  });
+
+  it("etapa que o backend não mandou não aparece na lista", async () => {
+    render(<SettingsView />);
+    await screen.findByText(estimativa(pronta(), 3));
+    const texto = secaoCuradoria().textContent ?? "";
+    expect(texto).not.toContain("Reconhecendo pelo som");
+    expect(texto).not.toContain("Procurando no Vagalume");
+  });
+
+  // A estimativa vem PRONTA (DECISIONS #80): mudar só o número do backend
+  // muda a frase inteira, e não há conta nenhuma em TypeScript para divergir.
+  it("a estimativa é o número do backend, formatado", async () => {
+    enrichCount.mockResolvedValue(
+      contagem({ total: 150, sem_letra: 80, segundos_estimados: 1020 }),
+    );
+    render(<SettingsView />);
+    expect(
+      await screen.findByText(/150 músicas nesta pasta/),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/por volta de 17 minutos/)).toBeInTheDocument();
+  });
+
+  it("dispara levando o que a máquina pode fazer quanto à etapa 5", async () => {
     const startScan = vi.fn(async () => {});
     useEnrichStore.setState({ startScan });
-    acessoriosEstado.mockResolvedValue([acessorio("pronto")]);
+    enrichCount.mockResolvedValue(contagem({ transcricao_disponivel: true }));
+    acessoriosEstado.mockResolvedValue([
+      acessorio("pronto"),
+      whisper("pronto"),
+      modelo("pronto"),
+    ]);
     render(<SettingsView />);
-    await screen.findByText(ACESSORIO_PRONTO);
+    await screen.findByText(estimativa(pronta(), 3));
 
-    fireEvent.click(opcaoConferir());
-    fireEvent.click(screen.getByRole("button", { name: "Conferir esta pasta" }));
-    expect(startScan).toHaveBeenCalledWith("", "conferencia");
+    fireEvent.click(screen.getByRole("button", { name: ROTULO_DO_DISPARO }));
+    expect(startScan).toHaveBeenCalledWith("", {
+      disponivel: true,
+      download: null,
+    });
+  });
+
+  // Sem os acessórios, a pergunta do fim precisa do TAMANHO e do TEMPO para
+  // oferecer o download (DECISIONS #106) — e quem os soma é a tela, a partir
+  // do que o backend disse de cada acessório.
+  it("sem os acessórios da etapa 5, o disparo leva o que falta baixar", async () => {
+    const startScan = vi.fn(async () => {});
+    useEnrichStore.setState({ startScan });
+    acessoriosEstado.mockResolvedValue([
+      acessorio("pronto"),
+      whisper("ausente"),
+      modelo("ausente"),
+    ]);
+    render(<SettingsView />);
+    await screen.findByText(estimativa(pronta(), 3));
+
+    fireEvent.click(screen.getByRole("button", { name: ROTULO_DO_DISPARO }));
+    expect(startScan).toHaveBeenCalledWith("", {
+      disponivel: false,
+      download: { bytes: 183_000_000, segundos: 183 },
+    });
+  });
+
+  it("zero músicas disponíveis: não deixa disparar e diz por quê", async () => {
+    enrichCount.mockResolvedValue(contagem({ total: 0, sem_letra: 0 }));
+    render(<SettingsView />);
+    await screen.findByText(estimativa(pronta({ total: 0 }), 3));
+    expect(screen.getByRole("button", { name: ROTULO_DO_DISPARO })).toBeDisabled();
+    expect(
+      screen.getByText("Não há música disponível nesta pasta para procurar."),
+    ).toBeVisible();
+  });
+
+  // A etapa 5 leva HORAS e roda em segundo plano: voltar a Configurações tem
+  // de mostrar em que pé ela está, e não liberar um segundo disparo por cima.
+  it("com a transcrição rodando, a seção mostra o progresso e bloqueia o disparo", () => {
+    useEnrichStore.setState({
+      status: "transcribing",
+      overlayOpen: false,
+      transcricaoProgress: {
+        done: 3,
+        total: 47,
+        atual: "Oh! Chuva.mp3",
+        porcento_da_musica: 45,
+        segundos_restantes: 9800,
+        scan_id: "t1",
+      },
+    });
+    render(<SettingsView />);
+    const secao = secaoCuradoria();
+    expect(secao).toHaveTextContent("Escrevendo as letras… 3 de 47");
+    expect(screen.getByRole("button", { name: ROTULO_DO_DISPARO })).toBeDisabled();
+    fireEvent.click(
+      within(secao).getByRole("button", { name: "Acompanhar a escrita" }),
+    );
+    expect(useEnrichStore.getState().overlayOpen).toBe(true);
   });
 });
 
-describe("SettingsView — chave do Vagalume (V8 F18)", () => {
+// ---------------------------------------------------------------------------
+// V10 — os acessórios da etapa 5: 2 MB de programa e 181 MB de dado
+// ---------------------------------------------------------------------------
+
+describe("SettingsView — os acessórios da etapa 5 (V10)", () => {
+  beforeEach(() => {
+    estadoBase();
+    acessoriosEstado.mockResolvedValue([
+      acessorio("ausente"),
+      whisper("ausente"),
+      modelo("ausente"),
+    ]);
+  });
+
+  it("cada acessório tem o seu bloco, com o para-que-serve do backend", async () => {
+    render(<SettingsView />);
+    for (const info of [acessorio("ausente"), whisper("ausente"), modelo("ausente")]) {
+      expect(
+        await screen.findByRole("region", { name: tituloDoAcessorio(info) }),
+      ).toBeInTheDocument();
+    }
+  });
+
+  // "um programa de 2 MB e um arquivo de 181 MB" é outra conversa que "dois
+  // programas": o modelo é DADO, e ninguém o executa.
+  it("o modelo é anunciado como arquivo, e o transcritor como programa", async () => {
+    render(<SettingsView />);
+    const bloco = await screen.findByRole("region", {
+      name: tituloDoAcessorio(modelo("ausente")),
+    });
+    expect(bloco).toHaveTextContent("um arquivo de 172,6 MB");
+    const programa = screen.getByRole("region", {
+      name: tituloDoAcessorio(whisper("ausente")),
+    });
+    expect(programa).toHaveTextContent("um programa de 1,9 MB");
+  });
+
+  // DECISIONS #106 — para 180 MB a dispensa do tempo acabou.
+  it("o download de 180 MB anuncia o tempo, e não só o tamanho", async () => {
+    render(<SettingsView />);
+    const bloco = await screen.findByRole("region", {
+      name: tituloDoAcessorio(modelo("ausente")),
+    });
+    expect(bloco).toHaveTextContent("cerca de 3 minutos");
+  });
+
+  it("baixar o modelo pede o modelo, e não o acessório do som", async () => {
+    render(<SettingsView />);
+    const bloco = await screen.findByRole("region", {
+      name: tituloDoAcessorio(modelo("ausente")),
+    });
+    await act(async () => {
+      fireEvent.click(
+        within(bloco).getByRole("button", {
+          name: rotuloBaixarAcessorio(modelo("ausente"), false),
+        }),
+      );
+    });
+    expect(acessorioBaixar).toHaveBeenCalledWith(
+      "modelo-de-transcricao",
+      expect.any(String),
+    );
+  });
+
+  // A velocidade MEDIDA troca a estimativa declarada assim que existe amostra
+  // — e o evento de OUTRO acessório não mexe nesta barra.
+  it("o progresso mostra quanto falta, pela velocidade medida", async () => {
+    acessorioBaixar.mockImplementation(() => new Promise(() => {}));
+    render(<SettingsView />);
+    const bloco = await screen.findByRole("region", {
+      name: tituloDoAcessorio(modelo("ausente")),
+    });
+    await act(async () => {
+      fireEvent.click(
+        within(bloco).getByRole("button", {
+          name: rotuloBaixarAcessorio(modelo("ausente"), false),
+        }),
+      );
+    });
+    await act(async () => {
+      emitirProgressoDoAcessorio?.({
+        nome: "modelo-de-transcricao",
+        baixados: 40_000_000,
+        total: 181_000_000,
+        segundos_restantes: 141,
+        download_id: acessorioBaixar.mock.calls[0][1] as string,
+      });
+    });
+    expect(
+      within(bloco).getByText(
+        textoDoDownload(40_000_000, 181_000_000, 141),
+      ),
+    ).toBeVisible();
+    expect(
+      within(bloco).getByText(/faltam cerca de 2 minutos/),
+    ).toBeVisible();
+  });
+
+  it("o progresso de OUTRO acessório não mexe nesta barra", async () => {
+    acessorioBaixar.mockImplementation(() => new Promise(() => {}));
+    render(<SettingsView />);
+    const bloco = await screen.findByRole("region", {
+      name: tituloDoAcessorio(modelo("ausente")),
+    });
+    await act(async () => {
+      fireEvent.click(
+        within(bloco).getByRole("button", {
+          name: rotuloBaixarAcessorio(modelo("ausente"), false),
+        }),
+      );
+    });
+    await act(async () => {
+      emitirProgressoDoAcessorio?.({
+        nome: "fpcalc",
+        baixados: 5_000_000,
+        total: 5_538_312,
+        segundos_restantes: 1,
+        download_id: acessorioBaixar.mock.calls[0][1] as string,
+      });
+    });
+    expect(
+      within(bloco).queryByText(textoDoDownload(5_000_000, 5_538_312, 1)),
+    ).toBeNull();
+  });
+
+  // Baixar um dos dois não liga a etapa 5: ela exige os DOIS, e quem combina
+  // os dois estados é o backend (DECISIONS #80).
+  it("baixar só o programa não promete a etapa 5", async () => {
+    enrichCount.mockImplementation(async () =>
+      contagem({ transcricao_disponivel: false }),
+    );
+    acessoriosEstado.mockResolvedValue([
+      acessorio("pronto"),
+      whisper("pronto"),
+      modelo("ausente"),
+    ]);
+    const startScan = vi.fn(async () => {});
+    useEnrichStore.setState({ startScan });
+    render(<SettingsView />);
+    await screen.findByText(estimativa(pronta(), 3));
+    fireEvent.click(screen.getByRole("button", { name: ROTULO_DO_DISPARO }));
+    expect(startScan).toHaveBeenCalledWith("", {
+      disponivel: false,
+      download: { bytes: 181_000_000, segundos: 181 },
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V10 — nenhuma credencial na tela (DECISIONS #110)
+// ---------------------------------------------------------------------------
+//
+// O Vagalume saiu do produto: API descontinuada, chave que o dono do produto
+// nunca conseguiu, e código que nunca rodou contra o serviço real. O
+// `lyrics.ovh` que tomou o lugar dele não pede nada — então o campo de chave e
+// todo o texto que o explicava saíram da tela. Era o último pedágio de
+// configuração do produto, numa tela usada por ~40 pessoas leigas.
+
+describe("SettingsView — nenhuma credencial pedida (V10)", () => {
   beforeEach(estadoBase);
 
-  // MÉDIO-2 — o PRD V9 previu uma chave NOSSA, embutida em tempo de build, e
-  // ela nunca existiu: o segredo `VAGALUME_API_KEY` não foi criado. Enquanto
-  // for assim, "só é preciso preencher se o Vagalume parar de funcionar"
-  // afirma que ele funciona sem a chave — e não funciona em build nenhuma.
-  it("sem chave embutida, diz que sem ela o Vagalume não é consultado", () => {
+  it("não há campo de chave nenhum, e a seção não fala em credencial", async () => {
     render(<SettingsView />);
+    await screen.findByText(estimativa(pronta(), 3));
     const texto = secaoCuradoria().textContent ?? "";
-    expect(texto).toContain("Sem ela, a busca não consulta o Vagalume");
-    expect(texto).not.toContain("Só é preciso preencher");
-    // e continua dizendo que é grátis e onde pegar: o passo seguinte
-    expect(texto).toContain("gratuita");
-    expect(texto).toContain(VAGALUME_URL);
+    expect(texto.toLowerCase()).not.toContain("chave");
+    expect(texto.toLowerCase()).not.toContain("vagalume");
+    expect(
+      screen.queryByLabelText(/Chave do Vagalume/i),
+    ).not.toBeInTheDocument();
+    // nenhum campo de texto sobrou na seção: o seletor de pasta é um <select>
+    expect(within(secaoCuradoria()).queryAllByRole("textbox")).toHaveLength(0);
   });
 
-  // MÉDIO-2 — o componente já tinha a chave em mãos e não a usava: o funil
-  // enumerava 4 etapas e entregava 2, e a estimativa somava 2 s/música de um
-  // trabalho que não acontece. O princípio "só liste o que ESTA máquina faz"
-  // vale para o Vagalume como vale para o som.
-  describe("a etapa 4 pergunta se ESTA máquina tem a chave (MÉDIO-2)", () => {
-    it("campo vazio: a etapa é listada com a condição, e não pesa na conta", async () => {
-      render(<SettingsView />);
-      await screen.findByText(estimativa(pronta(2), 3));
-      const texto = secaoCuradoria().textContent ?? "";
-      // listada — é onde alguém descobre para que serve o campo lá embaixo
-      expect(texto).toContain("Vagalume");
-      // ...mas com a condição escrita, e não como promessa
-      expect(texto).toContain("só com a chave gratuita");
-    });
-
-    it("chave pessoal colada: a etapa deixa de pedir, e passa a pesar na conta", async () => {
-      useUiStore.setState({ vagalumeApiKey: CHAVE_PESSOAL });
-      render(<SettingsView />);
-      await screen.findByText(
-        estimativa(pronta(2), 3, "completar", { som: false, vagalume: true }),
-      );
-      expect(secaoCuradoria().textContent ?? "").not.toContain(
-        "só com a chave gratuita",
-      );
-    });
-
-    // Chave só de espaços não é chave: contá-la prometeria uma etapa que o
-    // backend vai pular em silêncio.
-    it("espaços em branco não valem por chave", async () => {
-      useUiStore.setState({ vagalumeApiKey: "   " });
-      render(<SettingsView />);
-      await screen.findByText(estimativa(pronta(2), 3));
-      expect(secaoCuradoria().textContent ?? "").toContain(
-        "só com a chave gratuita",
-      );
-    });
-  });
-
-  // MÉDIO-10 — a chave É gravada em disco (localStorage das preferências), e
-  // quatro lugares diziam que não. A decisão de produto é mantê-la guardada:
-  // 40 pessoas sem suporte redigitando uma chave a cada sessão é pior. O que
-  // muda é a verdade do texto, que é a única coisa que essas pessoas têm.
-  it("diz a verdade sobre onde a chave fica guardada e para onde ela vai", () => {
+  it("a contagem é pedida sem credencial, e com um argumento só", async () => {
     render(<SettingsView />);
+    await screen.findByText(estimativa(pronta(), 3));
+    expect(enrichCount).toHaveBeenCalledWith("");
+    expect(enrichCount.mock.calls[0]).toHaveLength(1);
+  });
+
+  // A etapa 4 aparece SEMPRE: ela não depende de nada que a pessoa tenha de
+  // providenciar. Quem decide a lista continua sendo o backend.
+  it("a etapa do lyrics.ovh é listada sem depender de nada", async () => {
+    enrichCount.mockResolvedValue(
+      contagem({
+        etapas: [
+          "lendo etiquetas e nome do arquivo",
+          "procurando no LRCLIB",
+          "procurando no lyrics.ovh",
+        ],
+        segundos_estimados: 18,
+      }),
+    );
+    render(<SettingsView />);
+    await screen.findByText(estimativa(pronta({ segundos_estimados: 18 }), 3));
     const texto = secaoCuradoria().textContent ?? "";
-    // encurtar NÃO podia jogar fora nada disto: é o que a pessoa precisa
-    // saber sobre uma credencial dela guardada por nós (DECISIONS #84)
-    expect(texto).toContain("Ela fica guardada neste computador");
-    expect(texto).toContain("Não entra no banco de músicas");
-    expect(texto).toContain("não é escrita nos MP3");
-    expect(texto).toContain("não vai a lugar nenhum além do próprio Vagalume");
-  });
-
-  it("digitar guarda nas preferências; apagar volta ao estado sem chave", () => {
-    render(<SettingsView />);
-    const campo = screen.getByLabelText("Chave do Vagalume (opcional)");
-    fireEvent.change(campo, { target: { value: "minha-chave" } });
-    expect(useUiStore.getState().vagalumeApiKey).toBe("minha-chave");
-    fireEvent.change(campo, { target: { value: "" } });
-    expect(useUiStore.getState().vagalumeApiKey).toBe("");
-  });
-
-  // É a chave de um serviço gratuito da própria pessoa, num app sem conta e
-  // sem telemetria: esconder atrás de bolinhas só atrapalharia conferir a
-  // colagem. Mas ela nunca vai para log.
-  it("é um campo de texto comum, conferível — não um campo de senha", () => {
-    render(<SettingsView />);
-    expect(screen.getByLabelText("Chave do Vagalume (opcional)")).toHaveAttribute(
-      "type",
-      "text",
-    );
-  });
-
-  it("a chave já guardada aparece no campo ao reabrir Configurações", () => {
-    useUiStore.setState({ vagalumeApiKey: "guardada" });
-    render(<SettingsView />);
-    expect(screen.getByLabelText("Chave do Vagalume (opcional)")).toHaveValue(
-      "guardada",
-    );
+    expect(texto).toContain("Procurando no lyrics.ovh");
+    // e a lista diz a fraqueza dela: é a única etapa cujo casamento o
+    // programa não tem como conferir
+    expect(texto).toContain("ele não diz de que música é a letra");
   });
 });
 
@@ -1067,6 +1239,7 @@ describe("SettingsView — acessibilidade da seção nova", () => {
         nome: "fpcalc",
         baixados: 2_000_000,
         total: 5_538_312,
+        segundos_restantes: null,
         download_id: acessorioBaixar.mock.calls[0][1] as string,
       });
     });
@@ -1077,7 +1250,9 @@ describe("SettingsView — acessibilidade da seção nova", () => {
     render(<SettingsView />);
     const secao = secaoCuradoria();
     const controles = secao.querySelectorAll<HTMLElement>("button, select, input");
-    expect(controles.length).toBeGreaterThanOrEqual(3);
+    // V10 — o campo de chave saiu (DECISIONS #110): sobraram o seletor de
+    // pasta, o disparo e os botões de download dos acessórios
+    expect(controles.length).toBeGreaterThanOrEqual(2);
     for (const c of controles) {
       expect(c.getAttribute("tabindex")).not.toBe("-1");
     }

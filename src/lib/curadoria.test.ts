@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { AcessorioInfo, Contagem, EnrichProposal } from "./api";
 import { buildFolderTree } from "./folderTree";
 import {
   ACESSORIO_CANCELADO,
@@ -7,55 +8,98 @@ import {
   ACESSORIO_INDISPONIVEL,
   ACESSORIO_PRONTO,
   ACESSORIO_SEM_BINARIO,
+  AVISO_LETRA_DE_MAQUINA,
+  AVISO_MARCAR_INSTRUMENTAL,
   AVISO_NOME_ESCRITO,
-  ETAPAS_FORA_DO_APP,
+  EXPLICACAO_DA_CONFIANCA_DO_SOM,
   LABEL_SOM_DIZ,
   LABEL_SUBSTITUIR_LETRA,
   LABEL_SUA_ETIQUETA_DIZ,
-  MODOS,
+  ORDEM_DOS_GRUPOS,
+  ROTULO_COMECAR_TRANSCRICAO,
+  ROTULO_DO_DISPARO,
   SEM_RESULTADO_INDIVIDUAL,
   SEM_RESULTADO_INSTRUMENTAL,
-  VAGALUME_URL,
+  TRANSCRICAO_NO_FIM,
+  agruparPorRisco,
   avisoLetraExistente,
   avisoSemPerguntarAoSom,
+  compararConflito,
   confiancaDoSom,
+  destacarDiferenca,
+  downloadParaTranscrever,
+  estadoDoAcessorio,
   estimativaTexto,
-  estadoDoSom,
   etapasDoFunil,
   formatarTamanho,
-  motivoDaConferencia,
+  grupoDaProposta,
   opcoesDePasta,
   rotuloAceitarSom,
   rotuloBaixarAcessorio,
-  rotuloDoDisparo,
-  segundosPorMusica,
+  rotuloDaMarcacao,
+  rotuloDoRefrao,
   textoAplicado,
+  textoDaOfertaDeTranscricao,
+  textoDaTranscricaoIndisponivel,
+  textoDoAcessorioAusente,
   textoDoCabecalho,
   textoDoDownload,
-  textoDaChaveDoVagalume,
-  textoDoAcessorioAusente,
+  textoDoGrupoDobrado,
+  textoDoProgressoDaTranscricao,
+  textoDoTempoDaTranscricao,
   textoSemPropostas,
-  type ContagemCandidatas,
-  type EstadoDoSom,
-  type EtapasLigadas,
+  tituloDoAcessorio,
+  tituloDoGrupo,
+  type EstadoDaContagem,
+  type EstadoDoAcessorio,
 } from "./curadoria";
-import type { Folder, Song } from "./types";
+import { FONTE_TRANSCRICAO, type Folder, type Song } from "./types";
+
+// ---------------------------------------------------------------------------
+// Ajudantes
+// ---------------------------------------------------------------------------
+
+/** As etapas que o backend lista numa máquina completa (`Contagem.etapas`). */
+const ETAPAS_COMPLETAS = [
+  "lendo etiquetas e nome do arquivo",
+  "reconhecendo pelo som",
+  "procurando no LRCLIB",
+  "procurando no lyrics.ovh",
+];
+/**
+ * Instalação nova, sem o acessório do som. A etapa 4 continua na lista: ela
+ * não pede credencial nenhuma, então existe em toda máquina com internet
+ * (V10, DECISIONS #110).
+ */
+const ETAPAS_BASICAS = [
+  "lendo etiquetas e nome do arquivo",
+  "procurando no LRCLIB",
+  "procurando no lyrics.ovh",
+];
+
+function contagem(over: Partial<Contagem> = {}): Contagem {
+  return {
+    total: 150,
+    sem_letra: 80,
+    segundos_estimados: 1020,
+    etapas: ETAPAS_COMPLETAS,
+    transcricao_disponivel: false,
+    ...over,
+  };
+}
 
 /** Contagem já respondida pelo backend (`enrich_count`). */
-const pronta = (total: number): ContagemCandidatas => ({ estado: "pronta", total });
+const pronta = (over: Partial<Contagem> = {}): EstadoDaContagem => ({
+  estado: "pronta",
+  contagem: contagem(over),
+});
 
-/** Etapas de uma instalação NOVA: sem o acessório, com o Vagalume (chave nossa). */
-const SEM_SOM: EtapasLigadas = { som: false, vagalume: true };
-/** Etapas de quem já baixou o acessório. */
-const COM_SOM: EtapasLigadas = { som: true, vagalume: true };
-
-/** Atalho: a estimativa do modo de sempre. */
-function completar(
-  contagem: ContagemCandidatas,
+/** Atalho da estimativa: o único caminho que existe (V10). */
+function estimativa(
+  estado: EstadoDaContagem,
   musicasNaPasta: number,
-  etapas: EtapasLigadas = SEM_SOM,
 ): string {
-  return estimativaTexto({ contagem, musicasNaPasta, modo: "completar", etapas });
+  return estimativaTexto({ contagem: estado, musicasNaPasta });
 }
 
 function song(id: number, filePath: string, over: Partial<Song> = {}): Song {
@@ -73,10 +117,46 @@ function song(id: number, filePath: string, over: Partial<Song> = {}): Song {
   };
 }
 
+function proposta(over: Partial<EnrichProposal> = {}): EnrichProposal {
+  return {
+    song_id: 1,
+    file_path: "/acervo/a.mp3",
+    current_title: "a",
+    current_artist: null,
+    proposed_title: "Asa Branca",
+    proposed_artist: "Luiz Gonzaga",
+    lyrics: null,
+    has_lyrics: false,
+    letra_origem: null,
+    confidence: "baixa",
+    fonte: "nome do arquivo",
+    conflito: null,
+    substitui_nome_escrito: false,
+    marcar_instrumental: false,
+    refrao: null,
+    aviso: null,
+    error: null,
+    ...over,
+  };
+}
+
+function acessorio(over: Partial<AcessorioInfo> = {}): AcessorioInfo {
+  return {
+    nome: "fpcalc",
+    para_que_serve: "reconhecer a música pelo som",
+    arquivo: "fpcalc-linux-x86_64",
+    tamanho_bytes: 5_538_312,
+    segundos_estimados: 6,
+    executavel: true,
+    estado: "ausente",
+    origem: "https://github.com/exemplo/releases/download/acessorios-v1/fpcalc",
+    ...over,
+  };
+}
+
 // ---------------------------------------------------------------------------
-// A régua desta rodada (PRD V9, item 3 — "achando as mensagens muito longas"):
-// a PRIMEIRA frase diz o que é; o resto só existe se responder a uma pergunta
-// que a pessoa faria naquele momento. Texto que ninguém lê não explica nada.
+// A régua da copy (DECISIONS #100): a PRIMEIRA frase diz o que é; o resto só
+// existe se responder a uma pergunta que a pessoa faria naquele momento.
 // ---------------------------------------------------------------------------
 
 /** Quantas frases um texto tem (aproximação por pontuação final). */
@@ -84,20 +164,28 @@ function frases(texto: string): number {
   return texto.split(/[.!?](?:\s|$)/).filter((f) => f.trim() !== "").length;
 }
 
-describe("o passe de redução da copy (PRD V9, item 3)", () => {
-  // Os textos abaixo são os que o campo apontou como longos demais. O teto não
-  // é estético: são as mensagens que aparecem no fim de uma busca de minutos,
-  // quando a pessoa quer saber o que aconteceu — não ler um parágrafo.
+describe("a régua da copy (DECISIONS #100)", () => {
   const TETO_CARACTERES = 210;
   const TETO_FRASES = 2;
 
   const desfechos: Array<[string, string]> = [
-    ["textoSemPropostas(81)", textoSemPropostas(81, "completar")],
-    ["textoSemPropostas(null)", textoSemPropostas(null, "completar")],
+    ["textoSemPropostas(81)", textoSemPropostas(81)],
+    ["textoSemPropostas(null)", textoSemPropostas(null)],
     ["SEM_RESULTADO_INDIVIDUAL", SEM_RESULTADO_INDIVIDUAL],
     ["SEM_RESULTADO_INSTRUMENTAL", SEM_RESULTADO_INSTRUMENTAL],
-    ["estimativa de 95", completar(pronta(95), 200)],
+    ["estimativa de 150", estimativa(pronta(), 200)],
     ["aviso de letra existente", avisoLetraExistente("transcricao")],
+    // V10 — os textos novos entram na MESMA régua. São eles que aparecem no
+    // fim de uma varredura de minutos, que é o pior momento para um parágrafo.
+    ["oferta de transcrição", textoDaOfertaDeTranscricao(47, 10_800)],
+    [
+      "transcrição indisponível",
+      textoDaTranscricaoIndisponivel(47, { bytes: 183_000_000, segundos: 183 }),
+    ],
+    ["aviso de instrumental", AVISO_MARCAR_INSTRUMENTAL],
+    ["aviso de letra de máquina", AVISO_LETRA_DE_MAQUINA],
+    ["explicação da confiança do som", EXPLICACAO_DA_CONFIANCA_DO_SOM],
+    ["transcrição no fim", TRANSCRICAO_NO_FIM],
   ];
 
   for (const [nome, texto] of desfechos) {
@@ -107,263 +195,162 @@ describe("o passe de redução da copy (PRD V9, item 3)", () => {
     });
   }
 
-  // O que sai é a JUSTIFICATIVA nossa ("ainda não é feito pelo aplicativo —
-  // por enquanto, só pelas ferramentas de curadoria"), repetida em três
-  // desfechos. Quem cura não abre terminal (DECISIONS #78): mandá-lo para uma
-  // ferramenta que ele não tem não é o passo seguinte de ninguém.
-  it("os desfechos não mandam mais ninguém para as ferramentas de fora", () => {
+  it("os desfechos não mandam ninguém para as ferramentas de fora", () => {
     for (const [nome, texto] of desfechos) {
       expect(texto.toLowerCase(), nome).not.toContain("ferramentas de curadoria");
     }
   });
 });
 
+// ---------------------------------------------------------------------------
+// V10 — o caminho único: um botão, e a conta vem pronta do backend
+// ---------------------------------------------------------------------------
+
+describe("o caminho único (DECISIONS #102)", () => {
+  it("há UM disparo, e o rótulo não pergunta qual trabalho fazer", () => {
+    expect(ROTULO_DO_DISPARO).toBe("Buscar dados desta pasta");
+    expect(ROTULO_DO_DISPARO.toLowerCase()).not.toContain("conferir");
+  });
+
+  // O modelo de custo em TypeScript foi APAGADO: a estimativa vem em
+  // `Contagem.segundos_estimados`. Manter uma segunda conta aqui é a
+  // DECISIONS #80, que neste projeto já deixou o botão do produto cinza.
+  it("a estimativa é o número do backend, formatado — não uma conta daqui", () => {
+    // 1020 s = 17 minutos
+    expect(estimativa(pronta({ segundos_estimados: 1020 }), 200)).toContain(
+      "por volta de 17 minutos",
+    );
+    // trocar SÓ o número do backend muda a frase inteira
+    expect(estimativa(pronta({ segundos_estimados: 30 }), 200)).toContain(
+      "menos de 1 minuto",
+    );
+    expect(estimativa(pronta({ segundos_estimados: 10_800 }), 200)).toContain(
+      "por volta de 3 horas",
+    );
+  });
+
+  it("a etapa 5 é anunciada como pergunta do FIM, não como etapa da lista", () => {
+    expect(TRANSCRICAO_NO_FIM).toContain("ouvindo o áudio");
+    expect(TRANSCRICAO_NO_FIM.toLowerCase()).toContain("no fim");
+    // e o texto não pode mais dizer que isso "não é feito aqui": passou a ser
+    expect(TRANSCRICAO_NO_FIM.toLowerCase()).not.toContain("não é feito");
+  });
+});
+
 describe("estimativaTexto — o que a pessoa lê ANTES de disparar", () => {
-  // MÉDIO-11: `resetApp` sem pasta nenhuma imprimia "nenhuma música desta
-  // pasta está sem título, artista ou letra" — descrevia ZERO músicas como
-  // completas. Sem música não há completude a afirmar: há uma pasta a somar.
   it("pasta sem música nenhuma: não afirma completude — diz o que fazer em seguida", () => {
-    const texto = completar(pronta(0), 0);
+    const texto = estimativa(pronta({ total: 0 }), 0);
     expect(texto).toContain("Não há nenhuma música nesta pasta");
     expect(texto).toContain("Adicione uma pasta");
     expect(texto).not.toContain("já têm");
   });
 
-  // ALTO-2: a contagem virou uma chamada ao backend. Enquanto ela não volta,
-  // a tela não pode inventar "0" — nem travar o disparo por isso.
   it("contagem ainda em curso: estado intermediário honesto, sem número", () => {
-    expect(completar({ estado: "contando" }, 12)).toBe(
+    expect(estimativa({ estado: "contando" }, 12)).toBe(
       "Contando as músicas desta pasta…",
     );
   });
 
   it("contagem que não veio: admite, sem transformar isso em impedimento", () => {
-    const texto = completar({ estado: "indisponivel" }, 12);
+    const texto = estimativa({ estado: "indisponivel" }, 12);
     expect(texto).toContain("Não foi possível contar");
-    // a busca continua possível: o total aparece quando ela começar
     expect(texto).toContain("A busca funciona mesmo assim");
   });
 
-  // DECISIONS #60 e MÉDIO-11: "todas já têm título, artista e letra" é FALSO
-  // para instrumental — que fica de fora justamente por não ter letra.
-  it("nada a procurar: diz a regra de verdade, incluindo a marca de instrumental", () => {
-    const texto = completar(pronta(0), 12);
-    expect(texto).toContain("Nada a procurar nesta pasta");
-    expect(texto).toContain("instrumental");
-    expect(texto).not.toContain("está sem título, artista ou letra");
+  // Com o caminho único não existe mais "nada a procurar porque está tudo
+  // completo": a varredura olha TODAS as músicas disponíveis da pasta. Zero
+  // aqui é outra coisa — nenhuma música disponível — e o texto diz isso.
+  it("zero candidatas com músicas na pasta: não afirma completude nenhuma", () => {
+    const texto = estimativa(pronta({ total: 0 }), 12);
+    expect(texto).toContain("Nenhuma música desta pasta está disponível");
+    expect(texto).not.toContain("já têm título");
   });
 
-  it("uma candidata: singular", () => {
-    expect(completar(pronta(1), 12)).toBe(
-      "1 música incompleta nesta pasta. A busca leva menos de 1 minuto, e bem" +
-        " mais se a internet estiver lenta ou fora do ar.",
+  it("uma música: singular", () => {
+    expect(estimativa(pronta({ total: 1, segundos_estimados: 9 }), 12)).toBe(
+      "1 música nesta pasta. A busca leva menos de 1 minuto, e bem mais se a" +
+        " internet estiver lenta ou fora do ar.",
     );
-  });
-
-  // MÉDIO-9: 2 s/música dava "3 minutos" para 95 músicas contra ~10 min reais.
-  // Margem de segurança não protege contra erro de ordem de grandeza.
-  it("95 candidatas sem o acessório: 9 s por música (LRCLIB + Vagalume)", () => {
-    const texto = completar(pronta(95), 200);
-    expect(texto).toContain("95 músicas incompletas nesta pasta");
-    // 95 × 9 s = 855 s ≈ 14 min
-    expect(texto).toContain("por volta de 14 minutos");
-    expect(texto).toContain("mais se a internet estiver lenta");
-  });
-
-  // V9 — a estimativa deixou de ser um número fixo: ela depende de QUAIS
-  // etapas vão rodar nesta máquina. O acessório do som acrescenta uma leitura
-  // de áudio e uma consulta ao AcoustID por música.
-  it("o acessório do som ligado muda a conta", () => {
-    const semSom = completar(pronta(95), 200, SEM_SOM);
-    const comSom = completar(pronta(95), 200, COM_SOM);
-    expect(semSom).not.toBe(comSom);
-    // 95 × 11 s = 1045 s ≈ 17 min
-    expect(comSom).toContain("por volta de 17 minutos");
-  });
-
-  it("sem chave do Vagalume a etapa 4 não pesa na conta", () => {
-    const texto = completar(pronta(95), 200, { som: false, vagalume: false });
-    // 95 × 7 s = 665 s ≈ 11 min — o número medido em campo (etapas 1 e 3)
-    expect(texto).toContain("por volta de 11 minutos");
-  });
-
-  // O número de campo: 16 músicas em ~2 min com as etapas 1 e 3 apenas.
-  // A conta tem de reproduzi-lo, ou não é derivação, é chute (DECISIONS #85).
-  it("reproduz a medição de campo: 16 músicas, etapas 1 e 3, ~2 minutos", () => {
-    const segundos = 16 * segundosPorMusica("completar", { som: false, vagalume: false });
-    expect(segundos).toBeGreaterThanOrEqual(100);
-    expect(segundos).toBeLessThanOrEqual(140);
   });
 
   it("acervo grande: o texto passa a horas em vez de imprimir 150 minutos", () => {
-    expect(completar(pronta(1000), 2000)).toContain("por volta de 3 horas");
+    expect(
+      estimativa(pronta({ total: 1000, segundos_estimados: 11_000 }), 2000),
+    ).toContain("por volta de 3 horas");
   });
 
-  // A estimativa é uma ORDEM DE GRANDEZA: prometer precisão em cima de uma
-  // rede que ninguém controla é a promessa que o QA reprovou.
   it("nunca promete precisão", () => {
     for (const n of [1, 12, 95, 1000]) {
-      expect(completar(pronta(n), 2000)).not.toContain("exat");
+      expect(estimativa(pronta({ total: n }), 2000)).not.toContain("exat");
     }
+  });
+
+  // DECISIONS #85: a mitigação é admitir que a ordem de grandeza depende de
+  // uma rede que ninguém controla — "bem mais", e a rede FORA DO AR.
+  it("admite 'bem mais' e a rede fora do ar", () => {
+    const texto = estimativa(pronta(), 200);
+    expect(texto).toContain("bem mais se a internet estiver lenta");
+    expect(texto).toContain("fora do ar");
   });
 });
 
-describe("o modo de conferência (V9) — outro trabalho, outro custo", () => {
-  const conferir = (contagem: ContagemCandidatas, musicasNaPasta: number) =>
-    estimativaTexto({
-      contagem,
-      musicasNaPasta,
-      modo: "conferencia",
-      etapas: COM_SOM,
-    });
-
-  it("são dois trabalhos, nomeados e explicados — e o padrão é completar", () => {
-    expect(MODOS.map((m) => m.modo)).toEqual(["completar", "conferencia"]);
-    expect(MODOS[0].rotulo).toContain("Completar");
-    expect(MODOS[1].rotulo.toLowerCase()).toContain("etiqueta");
-    // o custo do modo caro está na própria explicação, não num parágrafo
-    expect(MODOS[1].explicacao).toContain("todas");
+describe("etapasDoFunil — a lista vem do backend (DECISIONS #101)", () => {
+  it("a ordem e os nomes são os que o backend mandou, sem reordenar", () => {
+    expect(etapasDoFunil(ETAPAS_COMPLETAS).map((e) => e.nome)).toEqual([
+      "Lendo etiquetas e nome do arquivo",
+      "Reconhecendo pelo som",
+      "Procurando no LRCLIB",
+      "Procurando no lyrics.ovh",
+    ]);
   });
 
-  it("cada explicação de modo cabe numa linha", () => {
-    for (const m of MODOS) {
-      expect(m.explicacao.length, m.explicacao).toBeLessThanOrEqual(90);
+  // Sem o acessório o backend não manda a etapa do som, e a tela não a lista:
+  // listá-la seria prometer trabalho que não vai acontecer.
+  it("etapa que o backend não mandou não aparece", () => {
+    const nomes = etapasDoFunil(ETAPAS_BASICAS).map((e) => e.nome);
+    expect(nomes).toHaveLength(3);
+    expect(nomes.join(" ").toLowerCase()).not.toContain("som");
+    // ...e a etapa 4 continua lá: ela não depende de nada que a pessoa tenha
+    // de providenciar (V10 — o último pedágio de configuração saiu do produto)
+    expect(nomes).toContain("Procurando no lyrics.ovh");
+  });
+
+  // V10 — a fraqueza desta fonte precisa estar na LISTA, e não só na linha da
+  // proposta: ela não devolve o nome da música, então é a única etapa cujo
+  // casamento o programa não tem como conferir.
+  it("a etapa 4 diz, na lista, que ela não confere a que música a letra pertence", () => {
+    const ovh = etapasDoFunil(ETAPAS_COMPLETAS)[3];
+    expect(ovh.explicacao.toLowerCase()).toContain("não diz");
+    expect(ovh.explicacao.length).toBeLessThanOrEqual(80);
+  });
+
+  // Nada do acervo sai da máquina — nem na etapa que "manda o áudio": o que
+  // viaja é um resumo acústico. É invariável do produto.
+  it("a etapa do som diz o que sai do computador", () => {
+    const som = etapasDoFunil(ETAPAS_COMPLETAS)[1];
+    expect(som.explicacao).toContain("resumo");
+    expect(som.explicacao.toLowerCase()).not.toContain("envia o áudio");
+  });
+
+  it("o contraste local x internet continua na lista", () => {
+    const etapas = etapasDoFunil(ETAPAS_COMPLETAS);
+    expect(etapas[0].explicacao).toContain("sem sair do computador");
+    expect(etapas[2].explicacao).toContain("na internet");
+  });
+
+  it("cada explicação cabe numa linha", () => {
+    for (const e of etapasDoFunil(ETAPAS_COMPLETAS)) {
+      expect(e.explicacao.length, e.explicacao).toBeLessThanOrEqual(80);
     }
   });
 
-  it("o botão diz qual dos dois trabalhos vai começar", () => {
-    expect(rotuloDoDisparo("completar")).toBe("Buscar dados desta pasta");
-    expect(rotuloDoDisparo("conferencia")).toBe("Conferir esta pasta");
-  });
-
-  // A conferência lê o áudio de TODAS as músicas: o custo é por música do
-  // acervo, não por música incompleta, e a estimativa precisa dizer isso.
-  it("a estimativa conta TODAS as músicas e diz que o áudio é lido", () => {
-    const texto = conferir(pronta(150), 150);
-    expect(texto).toContain("150 músicas");
-    expect(texto).toContain("áudio");
-    // 150 × 2 s = 300 s ≈ 5 min
-    expect(texto).toContain("por volta de 5 minutos");
-    // não é "incompleta": nesta varredura a música completa também entra
-    expect(texto).not.toContain("incompleta");
-  });
-
-  it("a conferência só roda as etapas 1 e 2 — as de letra são o outro trabalho", () => {
-    expect(segundosPorMusica("conferencia", COM_SOM)).toBeLessThan(
-      segundosPorMusica("completar", COM_SOM),
-    );
-  });
-
-  // MÉDIO-1 — o motivo era uma string FIXA, mostrada sempre que faltava o
-  // som: em três dos cinco estados ela mandava "baixar o acessório abaixo"
-  // enquanto o bloco logo abaixo dizia que não havia nada para baixar (e não
-  // desenhava botão nenhum). Uma tela contradizendo a si mesma, para quem não
-  // tem a quem perguntar. O motivo passa a DERIVAR do estado do acessório.
-  describe("o motivo da conferência bloqueada (MÉDIO-1, DECISIONS #87)", () => {
-    const SEM_SOM_AINDA: EstadoDoSom[] = [
-      "perguntando",
-      "indeterminado",
-      "sem-binario",
-      "indisponivel",
-      "ausente",
-      "corrompido",
-    ];
-
-    it("com o som pronto não há motivo nenhum a dar", () => {
-      expect(motivoDaConferencia("pronto")).toBeNull();
-    });
-
-    it("todo estado sem som tem um motivo próprio, e nenhum se repete", () => {
-      const motivos = SEM_SOM_AINDA.map((e) => motivoDaConferencia(e));
-      expect(motivos.every((m) => m !== null && m.length > 0)).toBe(true);
-      expect(new Set(motivos).size).toBe(SEM_SOM_AINDA.length);
-    });
-
-    // A regra que o QA reprovou por não existir: mandar baixar só onde HÁ
-    // botão de baixar. Nos outros três estados o bloco do acessório não
-    // desenha botão nenhum, e apontar para ele é mandar procurar o que não
-    // está lá.
-    it("só manda baixar nos dois estados em que existe botão de baixar", () => {
-      const manda = (e: EstadoDoSom) =>
-        (motivoDaConferencia(e) ?? "").toLowerCase().includes("baix");
-      expect(manda("ausente")).toBe(true);
-      expect(manda("corrompido")).toBe(true);
-      for (const e of ["perguntando", "indeterminado", "sem-binario", "indisponivel"] as const) {
-        expect(manda(e), `${e} manda baixar sem ter o que baixar`).toBe(false);
-      }
-    });
-
-    // Cada motivo é lido sozinho, por alguém que não sabe o que é "fpcalc":
-    // ele precisa nomear o recurso que falta e caber numa linha.
-    it("cada motivo nomeia o recurso e cabe numa linha", () => {
-      for (const e of SEM_SOM_AINDA) {
-        const m = motivoDaConferencia(e)!;
-        expect(m.toLowerCase(), m).toContain("som");
-        expect(m.length, m).toBeLessThanOrEqual(90);
-      }
-    });
-
-    // O motivo não pode contradizer o bloco do acessório: os dois textos ficam
-    // a três centímetros um do outro na mesma tela.
-    it("o motivo concorda com o que o bloco do acessório diz", () => {
-      expect(motivoDaConferencia("indisponivel")!.toLowerCase()).toContain(
-        "nesta versão",
-      );
-      expect(motivoDaConferencia("sem-binario")!.toLowerCase()).toContain(
-        "este computador",
-      );
-      expect(motivoDaConferencia("indeterminado")!.toLowerCase()).toContain(
-        "conferir",
-      );
-    });
-  });
-
-  // A leitura do que o backend devolveu mora num lugar só, e é ela que decide
-  // se a etapa 2 roda, se a conferência é possível e o que o motivo diz.
-  describe("estadoDoSom — a leitura do que o backend devolveu", () => {
-    const fpcalc = (estado: string) => [{ nome: "fpcalc", estado }];
-
-    it("undefined = a pergunta ainda não voltou", () => {
-      expect(estadoDoSom(undefined)).toBe("perguntando");
-    });
-
-    it("null = a pergunta falhou, que NÃO é 'não existe' nem 'pronto'", () => {
-      expect(estadoDoSom(null)).toBe("indeterminado");
-    });
-
-    it("lista vazia = não publicamos binário para este computador", () => {
-      expect(estadoDoSom([])).toBe("sem-binario");
-    });
-
-    // Lista com outros acessórios e sem o fpcalc é o mesmo fato, do ponto de
-    // vista de quem quer conferir etiqueta: o som não existe nesta máquina.
-    it("lista sem o fpcalc vale o mesmo que lista vazia", () => {
-      expect(estadoDoSom([{ nome: "whisper", estado: "pronto" }])).toBe(
-        "sem-binario",
-      );
-    });
-
-    it("cada estado do fpcalc passa direto", () => {
-      for (const e of ["pronto", "ausente", "corrompido", "indisponivel"]) {
-        expect(estadoDoSom(fpcalc(e))).toBe(e);
-      }
-    });
-
-    // Estado que esta versão do app não conhece (backend mais novo): "não
-    // sabemos" é a única resposta honesta — nunca "pronto" (DECISIONS #86).
-    it("estado desconhecido não vira 'pronto' por otimismo", () => {
-      expect(estadoDoSom(fpcalc("coisa-nova"))).toBe("indeterminado");
-    });
-  });
-
-  // DECISIONS #86 — nenhum texto pode afirmar o que o programa não sabe. O
-  // AcoustID não reconhece toda gravação: silêncio dele NÃO é etiqueta certa.
-  it("conferência sem divergência não promete que as etiquetas estão certas", () => {
-    const texto = textoSemPropostas(95, "conferencia");
-    expect(texto).toContain("95");
-    expect(texto).not.toMatch(/incompleta/);
-    expect(texto.toLowerCase()).toContain("não reconhece toda gravação");
-    expect(texto.toLowerCase()).not.toContain("todas as etiquetas estão certas");
+  // Backend mais novo com uma etapa que esta versão não conhece: mostrar o
+  // nome cru é melhor que esconder a etapa ou inventar explicação.
+  it("etapa desconhecida aparece com o nome do backend e sem explicação", () => {
+    const etapas = etapasDoFunil(["perguntando ao oráculo"]);
+    expect(etapas).toEqual([
+      { nome: "Perguntando ao oráculo", explicacao: "" },
+    ]);
   });
 });
 
@@ -396,57 +383,40 @@ describe("opcoesDePasta — o seletor de Configurações", () => {
 });
 
 describe("textoSemPropostas — 'não achamos' não pode soar como 'está completa'", () => {
-  // MÉDIO-11: "todas já têm título, artista e letra" é falso para
-  // instrumental, que sai da conta EXATAMENTE por não ter letra.
-  it("nenhuma candidata: não promete letra para quem não tem letra a ter", () => {
-    const texto = textoSemPropostas(0, "completar");
+  it("nenhuma candidata: não promete o que não foi feito", () => {
+    const texto = textoSemPropostas(0);
     expect(texto).toContain("Nenhuma música desta pasta entrou na busca");
-    expect(texto).toContain("instrumental");
-    expect(texto).not.toContain("todas já têm título, artista e letra");
   });
 
   it("com candidatas conferidas: conta o que houve e nega a completude", () => {
-    const texto = textoSemPropostas(81, "completar");
-    expect(texto).toContain("Conferimos as 81 músicas incompletas desta pasta");
-    expect(texto).toContain("não achamos nenhuma");
-    // não é fracasso e não é "acervo completo" (DECISIONS #60)
+    const texto = textoSemPropostas(81);
+    expect(texto).toContain("Conferimos as 81 músicas desta pasta");
+    expect(texto).toContain("não achamos nada");
     expect(texto).toContain("não significa pasta completa");
   });
 
   // MÉDIO-11 — `scannedTotal` vinha de `progress?.total ?? 0`, e o `catch` da
-  // assinatura de progresso é silencioso: uma varredura que conferiu 95
-  // músicas reportava "0" e a tela dizia que a pasta estava completa. Falha
-  // silenciosa com cara de sucesso. `null` = não sabemos quantas.
+  // assinatura é silencioso: 95 músicas conferidas reportavam "0" e a tela
+  // dizia que a pasta estava completa. `null` = não sabemos quantas.
   it("sem saber quantas foram conferidas: não inventa número nem completude", () => {
-    const texto = textoSemPropostas(null, "completar");
+    const texto = textoSemPropostas(null);
     expect(texto).toContain("A busca terminou sem nenhuma proposta");
     expect(texto).toContain("não significa pasta completa");
-    expect(texto).not.toContain("Nenhuma música desta pasta entrou na busca");
-    expect(texto).not.toMatch(/\d+ músicas incompletas/);
+    expect(texto).not.toMatch(/\d+ músicas/);
   });
 
   it("uma candidata só: singular", () => {
-    expect(textoSemPropostas(1, "completar")).toContain(
-      "Conferimos a única música incompleta desta pasta",
+    expect(textoSemPropostas(1)).toContain(
+      "Conferimos a única música desta pasta",
     );
   });
 
   it("o caso pontual do editor recebe o mesmo cuidado", () => {
     expect(SEM_RESULTADO_INDIVIDUAL).toContain("Isso é comum");
-    // não pode soar como "esta música está completa"
     expect(SEM_RESULTADO_INDIVIDUAL).not.toContain("completa");
-  });
-
-  // ALTO-3b: `null` do funil individual passou a significar UMA coisa —
-  // procuramos e não veio nada NOVO. Antes ele também saía sem rede nenhuma
-  // (música completa, instrumental), e o texto afirmava a busca que não houve.
-  it("o texto do caso pontual fala de 'nada novo', não de música inexistente", () => {
     expect(SEM_RESULTADO_INDIVIDUAL).toContain("nada novo");
   });
 
-  // A música marcada como instrumental para na etapa 1: nenhuma etapa de
-  // LETRA roda para ela. Dizer "não achamos nos sites de letra" seria contar
-  // uma busca que não aconteceu.
   it("instrumental tem o seu próprio desfecho, e o caminho de volta", () => {
     expect(SEM_RESULTADO_INSTRUMENTAL).toContain("instrumental");
     expect(SEM_RESULTADO_INSTRUMENTAL).toContain("título e artista");
@@ -454,39 +424,246 @@ describe("textoSemPropostas — 'não achamos' não pode soar como 'está comple
   });
 });
 
-// CRÍTICO-1: a linha da revisão precisa DIZER que existe letra ali antes de
-// alguém marcar a substituição — e dizer de que tipo ela é.
-describe("avisoLetraExistente — o que seria substituído", () => {
-  it("letra qualquer: avisa que existe e que, sem marcar, só nomes são aplicados", () => {
-    const texto = avisoLetraExistente(null);
-    expect(texto).toContain("Já tem letra");
-    expect(texto).toContain("só título e artista");
+// ---------------------------------------------------------------------------
+// QA A2 — as músicas que a etapa 2 deixou de perguntar
+// ---------------------------------------------------------------------------
+
+describe("avisoSemPerguntarAoSom (QA A2)", () => {
+  it("zero não merece texto nenhum", () => {
+    expect(avisoSemPerguntarAoSom(0)).toBeNull();
+    expect(avisoSemPerguntarAoSom(-1)).toBeNull();
   });
 
-  it("letra transcrita: usa o vocabulário do projeto e lembra da correção à mão", () => {
-    const texto = avisoLetraExistente("transcricao");
-    expect(texto).toContain("escrita ouvindo o áudio");
-    expect(texto).toContain("à mão");
+  it("diz o NÚMERO, que é a razão de o campo existir", () => {
+    expect(avisoSemPerguntarAoSom(37)).toContain("37");
+    expect(avisoSemPerguntarAoSom(1)).toContain("1 música");
   });
 
-  it("o rótulo da marcação é o mesmo que o backend cita ao recusar", () => {
-    expect(LABEL_SUBSTITUIR_LETRA).toBe("Substituir a letra atual");
+  it("singular e plural concordam", () => {
+    expect(avisoSemPerguntarAoSom(1)).toContain("não chegou a ser perguntada");
+    expect(avisoSemPerguntarAoSom(2)).toContain("não chegaram a ser perguntadas");
+  });
+
+  it("diz o que fazer em seguida, sem chutar a causa", () => {
+    const t = avisoSemPerguntarAoSom(37)!;
+    expect(t.toLowerCase()).toContain("repita");
+    expect(t.toLowerCase()).not.toContain("antivírus");
+    expect(t.toLowerCase()).not.toContain("baixe");
+  });
+
+  it("cabe na régua: 2 frases, 210 caracteres", () => {
+    for (const n of [1, 37, 1999]) {
+      const t = avisoSemPerguntarAoSom(n)!;
+      expect(t.length, t).toBeLessThanOrEqual(210);
+      expect(frases(t), t).toBeLessThanOrEqual(2);
+    }
   });
 });
 
-// V9 — o LRCLIB devolve a grafia oficial ("Ponto de Oxum" → "Ponto de Oxum
-// (Ao Vivo)"), com a duração batendo, portanto ALTA, portanto pré-marcada.
-// Um clique levava embora o que alguém digitou à mão.
-describe("aviso de troca de nome escrito por gente", () => {
-  it("diz o que a linha faria, em uma frase", () => {
-    expect(AVISO_NOME_ESCRITO.toLowerCase()).toContain("já existe");
-    expect(AVISO_NOME_ESCRITO.length).toBeLessThanOrEqual(90);
-    expect(frases(AVISO_NOME_ESCRITO)).toBe(1);
+describe("textoSemPropostas com a etapa 2 desligada no meio (QA A2)", () => {
+  it("para de afirmar que conferiu o que não perguntou", () => {
+    const texto = textoSemPropostas(40, 37);
+    expect(texto).toContain("37");
+    expect(texto).not.toContain("Conferimos as 40");
+    expect(texto.toLowerCase()).toContain("repita");
+  });
+
+  it("com zero, o desfecho é exatamente o de antes", () => {
+    expect(textoSemPropostas(40, 0)).toBe(textoSemPropostas(40));
+  });
+
+  it("funciona mesmo sem o total do progresso", () => {
+    expect(textoSemPropostas(null, 37)).toContain("37");
+  });
+
+  it("continua dentro da régua", () => {
+    const t = textoSemPropostas(150, 149);
+    expect(t.length, t).toBeLessThanOrEqual(210);
+    expect(frases(t), t).toBeLessThanOrEqual(2);
   });
 });
 
-// V9 — o vocabulário da revisão fala em "atual" e "proposto". Conflito não é
-// isso: é "sua etiqueta diz X, o som diz Y", e nada foi proposto.
+// ---------------------------------------------------------------------------
+// V10 — a revisão ordenada por RISCO (o coração desta rodada)
+// ---------------------------------------------------------------------------
+//
+// Medição de campo, com 53 músicas revisadas: "eu nem li as sugestões em
+// baixa — não deu vontade de ler mesmo". O corte por CONFIANÇA junta o mais
+// seguro (preencher um campo vazio) com o mais perigoso (trocar um nome que
+// alguém escreveu), e por isso a lista inteira parece ruído.
+
+describe("grupoDaProposta — o corte é por risco, não por confiança", () => {
+  it("conflito vem primeiro, mesmo trazendo letra ou nome novo", () => {
+    const p = proposta({
+      conflito: { titulo: "Meninos", artista: "Xangai", confianca: "alta" },
+      substitui_nome_escrito: true,
+    });
+    expect(grupoDaProposta(p, null)).toBe("conflitos");
+  });
+
+  it("letra encontrada é o que a pessoa mais quer ver", () => {
+    expect(grupoDaProposta(proposta({ lyrics: "ai ai" }), null)).toBe("letras");
+  });
+
+  it("marcar instrumental é decisão própria, não 'letra encontrada'", () => {
+    expect(grupoDaProposta(proposta({ marcar_instrumental: true }), null)).toBe(
+      "sem-voz",
+    );
+  });
+
+  it("troca de nome escrito por gente tem linha própria", () => {
+    expect(
+      grupoDaProposta(proposta({ substitui_nome_escrito: true }), null),
+    ).toBe("nomes-escritos");
+  });
+
+  // O grupo dobrado: só preenche campo VAZIO. Não havia nada a perder.
+  it("preencher campo vazio é o grupo dobrado", () => {
+    expect(grupoDaProposta(proposta(), null)).toBe("preenchimentos");
+  });
+
+  // Uma linha com erro não é proposta: ela informa que a música foi tentada e
+  // falhou. Se caísse no grupo dobrado, seria dobrada E pré-marcada.
+  it("linha com erro nunca entra no grupo dobrado", () => {
+    expect(grupoDaProposta(proposta({ error: "sem conexão" }), null)).toBe("erros");
+    // erro devolvido pelo APPLY (não pela varredura) vale o mesmo
+    expect(grupoDaProposta(proposta(), "a música mudou")).toBe("erros");
+  });
+
+  // A confiança continua existindo como INFORMAÇÃO na linha, mas não decide
+  // grupo nenhum: baixa não quer dizer "provavelmente errado", quer dizer
+  // "sem prova externa".
+  it("a confiança não muda o grupo", () => {
+    for (const c of ["alta", "media", "baixa"] as const) {
+      expect(grupoDaProposta(proposta({ confidence: c }), null)).toBe(
+        "preenchimentos",
+      );
+    }
+  });
+});
+
+describe("agruparPorRisco — a ordem de cima para baixo", () => {
+  it("a ordem é conflitos, letras, sem voz, nomes escritos, dobrado, erros", () => {
+    expect(ORDEM_DOS_GRUPOS).toEqual([
+      "conflitos",
+      "letras",
+      "sem-voz",
+      "nomes-escritos",
+      "preenchimentos",
+      "erros",
+    ]);
+  });
+
+  it("agrupa preservando a ordem de risco e a ordem dentro de cada grupo", () => {
+    const propostas = [
+      proposta({ song_id: 1 }),
+      proposta({ song_id: 2, lyrics: "ai" }),
+      proposta({ song_id: 3, substitui_nome_escrito: true }),
+      proposta({ song_id: 4, conflito: { titulo: "t", artista: "a", confianca: "alta" } }),
+      proposta({ song_id: 5, lyrics: "oh" }),
+      proposta({ song_id: 6, error: "sem conexão" }),
+      proposta({ song_id: 7, marcar_instrumental: true }),
+    ];
+    expect(
+      agruparPorRisco(propostas, () => null).map((g) => [
+        g.grupo,
+        g.propostas.map((p) => p.song_id),
+      ]),
+    ).toEqual([
+      ["conflitos", [4]],
+      ["letras", [2, 5]],
+      ["sem-voz", [7]],
+      ["nomes-escritos", [3]],
+      ["preenchimentos", [1]],
+      ["erros", [6]],
+    ]);
+  });
+
+  it("grupo vazio não vira cabeçalho vazio", () => {
+    expect(agruparPorRisco([proposta()], () => null).map((g) => g.grupo)).toEqual([
+      "preenchimentos",
+    ]);
+  });
+});
+
+describe("os títulos dos grupos", () => {
+  it("cada grupo diz o que é, com o número", () => {
+    expect(tituloDoGrupo("conflitos", 3)).toBe(
+      "3 músicas em que o som discorda da etiqueta",
+    );
+    expect(tituloDoGrupo("conflitos", 1)).toBe(
+      "1 música em que o som discorda da etiqueta",
+    );
+    expect(tituloDoGrupo("letras", 12)).toBe("12 letras encontradas");
+    expect(tituloDoGrupo("letras", 1)).toBe("1 letra encontrada");
+    expect(tituloDoGrupo("sem-voz", 2)).toBe("2 músicas sem voz no áudio");
+    expect(tituloDoGrupo("sem-voz", 1)).toBe("1 música sem voz no áudio");
+    expect(tituloDoGrupo("nomes-escritos", 4)).toBe(
+      "4 trocas de nome que já estava escrito",
+    );
+    expect(tituloDoGrupo("nomes-escritos", 1)).toBe(
+      "1 troca de nome que já estava escrito",
+    );
+    expect(tituloDoGrupo("erros", 4)).toBe(
+      "4 músicas não puderam ser consultadas — o motivo está em cada linha",
+    );
+    expect(tituloDoGrupo("erros", 1)).toBe(
+      "1 música não pôde ser consultada — o motivo está na linha dela",
+    );
+  });
+
+  it("nenhum título usa o vocabulário de confiança", () => {
+    for (const grupo of ORDEM_DOS_GRUPOS) {
+      const t = tituloDoGrupo(grupo, 3).toLowerCase();
+      expect(t, t).not.toContain("confiança");
+      expect(t, t).not.toContain("baixa");
+    }
+  });
+});
+
+// O grupo dobrado é a resposta ao "não deu vontade de ler": 72 linhas iguais
+// viram UMA linha que diz o que o clique fará. Dobrado NÃO é escondido —
+// continua visível, abrível e desmarcável.
+describe("textoDoGrupoDobrado — a frase que É a conferência", () => {
+  const doArquivo = (n: number) =>
+    Array.from({ length: n }, (_, i) =>
+      proposta({ song_id: i + 1, fonte: "nome do arquivo" }),
+    );
+
+  it("diz quantas são e o que vai acontecer com elas", () => {
+    expect(textoDoGrupoDobrado(doArquivo(72))).toBe(
+      "72 músicas sem título ou artista vão receber o nome que está no arquivo",
+    );
+  });
+
+  it("singular", () => {
+    expect(textoDoGrupoDobrado(doArquivo(1))).toBe(
+      "1 música sem título ou artista vai receber o nome que está no arquivo",
+    );
+  });
+
+  // Nem todo preenchimento vem do nome do arquivo: o som também preenche
+  // campo vazio. Prometer "o nome que está no arquivo" para 5 linhas que vêm
+  // do reconhecimento acústico seria descrever errado o que o clique faz.
+  it("com fontes misturadas, não promete o arquivo", () => {
+    const misto = [
+      ...doArquivo(3),
+      proposta({ song_id: 9, fonte: "reconhecimento pelo som" }),
+    ];
+    expect(textoDoGrupoDobrado(misto)).toBe(
+      "4 músicas sem título ou artista vão receber o nome que a busca achou",
+    );
+  });
+
+  it("cabe numa linha", () => {
+    expect(textoDoGrupoDobrado(doArquivo(999)).length).toBeLessThanOrEqual(100);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V10 — o conflito: destacar o que difere, e desfazer o engano do "alta"
+// ---------------------------------------------------------------------------
+
 describe("as duas vozes de uma linha de conflito", () => {
   it("os dois lados são nomeados por quem os disse", () => {
     expect(LABEL_SUA_ETIQUETA_DIZ).toBe("Sua etiqueta diz");
@@ -506,99 +683,311 @@ describe("as duas vozes de uma linha de conflito", () => {
     );
   });
 
-  it("a confiança mostrada é a do reconhecimento, escrita por extenso", () => {
-    expect(confiancaDoSom("alta")).toBe("confiança alta");
-    expect(confiancaDoSom("media")).toBe("confiança média");
+  // V10 — a etapa 5 acrescenta linhas a uma revisão aberta, e a música que
+  // sobrou sem letra é justamente a que costuma ter uma proposta de NOME
+  // pendente: duas caixas com o mesmo rótulo seriam indistinguíveis para quem
+  // ouve a tela, e ambíguas para quem vê.
+  describe("rotuloDaMarcacao — o que ESTA linha decide", () => {
+    const linha = (over: Partial<Parameters<typeof rotuloDaMarcacao>[0]> = {}) =>
+      rotuloDaMarcacao({
+        current_title: "sem_tags",
+        conflito: null,
+        marcar_instrumental: false,
+        lyrics: null,
+        fonte: "nome do arquivo",
+        ...over,
+      });
+
+    it("linha comum continua sendo 'Aplicar proposta'", () => {
+      expect(linha()).toBe("Aplicar proposta: sem_tags");
+      // letra de base de dados também: ela não duplica música nenhuma
+      expect(linha({ lyrics: "ai ai", fonte: "LRCLIB" })).toBe(
+        "Aplicar proposta: sem_tags",
+      );
+    });
+
+    it("a letra escrita pela máquina diz que é ela que está sendo aplicada", () => {
+      expect(linha({ lyrics: "ai ai", fonte: FONTE_TRANSCRICAO })).toBe(
+        "Aplicar a letra escrita ouvindo o áudio: sem_tags",
+      );
+    });
+
+    it("a marca de instrumental diz o que a marca faz", () => {
+      expect(linha({ marcar_instrumental: true, fonte: FONTE_TRANSCRICAO })).toBe(
+        "Marcar como instrumental: sem_tags",
+      );
+    });
+
+    it("o conflito continua com o rótulo dele", () => {
+      expect(linha({ conflito: { titulo: "t" } })).toBe(
+        "Aceitar o que o som diz: sem_tags",
+      );
+    });
   });
 
-  // O cabeçalho contava só por confiança, e a linha de conflito tem
-  // `confidence: "baixa"` sempre — somá-la ali diria "1 baixa" sobre uma
-  // linha que não é palpite fraco nenhum: é uma divergência.
-  it("o cabeçalho conta as divergências à parte das propostas", () => {
-    expect(textoDoCabecalho({ alta: 1, media: 1, baixa: 1, conflitos: 0 })).toBe(
-      "3 propostas — 1 alta, 1 média, 1 baixa",
-    );
-    expect(textoDoCabecalho({ alta: 1, media: 0, baixa: 0, conflitos: 0 })).toBe(
-      "1 proposta — 1 alta, 0 média, 0 baixa",
-    );
-    expect(textoDoCabecalho({ alta: 0, media: 0, baixa: 0, conflitos: 0 })).toBe(
-      "Nenhuma proposta para aplicar.",
+  // O caso real da v0.9.0: o título se repetia nas duas linhas e a pessoa
+  // tinha de comparar dois textos com o olho.
+  describe("compararConflito — o que é igual sai da comparação", () => {
+    it("título igual nos dois lados aparece UMA vez", () => {
+      const c = compararConflito(
+        { titulo: "Meninos", artista: "Renato Teixeira & Xangai" },
+        { titulo: "Meninos", artista: "Xangai & Quinteto da Paraíba" },
+      );
+      expect(c.iguais).toEqual([{ campo: "título", valor: "Meninos" }]);
+      expect(c.diferem).toEqual([
+        {
+          campo: "artista",
+          etiqueta: "Renato Teixeira & Xangai",
+          som: "Xangai & Quinteto da Paraíba",
+        },
+      ]);
+    });
+
+    it("os dois campos diferentes: nada é factorado", () => {
+      const c = compararConflito(
+        { titulo: "Te ver feliz", artista: "Caetano Veloso" },
+        { titulo: "Viver Feliz", artista: "Nilson Chaves" },
+      );
+      expect(c.iguais).toEqual([]);
+      expect(c.diferem.map((d) => d.campo)).toEqual(["título", "artista"]);
+    });
+
+    it("etiqueta sem artista: o lado vazio é dito, não escondido", () => {
+      const c = compararConflito(
+        { titulo: "Meninos", artista: null },
+        { titulo: "Meninos", artista: "Xangai" },
+      );
+      expect(c.diferem).toEqual([
+        { campo: "artista", etiqueta: "", som: "Xangai" },
+      ]);
+    });
+
+    it("espaço nas pontas não é diferença", () => {
+      const c = compararConflito(
+        { titulo: " Meninos ", artista: "Xangai" },
+        { titulo: "Meninos", artista: "Quinteto" },
+      );
+      expect(c.iguais.map((i) => i.campo)).toEqual(["título"]);
+    });
+  });
+
+  // Dentro do campo que difere, a palavra que os dois lados repetem não é a
+  // informação: "Xangai" aparece nos dois, e é justamente o que confunde.
+  describe("destacarDiferenca — a palavra que só um lado diz", () => {
+    it("marca o que é exclusivo de cada lado", () => {
+      expect(
+        destacarDiferenca("Xangai & Quinteto da Paraíba", "Renato Teixeira & Xangai"),
+      ).toEqual([
+        { texto: "Xangai", difere: false },
+        { texto: "&", difere: false },
+        { texto: "Quinteto", difere: true },
+        { texto: "da", difere: true },
+        { texto: "Paraíba", difere: true },
+      ]);
+    });
+
+    it("ignora acento e caixa: 'Coração' e 'coracao' são a mesma palavra", () => {
+      expect(destacarDiferenca("Coração", "coracao").every((p) => !p.difere)).toBe(
+        true,
+      );
+    });
+
+    it("texto vazio não vira pedaço nenhum", () => {
+      expect(destacarDiferenca("", "Xangai")).toEqual([]);
+    });
+  });
+
+  // "confiança alta" enganava: ela é sobre QUAL GRAVAÇÃO é esta, não sobre a
+  // etiqueta estar errada. O AcoustID identifica a gravação e o crédito vem do
+  // MusicBrainz, onde a MESMA gravação sai com créditos diferentes por
+  // lançamento — aceitar pode trocar uma etiqueta certa por outra defensável.
+  it("a confiança diz sobre O QUE ela fala", () => {
+    expect(confiancaDoSom("alta")).toBe("gravação reconhecida com confiança alta");
+    expect(confiancaDoSom("media")).toBe("gravação reconhecida com confiança média");
+  });
+
+  it("uma frase explica que a confiança não é sobre a etiqueta", () => {
+    const t = EXPLICACAO_DA_CONFIANCA_DO_SOM.toLowerCase();
+    expect(t).toContain("gravação");
+    expect(t).toContain("crédito");
+    expect(t).not.toContain("erro da etiqueta");
+  });
+
+  it("o cabeçalho conta OFERTAS, sem quebrar por confiança", () => {
+    expect(textoDoCabecalho(3)).toBe("3 propostas para conferir");
+    expect(textoDoCabecalho(1)).toBe("1 proposta para conferir");
+    expect(textoDoCabecalho(0)).toBe("Nenhuma proposta para aplicar.");
+    expect(textoDoCabecalho(3)).not.toContain("baixa");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V10 — a etapa 5, perguntada no FIM
+// ---------------------------------------------------------------------------
+
+describe("a pergunta do fim (PRD V10)", () => {
+  it("é a frase do PRD, com o número e o tempo desta máquina", () => {
+    expect(textoDaOfertaDeTranscricao(47, 10_800)).toBe(
+      "Sobraram 47 músicas sem letra. Escrever a letra ouvindo o áudio leva" +
+        " cerca de 3 horas neste computador.",
     );
   });
 
-  it("só divergências (o desfecho típico da conferência)", () => {
-    expect(textoDoCabecalho({ alta: 0, media: 0, baixa: 0, conflitos: 2 })).toBe(
-      "2 músicas em que o som discorda da etiqueta",
-    );
-    expect(textoDoCabecalho({ alta: 0, media: 0, baixa: 0, conflitos: 1 })).toBe(
-      "1 música em que o som discorda da etiqueta",
+  it("singular", () => {
+    expect(textoDaOfertaDeTranscricao(1, 240)).toContain("Sobrou 1 música sem letra");
+  });
+
+  // "cerca de menos de 1 minuto" é o tipo de frase que sai de formatador
+  // reusado sem olhar.
+  it("tempo curto não vira 'cerca de menos de'", () => {
+    const t = textoDaOfertaDeTranscricao(1, 30);
+    expect(t).toContain("leva menos de 1 minuto neste computador");
+    expect(t).not.toContain("cerca de menos");
+  });
+
+  it("o botão diz que começa agora, e a pergunta não vira parágrafo", () => {
+    expect(ROTULO_COMECAR_TRANSCRICAO).toBe("Começar agora");
+  });
+
+  // Para 180 MB a dispensa do tempo acabou (DECISIONS #106): o caminho de quem
+  // não tem os acessórios é o download, COM tamanho e tempo.
+  it("sem os acessórios, a saída é o download — com tamanho e tempo", () => {
+    const t = textoDaTranscricaoIndisponivel(47, {
+      bytes: 183_000_000,
+      segundos: 183,
+    });
+    expect(t).toContain("Sobraram 47 músicas sem letra");
+    expect(t).toContain("174,5 MB");
+    expect(t).toContain("cerca de 3 minutos");
+    expect(t).toContain("Configurações");
+  });
+
+  // Estado do acessório desconhecido: não inventa tamanho nem tempo.
+  it("sem saber o tamanho, não inventa número", () => {
+    const t = textoDaTranscricaoIndisponivel(47, null);
+    expect(t).toContain("Sobraram 47 músicas sem letra");
+    expect(t).toContain("Configurações");
+    expect(t).not.toMatch(/\d+ MB/);
+  });
+});
+
+describe("acompanhar horas de trabalho", () => {
+  it("o progresso conta a fila, não só a música", () => {
+    expect(textoDoProgressoDaTranscricao(3, 47)).toBe(
+      "Escrevendo as letras… 3 de 47",
     );
   });
 
-  it("as duas coisas juntas: cada uma com o seu número", () => {
-    expect(textoDoCabecalho({ alta: 1, media: 1, baixa: 0, conflitos: 2 })).toBe(
-      "2 propostas — 1 alta, 1 média, 0 baixa; e 2 em que o som discorda da" +
-        " etiqueta",
+  // `segundos_restantes` é null até a primeira música terminar. Inventar um
+  // número antes disso é a DECISIONS #85; deixar em branco é pior ainda numa
+  // tela que vai ficar aberta por horas.
+  it("sem medição, diz QUANDO o número vai aparecer", () => {
+    const t = textoDoTempoDaTranscricao(null);
+    expect(t).toContain("quando a primeira música terminar");
+    expect(t).not.toMatch(/\d/);
+  });
+
+  it("com medição, diz quanto falta", () => {
+    expect(textoDoTempoDaTranscricao(9800)).toBe("Faltam cerca de 3 horas.");
+    expect(textoDoTempoDaTranscricao(600)).toBe("Faltam cerca de 10 minutos.");
+    expect(textoDoTempoDaTranscricao(30)).toBe("Falta menos de 1 minuto.");
+  });
+});
+
+describe("os três campos novos da proposta", () => {
+  // A marca tira o arquivo da fila de letra para sempre, e só o editor a
+  // desfaz: a linha tem de dizer o que o clique faz.
+  it("instrumental: diz o que a marca significa para a pessoa", () => {
+    expect(AVISO_MARCAR_INSTRUMENTAL.toLowerCase()).toContain("voz");
+    expect(AVISO_MARCAR_INSTRUMENTAL.toLowerCase()).toContain("instrumental");
+    expect(AVISO_MARCAR_INSTRUMENTAL.toLowerCase()).toContain("sem letra");
+  });
+
+  // O refrão existe para reconhecer a música SEM abrir a letra — quem vai
+  // conferir 47 letras de máquina precisa disso na linha.
+  it("refrão: aparece entre aspas, com rótulo curto", () => {
+    expect(rotuloDoRefrao("na beira do mar sagrado")).toBe(
+      "Trecho mais repetido: “na beira do mar sagrado”",
     );
+  });
+
+  it("letra de máquina: o aviso de conferir vem antes de aplicar", () => {
+    expect(AVISO_LETRA_DE_MAQUINA.toLowerCase()).toContain("máquina");
+    expect(AVISO_LETRA_DE_MAQUINA.toLowerCase()).toContain("confira");
+    expect(FONTE_TRANSCRICAO).toBe("transcrição do áudio");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// CRÍTICO-1 e V9 — os avisos que sobrevivem à V10
+// ---------------------------------------------------------------------------
+
+describe("avisoLetraExistente — o que seria substituído", () => {
+  it("letra qualquer: avisa que existe e que, sem marcar, só nomes são aplicados", () => {
+    const texto = avisoLetraExistente(null);
+    expect(texto).toContain("Já tem letra");
+    expect(texto).toContain("só título e artista");
+    expect(texto).toContain("abaixo");
+  });
+
+  it("letra transcrita: usa o vocabulário do projeto e lembra da correção à mão", () => {
+    const texto = avisoLetraExistente("transcricao");
+    expect(texto).toContain("escrita ouvindo o áudio");
+    expect(texto).toContain("à mão");
+  });
+
+  it("o rótulo da marcação é o mesmo que o backend cita ao recusar", () => {
+    expect(LABEL_SUBSTITUIR_LETRA).toBe("Substituir a letra atual");
+  });
+});
+
+describe("aviso de troca de nome escrito por gente", () => {
+  it("diz o que a linha faria, em uma frase", () => {
+    expect(AVISO_NOME_ESCRITO.toLowerCase()).toContain("já existe");
+    expect(AVISO_NOME_ESCRITO.length).toBeLessThanOrEqual(90);
+    expect(frases(AVISO_NOME_ESCRITO)).toBe(1);
   });
 });
 
 describe("textoAplicado — o aviso final diz o que MUDOU, nunca uma tarefa", () => {
+  const resumo = (over: Partial<Parameters<typeof textoAplicado>[0]> = {}) =>
+    textoAplicado({
+      ganharamLetra: 0,
+      letraSubstituida: 0,
+      marcadasInstrumental: 0,
+      nomeCorrigido: 0,
+      gravadas: 0,
+      ...over,
+    });
+
   it("só letras: a frase do PRD", () => {
-    expect(
-      textoAplicado({
-        ganharamLetra: 47,
-        letraSubstituida: 0,
-        nomeCorrigido: 0,
-        gravadas: 47,
-      }),
-    ).toBe("47 músicas ganharam letra. A biblioteca já está atualizada.");
+    expect(resumo({ ganharamLetra: 47, gravadas: 47 })).toBe(
+      "47 músicas ganharam letra. A biblioteca já está atualizada.",
+    );
   });
 
   it("letras e correções de nome", () => {
-    expect(
-      textoAplicado({
-        ganharamLetra: 12,
-        letraSubstituida: 0,
-        nomeCorrigido: 3,
-        gravadas: 15,
-      }),
-    ).toBe(
+    expect(resumo({ ganharamLetra: 12, nomeCorrigido: 3, gravadas: 15 })).toBe(
       "12 músicas ganharam letra e 3 tiveram título ou artista corrigidos." +
         " A biblioteca já está atualizada.",
     );
   });
 
   it("só correções de nome", () => {
-    expect(
-      textoAplicado({
-        ganharamLetra: 0,
-        letraSubstituida: 0,
-        nomeCorrigido: 1,
-        gravadas: 1,
-      }),
-    ).toBe(
+    expect(resumo({ nomeCorrigido: 1, gravadas: 1 })).toBe(
       "1 música teve título ou artista corrigido. A biblioteca já está atualizada.",
     );
   });
 
   it("singular da letra", () => {
-    expect(
-      textoAplicado({
-        ganharamLetra: 1,
-        letraSubstituida: 0,
-        nomeCorrigido: 0,
-        gravadas: 1,
-      }),
-    ).toBe("1 música ganhou letra. A biblioteca já está atualizada.");
+    expect(resumo({ ganharamLetra: 1, gravadas: 1 })).toBe(
+      "1 música ganhou letra. A biblioteca já está atualizada.",
+    );
   });
 
-  // MÉDIO-13: letra gravada por cima de letra existente era reportada como
-  // "teve título ou artista corrigido" — a metade destrutiva ficava invisível
-  // até depois do fato. Ela vem PRIMEIRO por ser a única irreversível.
   it("letra substituída é contada, dita e vem na frente", () => {
     expect(
-      textoAplicado({
+      resumo({
         ganharamLetra: 12,
         letraSubstituida: 2,
         nomeCorrigido: 3,
@@ -610,35 +999,38 @@ describe("textoAplicado — o aviso final diz o que MUDOU, nunca uma tarefa", ()
     );
   });
 
-  it("uma letra substituída, sozinha: singular", () => {
+  // V10 — a marca de instrumental muda o acervo tanto quanto uma letra nova, e
+  // é a mudança que a lista NÃO mostra depois (a música some da fila).
+  it("a marca de instrumental é contada e dita", () => {
+    expect(resumo({ marcadasInstrumental: 5, gravadas: 5 })).toBe(
+      "5 músicas foram marcadas como instrumental. A biblioteca já está atualizada.",
+    );
+    expect(resumo({ marcadasInstrumental: 1, gravadas: 1 })).toBe(
+      "1 música foi marcada como instrumental. A biblioteca já está atualizada.",
+    );
+  });
+
+  it("a marca vem logo depois da letra substituída, antes dos ganhos", () => {
     expect(
-      textoAplicado({
-        ganharamLetra: 0,
-        letraSubstituida: 1,
-        nomeCorrigido: 0,
-        gravadas: 1,
-      }),
-    ).toBe("1 música teve a letra substituída. A biblioteca já está atualizada.");
+      resumo({ ganharamLetra: 2, letraSubstituida: 1, marcadasInstrumental: 3, gravadas: 6 }),
+    ).toBe(
+      "1 música teve a letra substituída, 3 foram marcadas como instrumental e" +
+        " 2 ganharam letra. A biblioteca já está atualizada.",
+    );
   });
 
   it("gravou sem mudar conteúdo: não inventa ganho que não houve", () => {
-    expect(
-      textoAplicado({
-        ganharamLetra: 0,
-        letraSubstituida: 0,
-        nomeCorrigido: 0,
-        gravadas: 2,
-      }),
-    ).toBe("2 músicas foram gravadas, sem mudança no conteúdo.");
+    expect(resumo({ gravadas: 2 })).toBe(
+      "2 músicas foram gravadas, sem mudança no conteúdo.",
+    );
   });
 
-  // PRD V8: "não haverá popup pedindo para reindexar nem para reiniciar"
   it("nunca pede reindexação nem reinício", () => {
     for (const t of [
-      textoAplicado({ ganharamLetra: 47, letraSubstituida: 0, nomeCorrigido: 0, gravadas: 47 }),
-      textoAplicado({ ganharamLetra: 12, letraSubstituida: 2, nomeCorrigido: 3, gravadas: 17 }),
-      textoAplicado({ ganharamLetra: 0, letraSubstituida: 0, nomeCorrigido: 1, gravadas: 1 }),
-      textoAplicado({ ganharamLetra: 0, letraSubstituida: 0, nomeCorrigido: 0, gravadas: 2 }),
+      resumo({ ganharamLetra: 47, gravadas: 47 }),
+      resumo({ letraSubstituida: 2, nomeCorrigido: 3, gravadas: 5 }),
+      resumo({ marcadasInstrumental: 1, gravadas: 1 }),
+      resumo({ gravadas: 2 }),
     ]) {
       expect(t.toLowerCase()).not.toContain("reindex");
       expect(t.toLowerCase()).not.toContain("reinici");
@@ -646,303 +1038,39 @@ describe("textoAplicado — o aviso final diz o que MUDOU, nunca uma tarefa", ()
   });
 });
 
-describe("o que a seção de curadoria promete", () => {
-  it("sem o acessório, a etapa do som NÃO é listada — ela não vai rodar", () => {
-    expect(etapasDoFunil(SEM_SOM).map((e) => e.nome)).toEqual([
-      "O que já está no arquivo",
-      "LRCLIB",
-      "Vagalume",
-    ]);
-  });
-
-  // V9 — a fase A ("que música é esta?") vem ANTES das fontes de letra: a
-  // impressão digital não devolve letra, devolve identidade, que é entrada
-  // das outras etapas.
-  it("com o acessório, o som entra em segundo — antes das bases de letra", () => {
-    expect(etapasDoFunil(COM_SOM).map((e) => e.nome)).toEqual([
-      "O que já está no arquivo",
-      "Reconhecer pelo som",
-      "LRCLIB",
-      "Vagalume",
-    ]);
-  });
-
-  // Nada do acervo sai da máquina — nem na etapa que "manda o áudio":
-  // o que viaja é um resumo acústico. É invariável do produto e a única
-  // explicação que essas pessoas vão receber.
-  it("a etapa do som diz o que sai do computador", () => {
-    const som = etapasDoFunil(COM_SOM)[1];
-    expect(som.explicacao).toContain("resumo");
-    expect(som.explicacao.toLowerCase()).not.toContain("envia o áudio");
-  });
-
-  it("cada explicação de etapa cabe numa linha", () => {
-    for (const etapas of [SEM_SOM, COM_SOM, { som: true, vagalume: false }]) {
-      for (const e of etapasDoFunil(etapas)) {
-        expect(e.explicacao.length, e.explicacao).toBeLessThanOrEqual(80);
-      }
-    }
-  });
-
-  // MÉDIO-2 — a etapa 4 era prometida em toda instalação ("site brasileiro de
-  // letras.") e não roda em NENHUMA: o segredo `VAGALUME_API_KEY` não existe,
-  // então não há chave embutida em build nenhuma. O funil enumerava 4 etapas
-  // e entregava 2, e o único texto que dizia COMO ligar a etapa tinha sido
-  // apagado no passe de copy.
-  describe("a etapa do Vagalume diz quando ela roda (MÉDIO-2)", () => {
-    const vagalumeDe = (etapas: EtapasLigadas) =>
-      etapasDoFunil(etapas).find((e) => e.nome === "Vagalume")!;
-
-    it("sem chave, a explicação diz a condição — e aponta o campo", () => {
-      const e = vagalumeDe({ som: false, vagalume: false });
-      expect(e.explicacao.toLowerCase()).toContain("chave");
-      expect(e.explicacao.toLowerCase()).toContain("abaixo");
-    });
-
-    // Com a chave em mãos a condição já foi cumprida: repeti-la é o ruído que
-    // o passe de redução da V9 existe para tirar.
-    it("com chave, a explicação não pede nada", () => {
-      const e = vagalumeDe({ som: false, vagalume: true });
-      expect(e.explicacao.toLowerCase()).not.toContain("chave");
-    });
-
-    // Continuar LISTANDO a etapa sem chave é deliberado, e é o contrário do
-    // que se faz com o som: o som exige um download de 5 MB e tem um bloco
-    // próprio logo abaixo da lista para explicá-lo; o Vagalume exige um campo,
-    // e esconder a etapa esconderia a única frase que diz para que o campo
-    // serve. Não há suporte a quem perguntar depois.
-    it("a etapa continua listada sem chave — mas não promete nada", () => {
-      const nomes = etapasDoFunil({ som: false, vagalume: false }).map((e) => e.nome);
-      expect(nomes).toContain("Vagalume");
-    });
-  });
-
-  // MÉDIO-2, o outro lado: a estimativa somava 2 s/música de um trabalho que
-  // não acontece. Estimativa folgada é o lado certo de errar (DECISIONS #85),
-  // mas isto não é folga — é uma etapa inexistente na conta.
-  it("a estimativa só cobra o Vagalume de quem vai consultá-lo", () => {
-    expect(segundosPorMusica("completar", { som: false, vagalume: false })).toBeLessThan(
-      segundosPorMusica("completar", { som: false, vagalume: true }),
-    );
-  });
-
-  // O texto do campo da chave também deriva do mesmo fato. "Só é preciso
-  // preencher se a busca do Vagalume parar de funcionar" afirma que ela
-  // funciona sem a chave — e não funciona em nenhuma build distribuída.
-  describe("o texto do campo da chave (MÉDIO-2)", () => {
-    it("sem chave embutida, diz que sem ela o Vagalume não é consultado", () => {
-      const t = textoDaChaveDoVagalume(false);
-      expect(t.toLowerCase()).toContain("sem ela");
-      expect(t.toLowerCase()).not.toContain("parar de funcionar");
-    });
-
-    it("com chave embutida, o campo volta a ser a saída de emergência", () => {
-      expect(textoDaChaveDoVagalume(true).toLowerCase()).toContain(
-        "parar de funcionar",
-      );
-    });
-
-    it("nenhuma das duas versões passa de duas frases", () => {
-      for (const t of [textoDaChaveDoVagalume(false), textoDaChaveDoVagalume(true)]) {
-        expect(frases(t), t).toBeLessThanOrEqual(2);
-      }
-    });
-  });
-
-  // O texto antigo negava DUAS coisas: reconhecer pelo som e escrever a letra
-  // ouvindo o áudio. A primeira passou a existir — continuar negando-a seria
-  // mentir sobre o próprio produto.
-  it("o que ainda não é feito aqui não inclui mais o reconhecimento pelo som", () => {
-    expect(ETAPAS_FORA_DO_APP).toContain("ainda não");
-    expect(ETAPAS_FORA_DO_APP.toLowerCase()).not.toContain("reconhecer");
-    expect(ETAPAS_FORA_DO_APP).toContain("ouvindo o áudio");
-    expect(ETAPAS_FORA_DO_APP.length).toBeLessThanOrEqual(90);
-  });
-
-  it("o endereço da chave gratuita do Vagalume é o oficial", () => {
-    expect(VAGALUME_URL).toBe("https://auth.vagalume.com.br/settings/api/");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// QA A2 — as músicas que a etapa 2 deixou de perguntar
-// ---------------------------------------------------------------------------
+// V10 — o campo da chave do Vagalume SAIU da tela (DECISIONS #110), e com ele
+// `VAGALUME_URL` e `textoDaChaveDoVagalume`. A etapa 4 passou a ser o
+// `lyrics.ovh`, que não pede chave: **nenhuma etapa do funil pede credencial de
+// quem usa**, e esse era o último pedágio de configuração do produto — numa
+// tela usada por 40 pessoas leigas, sem suporte a quem perguntar.
 //
-// Uma falha do `fpcalc` desligava a etapa 2 pelo resto da varredura. A pessoa
-// via UMA linha vermelha, as outras 149 sem nada, e concluía que o resto
-// tinha sido conferido. O backend agora conta quantas ficaram sem ser
-// perguntadas; se a tela não disser o número, o defeito continua idêntico —
-// silêncio lido como aprovação (DECISIONS #86).
+// Não é desligamento: o texto que explicava a chave não existe mais, porque
+// texto que não descreve nada é o que ensina a ignorar o resto da tela.
 
-describe("avisoSemPerguntarAoSom (QA A2)", () => {
-  // Zero é o CASO NORMAL: toda varredura que correu bem termina assim, e um
-  // "0 músicas ficaram sem ser perguntadas" em cada desfecho é ruído que
-  // ensina a ignorar o aviso justamente quando ele importar.
-  it("zero não merece texto nenhum", () => {
-    for (const modo of ["completar", "conferencia"] as const) {
-      expect(avisoSemPerguntarAoSom(0, modo)).toBeNull();
-      expect(avisoSemPerguntarAoSom(-1, modo)).toBeNull();
-    }
-  });
-
-  it("diz o NÚMERO, que é a razão de o campo existir", () => {
-    for (const modo of ["completar", "conferencia"] as const) {
-      expect(avisoSemPerguntarAoSom(37, modo)).toContain("37");
-      expect(avisoSemPerguntarAoSom(1, modo)).toContain("1 música");
-    }
-  });
-
-  it("singular e plural concordam", () => {
-    expect(avisoSemPerguntarAoSom(1, "completar")).toContain(
-      "não chegou a ser perguntada",
-    );
-    expect(avisoSemPerguntarAoSom(2, "completar")).toContain(
-      "não chegaram a ser perguntadas",
-    );
-  });
-
-  // "O que fazer em seguida" não pode ser específico do veredito: o número
-  // não distingue o acessório que não roda do AcoustID que recusou o app, e
-  // mandar procurar defeito no lugar errado é pior que não mandar nada. O
-  // passo comum aos dois é repetir quando o som voltar.
-  it("diz o que fazer em seguida, sem chutar a causa", () => {
-    for (const modo of ["completar", "conferencia"] as const) {
-      const t = avisoSemPerguntarAoSom(37, modo)!;
-      expect(t.toLowerCase()).toContain("repita");
-      expect(t.toLowerCase()).not.toContain("antivírus");
-      expect(t.toLowerCase()).not.toContain("baixe");
-    }
-  });
-
-  // A conferência é o trabalho caro, disparado de propósito, que a pessoa
-  // esperou minutos para ver terminar. Se 37 de 40 não foram perguntadas, o
-  // texto não pode deixar a conferência passar por concluída.
-  it("na conferência, diz que aquelas músicas continuam pendentes", () => {
-    const t = avisoSemPerguntarAoSom(37, "conferencia")!;
-    expect(t.toLowerCase()).toContain("sem conferência");
-  });
-
-  it("cabe na régua da V9: 2 frases, 210 caracteres", () => {
-    for (const modo of ["completar", "conferencia"] as const) {
-      for (const n of [1, 37, 1999]) {
-        const t = avisoSemPerguntarAoSom(n, modo)!;
-        expect(t.length, t).toBeLessThanOrEqual(210);
-        expect(frases(t), t).toBeLessThanOrEqual(2);
-      }
-    }
-  });
-});
-
-describe("textoSemPropostas com a etapa 2 desligada no meio (QA A2)", () => {
-  // O desfecho vazio da conferência dizia "Conferimos 40 músicas e o som não
-  // contradisse nenhuma etiqueta". Com 37 nunca perguntadas isso é falso duas
-  // vezes: não conferimos 40, e o silêncio das 37 não é concordância.
-  it("a conferência para de afirmar que conferiu o que não perguntou", () => {
-    const texto = textoSemPropostas(40, "conferencia", 37);
-    expect(texto).toContain("37");
-    expect(texto).not.toContain("Conferimos 40");
-    expect(texto.toLowerCase()).toContain("repita");
-  });
-
-  it("a busca de sempre também conta as que ficaram de fora", () => {
-    const texto = textoSemPropostas(40, "completar", 37);
-    expect(texto).toContain("37");
-    expect(texto.toLowerCase()).toContain("repita");
-  });
-
-  // Sem o número, o texto é o de sempre — nada muda no caminho normal.
-  it("com zero, o desfecho é exatamente o de antes", () => {
-    for (const modo of ["completar", "conferencia"] as const) {
-      expect(textoSemPropostas(40, modo, 0)).toBe(textoSemPropostas(40, modo));
-    }
-  });
-
-  // O total do progresso é best-effort e pode não chegar (MÉDIO-11); o número
-  // do som vem no RETORNO da varredura e chega sempre. Um não depende do outro.
-  it("funciona mesmo sem o total do progresso", () => {
-    const texto = textoSemPropostas(null, "conferencia", 37);
-    expect(texto).toContain("37");
-  });
-
-  it("continua dentro da régua da V9", () => {
-    for (const modo of ["completar", "conferencia"] as const) {
-      const t = textoSemPropostas(150, modo, 149);
-      expect(t.length, t).toBeLessThanOrEqual(210);
-      expect(frases(t), t).toBeLessThanOrEqual(2);
+describe("nenhuma etapa pede credencial (DECISIONS #110)", () => {
+  it("a copy da curadoria não fala em chave, cadastro nem Vagalume", () => {
+    const textos = [
+      TRANSCRICAO_NO_FIM,
+      ...etapasDoFunil(ETAPAS_COMPLETAS).flatMap((e) => [e.nome, e.explicacao]),
+      estimativa(pronta(), 200),
+    ];
+    for (const t of textos) {
+      expect(t.toLowerCase(), t).not.toContain("chave");
+      expect(t.toLowerCase(), t).not.toContain("vagalume");
+      expect(t.toLowerCase(), t).not.toContain("cadastro");
     }
   });
 });
 
 // ---------------------------------------------------------------------------
-// BAIXO-4 — o que o passe de redução levou junto sem ganhar nada em troca
-// ---------------------------------------------------------------------------
-//
-// Encurtar é bom; encurtar tirando o fato é outra coisa. Estes quatro textos
-// perderam informação que respondia a uma pergunta real, e a régua da V9 é
-// justamente essa: o que fica é o que responde a uma pergunta que a pessoa
-// faria naquele momento. Repostos SEM desfazer o passe.
-
-describe("o que o passe de redução levou junto (BAIXO-4)", () => {
-  // A etapa 1 diz "sem sair do computador". Sem "na internet" na etapa 3, o
-  // contraste entre local e remoto — que é a coisa que a pessoa quer saber
-  // sobre um app offline — some da lista inteira.
-  it("o LRCLIB volta a dizer que é na internet, em contraste com a etapa 1", () => {
-    const etapas = etapasDoFunil({ som: false, vagalume: true });
-    const local = etapas.find((e) => e.nome === "O que já está no arquivo")!;
-    const lrclib = etapas.find((e) => e.nome === "LRCLIB")!;
-    expect(local.explicacao).toContain("sem sair do computador");
-    expect(lrclib.explicacao).toContain("na internet");
-  });
-
-  // DECISIONS #85: a mitigação da estimativa é admitir que a ordem de grandeza
-  // depende de uma rede que ninguém controla. "mais se a internet estiver
-  // lenta" perdeu as duas metades que faziam isso — o "bem mais" e a rede
-  // FORA DO AR, que é o caso em que a busca demora de verdade.
-  it("a estimativa volta a admitir 'bem mais' e a rede fora do ar", () => {
-    const texto = completar(pronta(95), 200);
-    expect(texto).toContain("bem mais se a internet estiver lenta");
-    expect(texto).toContain("fora do ar");
-  });
-
-  // O aviso fica logo ACIMA da marcação que ele descreve. Sem o "abaixo", ele
-  // manda marcar sem dizer onde, numa lista que pode ter dezenas de linhas com
-  // caixas parecidas.
-  it("o aviso de letra existente volta a apontar onde fica a marcação", () => {
-    for (const origem of [null, "transcricao"]) {
-      expect(avisoLetraExistente(origem)).toContain("abaixo");
-    }
-  });
-
-  // "letra ou a marca de instrumental" lê-se como se a marca substituísse o
-  // conjunto todo. O que ela dispensa é a LETRA, e é isso que faz a frase
-  // descrever o acervo de quem está lendo (DECISIONS #86).
-  it("a regra de completude volta a dizer o que a marca de instrumental dispensa", () => {
-    const texto = completar(pronta(0), 12);
-    expect(texto).toContain("marca de instrumental");
-    expect(texto).toContain("dispensa a letra");
-  });
-
-  // ...e nada disso pode desfazer o passe: os textos continuam curtos.
-  it("os textos repostos continuam dentro do teto da V9", () => {
-    for (const t of [
-      completar(pronta(95), 200),
-      avisoLetraExistente("transcricao"),
-      textoSemPropostas(0, "completar"),
-    ]) {
-      expect(t.length, t).toBeLessThanOrEqual(210);
-      expect(frases(t), t).toBeLessThanOrEqual(2);
-    }
-  });
-});
-
-// ---------------------------------------------------------------------------
-// Acessórios (V9) — nada baixa sozinho, e a tela diz o que vai baixar
+// Acessórios — nada baixa sozinho, e agora com TEMPO junto do tamanho
 // ---------------------------------------------------------------------------
 
 describe("formatarTamanho — o 'quanto ocupa' que a pessoa lê antes de decidir", () => {
   it("megabytes com uma casa e vírgula decimal (pt-BR)", () => {
     expect(formatarTamanho(3_418_112)).toBe("3,3 MB");
     expect(formatarTamanho(5_538_312)).toBe("5,3 MB");
+    expect(formatarTamanho(181_000_000)).toBe("172,6 MB");
   });
 
   it("abaixo de 1 MB fala em kB, sem casa decimal", () => {
@@ -951,39 +1079,110 @@ describe("formatarTamanho — o 'quanto ocupa' que a pessoa lê antes de decidir
   });
 });
 
+describe("estadoDoAcessorio — a leitura do que o backend devolveu", () => {
+  const lista = (nome: string, estado: string) => [{ nome, estado }];
+
+  it("undefined = a pergunta ainda não voltou", () => {
+    expect(estadoDoAcessorio(undefined, "fpcalc")).toBe("perguntando");
+  });
+
+  it("null = a pergunta falhou, que NÃO é 'não existe' nem 'pronto'", () => {
+    expect(estadoDoAcessorio(null, "fpcalc")).toBe("indeterminado");
+  });
+
+  it("lista vazia = não publicamos binário para este computador", () => {
+    expect(estadoDoAcessorio([], "fpcalc")).toBe("sem-binario");
+  });
+
+  it("lista sem o acessório pedido vale o mesmo que lista vazia", () => {
+    expect(estadoDoAcessorio(lista("whisper-cli", "pronto"), "fpcalc")).toBe(
+      "sem-binario",
+    );
+  });
+
+  it("cada estado passa direto", () => {
+    for (const e of ["pronto", "ausente", "corrompido", "indisponivel"]) {
+      expect(estadoDoAcessorio(lista("modelo-de-transcricao", e), "modelo-de-transcricao")).toBe(e);
+    }
+  });
+
+  it("estado desconhecido não vira 'pronto' por otimismo", () => {
+    expect(estadoDoAcessorio(lista("fpcalc", "coisa-nova"), "fpcalc")).toBe(
+      "indeterminado",
+    );
+  });
+});
+
 describe("a copy dos acessórios", () => {
-  const fpcalc = {
-    nome: "fpcalc",
-    para_que_serve: "reconhecer a música pelo som",
-    arquivo: "fpcalc-linux-x86_64",
-    tamanho_bytes: 5_538_312,
-    estado: "ausente" as const,
-    origem: "https://github.com/exemplo/releases/download/acessorios-v1/fpcalc",
-  };
+  // O `para_que_serve` vem pronto do backend e vira o TÍTULO do bloco: quem
+  // cura não sabe o que é "impressão digital acústica", e a frase que explica
+  // isso não pode ficar duplicada em duas linguagens.
+  it("o título é o para-que-serve do backend, com maiúscula", () => {
+    expect(tituloDoAcessorio(acessorio())).toBe("Reconhecer a música pelo som");
+    expect(
+      tituloDoAcessorio(
+        acessorio({ para_que_serve: "escrever a letra ouvindo o áudio" }),
+      ),
+    ).toBe("Escrever a letra ouvindo o áudio");
+  });
 
-  // Regra 1 do PRD V9: a tela diz ANTES o que vai baixar e quanto ocupa.
-  it("antes de baixar: para que serve e quanto ocupa, na mesma frase", () => {
-    const texto = textoDoAcessorioAusente(fpcalc);
-    expect(texto).toContain("reconhecer a música pelo som");
+  // Regra 1 do PRD V9 + DECISIONS #106: tamanho E tempo, antes do clique.
+  it("antes de baixar: quanto ocupa, quanto tempo leva, e que é uma vez só", () => {
+    const texto = textoDoAcessorioAusente(acessorio());
     expect(texto).toContain("5,3 MB");
-    expect(texto.length).toBeLessThanOrEqual(140);
+    expect(texto).toContain("uma vez só");
+    expect(texto).toContain("menos de 1 minuto");
+    expect(frases(texto)).toBeLessThanOrEqual(2);
   });
 
-  // Regra 3: baixou uma vez, não pergunta de novo.
+  // "um programa de 2 MB e um arquivo de 181 MB" é outra conversa que "dois
+  // programas": o modelo é DADO, e ninguém o executa.
+  it("programa e dado são ditos com palavras diferentes", () => {
+    expect(textoDoAcessorioAusente(acessorio({ executavel: true }))).toContain(
+      "um programa de",
+    );
+    expect(
+      textoDoAcessorioAusente(
+        acessorio({
+          executavel: false,
+          tamanho_bytes: 181_000_000,
+          segundos_estimados: 181,
+        }),
+      ),
+    ).toContain("um arquivo de");
+  });
+
+  it("o tempo do download de 180 MB é dito em minutos, não omitido", () => {
+    const texto = textoDoAcessorioAusente(
+      acessorio({ tamanho_bytes: 181_000_000, segundos_estimados: 181, executavel: false }),
+    );
+    expect(texto).toContain("172,6 MB");
+    expect(texto).toContain("cerca de 3 minutos");
+  });
+
   it("o rótulo do botão carrega o tamanho, e o de repetição diz que é de novo", () => {
-    expect(rotuloBaixarAcessorio(fpcalc, false)).toBe("Baixar (5,3 MB)");
-    expect(rotuloBaixarAcessorio(fpcalc, true)).toBe("Baixar de novo (5,3 MB)");
+    expect(rotuloBaixarAcessorio(acessorio(), false)).toBe("Baixar (5,3 MB)");
+    expect(rotuloBaixarAcessorio(acessorio(), true)).toBe("Baixar de novo (5,3 MB)");
   });
 
-  // `total: null` = o servidor não anunciou o tamanho. NÃO é 0: uma barra de
-  // 0% de um arquivo vazio é a falha silenciosa da DECISIONS #86.
+  // `total: null` = o servidor não anunciou o tamanho. NÃO é 0 (DECISIONS #86).
   it("o progresso vive sem o total, em vez de inventar 0", () => {
-    expect(textoDoDownload(1_048_576, 5_538_312)).toBe("Baixando… 1,0 MB de 5,3 MB");
-    expect(textoDoDownload(1_048_576, null)).toBe("Baixando… 1,0 MB");
+    expect(textoDoDownload(1_048_576, 5_538_312, null)).toBe(
+      "Baixando… 1,0 MB de 5,3 MB",
+    );
+    expect(textoDoDownload(1_048_576, null, null)).toBe("Baixando… 1,0 MB");
   });
 
-  // O estado do acessório é uma ida ao backend, e ela pode falhar. "Não
-  // sabemos" não pode virar "não existe" nem "está pronto" (DECISIONS #86).
+  // A velocidade MEDIDA troca a estimativa declarada assim que existe amostra.
+  it("com velocidade medida, o progresso diz quanto falta", () => {
+    expect(textoDoDownload(1_048_576, 181_000_000, 120)).toBe(
+      "Baixando… 1,0 MB de 172,6 MB — faltam cerca de 2 minutos",
+    );
+    expect(textoDoDownload(1_048_576, 181_000_000, 20)).toContain(
+      "falta menos de 1 minuto",
+    );
+  });
+
   it("estado que não pôde ser conferido: admite, e não oferece download", () => {
     expect(ACESSORIO_INDETERMINADO.toLowerCase()).toContain("não foi possível");
     expect(ACESSORIO_INDETERMINADO.toLowerCase()).not.toContain("baixar");
@@ -1000,24 +1199,102 @@ describe("a copy dos acessórios", () => {
     expect(ACESSORIO_INDISPONIVEL.toLowerCase()).not.toContain("baixar");
   });
 
-  // "corrompido precisa de tratamento próprio e sem drama": o arquivo não
-  // confere, foi descartado, e a saída é baixar de novo.
   it("corrompido: sem drama e com a saída na mesma frase", () => {
     expect(ACESSORIO_CORROMPIDO.toLowerCase()).toContain("não confere");
     expect(ACESSORIO_CORROMPIDO.toLowerCase()).toContain("de novo");
     expect(frases(ACESSORIO_CORROMPIDO)).toBeLessThanOrEqual(2);
   });
 
-  it("pronto: uma frase, e nenhum pedido de ação", () => {
-    expect(frases(ACESSORIO_PRONTO)).toBe(1);
-    expect(ACESSORIO_PRONTO.toLowerCase()).toContain("som");
+  // Com três acessórios, o texto de "pronto" não pode falar do som: ele
+  // aparece embaixo do título de cada um.
+  it("pronto: uma frase, nenhum pedido de ação, e nada específico do som", () => {
+    expect(frases(ACESSORIO_PRONTO)).toBeLessThanOrEqual(2);
+    expect(ACESSORIO_PRONTO.toLowerCase()).not.toContain("som");
+    expect(ACESSORIO_PRONTO.toLowerCase()).toContain("pronto");
   });
 
-  // Cancelar e falhar terminam os dois com o acessório ausente: a tela
-  // precisa saber qual dos dois aconteceu sem adivinhar.
   it("cancelado é dito como cancelado, não como falha", () => {
     expect(ACESSORIO_CANCELADO.toLowerCase()).toContain("cancelad");
     expect(ACESSORIO_CANCELADO.toLowerCase()).not.toContain("erro");
     expect(frases(ACESSORIO_CANCELADO)).toBeLessThanOrEqual(2);
+  });
+});
+
+describe("downloadParaTranscrever — o que falta para a etapa 5 existir", () => {
+  const whisper = acessorio({
+    nome: "whisper-cli",
+    para_que_serve: "escrever a letra ouvindo o áudio",
+    tamanho_bytes: 2_000_000,
+    segundos_estimados: 2,
+    estado: "ausente",
+  });
+  const modelo = acessorio({
+    nome: "modelo-de-transcricao",
+    para_que_serve: "entender o que é cantado",
+    tamanho_bytes: 181_000_000,
+    segundos_estimados: 181,
+    executavel: false,
+    estado: "ausente",
+  });
+
+  it("soma os dois: são 2 MB de programa e 181 MB de dado", () => {
+    expect(downloadParaTranscrever([acessorio(), whisper, modelo])).toEqual({
+      bytes: 183_000_000,
+      segundos: 183,
+    });
+  });
+
+  it("o que já está pronto não é cobrado de novo", () => {
+    expect(
+      downloadParaTranscrever([whisper, { ...modelo, estado: "pronto" }]),
+    ).toEqual({ bytes: 2_000_000, segundos: 2 });
+  });
+
+  it("nada pendente: não há download a oferecer", () => {
+    expect(
+      downloadParaTranscrever([
+        { ...whisper, estado: "pronto" },
+        { ...modelo, estado: "pronto" },
+      ]),
+    ).toBeNull();
+  });
+
+  // Lista que não veio, ou que não traz os acessórios da etapa 5: "não
+  // sabemos" é um estado, e não um download de 0 MB (DECISIONS #86).
+  it("sem lista, não inventa tamanho", () => {
+    expect(downloadParaTranscrever(null)).toBeNull();
+    expect(downloadParaTranscrever(undefined)).toBeNull();
+    expect(downloadParaTranscrever([acessorio()])).toBeNull();
+  });
+
+  // Baixar 183 MB para descobrir que este build não usa o acessório é a
+  // acusação falsa da DECISIONS #97.
+  it("indisponível nesta versão não vira oferta de download", () => {
+    expect(
+      downloadParaTranscrever([
+        { ...whisper, estado: "indisponivel" },
+        { ...modelo, estado: "indisponivel" },
+      ]),
+    ).toBeNull();
+  });
+});
+
+// O tipo exportado é conferido por uso: uma união que perder um estado quebra
+// o `switch` de quem a lê.
+const TODOS_OS_ESTADOS: EstadoDoAcessorio[] = [
+  "perguntando",
+  "indeterminado",
+  "sem-binario",
+  "indisponivel",
+  "ausente",
+  "corrompido",
+  "pronto",
+];
+
+describe("EstadoDoAcessorio", () => {
+  it("tem os sete estados, e 'não sabemos' são dois deles", () => {
+    expect(new Set(TODOS_OS_ESTADOS).size).toBe(7);
+    expect(TODOS_OS_ESTADOS).toContain("perguntando");
+    expect(TODOS_OS_ESTADOS).toContain("indeterminado");
   });
 });

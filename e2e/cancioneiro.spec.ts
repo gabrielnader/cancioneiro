@@ -915,20 +915,36 @@ test.describe("V5 — Completar dados em lote (F13)", () => {
     await dispararCuradoria(page);
 
     const dialog = page.getByRole("dialog", { name: "Completar dados" });
+    await expect(dialog.getByText("2 propostas para conferir")).toBeVisible();
+    // V10 — a lista é ordenada por RISCO: a letra encontrada em cima, e o
+    // preenchimento de campo vazio DOBRADO, com a frase que diz o que fará
+    await expect(dialog.getByText("1 letra encontrada")).toBeVisible();
     await expect(
-      dialog.getByText("2 propostas — 0 alta, 1 média, 1 baixa"),
+      dialog.getByText(
+        "1 música sem título ou artista vai receber o nome que está no arquivo",
+      ),
     ).toBeVisible();
     await expect(dialog.getByText("MÉDIA", { exact: true })).toBeVisible();
-    await expect(dialog.getByText("BAIXA", { exact: true })).toBeVisible();
-    await expect(dialog.getByText("letra encontrada")).toBeVisible();
+    await expect(
+      dialog.getByText("letra encontrada", { exact: true }),
+    ).toBeVisible();
 
-    // nada pré-marcado (nenhuma ALTA): aplicar começa desabilitado
-    const aplicar0 = dialog.getByRole("button", {
-      name: "Aplicar selecionadas (0)",
-    });
-    await expect(aplicar0).toBeDisabled();
+    // o grupo dobrado chega MARCADO (preencher campo vazio não tem nada a
+    // perder) e a letra em MÉDIA, não: são riscos diferentes
+    await expect(
+      dialog.getByRole("button", { name: "Aplicar selecionadas (1)" }),
+    ).toBeEnabled();
+    await expect(
+      dialog.getByRole("checkbox", {
+        name: "Aplicar proposta: Instrumental Sem Letra",
+      }),
+    ).not.toBeChecked();
 
-    // o humano decide: marca a MÉDIA (letra encontrada para a instrumental)
+    // o humano decide a letra; e desmarca o grupo dobrado, para este teste
+    // aplicar só a linha da letra
+    await dialog
+      .getByRole("checkbox", { name: /1 música sem título ou artista/ })
+      .uncheck();
     await dialog
       .getByRole("checkbox", { name: "Aplicar proposta: Instrumental Sem Letra" })
       .check();
@@ -973,10 +989,12 @@ test.describe("V5 — Completar dados em lote (F13)", () => {
 
     const dialog = page.getByRole("dialog", { name: "Completar dados" });
     // barra determinada com "n de total" (2 músicas incompletas)
-    await expect(dialog.getByText("Buscando dados… 0 de 2")).toBeVisible();
+    // V10 — o caminho único olha TODAS as músicas disponíveis da pasta (3),
+    // e não só as incompletas: é assim que etiqueta errada aparece
+    await expect(dialog.getByText("Buscando dados… 0 de 3")).toBeVisible();
     await expect(dialog.getByRole("progressbar")).toHaveAttribute(
       "aria-valuemax",
-      "2",
+      "3",
     );
     // com uma varredura rodando, disparar outra fica bloqueado
     await expect(
@@ -991,7 +1009,7 @@ test.describe("V5 — Completar dados em lote (F13)", () => {
     const indicador = page.getByRole("button", { name: /Buscando dados/ });
     await expect(indicador).toBeVisible();
     // o indicador da lateral traz contagem E etapa do funil (V8/F18)
-    await expect(indicador).toContainText(/de 2/);
+    await expect(indicador).toContainText(/de 3/);
     await expect(indicador).toContainText(/procurando no LRCLIB|preparando/);
 
     // a pessoa volta ao dia a dia enquanto a busca roda
@@ -1010,9 +1028,7 @@ test.describe("V5 — Completar dados em lote (F13)", () => {
       page.getByText("Dados encontrados para 2 músicas — abra a revisão para conferir."),
     ).toBeVisible({ timeout: 15000 });
     await page.getByRole("button", { name: "Revisar 2 propostas" }).click();
-    await expect(
-      dialog.getByText("2 propostas — 0 alta, 1 média, 1 baixa"),
-    ).toBeVisible();
+    await expect(dialog.getByText("2 propostas para conferir")).toBeVisible();
     expect(errors).toEqual([]);
   });
 
@@ -1033,7 +1049,9 @@ test.describe("V5 — Completar dados em lote (F13)", () => {
     const abrir = page.getByRole("button", { name: "Buscar dados desta pasta" });
     await abrir.click();
     const dialog = page.getByRole("dialog", { name: "Completar dados" });
-    await expect(dialog.getByText("Buscando dados… 0 de 2")).toBeVisible();
+    // V10 — o caminho único olha TODAS as músicas disponíveis da pasta (3),
+    // e não só as incompletas: é assim que etiqueta errada aparece
+    await expect(dialog.getByText("Buscando dados… 0 de 3")).toBeVisible();
 
     await dialog.getByRole("button", { name: "Cancelar" }).click();
     await expect(dialog).toHaveCount(0);
@@ -1052,7 +1070,9 @@ test.describe("V5 — Completar dados em lote (F13)", () => {
     // quando o invoke enfim responde, o botão volta e a varredura recomeça do zero
     await expect(abrir).toBeEnabled({ timeout: 15000 });
     await abrir.click();
-    await expect(dialog.getByText("Buscando dados… 0 de 2")).toBeVisible();
+    // V10 — o caminho único olha TODAS as músicas disponíveis da pasta (3),
+    // e não só as incompletas: é assim que etiqueta errada aparece
+    await expect(dialog.getByText("Buscando dados… 0 de 3")).toBeVisible();
     await expect(dialog.getByRole("progressbar")).toHaveAttribute(
       "aria-valuenow",
       "0",
@@ -1142,26 +1162,28 @@ test.describe("V8 — O funil dentro do app (F18)", () => {
     const secao = page.getByRole("region", { name: "Curadoria do acervo" });
     await expect(secao.getByText(/Nada é gravado sem você conferir/)).toBeVisible();
     await expect(secao.getByText(/LRCLIB/).first()).toBeVisible();
-    // V9 — o texto que negava DUAS etapas pesadas nega uma só: o
-    // reconhecimento pelo som passou a existir dentro do app
+    // V10 — o texto que negava a etapa 5 deixou de ser verdade: ela existe, e
+    // é oferecida no FIM, quando o app já sabe quantas músicas sobraram
     await expect(
-      secao.getByText(/Escrever a letra ouvindo o áudio ainda não é feito aqui/),
+      secao.getByText(/Escrever a letra ouvindo o áudio é oferecido no fim/),
     ).toBeVisible();
     expect(errors).toEqual([]);
   });
 
-  test("a chave do Vagalume liga a terceira etapa, persiste e aparece na procedência", async ({
+  // V10 — o Vagalume SAIU do produto (DECISIONS #110). A etapa 4 é o
+  // `lyrics.ovh`, que não pede chave: **nenhuma etapa do funil pede credencial
+  // de quem usa**, e o campo de chave desapareceu da tela. Era o último
+  // pedágio de configuração do produto.
+  test("a etapa 4 roda sem chave nenhuma, e a tela não pede credencial", async ({
     page,
   }) => {
     const errors = trackErrors(page);
     await resetApp(page);
     await addMockFolder(page);
 
-    // QA ALTO-5: o Vagalume só é consultado quando existem título E artista
-    // REAIS para conferir (enrich.rs) — ele não tem duração, e a igualdade de
-    // palavras dos dois lados é a única prova que existe. Então a música que
-    // vai chegar lá é uma de tags boas que o LRCLIB não conhece, e não a
-    // sem_tags (que antes exercitava uma chamada que o backend nunca faria).
+    // A régua desta fonte é estrita: ela não tem duração e não devolve nome,
+    // então só é consultada com título E artista REAIS para conferir. Então a
+    // música que chega lá é uma de tags boas que o LRCLIB não conhece.
     const panel = page.getByLabel("Painel de letra");
     await page.getByText("sem_tags", { exact: true }).first().click();
     await panel.getByRole("button", { name: "Editar" }).click();
@@ -1171,58 +1193,63 @@ test.describe("V8 — O funil dentro do app (F18)", () => {
     await expect(page.getByText("Alterações salvas em sem_tags.mp3.")).toBeVisible();
 
     await page.getByRole("button", { name: "Configurações" }).click();
-    const campo = page.getByLabel("Chave do Vagalume (opcional)");
-    // o endereço para pegar a chave gratuita está ali, escrito
+    const secao = page.getByRole("region", { name: "Curadoria do acervo" });
+    // nenhum campo de credencial, e nenhuma palavra sobre chave
+    await expect(page.getByLabel(/Chave do Vagalume/i)).toHaveCount(0);
+    await expect(secao).not.toContainText("chave");
+    await expect(secao).not.toContainText("Vagalume");
+    // a etapa 4 está na lista mesmo assim — ela não depende de nada — e a
+    // lista diz a fraqueza dela
+    await expect(secao.getByText(/Procurando no lyrics\.ovh/)).toBeVisible();
     await expect(
-      page.getByText("https://auth.vagalume.com.br/settings/api/"),
+      secao.getByText(/ele não diz de que música é a letra/),
     ).toBeVisible();
-    await campo.fill("chave-de-teste");
 
-    // preferência como as outras: sobrevive ao reinício do app — e a tela diz
-    // que ela fica guardada nesta máquina (QA MÉDIO-10)
-    await expect(
-      page.getByText(/Ela fica guardada neste computador/),
-    ).toBeVisible();
-    await page.reload();
-    await page.getByRole("button", { name: "Configurações" }).click();
-    await expect(page.getByLabel("Chave do Vagalume (opcional)")).toHaveValue(
-      "chave-de-teste",
-    );
-
-    // com a chave, a música que o LRCLIB não resolveu passa pelo Vagalume
     await page.getByRole("button", { name: "Buscar dados desta pasta" }).click();
     const dialog = page.getByRole("dialog", { name: "Completar dados" });
-    await expect(dialog.getByText("via Vagalume")).toBeVisible();
+    await expect(dialog.getByText("via lyrics.ovh")).toBeVisible();
     await expect(dialog.getByText("via LRCLIB")).toBeVisible();
-    // e esse caminho NUNCA propõe nome novo (DECISIONS #63): a letra é a
+    // este caminho NUNCA propõe nome novo (DECISIONS #63): a letra é a
     // mudança inteira
     await expect(dialog.getByText("Ponto de Oxum — Grupo Fixture")).toHaveCount(2);
+    await expect(dialog.getByText("2 letras encontradas")).toBeVisible();
+
+    // A RESSALVA, na linha e sem abrir nada: esta fonte não diz a que música a
+    // letra pertence, e é a única cujo casamento o programa não confere. Sem
+    // ela, o teto MÉDIA é só um clique a mais sem explicação — e a medição de
+    // campo foi "eu nem li as sugestões em baixa".
     await expect(
-      dialog.getByText("2 propostas — 0 alta, 2 média, 0 baixa"),
+      dialog.getByText(/este site não diz a que música a letra pertence/),
     ).toBeVisible();
+    // e ela não desabilita a linha: quem leu a letra pode aplicá-la
+    await expect(
+      dialog.getByRole("checkbox", { name: "Aplicar proposta: Ponto de Oxum" }),
+    ).toBeEnabled();
     expect(errors).toEqual([]);
   });
 
-  // QA ALTO-5 — sem artista real, nem com chave o Vagalume entra: identificar
-  // quem não tem etiqueta é trabalho da impressão digital (fase 2), e chutar
-  // pelo nome do arquivo é como se grava "Ponto de Ogum" dentro de "Ponto de
-  // Oxum" (DECISIONS #63).
-  test("sem etiqueta de artista, a chave do Vagalume não muda nada", async ({
-    page,
-  }) => {
+  // A régua estrita: sem título E artista REAIS não há o que conferir, e
+  // chutar pelo nome do arquivo é como se grava "Ponto de Ogum" dentro de
+  // "Ponto de Oxum" (DECISIONS #63).
+  test("sem etiqueta de artista, a etapa 4 não é consultada", async ({ page }) => {
     const errors = trackErrors(page);
     await resetApp(page);
     await addMockFolder(page);
 
     await page.getByRole("button", { name: "Configurações" }).click();
-    await page.getByLabel("Chave do Vagalume (opcional)").fill("chave-de-teste");
     await page.getByRole("button", { name: "Buscar dados desta pasta" }).click();
 
     const dialog = page.getByRole("dialog", { name: "Completar dados" });
+    await expect(dialog.getByText("2 propostas para conferir")).toBeVisible();
+    await expect(dialog.getByText("via lyrics.ovh")).toHaveCount(0);
+    // e ninguém recebe ressalva que não se aplica: aviso em toda linha ensina
+    // a ignorar todos
     await expect(
-      dialog.getByText("2 propostas — 0 alta, 1 média, 1 baixa"),
-    ).toBeVisible();
-    await expect(dialog.getByText("via Vagalume")).toHaveCount(0);
+      dialog.getByText(/este site não diz a que música a letra pertence/),
+    ).toHaveCount(0);
+    // o palpite de nome de arquivo mora no grupo dobrado: a procedência
+    // aparece ao abrir, que é o que a pessoa faz quando quer conferir
+    await dialog.getByRole("button", { name: /abrir para ver/i }).click();
     await expect(dialog.getByText("via nome do arquivo")).toBeVisible();
     expect(errors).toEqual([]);
   });
@@ -1246,6 +1273,9 @@ test.describe("V8 — O funil dentro do app (F18)", () => {
     await page.getByText("sem_tags", { exact: true }).first().click();
     await panel.getByRole("button", { name: "Editar" }).click();
     await panel.getByLabel("Título").fill("sem tags");
+    // V10 — a letra também: sem ela esta música SOBRA para a etapa 5, e o fim
+    // da varredura passa a ser uma pergunta em vez de um desfecho vazio
+    await panel.getByLabel("Letra", { exact: true }).fill("Letra já conferida");
     await panel.getByRole("button", { name: "Salvar no arquivo" }).click();
     await expect(page.getByText("Alterações salvas em sem_tags.mp3.")).toBeVisible();
 
@@ -1254,7 +1284,7 @@ test.describe("V8 — O funil dentro do app (F18)", () => {
     // .last(): a mesma frase também vai para a região viva (sr-only) que
     // anuncia o fim da busca — o parágrafo visível é o segundo
     const aviso = dialog
-      .getByText(/Conferimos a única música incompleta desta pasta/)
+      .getByText(/Conferimos as 3 músicas desta pasta/)
       .last();
     await expect(aviso).toBeVisible();
     // o passe de redução da V9 cortou a terceira frase (a que mandava a pessoa
@@ -1285,32 +1315,38 @@ test.describe("V8 — O funil dentro do app (F18)", () => {
     ).toBeDisabled();
   });
 
-  // QA CRÍTICO-1 — o caminho inteiro do defeito mais grave: a varredura acha
-  // letra para uma música que JÁ TEM letra (uma transcrição corrigida à mão),
-  // a linha chega pré-marcada por ser ALTA, e um clique em "Aplicar
-  // selecionadas" destruía o trabalho. Agora a linha avisa, a substituição é
-  // uma segunda marcação, e sem ela só título e artista são aplicados.
-  test("proposta que substituiria uma letra: avisa, pede consentimento e preserva a letra", async ({
+  /**
+   * QA CRÍTICO-1, agora pelo avesso.
+   *
+   * O defeito era: a varredura achava letra para uma música que JÁ TINHA letra
+   * (uma transcrição corrigida à mão), a linha chegava pré-marcada por ser
+   * ALTA, e um clique em "Aplicar selecionadas" destruía o trabalho. A V9
+   * respondeu com um consentimento separado — que continua de pé no editor.
+   *
+   * A V10 fecha a porta antes dela: com o caminho único, o portão de
+   * completude virou o guarda das etapas de LETRA (DECISIONS #102), e elas não
+   * rodam para quem já tem letra. O lote perdeu a rota que destruía a
+   * transcrição corrigida à mão — não por uma trava a mais, mas porque a
+   * consulta não acontece.
+   *
+   * É garantia melhor que a anterior, e é ela que este teste guarda: se
+   * alguém reabrir aquela consulta, a linha de substituição volta a aparecer
+   * aqui e o teste cai.
+   */
+  test("a varredura nunca mais oferece trocar uma letra que já existe", async ({
     page,
   }) => {
     const errors = trackErrors(page);
     await resetApp(page);
     await addMockFolder(page);
 
-    // a curadoria transcreveu a letra desta música, e alguém a corrigiu; a
-    // etiqueta de título é lixo de ripador, então ela volta a ser candidata
-    await page.evaluate(() => {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (window as any).__CANCIONEIRO_MOCK__._markAsTranscribed(
-        "/musicas/mock/com_letra.mp3",
-      );
-    });
+    // a curadoria transcreveu a letra desta música, e alguém a corrigiu à mão
     const panel = page.getByLabel("Painel de letra");
     await page.getByText("Coração Sertanejo").first().click();
     await panel.getByRole("button", { name: "Editar" }).click();
     await panel.getByLabel("Letra", { exact: true }).fill("Letra conferida à mão");
-    // sem etiqueta de artista ela volta a ser candidata da varredura — é
-    // assim que uma música COM letra reaparece na revisão
+    // e a etiqueta de artista some: no desenho antigo era isto que a devolvia
+    // à varredura com uma proposta de letra por cima
     await panel.getByLabel("Artista").fill("");
     await panel.getByRole("button", { name: "Salvar no arquivo" }).click();
     await expect(page.getByText("Alterações salvas em com_letra.mp3.")).toBeVisible();
@@ -1325,41 +1361,47 @@ test.describe("V8 — O funil dentro do app (F18)", () => {
     await dispararCuradoria(page);
     const dialog = page.getByRole("dialog", { name: "Completar dados" });
 
-    // a linha DIZ que existe letra ali, e de que tipo ela é
+    // nenhuma linha oferece letra para ela, e portanto não há consentimento a
+    // pedir: a letra escrita à mão nunca esteve em risco
     await expect(
       dialog.getByText(/Já tem letra, escrita ouvindo o áudio/),
-    ).toBeVisible();
-    // a substituição é uma segunda marcação, desmarcada por padrão
-    const substituir = dialog.getByRole("checkbox", {
-      name: /Substituir a letra atual/,
-    });
-    await expect(substituir).not.toBeChecked();
-    // "Marcar todas" nunca marca a substituição
+    ).toHaveCount(0);
+    await expect(
+      dialog.getByRole("checkbox", { name: /Substituir a letra atual/ }),
+    ).toHaveCount(0);
+
+    // e o resto da revisão segue normal: marcar todas e aplicar não encosta
+    // na letra
     await dialog
       .getByRole("button", { name: "Marcar todas", exact: true })
       .click();
-    await expect(substituir).not.toBeChecked();
-
     await dialog.getByRole("button", { name: /Aplicar selecionadas/ }).click();
     await expect(page.getByText(/A biblioteca já está atualizada/)).toBeVisible();
 
-    // a letra escrita à mão continua no arquivo
+    // a letra escrita à mão continua no arquivo, letra por letra
     await page.getByRole("button", { name: "Biblioteca", exact: true }).click();
     await page.getByText("Coração Sertanejo").first().click();
     await expect(
       page.getByLabel("Painel de letra").getByTestId("lyrics-body"),
     ).toHaveText("Letra conferida à mão");
+    // ...e a marca de procedência dela também: gravar título não mexe na letra
+    await expect(
+      page.getByLabel("Painel de letra").getByTestId("lyrics-origem"),
+    ).toContainText("pode conter erros");
     expect(errors).toEqual([]);
   });
 });
 
 
-test.describe("V9 — o acessório do som, a conferência e o conflito (F18 fase 2)", () => {
-  // O caminho inteiro da fase 2, pela porta que a pessoa usa: baixar o
-  // acessório em Configurações, ligar o modo de conferência que ele
-  // habilita, e resolver a divergência que só ele acha. É o caso real que
-  // criou o modo — etiqueta certa na aparência, música errada no arquivo.
-  test("baixar o acessório liga a conferência, que acha a etiqueta errada", async ({
+test.describe("V9/V10 — o acessório do som e o conflito (F18 fases 2 e 3)", () => {
+  // O caminho inteiro, pela porta que a pessoa usa: baixar o acessório em
+  // Configurações e resolver a divergência que só ele acha. É o caso real que
+  // criou a etapa 2 — etiqueta certa na aparência, música errada no arquivo.
+  //
+  // V10 — não há mais um modo a ligar (DECISIONS #102): o acessório entra no
+  // caminho ÚNICO, e a música que "parece completa" passa a ser olhada por
+  // ele. Era esse o recurso que dependia de a pessoa adivinhar que existia.
+  test("baixar o acessório põe o som no caminho único, que acha a etiqueta errada", async ({
     page,
   }) => {
     const errors = trackErrors(page);
@@ -1381,40 +1423,52 @@ test.describe("V9 — o acessório do som, a conferência e o conflito (F18 fase
 
     await page.getByRole("button", { name: "Configurações" }).click();
     const secao = page.getByRole("region", { name: "Curadoria do acervo" });
-    const bloco = page.getByRole("region", { name: "Reconhecer música pelo som" });
+    const bloco = page.getByRole("region", { name: "Reconhecer a música pelo som" });
 
-    // a tela diz o que vai baixar, quanto ocupa e de onde vem — ANTES
-    await expect(bloco.getByText(/é preciso baixar um arquivo de 5,3 MB/)).toBeVisible();
-    await expect(bloco.getByText(/acessorios-v1/)).toBeVisible();
-    // e a conferência ainda não é possível, com o motivo escrito na tela
-    const conferir = page.getByRole("radio", { name: /Conferir se a etiqueta/ });
-    await expect(conferir).toBeDisabled();
+    // a tela diz o que vai baixar, quanto ocupa, quanto TEMPO leva e de onde
+    // vem — ANTES do clique (regra 1 do PRD V9 + DECISIONS #106)
     await expect(
-      secao.getByText("Precisa do reconhecimento pelo som — baixe o acessório abaixo."),
+      bloco.getByText(/É preciso baixar um programa de 5,3 MB, uma vez só/),
     ).toBeVisible();
+    await expect(bloco.getByText(/O download leva/)).toBeVisible();
+    await expect(bloco.getByText(/acessorios-v1/)).toBeVisible();
+    // e a etapa do som ainda não está no funil: listá-la seria prometer
+    // trabalho que não vai acontecer (DECISIONS #101)
+    await expect(secao.getByText(/Reconhecendo pelo som/)).toHaveCount(0);
 
     // nada baixou sozinho: só depois do clique
     await bloco.getByRole("button", { name: /^Baixar \(/ }).click();
     await expect(bloco.getByText(/^Baixando…/)).toBeVisible();
     await expect(
-      bloco.getByText("Pronto — a busca já reconhece música pelo som."),
+      bloco.getByText("Pronto. Não é preciso baixar de novo."),
     ).toBeVisible();
     // baixou uma vez, não pergunta de novo
     await expect(bloco.getByRole("button", { name: /Baixar/ })).toHaveCount(0);
 
-    // com o acessório, a etapa 2 entra no funil e a conferência é possível
-    await expect(secao.getByText(/Reconhecer pelo som/)).toBeVisible();
-    await conferir.click();
-    await page.getByRole("button", { name: "Conferir esta pasta" }).click();
+    // com o acessório, a etapa 2 entra no funil — e no caminho ÚNICO
+    await expect(secao.getByText(/Reconhecendo pelo som/)).toBeVisible();
+    await page.getByRole("button", { name: "Buscar dados desta pasta" }).click();
 
     const dialog = page.getByRole("dialog", { name: "Completar dados" });
     await expect(dialog.getByText("CONFLITO")).toBeVisible();
-    await expect(dialog.getByText(/Sua etiqueta diz/)).toBeVisible();
+    // a divergência é o PRIMEIRO grupo: é a linha mais arriscada da tela
     await expect(
-      dialog.getByText("Coração Sertanejo — Artista Teste"),
+      dialog.getByText("1 música em que o som discorda da etiqueta"),
     ).toBeVisible();
-    await expect(dialog.getByText("Viver Feliz — Nilson Chaves")).toBeVisible();
-    await expect(dialog.getByText("confiança alta")).toBeVisible();
+    // os dois lados aparecem CAMPO A CAMPO: aqui título e artista diferem, e
+    // cada campo tem o seu par de rótulos — daí o `.first()`
+    await expect(dialog.getByText(/Sua etiqueta diz/).first()).toBeVisible();
+    await expect(dialog.getByText(/O som diz/).first()).toBeVisible();
+    // V10 — o que difere em destaque, palavra por palavra
+    await expect(dialog.getByText("Coração", { exact: true })).toBeVisible();
+    await expect(dialog.getByText("Nilson", { exact: true })).toBeVisible();
+    // e a confiança diz SOBRE O QUE ela fala: a gravação, não a etiqueta
+    await expect(
+      dialog.getByText("gravação reconhecida com confiança alta"),
+    ).toBeVisible();
+    await expect(
+      dialog.getByText(/A confiança é sobre qual gravação é esta/),
+    ).toBeVisible();
 
     // aceitar o som é escolha POR LINHA: nem pré-marcada, nem em massa
     const aceitar = dialog.getByRole("checkbox", {
@@ -1450,7 +1504,7 @@ test.describe("V9 — o acessório do som, a conferência e o conflito (F18 fase
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (window as any).__CANCIONEIRO_MOCK__._acessorio.atrasoMs = 400;
     });
-    const bloco = page.getByRole("region", { name: "Reconhecer música pelo som" });
+    const bloco = page.getByRole("region", { name: "Reconhecer a música pelo som" });
     await bloco.getByRole("button", { name: /^Baixar \(/ }).click();
     await bloco.getByRole("button", { name: "Parar" }).click();
 
@@ -1471,31 +1525,33 @@ test.describe("V9 — o acessório do som, a conferência e o conflito (F18 fase
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (window as any).__CANCIONEIRO_MOCK__._acessorio.erro = "soma";
     });
-    const bloco = page.getByRole("region", { name: "Reconhecer música pelo som" });
+    const bloco = page.getByRole("region", { name: "Reconhecer a música pelo som" });
     await bloco.getByRole("button", { name: /^Baixar \(/ }).click();
 
     await expect(
       bloco.getByText(/não confere com o esperado — foi descartado/),
     ).toBeVisible();
     await expect(bloco.getByRole("button", { name: /^Baixar \(/ })).toBeVisible();
+    // e a etapa do som continua fora do funil: nada foi instalado
     await expect(
-      page.getByRole("radio", { name: /Conferir se a etiqueta/ }),
-    ).toBeDisabled();
+      page.getByRole("region", { name: "Curadoria do acervo" })
+        .getByText(/Reconhecendo pelo som/),
+    ).toHaveCount(0);
   });
 
   /**
-   * QA A2 — a conferência que parou no meio.
+   * QA A2 — a varredura em que a etapa do som parou no meio.
    *
    * Uma falha do `fpcalc` desligava a etapa 2 pelo resto da varredura: a
    * pessoa via UMA linha vermelha, as outras sem nada, e concluía que o resto
-   * tinha sido conferido. É o trabalho CARO, disparado de propósito, que ela
-   * esperou minutos para ver terminar — e a tela não pode dá-lo por concluído.
+   * tinha sido conferido. A varredura leva minutos, e a tela não pode dá-la
+   * por concluída.
    *
    * O E2E cobre o caminho inteiro porque o contrato mudou de forma
    * (`enrich_folder_scan` devolve um objeto, não a lista): se o store voltar a
    * tratar a resposta como array, a revisão nem abre.
    */
-  test("conferência que para no meio: a tela diz quantas ficaram sem resposta", async ({
+  test("som que para no meio: a tela diz quantas ficaram sem resposta", async ({
     page,
   }) => {
     const errors = trackErrors(page);
@@ -1514,8 +1570,7 @@ test.describe("V9 — o acessório do som, a conferência e o conflito (F18 fase
     });
 
     await page.getByRole("button", { name: "Configurações" }).click();
-    await page.getByRole("radio", { name: /Conferir se a etiqueta/ }).click();
-    await page.getByRole("button", { name: "Conferir esta pasta" }).click();
+    await page.getByRole("button", { name: "Buscar dados desta pasta" }).click();
 
     const dialog = page.getByRole("dialog", { name: "Completar dados" });
     // o motivo, com as palavras do backend, na linha da música que falhou
@@ -1532,7 +1587,7 @@ test.describe("V9 — o acessório do som, a conferência e o conflito (F18 fase
       .locator("p:not([role='status'])")
       .filter({ hasText: /2 músicas não chegaram a ser perguntadas/ });
     await expect(avisoVisivel).toBeVisible();
-    await expect(avisoVisivel).toContainText(/continuam sem conferência/);
+    await expect(avisoVisivel).toContainText(/Repita a busca/);
     // e quem ouve a tela recebe o mesmo desfecho, não um resumo otimista
     await expect(dialog.locator("p[role='status']")).toContainText(
       /2 músicas não chegaram a ser perguntadas/,
@@ -1543,7 +1598,7 @@ test.describe("V9 — o acessório do som, a conferência e o conflito (F18 fase
   // O caminho normal não ganha aviso nenhum: zero é o caso comum, e um
   // "0 músicas ficaram sem resposta" em cada desfecho ensina a ignorar o
   // aviso justamente quando ele importar.
-  test("conferência que roda inteira não menciona música nenhuma sem resposta", async ({
+  test("varredura que roda inteira não menciona música nenhuma sem resposta", async ({
     page,
   }) => {
     await resetApp(page);
@@ -1560,13 +1615,158 @@ test.describe("V9 — o acessório do som, a conferência e o conflito (F18 fase
     });
 
     await page.getByRole("button", { name: "Configurações" }).click();
-    await page.getByRole("radio", { name: /Conferir se a etiqueta/ }).click();
-    await page.getByRole("button", { name: "Conferir esta pasta" }).click();
+    await page.getByRole("button", { name: "Buscar dados desta pasta" }).click();
 
     const dialog = page.getByRole("dialog", { name: "Completar dados" });
     await expect(dialog.getByText("CONFLITO")).toBeVisible();
     await expect(dialog.getByText(/chegaram a ser perguntadas/)).toHaveCount(0);
     await expect(dialog.getByText(/chegou a ser perguntada/)).toHaveCount(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V10 — a etapa 5: perguntada no FIM, e as horas que ela leva
+// ---------------------------------------------------------------------------
+
+test.describe("V10 — a etapa que resolve (F18 fase 3)", () => {
+  /** Deixa o transcritor e o modelo prontos, e ensina o motor. */
+  async function comTranscricao(page: Page) {
+    await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const mock = (window as any).__CANCIONEIRO_MOCK__;
+      mock._estadoDoAcessorio("whisper-cli", "pronto");
+      mock._estadoDoAcessorio("modelo-de-transcricao", "pronto");
+      mock._ensinarTranscricao("/musicas/mock/sem_tags.mp3", {
+        letra: "na beira do mar sagrado\nna beira do mar sagrado",
+        refrao: "na beira do mar sagrado",
+      });
+    });
+  }
+
+  // O caminho inteiro: a varredura termina, sobra uma música sem letra, e a
+  // pergunta é feita AGORA — com o número e o tempo desta máquina. Pergunta
+  // feita quando pode ser respondida com informação.
+  test("a pergunta do fim escreve a letra e a manda para a MESMA revisão", async ({
+    page,
+  }) => {
+    const errors = trackErrors(page);
+    await resetApp(page);
+    await addMockFolder(page);
+    await comTranscricao(page);
+
+    await page.getByRole("button", { name: "Configurações" }).click();
+    await page.getByRole("button", { name: "Buscar dados desta pasta" }).click();
+
+    const dialog = page.getByRole("dialog", { name: "Completar dados" });
+    // a pergunta traz o NÚMERO e o TEMPO — e não pede nada antes de existir
+    await expect(dialog.getByText(/Sobrou 1 música sem letra/)).toBeVisible();
+    await expect(
+      dialog.getByText(/Escrever a letra ouvindo o áudio leva/),
+    ).toBeVisible();
+
+    await dialog.getByRole("button", { name: "Começar agora" }).click();
+
+    // a letra escrita entra na revisão, com o refrão para reconhecer a música
+    // SEM abrir a letra, e o aviso de que ela é de máquina
+    await expect(
+      dialog.getByText(/Trecho mais repetido: “na beira do mar sagrado”/),
+    ).toBeVisible();
+    await expect(
+      dialog.getByText("Letra escrita pela máquina ouvindo o áudio — confira antes de aplicar."),
+    ).toBeVisible();
+    await expect(dialog.getByText("via transcrição do áudio")).toBeVisible();
+
+    // aplicar grava a letra, e o painel avisa que ela é automática (V5/F14).
+    // O rótulo da caixa diz o que ELA decide: esta música tem duas linhas na
+    // revisão — o nome que a etapa 1 achou e a letra que a etapa 5 escreveu.
+    await dialog
+      .getByRole("checkbox", {
+        name: "Aplicar a letra escrita ouvindo o áudio: sem_tags",
+      })
+      .check();
+    await dialog.getByRole("button", { name: /Aplicar selecionadas/ }).click();
+    await expect(page.getByText(/A biblioteca já está atualizada/)).toBeVisible();
+
+    // UMA gravação, com as duas decisões juntas: esta música tinha o nome
+    // pendente do grupo dobrado (que chega marcado) MAIS a letra da etapa 5.
+    // Duas gravações seriam recusadas pelo eco do `apply` (QA A5).
+    await page.getByRole("button", { name: "Biblioteca", exact: true }).click();
+    await page.getByText("sem tags", { exact: true }).first().click();
+    const panel = page.getByLabel("Painel de letra");
+    await expect(panel.getByTestId("lyrics-body")).toContainText(
+      "na beira do mar sagrado",
+    );
+    // e a letra fica marcada como de máquina: é o que faz o painel avisar
+    await expect(panel.getByTestId("lyrics-origem")).toContainText(
+      "pode conter erros",
+    );
+    expect(errors).toEqual([]);
+  });
+
+  // Sem os acessórios, a saída é o download — e para 180 MB a dispensa do
+  // tempo acabou (DECISIONS #106).
+  test("sem os acessórios, a pergunta do fim oferece o download com tamanho e tempo", async ({
+    page,
+  }) => {
+    await resetApp(page);
+    await addMockFolder(page);
+
+    await page.getByRole("button", { name: "Configurações" }).click();
+    // o modelo é DADO, não programa, e o bloco dele diz isso
+    const bloco = page.getByRole("region", {
+      name: /Entender o que é cantado/,
+    });
+    await expect(
+      bloco.getByText(/É preciso baixar um arquivo de 172,6 MB/),
+    ).toBeVisible();
+    await expect(bloco.getByText(/O download leva cerca de 3 minutos/)).toBeVisible();
+
+    await page.getByRole("button", { name: "Buscar dados desta pasta" }).click();
+    const dialog = page.getByRole("dialog", { name: "Completar dados" });
+    await expect(dialog.getByText(/Sobrou 1 música sem letra/)).toBeVisible();
+    await expect(dialog.getByText(/baixe 174,5 MB em Configurações/)).toBeVisible();
+    // e não há o que começar: o trabalho não existe nesta máquina
+    await expect(dialog.getByRole("button", { name: "Começar agora" })).toHaveCount(
+      0,
+    );
+  });
+
+  // Uma música leva MINUTOS: a barra tem de andar DENTRO dela, e o trabalho
+  // tem de sair da frente sem parar (a lição da v0.8.1).
+  test("a escrita das letras mostra progresso, vai para segundo plano e é cancelável", async ({
+    page,
+  }) => {
+    await resetApp(page);
+    await addMockFolder(page);
+    await comTranscricao(page);
+    await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__CANCIONEIRO_MOCK__._enrichDelayMs = 800;
+    });
+
+    await page.getByRole("button", { name: "Configurações" }).click();
+    await page.getByRole("button", { name: "Buscar dados desta pasta" }).click();
+    const dialog = page.getByRole("dialog", { name: "Completar dados" });
+    await expect(dialog.getByText(/Sobrou 1 música sem letra/)).toBeVisible({
+      timeout: 20000,
+    });
+    await dialog.getByRole("button", { name: "Começar agora" }).click();
+
+    await expect(dialog.getByText(/Escrevendo as letras… 0 de 1/)).toBeVisible();
+    // o tempo que falta só aparece quando houver o que medir
+    await expect(
+      dialog.getByText("O tempo que falta aparece quando a primeira música terminar."),
+    ).toBeVisible();
+
+    // sai da frente sem parar: o app continua usável
+    await dialog
+      .getByRole("button", { name: "Deixar rodando em segundo plano" })
+      .click();
+    await expect(dialog).toHaveCount(0);
+    await page.getByRole("button", { name: "Biblioteca", exact: true }).click();
+    const search = page.getByPlaceholder("Buscar por letra, título ou artista…");
+    await search.fill(LETRA_TRECHO);
+    await expect(page.getByText("1 resultados")).toBeVisible();
   });
 });
 
@@ -1637,9 +1837,12 @@ test.describe("V8 — Marca de instrumental (F17)", () => {
     await dispararCuradoria(page);
 
     const dialog = page.getByRole("dialog", { name: "Completar dados" });
-    // sobra só a sem_tags: a instrumental não é candidata nem no total
+    // sobra só a sem_tags, no grupo dobrado: a instrumental é OLHADA (V10 — o
+    // caminho único não filtra na porta) mas nenhuma etapa de letra roda para
+    // ela, e a etapa 1 não tem o que propor, então ela não vira linha
+    await expect(dialog.getByText("1 proposta para conferir")).toBeVisible();
     await expect(
-      dialog.getByText("1 proposta — 0 alta, 0 média, 1 baixa"),
+      dialog.getByText("1 música sem título ou artista vai receber o nome que está no arquivo"),
     ).toBeVisible();
     await expect(dialog.getByText("Instrumental Sem Letra")).toHaveCount(0);
     await expect(
@@ -1671,25 +1874,26 @@ test.describe("V8 — instrumental sem etiqueta (QA ALTO-5)", () => {
     });
     await page.reload();
 
-    // a contagem (que vem do backend) conta as duas, e o disparo continua vivo
+    // a contagem (que vem do backend) olha as TRÊS, e o disparo continua vivo
     await page.getByRole("button", { name: "Configurações" }).click();
-    await expect(
-      page.getByText(/2 músicas incompletas nesta pasta/),
-    ).toBeVisible();
+    await expect(page.getByText(/3 músicas nesta pasta/)).toBeVisible();
     const disparo = page.getByRole("button", { name: "Buscar dados desta pasta" });
     await expect(disparo).toBeEnabled();
     await disparo.click();
 
     const dialog = page.getByRole("dialog", { name: "Completar dados" });
-    await expect(
-      dialog.getByText("2 propostas — 0 alta, 1 média, 1 baixa"),
-    ).toBeVisible();
-    // ela está na lista: o que ela pode ganhar é NOME
+    await expect(dialog.getByText("2 propostas para conferir")).toBeVisible();
+    // ela está na lista: o que ela pode ganhar é NOME. A linha mora no grupo
+    // dobrado, e abrir é o que a pessoa faz para conferir.
+    await dialog.getByRole("button", { name: /abrir para ver/i }).click();
     await expect(
       dialog.getByRole("checkbox", { name: "Aplicar proposta: sem_tags" }),
     ).toBeVisible();
     // e nenhuma etapa de letra rodou para ela: só a outra traz letra
-    await expect(dialog.getByText("letra encontrada")).toHaveCount(1);
+    // (`exact` porque o cabeçalho do grupo também diz "1 letra encontrada")
+    await expect(
+      dialog.getByText("letra encontrada", { exact: true }),
+    ).toHaveCount(1);
     expect(errors).toEqual([]);
   });
 });

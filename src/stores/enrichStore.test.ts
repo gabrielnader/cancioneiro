@@ -5,11 +5,11 @@ import {
   type EnrichProgress,
   type EnrichProposal,
   type EnrichScanResult,
+  type TranscricaoProgresso,
 } from "../lib/api";
 import { textoSemPropostas } from "../lib/curadoria";
 import { useEnrichStore } from "./enrichStore";
 import { useToastStore } from "./toastStore";
-import { useUiStore } from "./uiStore";
 
 function proposal(overrides: Partial<EnrichProposal> = {}): EnrichProposal {
   return {
@@ -29,6 +29,11 @@ function proposal(overrides: Partial<EnrichProposal> = {}): EnrichProposal {
     // V9 — a proposta comum não é conflito e não troca nome escrito por gente
     conflito: null,
     substitui_nome_escrito: false,
+    // V10 — a varredura nunca marca instrumental nem extrai refrão: as duas
+    // coisas saem da etapa 5, que é outro comando
+    marcar_instrumental: false,
+    refrao: null,
+    aviso: null,
     error: null,
     ...overrides,
   };
@@ -42,8 +47,19 @@ function proposal(overrides: Partial<EnrichProposal> = {}): EnrichProposal {
 function scanResult(
   propostas: EnrichProposal[],
   semPerguntarAoSom = 0,
+  /**
+   * V10 — quem sobrou sem letra, e o tempo de transcrever isso. A lista vem
+   * do backend em ids, porque é exatamente o que `transcreverMusicas` recebe.
+   */
+  semLetraNoFim: number[] = [],
+  segundosDeTranscricao = 0,
 ): EnrichScanResult {
-  return { propostas, sem_perguntar_ao_som: semPerguntarAoSom };
+  return {
+    propostas,
+    sem_perguntar_ao_som: semPerguntarAoSom,
+    sem_letra_no_fim: semLetraNoFim,
+    segundos_de_transcricao: segundosDeTranscricao,
+  };
 }
 
 describe("enrichStore (V5 — F13)", () => {
@@ -58,7 +74,11 @@ describe("enrichStore (V5 — F13)", () => {
       scannedTotal: 0,
       applyErrors: {},
       scanInFlight: false,
-      modo: "completar",
+      semLetraNoFim: [],
+      segundosDeTranscricao: 0,
+      transcricao: { disponivel: false, download: null },
+      transcricaoProgress: null,
+      transcricaoDispensada: false,
     });
     useToastStore.setState({ toasts: [] });
     setBackendForTests(null);
@@ -75,55 +95,40 @@ describe("enrichStore (V5 — F13)", () => {
     await pending;
 
     // sem chave do Vagalume configurada, o parâmetro vai como null
-    // V9 — o modo viaja com a varredura: o padrão é o trabalho barato
-    expect(enrichFolderScan).toHaveBeenCalledWith(
-      "/acervo/1",
-      expect.any(String),
-      null,
-      "completar",
-    );
+    expect(enrichFolderScan).toHaveBeenCalledWith("/acervo/1", expect.any(String));
     expect(useEnrichStore.getState().status).toBe("review");
     expect(useEnrichStore.getState().proposals).toEqual(proposals);
   });
 
-  // V8/F18 — a chave é preferência de quem usa e viaja como PARÂMETRO da
-  // varredura; o backend não guarda credencial nenhuma.
-  it("startScan leva a chave do Vagalume configurada nas preferências", async () => {
+  // V10 — nenhuma etapa do funil pede credencial (DECISIONS #110): a etapa do
+  // Vagalume saiu do produto e o `lyrics.ovh` que a substituiu não pede nada.
+  // O payload tem DOIS argumentos, e nenhum deles é segredo — há guarda no
+  // backend contra a volta de um parâmetro de credencial.
+  it("o disparo não manda credencial nenhuma", async () => {
     const enrichFolderScan = vi.fn(async () => scanResult([]));
     setBackendForTests({ enrichFolderScan } as unknown as Backend);
-    useUiStore.getState().setVagalumeApiKey("chave-da-pessoa");
 
     await useEnrichStore.getState().startScan("");
 
-    expect(enrichFolderScan).toHaveBeenCalledWith(
-      "",
-      expect.any(String),
-      "chave-da-pessoa",
-      "completar",
-    );
-    useUiStore.getState().setVagalumeApiKey("");
+    expect(enrichFolderScan).toHaveBeenCalledWith("", expect.any(String));
+    expect(enrichFolderScan.mock.calls[0]).toHaveLength(2);
   });
 
-  // V9 — a conferência é OUTRO trabalho, disparado de propósito. O store
-  // guarda qual deles rodou: o desfecho vazio de uma conferência não pode ser
-  // narrado como o de uma busca de dados ("conferimos as N incompletas").
-  it("startScan leva o modo pedido, e o desfecho vazio fala a língua dele", async () => {
+  // V10 — os modos sumiram (DECISIONS #102): há UMA varredura, e o payload
+  // não leva mais `modo`. Um campo a mais seria ignorado pelo backend, mas
+  // mandá-lo manteria vivo, no frontend, o vocabulário que o produto abandonou.
+  it("o disparo não manda modo nenhum, e o desfecho vazio é o único que existe", async () => {
     const enrichFolderScan = vi.fn(async () => scanResult([]));
     setBackendForTests({ enrichFolderScan } as unknown as Backend);
 
-    const pending = useEnrichStore.getState().startScan("", "conferencia");
-    expect(useEnrichStore.getState().modo).toBe("conferencia");
+    const pending = useEnrichStore.getState().startScan("");
     useEnrichStore.getState().hideOverlay();
     await pending;
 
-    expect(enrichFolderScan).toHaveBeenCalledWith(
-      "",
-      expect.any(String),
-      null,
-      "conferencia",
-    );
+    expect(enrichFolderScan).toHaveBeenCalledWith("", expect.any(String));
+    expect(enrichFolderScan.mock.calls[0]).toHaveLength(2);
     expect(useToastStore.getState().toasts[0].message).toBe(
-      textoSemPropostas(null, "conferencia"),
+      textoSemPropostas(null),
     );
   });
 
@@ -452,7 +457,7 @@ describe("enrichStore (V5 — F13)", () => {
 
       expect(useEnrichStore.getState().scannedTotal).toBeNull();
       expect(useToastStore.getState().toasts[0].message).toBe(
-        textoSemPropostas(null, "completar"),
+        textoSemPropostas(null),
       );
       expect(useEnrichStore.getState().status).toBe("idle");
       expect(useEnrichStore.getState().overlayOpen).toBe(false);
@@ -488,7 +493,7 @@ describe("enrichStore (V5 — F13)", () => {
       await pending;
 
       expect(useToastStore.getState().toasts[0].message).toBe(
-        textoSemPropostas(81, "completar"),
+        textoSemPropostas(81),
       );
       expect(useEnrichStore.getState().status).toBe("idle");
     });
@@ -520,7 +525,7 @@ describe("enrichStore (V5 — F13)", () => {
       await pending;
 
       expect(useToastStore.getState().toasts[0].message).toBe(
-        textoSemPropostas(1, "completar"),
+        textoSemPropostas(1),
       );
     });
 
@@ -577,7 +582,7 @@ describe("enrichStore (V5 — F13)", () => {
       setBackendForTests({
         enrichFolderScan: vi.fn(async () => scanResult([proposal()], 37)),
       } as unknown as Backend);
-      await useEnrichStore.getState().startScan("", "conferencia");
+      await useEnrichStore.getState().startScan("");
       expect(useEnrichStore.getState().semPerguntarAoSom).toBe(37);
     });
 
@@ -585,13 +590,13 @@ describe("enrichStore (V5 — F13)", () => {
       setBackendForTests({
         enrichFolderScan: vi.fn(async () => scanResult([proposal()], 37)),
       } as unknown as Backend);
-      await useEnrichStore.getState().startScan("", "conferencia");
+      await useEnrichStore.getState().startScan("");
       expect(useEnrichStore.getState().semPerguntarAoSom).toBe(37);
 
       setBackendForTests({
         enrichFolderScan: vi.fn(async () => scanResult([proposal()])),
       } as unknown as Backend);
-      await useEnrichStore.getState().startScan("", "conferencia");
+      await useEnrichStore.getState().startScan("");
       expect(useEnrichStore.getState().semPerguntarAoSom).toBe(0);
     });
 
@@ -599,7 +604,7 @@ describe("enrichStore (V5 — F13)", () => {
       setBackendForTests({
         enrichFolderScan: vi.fn(async () => scanResult([proposal()], 37)),
       } as unknown as Backend);
-      await useEnrichStore.getState().startScan("", "conferencia");
+      await useEnrichStore.getState().startScan("");
       useEnrichStore.getState().close();
       expect(useEnrichStore.getState().semPerguntarAoSom).toBe(0);
     });
@@ -613,12 +618,12 @@ describe("enrichStore (V5 — F13)", () => {
         enrichFolderScan: vi.fn(async () => scanResult([], 37)),
       } as unknown as Backend);
 
-      const pending = useEnrichStore.getState().startScan("", "conferencia");
+      const pending = useEnrichStore.getState().startScan("");
       useEnrichStore.getState().hideOverlay();
       await pending;
 
       const toast = useToastStore.getState().toasts[0];
-      expect(toast.message).toBe(textoSemPropostas(null, "conferencia", 37));
+      expect(toast.message).toBe(textoSemPropostas(null, 37));
       expect(toast.message).toContain("37");
       expect(toast.kind).toBe("warning");
     });
@@ -628,12 +633,12 @@ describe("enrichStore (V5 — F13)", () => {
         enrichFolderScan: vi.fn(async () => scanResult([])),
       } as unknown as Backend);
 
-      const pending = useEnrichStore.getState().startScan("", "conferencia");
+      const pending = useEnrichStore.getState().startScan("");
       useEnrichStore.getState().hideOverlay();
       await pending;
 
       const toast = useToastStore.getState().toasts[0];
-      expect(toast.message).toBe(textoSemPropostas(null, "conferencia"));
+      expect(toast.message).toBe(textoSemPropostas(null));
       expect(toast.kind).toBe("success");
     });
   });
@@ -740,6 +745,295 @@ describe("enrichStore (V5 — F13)", () => {
       expect(useEnrichStore.getState().status).toBe("idle");
       expect(useEnrichStore.getState().proposals).toEqual([]);
       expect(useToastStore.getState().toasts).toHaveLength(0);
+    });
+  });
+  // -------------------------------------------------------------------------
+  // V10 — a etapa 5, perguntada no FIM
+  // -------------------------------------------------------------------------
+  //
+  // Não é modo, não é caixa marcada antes. Terminada a varredura, o store tem
+  // em mãos QUEM sobrou sem letra e QUANTO TEMPO isso leva nesta máquina — e é
+  // só aí que a pergunta pode ser respondida com informação.
+
+  describe("a pergunta do fim (V10)", () => {
+    /** Resultado com 47 músicas sobrando e 3 horas de trabalho. */
+    const comSobra = () =>
+      scanResult([proposal()], 0, [10, 11, 12], 10_800);
+
+    it("guarda quem sobrou sem letra e o tempo de transcrever", async () => {
+      setBackendForTests({
+        enrichFolderScan: vi.fn(async () => comSobra()),
+      } as unknown as Backend);
+      await useEnrichStore.getState().startScan("");
+
+      expect(useEnrichStore.getState().semLetraNoFim).toEqual([10, 11, 12]);
+      expect(useEnrichStore.getState().segundosDeTranscricao).toBe(10_800);
+    });
+
+    // A tela precisa saber se OFERECE o trabalho ou o download, e quem sabe
+    // disso é a contagem do backend (`transcricao_disponivel`).
+    it("o disparo carrega o que a máquina pode fazer, sem deduzir nada", async () => {
+      setBackendForTests({
+        enrichFolderScan: vi.fn(async () => comSobra()),
+      } as unknown as Backend);
+      await useEnrichStore.getState().startScan("", {
+        disponivel: true,
+        download: null,
+      });
+      expect(useEnrichStore.getState().transcricao.disponivel).toBe(true);
+    });
+
+    it("uma varredura nova zera a sobra da anterior", async () => {
+      setBackendForTests({
+        enrichFolderScan: vi.fn(async () => comSobra()),
+      } as unknown as Backend);
+      await useEnrichStore.getState().startScan("");
+      setBackendForTests({
+        enrichFolderScan: vi.fn(async () => scanResult([proposal()])),
+      } as unknown as Backend);
+      await useEnrichStore.getState().startScan("");
+      expect(useEnrichStore.getState().semLetraNoFim).toEqual([]);
+    });
+
+    // Sem propostas E sem sobra, a varredura termina em segundo plano com um
+    // toast. Com SOBRA, ela tem uma pergunta a fazer — e pergunta não cabe num
+    // toast que some em 5 segundos.
+    it("com músicas sobrando, o fim em segundo plano abre a revisão em vez de sumir", async () => {
+      setBackendForTests({
+        enrichFolderScan: vi.fn(async () => scanResult([], 0, [10], 300)),
+      } as unknown as Backend);
+
+      const pending = useEnrichStore.getState().startScan("", {
+        disponivel: true,
+        download: null,
+      });
+      useEnrichStore.getState().hideOverlay();
+      await pending;
+
+      expect(useEnrichStore.getState().status).toBe("review");
+      expect(useEnrichStore.getState().semLetraNoFim).toEqual([10]);
+    });
+
+    it("sem nada sobrando, o desfecho vazio continua sendo um toast", async () => {
+      setBackendForTests({
+        enrichFolderScan: vi.fn(async () => scanResult([])),
+      } as unknown as Backend);
+
+      const pending = useEnrichStore.getState().startScan("");
+      useEnrichStore.getState().hideOverlay();
+      await pending;
+
+      expect(useEnrichStore.getState().status).toBe("idle");
+      expect(useToastStore.getState().toasts).toHaveLength(1);
+    });
+
+    // Dispensar é uma resposta: a pergunta não pode voltar sozinha na mesma
+    // revisão, ou vira o pop-up que se aprende a fechar sem ler.
+    it("dispensar a oferta cala a pergunta desta revisão", async () => {
+      setBackendForTests({
+        enrichFolderScan: vi.fn(async () => comSobra()),
+      } as unknown as Backend);
+      await useEnrichStore.getState().startScan("");
+      expect(useEnrichStore.getState().transcricaoDispensada).toBe(false);
+      useEnrichStore.getState().dispensarTranscricao();
+      expect(useEnrichStore.getState().transcricaoDispensada).toBe(true);
+    });
+  });
+
+  describe("startTranscricao — horas de trabalho em segundo plano", () => {
+    function backendComTranscricao(over: Partial<Backend> = {}): Backend {
+      return {
+        enrichFolderScan: vi.fn(async () =>
+          scanResult([], 0, [10, 11], 600),
+        ),
+        transcreverMusicas: vi.fn(async () => ({
+          propostas: [proposal({ song_id: 10, fonte: "transcrição do áudio" })],
+          razao_medida: 1.2,
+        })),
+        onTranscricaoProgresso: vi.fn(async () => () => {}),
+        ...over,
+      } as unknown as Backend;
+    }
+
+    it("manda ao backend exatamente os ids que a varredura devolveu", async () => {
+      const backend = backendComTranscricao();
+      setBackendForTests(backend);
+      await useEnrichStore.getState().startScan("", {
+        disponivel: true,
+        download: null,
+      });
+
+      await useEnrichStore.getState().startTranscricao();
+
+      expect(backend.transcreverMusicas).toHaveBeenCalledWith(
+        [10, 11],
+        expect.any(String),
+      );
+    });
+
+    it("as propostas da etapa 5 entram na MESMA revisão", async () => {
+      setBackendForTests(backendComTranscricao());
+      await useEnrichStore.getState().startScan("", {
+        disponivel: true,
+        download: null,
+      });
+      await useEnrichStore.getState().startTranscricao();
+
+      expect(useEnrichStore.getState().status).toBe("review");
+      expect(useEnrichStore.getState().proposals).toHaveLength(1);
+      expect(useEnrichStore.getState().proposals[0].song_id).toBe(10);
+    });
+
+    // A varredura que veio antes pode ter deixado propostas na tela: a etapa 5
+    // ACRESCENTA, não substitui — jogar fora o que a pessoa ainda não aplicou
+    // seria perder trabalho dela.
+    it("acrescenta às propostas que já estavam na revisão", async () => {
+      setBackendForTests(
+        backendComTranscricao({
+          enrichFolderScan: vi.fn(async () =>
+            scanResult([proposal({ song_id: 1 })], 0, [10, 11], 600),
+          ),
+        }),
+      );
+      await useEnrichStore.getState().startScan("", {
+        disponivel: true,
+        download: null,
+      });
+      await useEnrichStore.getState().startTranscricao();
+
+      expect(
+        useEnrichStore.getState().proposals.map((p) => p.song_id),
+      ).toEqual([1, 10]);
+    });
+
+    it("o progresso do evento chega ao store, e o de outra fila é descartado", async () => {
+      let emitir: ((p: unknown) => void) | null = null;
+      /** O que a tela via DURANTE a fila — depois dela o progresso é limpo. */
+      const vistos: Array<TranscricaoProgresso | null> = [];
+      setBackendForTests(
+        backendComTranscricao({
+          onTranscricaoProgresso: vi.fn(async (cb) => {
+            emitir = cb as (p: unknown) => void;
+            return () => {};
+          }),
+          transcreverMusicas: vi.fn(async (_ids: number[], scanId: string) => {
+            emitir?.({
+              done: 1,
+              total: 2,
+              atual: "Oh! Chuva.mp3",
+              porcento_da_musica: 45,
+              segundos_restantes: 9800,
+              scan_id: scanId,
+            });
+            vistos.push(useEnrichStore.getState().transcricaoProgress);
+            // evento de uma fila zumbi (cancelada e ainda respondendo): a
+            // mesma disciplina do scan_id da varredura, e pelo mesmo motivo
+            emitir?.({
+              done: 99,
+              total: 99,
+              atual: "de outra fila.mp3",
+              porcento_da_musica: 0,
+              segundos_restantes: null,
+              scan_id: "fila-zumbi",
+            });
+            vistos.push(useEnrichStore.getState().transcricaoProgress);
+            return { propostas: [], razao_medida: null };
+          }),
+        }),
+      );
+      await useEnrichStore.getState().startScan("", {
+        disponivel: true,
+        download: null,
+      });
+      await useEnrichStore.getState().startTranscricao();
+
+      expect(vistos[0]?.atual).toBe("Oh! Chuva.mp3");
+      expect(vistos[0]?.porcento_da_musica).toBe(45);
+      expect(vistos[0]?.segundos_restantes).toBe(9800);
+      // o evento alheio não mexeu na barra desta fila
+      expect(vistos[1]?.atual).toBe("Oh! Chuva.mp3");
+      // e, terminada a fila, o progresso não fica pendurado na tela
+      expect(useEnrichStore.getState().transcricaoProgress).toBeNull();
+    });
+
+    // A etapa 5 roda em SEGUNDO PLANO e o app tem de continuar usável: sair da
+    // janela não pode parar horas de trabalho (a lição da v0.8.1).
+    it("esconder o overlay não interrompe a transcrição", async () => {
+      const backend = backendComTranscricao();
+      setBackendForTests(backend);
+      await useEnrichStore.getState().startScan("", {
+        disponivel: true,
+        download: null,
+      });
+      const pendente = useEnrichStore.getState().startTranscricao();
+      useEnrichStore.getState().hideOverlay();
+      await pendente;
+      expect(backend.transcreverMusicas).toHaveBeenCalledTimes(1);
+      expect(useEnrichStore.getState().proposals).toHaveLength(1);
+    });
+
+    // Cancelar horas de CPU precisa cancelar de verdade: é o MESMO comando da
+    // varredura (o backend cancela as duas coisas pelo scan_id).
+    it("close cancela a fila no backend", async () => {
+      const enrichCancelScan = vi.fn(async () => {});
+      setBackendForTests(backendComTranscricao({ enrichCancelScan }));
+      await useEnrichStore.getState().startScan("", {
+        disponivel: true,
+        download: null,
+      });
+      void useEnrichStore.getState().startTranscricao();
+      useEnrichStore.getState().close();
+      expect(enrichCancelScan).toHaveBeenCalledTimes(1);
+    });
+
+    it("não dispara duas filas ao mesmo tempo", async () => {
+      const backend = backendComTranscricao({
+        transcreverMusicas: vi.fn(
+          () => new Promise(() => {}),
+        ) as unknown as Backend["transcreverMusicas"],
+      });
+      setBackendForTests(backend);
+      await useEnrichStore.getState().startScan("", {
+        disponivel: true,
+        download: null,
+      });
+      void useEnrichStore.getState().startTranscricao();
+      await useEnrichStore.getState().startTranscricao();
+      // deixa a primeira fila chegar ao invoke antes de contar
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(backend.transcreverMusicas).toHaveBeenCalledTimes(1);
+    });
+
+    it("sem ninguém na fila, não chama o backend", async () => {
+      const backend = backendComTranscricao({
+        enrichFolderScan: vi.fn(async () => scanResult([proposal()])),
+      });
+      setBackendForTests(backend);
+      await useEnrichStore.getState().startScan("");
+      await useEnrichStore.getState().startTranscricao();
+      expect(backend.transcreverMusicas).not.toHaveBeenCalled();
+    });
+
+    // Falha da etapa 5 não pode sumir: são horas de espera, e a pessoa
+    // precisa saber que elas não produziram nada.
+    it("falha do comando vira aviso, e a revisão não fica travada", async () => {
+      setBackendForTests(
+        backendComTranscricao({
+          transcreverMusicas: vi.fn(async () => {
+            throw new Error("o programa que escreve a letra não está instalado");
+          }),
+        }),
+      );
+      await useEnrichStore.getState().startScan("", {
+        disponivel: true,
+        download: null,
+      });
+      await useEnrichStore.getState().startTranscricao();
+
+      const toast = useToastStore.getState().toasts[useToastStore.getState().toasts.length - 1];
+      expect(toast.kind).toBe("error");
+      expect(useEnrichStore.getState().status).not.toBe("transcribing");
     });
   });
 });

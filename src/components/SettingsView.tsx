@@ -7,24 +7,22 @@ import {
   ACESSORIO_INDISPONIVEL,
   ACESSORIO_PRONTO,
   ACESSORIO_SEM_BINARIO,
-  ETAPAS_FORA_DO_APP,
-  MODOS,
-  VAGALUME_URL,
-  estadoDoSom,
+  ROTULO_DO_DISPARO,
+  TRANSCRICAO_NO_FIM,
+  downloadParaTranscrever,
+  estadoDoAcessorio,
   estimativaTexto,
   etapasDoFunil,
   formatarTamanho,
-  motivoDaConferencia,
   opcoesDePasta,
   rotuloBaixarAcessorio,
-  rotuloDoDisparo,
-  textoDaChaveDoVagalume,
   textoDoAcessorioAusente,
   textoDoDownload,
-  type ContagemCandidatas,
+  textoDoProgressoDaTranscricao,
+  tituloDoAcessorio,
+  type EstadoDaContagem,
 } from "../lib/curadoria";
 import { buildFolderTree, isUnderFolder } from "../lib/folderTree";
-import type { Modo } from "../lib/types";
 import { getAppVersion } from "../lib/updater";
 import { novoScanId, useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
@@ -80,15 +78,7 @@ export function SettingsView() {
     <div className="flex h-full min-w-0 flex-1 flex-col overflow-y-auto bg-[#F9FAFB] p-6">
       {/*
         A faixa do botão flutuante (App.tsx) é reservada SÓ na linha do
-        título, não na página inteira. Antes o `pr-36` estava no container:
-        reservava de menos para o botão (144 px contra os 167 que ele ocupa)
-        e de mais para o resto — a 1024 com o painel aberto, "Adicionar
-        pasta" e "Reindexar tudo" perdiam 38 px de largura cada um por causa
-        de um botão que está lá em cima.
-
-        Hoje nada de Configurações fica na altura do botão; isso é sorte, não
-        projeto — a seção de curadoria da F18 nasce exatamente aqui. O E2E
-        mede esta view junto com as outras duas.
+        título, não na página inteira (DECISIONS #76).
       */}
       <h1 className="pr-[var(--faixa-detalhes)] text-[22px] font-semibold text-[#111827]">
         Configurações
@@ -196,33 +186,37 @@ export function SettingsView() {
 }
 
 /**
- * "Curadoria do acervo" (V8 — F18, Fase 1): escolher a pasta e disparar o
- * funil, de dentro do app.
+ * "Curadoria do acervo" (V8 — F18 fase 1; V9 fase 2; V10 fase 3): escolher a
+ * pasta e disparar o funil, de dentro do app.
  *
  * Mora AQUI, e não na lateral, de propósito: quem abre o Cancioneiro numa
  * reunião quer achar e tocar música, e não pode esbarrar num botão que dispara
  * minutos (ou horas) de processamento. Em troca, a seção nasce com a pasta que
  * estiver selecionada na lateral — o contexto que o ✎ dava de graça.
  *
+ * **V10 — um botão só** (DECISIONS #102). Os dois modos sumiram: modo é
+ * escolha, e escolha é pedágio para quem não tem a quem perguntar.
+ *
  * Toda a copy desta seção parte de uma premissa dura: são ~40 pessoas curando
- * cada uma o próprio acervo, e NÃO HÁ SUPORTE. Nada aqui pode depender de
- * alguém explicar depois.
+ * cada uma o próprio acervo, e NÃO HÁ SUPORTE.
  */
 function CuradoriaSection() {
   const allSongs = useLibraryStore((s) => s.allSongs);
   const folders = useLibraryStore((s) => s.folders);
   const folderFilter = useLibraryStore((s) => s.folderFilter);
-  const vagalumeApiKey = useUiStore((s) => s.vagalumeApiKey);
-  const setVagalumeApiKey = useUiStore((s) => s.setVagalumeApiKey);
   const startScan = useEnrichStore((s) => s.startScan);
   const openOverlay = useEnrichStore((s) => s.openOverlay);
   const status = useEnrichStore((s) => s.status);
   const progress = useEnrichStore((s) => s.progress);
+  const transcricaoProgress = useEnrichStore((s) => s.transcricaoProgress);
   const propostas = useEnrichStore((s) => s.proposals.length);
   // depois do "Cancelar" o invoke ainda leva alguns segundos para responder:
   // liberar o disparo aí faria a segunda varredura correr por cima (M4)
-  const encerrando = useEnrichStore((s) => s.scanInFlight && s.status !== "scanning");
+  const encerrando = useEnrichStore(
+    (s) => s.scanInFlight && s.status !== "scanning" && s.status !== "transcribing",
+  );
   const varrendo = status === "scanning";
+  const transcrevendo = status === "transcribing";
 
   const opcoes = useMemo(
     () => opcoesDePasta(buildFolderTree(allSongs, folders)),
@@ -237,9 +231,9 @@ function CuradoriaSection() {
   const pasta = opcoes.some((o) => o.path === escolhida) ? escolhida : "";
 
   /**
-   * Quantas músicas há na pasta, ponto — fato local e barato. Não é a regra
-   * do funil (essa é do backend): serve só para separar "está tudo completo"
-   * de "não há nada aqui", que a contagem sozinha devolve como o mesmo zero.
+   * Quantas músicas há na pasta, ponto — fato local e barato. Não é a regra do
+   * funil (essa é do backend): serve só para separar "não há nada aqui" do
+   * resto, que a contagem sozinha devolve como o mesmo zero.
    */
   const musicasNaPasta = useMemo(
     () =>
@@ -248,9 +242,7 @@ function CuradoriaSection() {
   );
 
   /**
-   * O acessório do som (V9). O estado dele decide TRÊS coisas nesta tela: se a
-   * etapa 2 é listada no funil, se a conferência é possível, e quanto tempo a
-   * estimativa promete. Uma consulta só, no topo da seção.
+   * Os acessórios desta máquina (V9; V10 são três).
    *
    * `undefined` = ainda perguntando; `null` = não deu para conferir (que NÃO é
    * "não existe" nem "está pronto" — DECISIONS #86); `[]` = não publicamos
@@ -275,68 +267,39 @@ function CuradoriaSection() {
     });
   }, []);
 
-  const fpcalc = acessorios?.find((a) => a.nome === "fpcalc") ?? null;
   /**
-   * O estado do som, lido num lugar só (`estadoDoSom`). É ele que decide se a
-   * etapa 2 é listada, se a conferência é possível, o que o motivo do bloqueio
-   * diz e quanto tempo a estimativa promete — quatro respostas que precisam
-   * vir do mesmo fato, ou voltam a discordar entre si na mesma tela (MÉDIO-1).
-   */
-  const estadoSom = estadoDoSom(acessorios);
-  /** A etapa 2 vai rodar? Só com o acessório conferido e pronto. */
-  const som = estadoSom === "pronto";
-
-  /**
-   * Esta build embute a chave do Vagalume? (PRD V9, item 2)
+   * A contagem vem do backend (`enrich_count`), pela MESMA função que a
+   * varredura usa — e desde a V10 ela traz também a ESTIMATIVA e a lista de
+   * etapas. Recomeça a cada troca de pasta, a cada mudança do acervo e a cada
+   * acessório instalado (a etapa 2 entra na conta). Enquanto não chega, a tela
+   * diz que está contando.
    *
-   * A chave é decidida em tempo de COMPILAÇÃO, a partir do segredo
-   * `VAGALUME_API_KEY` do repositório — o frontend não tem como descobrir
-   * sozinho. Hoje a resposta é NÃO em toda build que existe: o segredo nunca
-   * foi criado, e a etapa 4 é pulada em silêncio em qualquer instalação sem
-   * chave pessoal.
-   *
-   * PONTO DE EXTENSÃO: quando o backend expuser `tem_chave` para o Vagalume —
-   * ele já expõe o mesmo para o AcoustID —, esta constante vira aquela
-   * resposta (uma consulta, como a dos acessórios) e nada mais nesta tela
-   * muda: a lista de etapas, a estimativa e o texto do campo já derivam daqui.
-   *
-   * Enquanto isso, afirmar `true` prometeria em toda tela uma etapa que não
-   * roda em nenhuma máquina — que é exatamente o defeito da DECISIONS #86.
+   * Ela não leva credencial nenhuma: nenhuma etapa do funil pede (DECISIONS
+   * #110).
    */
-  const CHAVE_DO_VAGALUME_EMBUTIDA = false;
-  /** A etapa 4 vai rodar NESTA máquina? Chave pessoal tem precedência (V9). */
-  const vagalume = CHAVE_DO_VAGALUME_EMBUTIDA || vagalumeApiKey.trim() !== "";
-
-  /** As etapas que ESTA máquina vai executar — não as que o produto sabe. */
-  const etapas = useMemo(
-    () => etapasDoFunil({ som, vagalume }),
-    [som, vagalume],
-  );
-
-  /**
-   * O TRABALHO escolhido (V9). O padrão é o barato, sempre; e se o acessório
-   * sumir com a conferência já escolhida, a tela volta sozinha para o padrão
-   * em vez de oferecer um disparo que o backend não teria como executar.
-   */
-  const [modoEscolhido, setModoEscolhido] = useState<Modo>("completar");
-  const modo: Modo = som ? modoEscolhido : "completar";
-
-  /**
-   * A contagem de candidatas vem do backend (`enrich_count`), pela MESMA
-   * função que a varredura usa. Ela é assíncrona: recomeça a cada troca de
-   * pasta, de MODO (a conferência olha outra população) e a cada mudança do
-   * acervo, e enquanto não chega a tela diz que está contando — nunca "0".
-   */
-  const [contagem, setContagem] = useState<ContagemCandidatas>({
+  const [contagem, setContagem] = useState<EstadoDaContagem>({
     estado: "contando",
   });
+  /** A pasta cujo número está na tela — para saber se ele ainda descreve algo. */
+  const pastaContada = useRef<string | null>(null);
   useEffect(() => {
     let atual = true;
-    setContagem({ estado: "contando" });
+    // "Contando…" quando o número que está na tela não descreve mais nada: a
+    // primeira contagem, ou uma troca de PASTA (o número da pasta anterior
+    // descreveria outra coisa). Numa recontagem por acessório recém-instalado
+    // o número continua valendo até a resposta chegar: piscar a lista de
+    // etapas para vazia e voltar é ruído, e ruído numa tela sem suporte é
+    // dúvida.
+    const trocouDePasta = pastaContada.current !== pasta;
+    setContagem((prev) =>
+      prev.estado === "pronta" && !trocouDePasta ? prev : { estado: "contando" },
+    );
     getBackend()
-      .enrichCount(pasta, modo)
-      .then((total) => {
-        if (atual) setContagem({ estado: "pronta", total });
+      .enrichCount(pasta)
+      .then((c) => {
+        if (!atual) return;
+        pastaContada.current = pasta;
+        setContagem({ estado: "pronta", contagem: c });
       })
       .catch(() => {
         // contagem é conveniência; a busca não depende dela para rodar
@@ -345,36 +308,46 @@ function CuradoriaSection() {
     return () => {
       atual = false;
     };
-  }, [pasta, modo, allSongs]);
+  }, [pasta, allSongs, acessorios]);
 
   /**
-   * O disparo só é bloqueado por fatos SABIDOS: uma busca em andamento, uma
+   * As etapas que ESTA máquina vai executar — a lista vem do backend
+   * (DECISIONS #101), e a tela só acrescenta a frase que explica cada uma.
+   */
+  const etapas = useMemo(
+    () =>
+      etapasDoFunil(
+        contagem.estado === "pronta" ? contagem.contagem.etapas : [],
+      ),
+    [contagem],
+  );
+
+  /**
+   * O disparo só é bloqueado por fatos SABIDOS: um trabalho em andamento, uma
    * busca encerrando, uma pasta sem música ou uma contagem que voltou zero.
    * Contagem pendente ou indisponível NUNCA bloqueia — desabilitar o único
    * ponto de entrada do produto por não saber ainda é o defeito que o QA
-   * reprovou, agora sem a desculpa da regra duplicada.
+   * reprovou (DECISIONS #80).
    */
   const pastaVazia = musicasNaPasta === 0;
-  const nadaACurar = contagem.estado === "pronta" && contagem.total === 0;
-  const bloqueado = varrendo || encerrando || pastaVazia || nadaACurar;
+  const nadaACurar =
+    contagem.estado === "pronta" && contagem.contagem.total === 0;
+  const bloqueado =
+    varrendo || transcrevendo || encerrando || pastaVazia || nadaACurar;
   // MÉDIO-14 — o motivo é TEXTO na tela, não `title=`: botão desabilitado não
   // recebe foco, e `title` não é anunciado de forma confiável por leitor de
   // tela. Fica ligado ao botão por aria-describedby.
   const motivo = varrendo
     ? "Uma busca de dados já está em andamento — espere ela terminar."
-    : encerrando
-      ? "Terminando de encerrar a busca anterior — aguarde alguns segundos."
-      : pastaVazia
-        ? "Não há música nesta pasta para procurar."
-        : nadaACurar
-          ? modo === "conferencia"
-            ? // a conferência olha TODAS as músicas: chegar a zero aqui é não
-              // haver nenhuma disponível, e não "está tudo completo". Frase
-              // diferente da estimativa de propósito — a mesma sentença duas
-              // vezes seguidas na tela é ruído, não reforço.
-              "Não há o que conferir nesta pasta."
-            : "Nenhuma música desta pasta precisa de busca agora."
-          : null;
+    : transcrevendo
+      ? "As letras estão sendo escritas — espere elas terminarem."
+      : encerrando
+        ? "Terminando de encerrar a busca anterior — aguarde alguns segundos."
+        : pastaVazia
+          ? "Não há música nesta pasta para procurar."
+          : nadaACurar
+            ? "Não há música disponível nesta pasta para procurar."
+            : null;
 
   return (
     <section className="mt-8 max-w-2xl" aria-labelledby="curadoria-titulo">
@@ -385,11 +358,6 @@ function CuradoriaSection() {
         Curadoria do acervo
       </h2>
 
-      {/*
-        Passe de redução da V9: a frase dizia "mostra tudo para você conferir"
-        e emendava "nada é gravado sem você conferir" — a mesma informação duas
-        vezes, na mesma frase.
-      */}
       <p className="mt-2 text-[14px] leading-relaxed text-[#374151]">
         Procura o que falta nas músicas de uma pasta — título, artista e letra.{" "}
         <strong className="font-medium">
@@ -401,17 +369,23 @@ function CuradoriaSection() {
       <ol className="mt-2 list-decimal space-y-0.5 pl-6 text-[14px] text-[#374151]">
         {etapas.map((etapa) => (
           <li key={etapa.nome}>
-            <span className="font-medium">{etapa.nome}</span> — {etapa.explicacao}
+            <span className="font-medium">{etapa.nome}</span>
+            {etapa.explicacao && <> — {etapa.explicacao}</>}
           </li>
         ))}
       </ol>
 
+      {/*
+        V10 — a etapa 5 NÃO entra na lista numerada: ela não é uma etapa da
+        varredura. Custa minutos por música, e a pergunta é feita no fim,
+        quando o app já sabe quantas sobraram sem letra.
+      */}
       <p className="mt-2 text-[13px] leading-relaxed text-[#5B6472]">
-        {ETAPAS_FORA_DO_APP} Roda em segundo plano: dá para continuar ouvindo
+        {TRANSCRICAO_NO_FIM} Roda em segundo plano: dá para continuar ouvindo
         música, e interromper quando quiser.
       </p>
 
-      <AcessorioDoSom info={fpcalc} lista={acessorios} aoAtualizar={aoAtualizar} />
+      <Acessorios lista={acessorios} aoAtualizar={aoAtualizar} />
 
       <div className="mt-4 max-w-md">
         <label
@@ -429,73 +403,15 @@ function CuradoriaSection() {
           {opcoes.map((o) => (
             <option key={o.path || "__tudo__"} value={o.path}>
               {/* recuo com espaço inquebrável: <option> não aceita layout */}
-              {"  ".repeat(o.nivel)}
+              {"  ".repeat(o.nivel)}
               {o.label}
             </option>
           ))}
         </select>
       </div>
 
-      {/*
-        V9 — os dois trabalhos, lado a lado e nomeados. Rádio, e não um botão
-        extra: eles são mutuamente exclusivos, o padrão precisa estar visível
-        como padrão, e a diferença de CUSTO fica na explicação de cada um em
-        vez de virar um parágrafo de aviso.
-      */}
-      <fieldset className="mt-4">
-        <legend className="mb-1 text-[13px] font-medium text-[#374151]">
-          O que fazer
-        </legend>
-        {MODOS.map((opcao) => {
-          const bloqueado = opcao.modo === "conferencia" && !som;
-          return (
-            <label
-              key={opcao.modo}
-              className="flex items-start gap-2 py-0.5 text-[14px] text-[#374151]"
-            >
-              <input
-                type="radio"
-                name="curadoria-modo"
-                value={opcao.modo}
-                checked={modo === opcao.modo}
-                disabled={bloqueado}
-                aria-describedby={bloqueado ? "curadoria-modo-motivo" : undefined}
-                onChange={() => setModoEscolhido(opcao.modo)}
-                className="mt-1 h-4 w-4 shrink-0 accent-[#0F766E]"
-              />
-              <span>
-                <span className="font-medium">{opcao.rotulo}</span> —{" "}
-                {opcao.explicacao}
-              </span>
-            </label>
-          );
-        })}
-        {/*
-          Motivo do bloqueio é CONTEÚDO, não `title=` (DECISIONS #87) — e ele
-          DERIVA do estado do acessório. Antes era uma frase fixa: em três dos
-          cinco estados ela mandava "baixe o acessório abaixo" enquanto o bloco
-          três centímetros acima dizia que não havia nada para baixar, e não
-          desenhava botão nenhum (MÉDIO-1).
-        */}
-        {motivoDaConferencia(estadoSom) !== null && (
-          <p id="curadoria-modo-motivo" className="mt-0.5 pl-6 text-[13px] text-[#5B6472]">
-            {motivoDaConferencia(estadoSom)}
-          </p>
-        )}
-      </fieldset>
-
       <p className="mt-2 text-[13px] text-[#5B6472]">
-        {estimativaTexto({
-          contagem,
-          musicasNaPasta,
-          modo,
-          // MÉDIO-2 — a conta pergunta o que ESTA máquina faz. Contar a etapa
-          // 4 sempre não era "errar folgado" (o lado certo de errar, da
-          // DECISIONS #85): era somar 2 s/música de um trabalho que não
-          // acontece em instalação nenhuma, porque a chave embutida que o PRD
-          // previu nunca existiu.
-          etapas: { som, vagalume },
-        })}
+        {estimativaTexto({ contagem, musicasNaPasta })}
       </p>
 
       <div className="mt-3">
@@ -503,10 +419,21 @@ function CuradoriaSection() {
           type="button"
           disabled={bloqueado}
           aria-describedby={motivo ? "curadoria-motivo" : undefined}
-          onClick={() => void startScan(pasta, modo)}
+          onClick={() =>
+            void startScan(pasta, {
+              // quem sabe se a etapa 5 existe nesta máquina é a CONTAGEM:
+              // combinar dois estados de acessório é regra, e regra duplicada
+              // em duas linguagens diverge (DECISIONS #80)
+              disponivel:
+                contagem.estado === "pronta" &&
+                contagem.contagem.transcricao_disponivel,
+              // e o que falta baixar, quando falta — com tamanho e tempo
+              download: downloadParaTranscrever(acessorios),
+            })
+          }
           className="rounded-md bg-[#0F766E] px-4 py-2 text-[15px] font-medium text-white hover:bg-[#115E59] disabled:cursor-not-allowed disabled:bg-[#9CA3AF]"
         >
-          {rotuloDoDisparo(modo)}
+          {ROTULO_DO_DISPARO}
         </button>
         {motivo && (
           <p id="curadoria-motivo" className="mt-1 text-[13px] text-[#5B6472]">
@@ -516,9 +443,9 @@ function CuradoriaSection() {
       </div>
 
       {/*
-        A varredura roda em segundo plano e o disparo agora acontece AQUI:
-        voltar a Configurações tem de mostrar em que pé ela está, sem depender
-        de a pessoa achar o indicador da lateral.
+        O trabalho roda em segundo plano e o disparo acontece AQUI: voltar a
+        Configurações tem de mostrar em que pé ele está, sem depender de a
+        pessoa achar o indicador da lateral.
       */}
       {varrendo && (
         <div className="mt-4 rounded-md bg-[#F0FDFA] px-4 py-3">
@@ -539,6 +466,26 @@ function CuradoriaSection() {
           </button>
         </div>
       )}
+      {/* V10 — a etapa 5 leva HORAS: ela precisa do mesmo caminho de volta */}
+      {transcrevendo && (
+        <div className="mt-4 rounded-md bg-[#F0FDFA] px-4 py-3">
+          <p className="text-[14px] font-medium text-[#115E59]">
+            {transcricaoProgress
+              ? textoDoProgressoDaTranscricao(
+                  transcricaoProgress.done,
+                  transcricaoProgress.total,
+                )
+              : "Escrevendo as letras…"}
+          </p>
+          <button
+            type="button"
+            onClick={openOverlay}
+            className="mt-2 rounded-md border border-[#0F766E] px-3 py-1.5 text-[14px] font-medium text-[#0F766E] hover:bg-[#CCFBF1]"
+          >
+            Acompanhar a escrita
+          </button>
+        </div>
+      )}
       {status === "review" && (
         <div className="mt-4 rounded-md bg-[#F0FDFA] px-4 py-3">
           <p className="text-[14px] font-medium text-[#115E59]">
@@ -556,88 +503,62 @@ function CuradoriaSection() {
         </div>
       )}
 
-      <div className="mt-5 max-w-md">
-        <label
-          htmlFor="curadoria-vagalume"
-          className="mb-1 block text-[13px] font-medium text-[#374151]"
-        >
-          Chave do Vagalume (opcional)
-        </label>
-        <input
-          id="curadoria-vagalume"
-          // Campo de TEXTO, não de senha: é a chave de um serviço gratuito da
-          // própria pessoa, num app sem conta e sem telemetria — esconder
-          // atrás de bolinhas só atrapalharia conferir a colagem. Ela fica
-          // guardada em disco (localStorage das preferências), o que o texto
-          // abaixo diz; não é impressa em log e não sai daqui a não ser como
-          // parâmetro da consulta ao Vagalume.
-          type="text"
-          spellCheck={false}
-          autoComplete="off"
-          value={vagalumeApiKey}
-          onChange={(e) => setVagalumeApiKey(e.target.value)}
-          className="w-full rounded-md border border-[#D1D5DB] bg-white px-3 py-2 text-[15px] text-[#111827] outline-none focus:border-[#0F766E]"
-        />
-        {/*
-          MÉDIO-2 — o PRD V9 previu uma chave NOSSA, embutida em tempo de
-          build, e o texto foi escrito como se ela existisse ("só é preciso
-          preencher se a busca do Vagalume parar de funcionar"). Ela não
-          existe: o segredo nunca foi criado. Afirmar que a busca funciona sem
-          a chave é mentir sobre credencial, que é defeito mesmo quando o
-          comportamento é o certo (DECISIONS #84) — e aqui nem o comportamento
-          é: sem chave a etapa 4 é pulada em silêncio.
-        */}
-        <p className="mt-1 text-[13px] leading-relaxed text-[#5B6472]">
-          {textoDaChaveDoVagalume(CHAVE_DO_VAGALUME_EMBUTIDA)} A chave é
-          gratuita: crie a sua em{" "}
-          <span className="select-text break-all text-[#0F766E]">
-            {VAGALUME_URL}
-          </span>{" "}
-          e cole aqui.
-        </p>
-        {/*
-          MÉDIO-10 — a chave é gravada em disco, junto das outras preferências,
-          e quatro lugares do projeto diziam que não. O passe de redução da V9
-          encurtou este parágrafo mas não tirou NADA dele: cada fato aqui é
-          sobre uma credencial de outra pessoa guardada por nós, e é a única
-          explicação que ela vai receber.
-        */}
-        <p className="mt-1 text-[13px] leading-relaxed text-[#5B6472]">
-          Ela fica guardada neste computador, nas preferências do aplicativo.
-          Não entra no banco de músicas, não é escrita nos MP3 e não vai a
-          lugar nenhum além do próprio Vagalume.
-        </p>
-      </div>
     </section>
   );
 }
 
 /**
- * O acessório que liga o reconhecimento pelo som (PRD V9).
+ * Os acessórios que este computador pode baixar (PRD V9; V10 são três).
  *
  * As quatro regras do PRD estão aqui, e todas nasceram do mesmo fato: são ~40
  * pessoas sem suporte, e um download que dá errado sem explicação é um recurso
  * que morre calado.
  *
  * 1. **Nada baixa sozinho**: só existe download depois de um clique em cima de
- *    um texto que diz o que é, quanto ocupa e de onde vem.
- * 2. **Progresso e cancelamento**, não uma tela parada — a v0.8.1 já ensinou o
- *    custo disso (DECISIONS #92).
+ *    um texto que diz o que é, quanto ocupa, quanto TEMPO leva e de onde vem.
+ * 2. **Progresso e cancelamento**, não uma tela parada (DECISIONS #92).
  * 3. **Baixou uma vez, não pergunta de novo**: no estado "pronto" não há botão.
  * 4. **Falha honesta**: a frase de erro vem PRONTA do backend e é mostrada como
  *    veio. Reescrevê-la aqui criaria uma segunda versão da verdade sobre uma
- *    verificação de segurança (a soma SHA-256) para quem não tem a quem
- *    perguntar.
+ *    verificação de segurança (a soma SHA-256).
  */
+function Acessorios({
+  lista,
+  aoAtualizar,
+}: {
+  /** `undefined` = perguntando; `null` = não deu para conferir; `[]` = não há. */
+  lista: AcessorioInfo[] | null | undefined;
+  aoAtualizar: (info: AcessorioInfo) => void;
+}) {
+  return (
+    <div className="mt-4 space-y-3">
+      {/* enquanto a pergunta não volta nada é afirmado: nem que existe, nem
+          que não existe, nem que está pronto (DECISIONS #86) */}
+      {lista === null && (
+        <p className="text-[13px] text-[#5B6472]">{ACESSORIO_INDETERMINADO}</p>
+      )}
+      {lista?.length === 0 && (
+        <p className="text-[13px] text-[#5B6472]">{ACESSORIO_SEM_BINARIO}</p>
+      )}
+      {(lista ?? []).map((info) => (
+        <CartaoDoAcessorio
+          key={info.nome}
+          info={info}
+          lista={lista}
+          aoAtualizar={aoAtualizar}
+        />
+      ))}
+    </div>
+  );
+}
+
 /**
  * O total do download em que dá para CONFIAR — `null` quando não há um.
  *
  * `Content-Length` que mente para menos existe de verdade (proxy que
- * recomprime, CDN mal configurado, servidor que anuncia o tamanho do pedaço), e
- * um total já ultrapassado não é um total: é um número velho. Grampear em 100%
- * seria a outra mentira — barra cheia com o download em curso. "Não sabemos" é
- * um estado (DECISIONS #86), e daqui ele vale para a barra E para o texto, que
- * senão diria "de 5,3 MB" sobre um arquivo que já passou disso.
+ * recomprime, CDN mal configurado), e um total já ultrapassado não é um total:
+ * é um número velho. Grampear em 100% seria a outra mentira. "Não sabemos" é
+ * um estado (DECISIONS #86), e daqui ele vale para a barra E para o texto.
  *
  * Zero entra na mesma regra: `0 / 0` vira `NaN`, e `width: NaN%` é uma barra
  * que o navegador ignora em silêncio.
@@ -647,19 +568,19 @@ function totalConfiavel(p: { baixados: number; total: number | null }): number |
   return p.total;
 }
 
-function AcessorioDoSom({
+function CartaoDoAcessorio({
   info,
   lista,
   aoAtualizar,
 }: {
-  info: AcessorioInfo | null;
-  /** `undefined` = perguntando; `null` = não deu para conferir; `[]` = não há. */
+  info: AcessorioInfo;
   lista: AcessorioInfo[] | null | undefined;
   aoAtualizar: (info: AcessorioInfo) => void;
 }) {
   const [baixando, setBaixando] = useState<{
     baixados: number;
     total: number | null;
+    segundosRestantes: number | null;
   } | null>(null);
   /** Desfecho do último download (cancelamento ou a frase do backend). */
   const [mensagem, setMensagem] = useState<string | null>(null);
@@ -667,18 +588,23 @@ function AcessorioDoSom({
   const downloadAtual = useRef<string | null>(null);
 
   async function baixar() {
-    if (!info) return;
     const id = novoScanId();
     downloadAtual.current = id;
     setMensagem(null);
     // o total só aparece quando o servidor o anunciar: começar em 0 de 0
     // desenharia uma barra cheia de um arquivo vazio (DECISIONS #86)
-    setBaixando({ baixados: 0, total: null });
+    setBaixando({ baixados: 0, total: null, segundosRestantes: null });
     let unlisten: (() => void) | null = null;
     try {
       unlisten = await getBackend().onAcessorioProgresso((p) => {
         if (p.download_id !== downloadAtual.current) return;
-        setBaixando({ baixados: p.baixados, total: p.total });
+        if (p.nome !== info.nome) return;
+        setBaixando({
+          baixados: p.baixados,
+          total: p.total,
+          // velocidade MEDIDA desta conexão; null enquanto a amostra é curta
+          segundosRestantes: p.segundos_restantes,
+        });
       });
     } catch {
       // sem canal de progresso o download continua: só não há barra
@@ -704,30 +630,23 @@ function AcessorioDoSom({
     if (id) void getBackend().acessorioCancelar(id);
   }
 
-  const estado = info?.estado;
+  // A leitura do estado mora num lugar só: um acessório que sumiu da lista não
+  // é o mesmo que um acessório ausente, e um estado que esta versão não
+  // conhece não pode virar "pronto" por otimismo (DECISIONS #86).
+  const estado = estadoDoAcessorio(lista, info.nome);
   const podeBaixar = estado === "ausente" || estado === "corrompido";
+  const tituloId = `acessorio-${info.nome}`;
 
   return (
     <section
-      aria-labelledby="acessorio-som-titulo"
-      className="mt-4 rounded-md border border-[#E5E7EB] bg-[#FFFFFF] p-4"
+      aria-labelledby={tituloId}
+      className="rounded-md border border-[#E5E7EB] bg-[#FFFFFF] p-4"
     >
-      <h3
-        id="acessorio-som-titulo"
-        className="text-[14px] font-medium text-[#111827]"
-      >
-        Reconhecer música pelo som
+      {/* o "para que serve" vem PRONTO do backend, em pt-BR: quem cura não
+          sabe (e não precisa saber) o que é "impressão digital acústica" */}
+      <h3 id={tituloId} className="text-[14px] font-medium text-[#111827]">
+        {tituloDoAcessorio(info)}
       </h3>
-
-      {/* enquanto a pergunta não volta nada é afirmado: nem que existe, nem
-          que não existe, nem que está pronto */}
-      {lista === null && (
-        <p className="mt-1 text-[13px] text-[#5B6472]">{ACESSORIO_INDETERMINADO}</p>
-      )}
-
-      {lista?.length === 0 && (
-        <p className="mt-1 text-[13px] text-[#5B6472]">{ACESSORIO_SEM_BINARIO}</p>
-      )}
 
       {estado === "indisponivel" && (
         <p className="mt-1 text-[13px] text-[#5B6472]">{ACESSORIO_INDISPONIVEL}</p>
@@ -741,7 +660,7 @@ function AcessorioDoSom({
         <p className="mt-1 text-[13px] text-[#854D0E]">{ACESSORIO_CORROMPIDO}</p>
       )}
 
-      {info && podeBaixar && (
+      {podeBaixar && (
         <>
           <p className="mt-1 text-[13px] leading-relaxed text-[#374151]">
             {textoDoAcessorioAusente(info)}
@@ -768,14 +687,17 @@ function AcessorioDoSom({
       {baixando !== null && (
         <div className="mt-2">
           <p className="text-[13px] text-[#374151]">
-            {textoDoDownload(baixando.baixados, totalConfiavel(baixando))}
+            {textoDoDownload(
+              baixando.baixados,
+              totalConfiavel(baixando),
+              baixando.segundosRestantes,
+            )}
           </p>
           {/*
             Barra determinada SÓ com um total em que dá para confiar — ver
             `totalConfiavel`. Sem isso, um `Content-Length` mentindo para menos
-            fazia a largura passar de 100% (a barra vazava do trilho) e o
-            `aria-valuenow` ficar MAIOR que o `aria-valuemax`, o que é um
-            progressbar inválido (BAIXO-3).
+            fazia a largura passar de 100% e o `aria-valuenow` ficar MAIOR que
+            o `aria-valuemax`, o que é um progressbar inválido (BAIXO-3).
           */}
           {totalConfiavel(baixando) !== null && (
             <div

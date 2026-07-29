@@ -2,19 +2,19 @@ import { useRef, useState } from "react";
 import { audioController } from "../hooks/playerAudioCore";
 import { getBackend, type EnrichProposal } from "../lib/api";
 import {
+  EXPLICACAO_DA_CONFIANCA_DO_SOM,
   LABEL_SOM_DIZ,
   LABEL_SUA_ETIQUETA_DIZ,
   SEM_RESULTADO_INDIVIDUAL,
   SEM_RESULTADO_INSTRUMENTAL,
   confiancaDoSom,
 } from "../lib/curadoria";
-import { ORIGEM_VAGALUME, type Song } from "../lib/types";
+import { FONTE_LYRICS_OVH, ORIGEM_LYRICS_OVH, type Song } from "../lib/types";
 import { novoScanId, useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlayerStore } from "../stores/playerStore";
 import { usePlaylistStore } from "../stores/playlistStore";
 import { useToastStore } from "../stores/toastStore";
-import { useUiStore } from "../stores/uiStore";
 
 function basename(filePath: string): string {
   return filePath.split(/[\\/]/).pop() ?? filePath;
@@ -161,7 +161,6 @@ export function EditSongForm({
     try {
       const proposta = await getBackend().enrichSongScan(
         song.id,
-        useUiStore.getState().vagalumeApiKey || null,
         scanId,
         // ALTO-3a — o que a pessoa DIGITOU vence a etiqueta do banco. Antes,
         // quem corrigia "Faixa 03" para "Asa Branca" e clicava buscar via o
@@ -239,10 +238,11 @@ export function EditSongForm({
     if (p.proposed_artist?.trim()) setArtist(p.proposed_artist);
     if (trocarLetra && p.lyrics !== null) {
       setLyrics(p.lyrics);
-      // ALTO-4: só o Vagalume DECLARA procedência; qualquer outra fonte
-      // limpa a marca (letra oficial nunca é transcrição — DECISIONS #54)
+      // ALTO-4: a fonte que DECLARA procedência é o lyrics.ovh (V10 — o
+      // Vagalume saiu, DECISIONS #110); qualquer outra limpa a marca, porque
+      // letra oficial nunca é transcrição (DECISIONS #54)
       setLetraOrigemPendente(
-        p.fonte.toLowerCase() === "vagalume" ? ORIGEM_VAGALUME : null,
+        p.fonte === FONTE_LYRICS_OVH ? ORIGEM_LYRICS_OVH : null,
       );
     }
     setResultado(null);
@@ -481,6 +481,15 @@ export function EditSongForm({
                   </dd>
                 </div>
               </dl>
+              {/*
+                V10 — "confiança alta" enganava aqui pelo mesmo motivo que na
+                revisão em lote: ela é do RECONHECIMENTO DA GRAVAÇÃO, e não da
+                etiqueta estar errada. A frase mora num lugar só, e aparece nos
+                dois lugares em que a confiança é mostrada.
+              */}
+              <p className="mt-2 text-[13px] leading-relaxed text-[#5B6472]">
+                {EXPLICACAO_DA_CONFIANCA_DO_SOM}
+              </p>
               <p className="mt-2 text-[13px] text-[#5B6472]">
                 Nada foi gravado ainda.
               </p>

@@ -12,7 +12,6 @@ import {
 } from "../lib/curadoria";
 import { useEnrichStore } from "../stores/enrichStore";
 import type { Song } from "../lib/types";
-import { useUiStore } from "../stores/uiStore";
 import {
   AA_TEXTO_NORMAL,
   contrastRatio,
@@ -454,7 +453,6 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
     await waitFor(() =>
       expect(enrichSongScan).toHaveBeenCalledWith(
         1,
-        null,
         expect.any(String),
         "Coração Sertanejo",
         "Artista Teste",
@@ -469,8 +467,10 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
     expect(screen.getByLabelText("Letra")).toHaveValue(LYRICS);
   });
 
-  it("leva a chave do Vagalume das preferências", async () => {
-    useUiStore.getState().setVagalumeApiKey("chave-da-pessoa");
+  // V10 — a busca não leva credencial nenhuma (DECISIONS #110): a etapa que
+  // pedia chave saiu do produto, e o `lyrics.ovh` que a substituiu não pede
+  // nada. O payload tem quatro argumentos, e nenhum deles é segredo.
+  it("a busca individual não manda credencial nenhuma", async () => {
     await enterEditMode();
     fireEvent.click(
       screen.getByRole("button", { name: "Buscar dados na internet" }),
@@ -478,13 +478,12 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
     await waitFor(() =>
       expect(enrichSongScan).toHaveBeenCalledWith(
         1,
-        "chave-da-pessoa",
         expect.any(String),
         "Coração Sertanejo",
         "Artista Teste",
       ),
     );
-    useUiStore.getState().setVagalumeApiKey("");
+    expect(enrichSongScan.mock.calls[0]).toHaveLength(4);
   });
 
   it("'Usar estes dados' preenche o formulário (confirmando a sobrescrita da letra)", async () => {
@@ -587,7 +586,14 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
       expect(await screen.findByText(/Sua etiqueta diz/)).toBeInTheDocument();
       expect(screen.getByText(/O som diz/)).toBeInTheDocument();
       expect(screen.getByText("Viver Feliz — Nilson Chaves")).toBeInTheDocument();
-      expect(screen.getByText("confiança alta")).toBeInTheDocument();
+      // V10 — a confiança diz SOBRE O QUE ela fala, e uma frase desfaz o
+      // engano: ela é do reconhecimento da GRAVAÇÃO, não da etiqueta
+      expect(
+        screen.getByText("gravação reconhecida com confiança alta"),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText(/A confiança é sobre qual gravação é esta/),
+      ).toBeInTheDocument();
       expect(
         screen.queryByRole("button", { name: "Usar estes dados" }),
       ).not.toBeInTheDocument();
@@ -734,7 +740,6 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
     await waitFor(() =>
       expect(enrichSongScan).toHaveBeenCalledWith(
         1,
-        null,
         expect.any(String),
         "Asa Branca",
         "Luiz Gonzaga",
@@ -751,7 +756,6 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
     await waitFor(() =>
       expect(enrichSongScan).toHaveBeenCalledWith(
         1,
-        null,
         expect.any(String),
         "Coração Sertanejo",
         null,
@@ -826,7 +830,10 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
   // -------------------------------------------------------------------------
   // ALTO-4 — a procedência da letra aceita no editor
   // -------------------------------------------------------------------------
-  it("letra do Vagalume aceita no editor é GRAVADA como vinda do Vagalume", async () => {
+  // V10 — a fonte que DECLARA procedência é o `lyrics.ovh` (o Vagalume saiu,
+  // DECISIONS #110). O valor gravado é o nome do serviço, e é assim que a
+  // próxima ferramenta sabe de onde a letra veio.
+  it("letra do lyrics.ovh aceita no editor é GRAVADA como vinda dele", async () => {
     enrichSongScan.mockResolvedValueOnce({
       song_id: 1,
       file_path: "/acervo/1.mp3",
@@ -834,9 +841,9 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
       current_artist: "Artista Teste",
       proposed_title: "Coração Sertanejo",
       proposed_artist: "Artista Teste",
-      lyrics: "letra do vagalume",
+      lyrics: "letra do lyrics.ovh",
       confidence: "media",
-      fonte: "Vagalume",
+      fonte: "lyrics.ovh",
       has_lyrics: true,
       letra_origem: null,
       error: null,
@@ -850,7 +857,7 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Salvar no arquivo" }));
 
     await waitFor(() => expect(writeTags).toHaveBeenCalled());
-    expect(writeTags.mock.calls[0][6]).toBe("vagalume");
+    expect(writeTags.mock.calls[0][6]).toBe("lyrics.ovh");
     confirmSpy.mockRestore();
   });
 
@@ -869,7 +876,7 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
   });
 
   // A marca descreve o TEXTO que está lá: se a pessoa mexeu na letra depois de
-  // aceitar, ela não é mais a letra do Vagalume.
+  // aceitar, ela não é mais a letra que o serviço devolveu.
   it("editar a letra à mão depois de aceitar apaga a procedência pendente", async () => {
     enrichSongScan.mockResolvedValueOnce({
       song_id: 1,

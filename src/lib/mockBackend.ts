@@ -3,13 +3,15 @@ import type {
   AcessorioInfo,
   AcessorioProgresso,
   Backend,
+  Contagem,
   EnrichApply,
   EnrichApplyResult,
   EnrichProgress,
   EnrichProposal,
   EnrichScanResult,
+  TranscricaoProgresso,
+  TranscricaoResultado,
 } from "./api";
-import type { Modo } from "./types";
 import { isUnderFolder } from "./folderTree";
 import { HIGHLIGHT_END, HIGHLIGHT_START } from "./highlight";
 import type {
@@ -21,7 +23,11 @@ import type {
   SearchResult,
   Song,
 } from "./types";
-import { ORIGEM_TRANSCRICAO, ORIGEM_VAGALUME } from "./types";
+import {
+  FONTE_TRANSCRICAO,
+  ORIGEM_LYRICS_OVH,
+  ORIGEM_TRANSCRICAO,
+} from "./types";
 
 /**
  * Backend em memória com a mesma semântica do backend Rust (src-tauri),
@@ -64,17 +70,22 @@ export interface MockBackend extends Backend {
    */
   _enrichDelayMs: number;
   /**
-   * Simula uma chave do Vagalume recusada pelo serviço (HTTP 401): a etapa 3
-   * falha com `ERRO_CHAVE_RECUSADA` e, como no Rust, desliga-se pelo resto da
-   * varredura — a primeira música avisa, as seguintes pulam em silêncio.
+   * Simula o `lyrics.ovh` fora do ar (V10). A falha é erro DESTA MÚSICA e a
+   * etapa continua sendo tentada nas seguintes — o serviço cai com frequência,
+   * e desligar a etapa no primeiro soluço era o defeito do QA A2 no `fpcalc`.
    */
-  _vagalumeKeyRecusada: boolean;
+  _lyricsOvhForaDoAr: boolean;
   /** Popula a pasta /acervo com subpastas 1/ e 2/ para o E2E da árvore (V4 F11). */
   _seedFolderTree(): void;
   /**
-   * O acessório desta "máquina" (V9). `estado` é o cache de verdade — ele
-   * persiste, como o arquivo sob o perfil do usuário: baixou uma vez, o app
-   * não pergunta de novo nem depois de reiniciar. O resto são botões de teste.
+   * O acessório do SOM desta "máquina" (V9). `estado` é o cache de verdade —
+   * ele persiste, como o arquivo sob o perfil do usuário: baixou uma vez, o
+   * app não pergunta de novo nem depois de reiniciar. O resto são botões de
+   * teste, e eles valem para QUALQUER download (atraso, erro, pedaços).
+   *
+   * V10 — o catálogo passou a ter três acessórios, e o estado de cada um vive
+   * em `_estadoDoAcessorio`. Este atalho continua existindo porque o `fpcalc`
+   * é citado por dezenas de testes e pelo E2E.
    */
   _acessorio: {
     /** false = não publicamos binário para esta plataforma → lista vazia. */
@@ -110,7 +121,34 @@ export interface MockBackend extends Backend {
    * sido perguntada entra em `sem_perguntar_ao_som`.
    */
   _ensinarFalhaDoSom(filePath: string, mensagem: string): void;
+  /**
+   * O estado do cache de UM acessório (V10). É o que `_acessorio.estado` faz
+   * pelo `fpcalc`, para os outros dois — sem isso não há como montar a máquina
+   * que tem o transcritor e não tem o modelo, que é justamente o estado em que
+   * `transcricao_disponivel` precisa continuar `false`.
+   */
+  _estadoDoAcessorio(nome: string, estado: AcessorioInfo["estado"]): void;
+  /**
+   * Ensina ao "whisper" o que ele devolve para um arquivo (V10) — é o motor da
+   * etapa 5 do mock. Sem isto a transcrição volta vazia, que é o desfecho de
+   * instrumental.
+   */
+  _ensinarTranscricao(filePath: string, saida: SaidaDaTranscricao): void;
 }
+
+/**
+ * O que o motor da etapa 5 devolve para um arquivo, no mock. São os três
+ * desfechos do `transcricao::Desfecho` que chegam à tela:
+ *
+ * - `letra` + `refrao`: transcreveu;
+ * - `instrumental`: ouviu o áudio inteiro e não achou voz — o texto é o MOTIVO
+ *   medido, que vira o `aviso` da proposta;
+ * - `erro`: falhou nesta música.
+ */
+export type SaidaDaTranscricao =
+  | { letra: string; refrao: string | null }
+  | { instrumental: string }
+  | { erro: string };
 
 const STORAGE_KEY = "cancioneiro-mock-db";
 
@@ -148,11 +186,14 @@ interface DbState {
   nextPlaylistId: number;
   nextItemId: number;
   /**
-   * Cache do acessório (V9). Persistido junto do resto porque é isso que ele
-   * é no produto: um arquivo sob o perfil do usuário, que sobrevive ao
-   * reinício — "baixou uma vez, não pergunta de novo".
+   * Cache dos acessórios (V9; V10 passou a ser um por NOME). Persistido junto
+   * do resto porque é isso que ele é no produto: arquivos sob o perfil do
+   * usuário, que sobrevivem ao reinício — "baixou uma vez, não pergunta de
+   * novo".
    */
-  acessorioEstado: AcessorioInfo["estado"];
+  acessoriosEstado: Record<string, AcessorioInfo["estado"]>;
+  /** O que a etapa 5 devolve por arquivo. Permanente, como o próprio áudio. */
+  transcricoes: Record<string, SaidaDaTranscricao>;
   /** O que o som responde, por arquivo. Permanente, como o próprio áudio. */
   somDiz: Record<string, SomDiz>;
   /**
@@ -175,7 +216,8 @@ function freshState(): DbState {
     nextSongId: 1,
     nextPlaylistId: 1,
     nextItemId: 1,
-    acessorioEstado: "ausente",
+    acessoriosEstado: {},
+    transcricoes: {},
     somDiz: {},
     somFalha: {},
   };
@@ -351,11 +393,22 @@ function arquivoParaBusca(song: SongRecord): string {
  * qualquer consulta.
  */
 const ETAPA_PREPARANDO = "preparando";
+// Os nomes das etapas, com as palavras do Rust (`enrich::ETAPA_*`): eles saem
+// CRUS na tela e entram na lista que a contagem devolve.
+const ETAPA_NOME_ARQUIVO = "lendo etiquetas e nome do arquivo";
+const ETAPA_IMPRESSAO_DIGITAL = "reconhecendo pelo som";
+const ETAPA_LRCLIB = "procurando no LRCLIB";
+const ETAPA_LYRICS_OVH = "procurando no lyrics.ovh";
 const FONTE_ARQUIVO = "nome do arquivo";
 /** Etapa 2 (V9): a identidade veio do SOM, não de etiqueta nem de base de letra. */
 const FONTE_IMPRESSAO_DIGITAL = "reconhecimento pelo som";
 const FONTE_LRCLIB = "LRCLIB";
-const FONTE_VAGALUME = "Vagalume";
+/**
+ * Etapa 4 (V10): o `lyrics.ovh`, a fonte de letra SEM CHAVE. Tomou o lugar do
+ * Vagalume, que saiu do produto (DECISIONS #110) — API descontinuada, chave
+ * que ninguém tem, e código que nunca rodou contra o serviço real.
+ */
+const FONTE_LYRICS_OVH = "lyrics.ovh";
 /** Fonte das linhas que existem para INFORMAR a falha (enrich::FONTE_ERRO). */
 const FONTE_ERRO = "erro";
 
@@ -375,14 +428,90 @@ const TETO_COM_IDENTIDADE_DO_SOM = "media" as const;
  * Uma entrada real do catálogo do Rust (`acessorios::CATALOGO`, linux-x86_64):
  * nome, arquivo, tamanho e origem batem com o que o app publica de verdade.
  */
+const URL_BASE =
+  "https://github.com/gabrielnader/cancioneiro/releases/download/acessorios-v1";
+
 const ACESSORIO_FPCALC = {
   nome: "fpcalc" as const,
   para_que_serve: "reconhecer a música pelo som",
   arquivo: "fpcalc-linux-x86_64",
   tamanho_bytes: 5_538_312,
-  origem:
-    "https://github.com/gabrielnader/cancioneiro/releases/download/acessorios-v1/fpcalc-linux-x86_64",
+  executavel: true,
+  origem: `${URL_BASE}/fpcalc-linux-x86_64`,
 };
+
+/**
+ * Os dois acessórios da etapa 5 (V10), com os valores do `acessorios::CATALOGO`
+ * do Rust (linux-x86_64). São DUAS entradas para uma etapa só, e a separação é
+ * deliberada: 2 MB e 181 MB têm conversas diferentes com quem vai clicar, e um
+ * pode estar pronto sem o outro.
+ */
+const ACESSORIO_WHISPER = {
+  nome: "whisper-cli" as const,
+  para_que_serve: "escrever a letra ouvindo o áudio",
+  arquivo: "whisper-cli-linux-x86_64",
+  tamanho_bytes: 2_000_000,
+  executavel: true,
+  origem: `${URL_BASE}/whisper-cli-linux-x86_64`,
+};
+
+const ACESSORIO_MODELO = {
+  nome: "modelo-de-transcricao" as const,
+  para_que_serve: "entender o que é cantado — é o que o transcritor consulta",
+  arquivo: "ggml-small-q5_1.bin",
+  // DADO, não programa: o mesmo arquivo serve as quatro máquinas, e ele não
+  // recebe o bit de execução.
+  tamanho_bytes: 181_000_000,
+  executavel: false,
+  origem: `${URL_BASE}/ggml-small-q5_1.bin`,
+};
+
+/** O catálogo desta "máquina", na ordem em que a tela o mostra. */
+const CATALOGO = [ACESSORIO_FPCALC, ACESSORIO_WHISPER, ACESSORIO_MODELO];
+
+/**
+ * Banda de REFERÊNCIA do download, em bytes por segundo — espelha
+ * `acessorios::BANDA_REFERENCIA_BYTES_S`. Deliberadamente conservadora: pela
+ * DECISIONS #85, estimativa que promete MENOS do que leva é o defeito.
+ */
+const BANDA_REFERENCIA_BYTES_S = 1_000_000;
+
+// ---------------------------------------------------------------------------
+// O custo da varredura e da transcrição — ESPELHO do Rust, não uma segunda conta
+// ---------------------------------------------------------------------------
+//
+// Estes números moram no `enrich.rs` e no `transcricao.rs`; aqui eles são
+// cópia, como todo o resto deste arquivo. O mock É o backend quando o app roda
+// fora do Tauri, e mock que discorda do backend certifica o contrato errado
+// (DECISIONS #88). O que a V10 apagou foi a conta que vivia na TELA — essa,
+// sim, era uma segunda implementação da mesma regra (DECISIONS #80).
+
+/** Etapa 2, por música: 2 s medidos em campo (`SEGUNDOS_ETAPA_SOM`). */
+const SEGUNDOS_ETAPA_SOM = 2;
+/** Etapa 3, por música SEM LETRA: 7 s medidos (`SEGUNDOS_ETAPA_LRCLIB`). */
+const SEGUNDOS_ETAPA_LRCLIB = 7;
+/** Etapa 4, por música SEM LETRA: 2 s (`SEGUNDOS_ETAPA_LYRICS_OVH`). */
+const SEGUNDOS_ETAPA_LYRICS_OVH = 2;
+
+/**
+ * Segundos de CPU por segundo de ÁUDIO enquanto esta máquina não transcreveu
+ * nada — `transcricao::RAZAO_DE_REFERENCIA`. Um minuto de máquina por minuto
+ * de música: os 0,25 do `tools/curadoria.py` são de OUTRO motor, e reusá-los
+ * seria a DECISIONS #72 aplicada a uma estimativa.
+ */
+const RAZAO_DE_REFERENCIA = 1.0;
+const DURACAO_MINIMA_ESTIMADA = 30;
+const DURACAO_MAXIMA_ESTIMADA = 900;
+const DURACAO_TIPICA = 240;
+
+/** Porte de `transcricao::segundos_para_transcrever`. */
+function segundosParaTranscrever(duracoes: number[], razao: number): number {
+  const audio = duracoes.reduce((soma, d) => {
+    if (d <= 0) return soma + DURACAO_TIPICA;
+    return soma + Math.min(Math.max(d, DURACAO_MINIMA_ESTIMADA), DURACAO_MAXIMA_ESTIMADA);
+  }, 0);
+  return Math.ceil(audio * Math.max(razao, 0));
+}
 
 // As frases são as do Rust, LETRA POR LETRA: elas chegam prontas na tela e a
 // UI as mostra como vieram. Mock que inventa a própria mensagem certifica um
@@ -420,13 +549,25 @@ export const ERROS_DE_GRAVACAO = {
  * ele aparece na linha, e é o único lugar onde a pessoa vai ler o que fazer.
  */
 /**
- * Chave do Vagalume rejeitada pelo serviço — mesmo texto do
- * `vagalume::ERRO_CHAVE_RECUSADA`. É o único erro de rede que vale para a
- * varredura INTEIRA: os outros ("fora do ar", "espere um pouco") podem ter
- * sido soluço, e a música seguinte merece a tentativa.
+ * A RESSALVA da etapa 4 — texto do `lyrics_ovh::AVISO_SEM_CONFERENCIA`, letra
+ * por letra.
+ *
+ * Esta fonte **não devolve o nome da música**: se o serviço fizer casamento
+ * aproximado por dentro, ele pode entregar a letra de "Ponto de Ogum" para um
+ * pedido de "Ponto de Oxum" e o programa não tem como perceber. É a única
+ * etapa do funil cujo casamento não é verificável, e o que o programa SABE tem
+ * de chegar à tela: o teto MÉDIA tira a pré-marcação, mas só protege quem
+ * saiba POR QUÊ (a medição de campo foi "eu nem li as sugestões em baixa").
+ *
+ * Exportado para que os testes provem que a tela a mostra COMO VEIO.
  */
-const ERRO_CHAVE_RECUSADA =
-  "a chave do Vagalume foi recusada — confira se copiou a chave inteira";
+export const AVISO_SEM_CONFERENCIA =
+  "este site não diz a que música a letra pertence, então não deu para" +
+  " conferir se ela é desta — vale ler antes de aplicar";
+
+/** `lyrics.ovh` fora do ar — erro DESTA música, nunca da varredura. */
+const ERRO_LYRICS_OVH_FORA_DO_AR =
+  "o lyrics.ovh não respondeu — a busca continua nas outras músicas";
 
 /**
  * As duas falhas do `fpcalc`, com as palavras do Rust
@@ -442,6 +583,21 @@ export const ERRO_FPCALC_NAO_EXECUTA =
 
 const RECUSA_LETRA_EXISTENTE =
   'esta música já tem letra — marque "substituir a letra atual" para trocá-la';
+
+/**
+ * As recusas da etapa 5, com as palavras do Rust
+ * (`enrich::AVISO_INSTRUMENTAL_NAO_TRANSCREVE`, `AVISO_JA_TEM_LETRA` e
+ * `transcricao::ERRO_SEM_MODELO`). Elas existem porque a etapa 5 NÃO desfaz
+ * trabalho humano: marca de instrumental e letra existente são escolha de
+ * gente, e horas de CPU contra elas seriam desrespeito, não zelo.
+ */
+const AVISO_INSTRUMENTAL_NAO_TRANSCREVE =
+  "esta música está marcada como instrumental — não há letra a escrever";
+const AVISO_JA_TEM_LETRA =
+  "esta música já tem letra — apague a letra atual no editor se quiser" +
+  " escrevê-la de novo ouvindo o áudio";
+const ERRO_SEM_MODELO =
+  "o programa que escreve a letra, ou o modelo dele, não está instalado";
 
 // ---------------------------------------------------------------------------
 // Placeholders — porte do `is_placeholder` do Rust (que por sua vez porta o
@@ -608,6 +764,23 @@ export function tituloEhDoIndexador(titulo: string, nomeDoArquivo: string): bool
   return titulo.trim() === stem.trim();
 }
 
+/**
+ * A procedência que o `apply` grava para a letra que está sendo gravada —
+ * porte do `origem_da_fonte` do Rust. Letra do `lyrics.ovh` e letra da etapa 5
+ * ficam marcadas como tais; qualquer outra fonte LIMPA a marca, porque letra
+ * oficial não é transcrição (DECISIONS #54 e #82).
+ *
+ * `"vagalume"` não aparece aqui de propósito: nada mais o ESCREVE (DECISIONS
+ * #110). Ele continua sendo LIDO — arquivos do acervo real o carregam, e o
+ * `writeTags` o grava quando quem chama o declara.
+ */
+function origemDaFonte(fonte: string | null | undefined): string | null {
+  const f = (fonte ?? "").toLowerCase();
+  if (f === FONTE_LYRICS_OVH) return ORIGEM_LYRICS_OVH;
+  if (f === FONTE_TRANSCRICAO.toLowerCase()) return ORIGEM_TRANSCRICAO;
+  return null;
+}
+
 /** A tag como o funil a enxerga: placeholder vira string vazia. */
 function tagReal(texto: string | null | undefined): string {
   const t = (texto ?? "").trim();
@@ -656,10 +829,10 @@ const LRCLIB_CATALOGO: Record<
  * o último.
  */
 function etapaDaFonte(fonte: string): string {
-  if (fonte === FONTE_IMPRESSAO_DIGITAL) return "reconhecendo pelo som";
-  if (fonte === FONTE_LRCLIB) return "procurando no LRCLIB";
-  if (fonte === FONTE_VAGALUME) return "procurando no Vagalume";
-  return "lendo etiquetas e nome do arquivo";
+  if (fonte === FONTE_IMPRESSAO_DIGITAL) return ETAPA_IMPRESSAO_DIGITAL;
+  if (fonte === FONTE_LRCLIB) return ETAPA_LRCLIB;
+  if (fonte === FONTE_LYRICS_OVH) return ETAPA_LYRICS_OVH;
+  return ETAPA_NOME_ARQUIVO;
 }
 
 /**
@@ -847,8 +1020,6 @@ export function discordaDoSom(atual: string, identificado: string): boolean {
  * segue (QA A2).
  */
 interface EstadoDaVarredura {
-  /** O Vagalume recusou a chave: etapa 4 desligada pelo resto (DECISIONS #83). */
-  chaveRecusada: boolean;
   /** O acessório do som não roda nesta máquina: etapa 2 desligada pelo resto. */
   somDesligado: boolean;
   /**
@@ -860,7 +1031,7 @@ interface EstadoDaVarredura {
 }
 
 function novoEstadoDaVarredura(): EstadoDaVarredura {
-  return { chaveRecusada: false, somDesligado: false, semPerguntarAoSom: 0 };
+  return { somDesligado: false, semPerguntarAoSom: 0 };
 }
 
 export function createMockBackend(): MockBackend {
@@ -868,18 +1039,68 @@ export function createMockBackend(): MockBackend {
   const progressListeners = new Set<(p: ScanProgress) => void>();
   const enrichProgressListeners = new Set<(p: EnrichProgress) => void>();
   const acessorioProgressListeners = new Set<(p: AcessorioProgresso) => void>();
+  const transcricaoProgressListeners = new Set<
+    (p: TranscricaoProgresso) => void
+  >();
   /** Varreduras que pediram cancelamento e ainda não pararam (M4). */
   const enrichCancelled = new Set<string>();
   /** Downloads de acessório que pediram cancelamento (mesma disciplina). */
   const downloadsCancelados = new Set<string>();
 
-  /** O acessório desta máquina, como a tela precisa vê-lo. */
-  function infoDoAcessorio(): AcessorioInfo {
-    return { ...ACESSORIO_FPCALC, estado: state.acessorioEstado };
+  /** O estado do cache de um acessório — "ausente" é o padrão de quem nunca baixou. */
+  function estadoDe(nome: string): AcessorioInfo["estado"] {
+    return state.acessoriosEstado[nome] ?? "ausente";
+  }
+
+  /** Um acessório do catálogo, como a tela precisa vê-lo. */
+  function infoDoAcessorio(
+    a: (typeof CATALOGO)[number] = ACESSORIO_FPCALC,
+  ): AcessorioInfo {
+    return {
+      ...a,
+      estado: estadoDe(a.nome),
+      // DECISIONS #106 — número DECLARADO, da banda de referência, e
+      // arredondado para CIMA: a copy diz "cerca de", e prometer menos do que
+      // leva é o defeito da DECISIONS #85.
+      segundos_estimados: Math.ceil(a.tamanho_bytes / BANDA_REFERENCIA_BYTES_S),
+    };
+  }
+
+  /** A etapa 5 pode rodar? Exige o transcritor E o modelo, os dois prontos. */
+  function transcricaoPronta(): boolean {
+    return (
+      backend._acessorio.publicado &&
+      estadoDe(ACESSORIO_WHISPER.nome) === "pronto" &&
+      estadoDe(ACESSORIO_MODELO.nome) === "pronto"
+    );
   }
 
   function emitirProgressoDoAcessorio(p: AcessorioProgresso): void {
     acessorioProgressListeners.forEach((cb) => cb(p));
+  }
+
+  /**
+   * Evento `transcricao:progresso` (V10). `porcento_da_musica` existe porque
+   * UMA música leva minutos, e `segundos_restantes` é `null` até a primeira
+   * terminar — antes disso não há o que medir (DECISIONS #85).
+   */
+  function emitirProgressoDaTranscricao(
+    scanId: string,
+    done: number,
+    total: number,
+    atual: string,
+    porcento: number,
+    segundosRestantes: number | null,
+  ): void {
+    const payload: TranscricaoProgresso = {
+      done,
+      total,
+      atual,
+      porcento_da_musica: porcento,
+      segundos_restantes: segundosRestantes,
+      scan_id: scanId,
+    };
+    transcricaoProgressListeners.forEach((cb) => cb(payload));
   }
 
   function save(): void {
@@ -946,28 +1167,30 @@ export function createMockBackend(): MockBackend {
    *   letra ainda pode (e deve) ter título e artista corretos" (PRD V8), e era
    *   justamente essa pasta que o app declarava completa com o botão cinza.
    */
-  function candidataDoFunil(
-    song: SongRecord,
-    folderPrefix: string,
-    modo: Modo,
-  ): boolean {
+  function candidataDoFunil(song: SongRecord, folderPrefix: string): boolean {
     if (!song.available) return false;
     // prefixo casa na FRONTEIRA de separador ("/m/1" não casa "/m/10/a.mp3"),
     // como isUnderFolder e o backend Rust
     if (folderPrefix && !isUnderFolder(song.file_path, folderPrefix)) return false;
-    // V9 — na conferência o filtro NÃO se aplica: o trabalho ali é perguntar
-    // ao som se a etiqueta está certa, e a música que mais precisa dessa
-    // pergunta é justamente a que PARECE completa e está errada. Um `if` no
-    // mesmo lugar, não uma segunda função (a regra de quem é candidata é UMA).
-    if (modo === "conferencia") return true;
-    const nomesProntos = tagReal(song.title) !== "" && tagReal(song.artist) !== "";
-    const completa = nomesProntos && (song.instrumental === true || song.has_lyrics);
-    return !completa;
+    return true;
+  }
+
+  /**
+   * As etapas 3 e 4 valem a pena para esta música? Porte do
+   * `etapas_de_letra_valem_a_pena`: é o que RESTOU do portão de completude.
+   *
+   * Note o que ele NÃO olha mais: título e artista. Música sem letra passa
+   * pelas etapas de letra mesmo com nomes prontos — é assim que ela ganha a
+   * letra que lhe falta. E quem JÁ tem letra não passa, o que fecha de graça a
+   * rota que destruía transcrição corrigida à mão (DECISIONS #79 e #102).
+   */
+  function etapasDeLetraValemAPena(song: SongRecord): boolean {
+    return !song.has_lyrics && song.instrumental !== true;
   }
 
   /** A etapa 2 existe nesta máquina? Só com o acessório conferido e pronto. */
   function somAtivo(): boolean {
-    return backend._acessorio.publicado && state.acessorioEstado === "pronto";
+    return backend._acessorio.publicado && estadoDe(ACESSORIO_FPCALC.nome) === "pronto";
   }
 
   /**
@@ -982,13 +1205,18 @@ export function createMockBackend(): MockBackend {
    */
   function propostaDoFunil(
     song: SongRecord,
-    vagalumeKey: string | null,
     digitado?: { title?: string | null; artist?: string | null },
     /** Estado da VARREDURA (não da música): vereditos e a conta do A2. */
     estado: EstadoDaVarredura = novoEstadoDaVarredura(),
-    modo: Modo = "completar",
+    /**
+     * De onde veio o pedido (porte do `enrich::Origem`). Na VARREDURA as
+     * etapas de letra só rodam para quem não tem letra; na porta de UMA
+     * música o funil inteiro roda sempre, porque quem clicou sabe o que quer
+     * (DECISIONS #81).
+     */
+    origem: "varredura" | "uma-musica" = "uma-musica",
   ): EnrichProposal {
-    const proposta = passarPeloFunil(song, vagalumeKey, digitado, estado, modo);
+    const proposta = passarPeloFunil(song, digitado, estado, origem);
     // Num lugar SÓ, na saída — como no Rust: o funil tem vários pontos de
     // retorno, e marcar em cada um é o tipo de coisa que fica correta hoje e
     // silenciosamente errada na próxima etapa nova. O modo de falhar aqui é
@@ -1036,10 +1264,9 @@ export function createMockBackend(): MockBackend {
 
   function passarPeloFunil(
     song: SongRecord,
-    vagalumeKey: string | null,
     digitado: { title?: string | null; artist?: string | null } | undefined,
     estado: EstadoDaVarredura,
-    modo: Modo,
+    origem: "varredura" | "uma-musica",
   ): EnrichProposal {
     const tituloTag = tagReal(digitado?.title ?? song.title);
     const artistaTag = tagReal(digitado?.artist ?? song.artist);
@@ -1077,6 +1304,11 @@ export function createMockBackend(): MockBackend {
         fonte: error !== null ? FONTE_ERRO : FONTE_ARQUIVO,
         conflito: null,
         substitui_nome_escrito: false,
+        // V10 — a varredura nunca marca instrumental nem extrai refrão: as
+        // duas coisas saem da etapa 5, que é outro comando.
+        marcar_instrumental: false,
+        refrao: null,
+        aviso: null,
         error,
       };
     }
@@ -1163,8 +1395,12 @@ export function createMockBackend(): MockBackend {
       return p;
     }
 
-    // A conferência é UM trabalho — perguntar ao som —, e termina aqui.
-    if (modo === "conferencia") return propostaDaIdentidade();
+    // V10 — o portão de completude MUDOU DE LUGAR (DECISIONS #102): ele saiu
+    // da porta de entrada (por isso a música que parece completa chegou até
+    // aqui e o som pôde desmenti-la) e virou o guarda das etapas de letra.
+    // Procurar letra para quem já tem não faz sentido — e, de graça, isso
+    // fecha a rota que destruía transcrição corrigida à mão (DECISIONS #79).
+    if (origem === "varredura" && song.has_lyrics) return propostaDaIdentidade();
 
     // V8/F17 — as etapas de LETRA param aqui para música sem voz. NÃO é
     // filtro de completude (o instrumental é candidato e pode ganhar nome):
@@ -1205,41 +1441,124 @@ export function createMockBackend(): MockBackend {
         fonte: FONTE_LRCLIB,
         conflito: null,
         substitui_nome_escrito: false,
+        marcar_instrumental: false,
+        refrao: null,
+        aviso: null,
         error: null,
       };
     }
 
-    // --- etapa 4: Vagalume, só com chave E com as DUAS tags reais ----------
+    // --- etapa 4: lyrics.ovh, SEM CHAVE ------------------------------------
     //
-    // A regra é a do enrich.rs: o Vagalume não tem duração, e a igualdade de
-    // palavras dos dois lados é a única prova que existe — ela precisa de um
-    // pedido que já signifique alguma coisa. Palpite de nome de arquivo não é
-    // isso. E o caminho NUNCA propõe nome novo: a letra é a mudança inteira
-    // (DECISIONS #63 — "Ponto de Ogum" dentro de "Ponto de Oxum").
-    if (vagalumeKey && tituloBusca && artistaBusca && !estado.chaveRecusada) {
-      if (backend._vagalumeKeyRecusada) {
-        // veredito sobre a varredura inteira: registra e desliga a etapa —
-        // repetir o mesmo aviso em 95 linhas não informa ninguém, e insistir
-        // seria bater num serviço que já disse não
-        estado.chaveRecusada = true;
-        erro = ERRO_CHAVE_RECUSADA;
+    // Ela tomou o lugar do Vagalume (DECISIONS #110) porque não pede chave: a
+    // etapa com chave é a que quase ninguém alcança, e pôr a única fonte
+    // utilizável atrás de um pedágio é o mesmo que não tê-la.
+    //
+    // A régua é a mesma, e estrita pelo mesmo motivo: esta fonte não tem
+    // duração, e ainda por cima NÃO DEVOLVE NOME. Sem título E artista REAIS
+    // para conferir, não se consulta — foi um casamento sem prova que gravou a
+    // letra de "Ponto de Ogum" dentro de "Ponto de Oxum" (DECISIONS #63).
+    if (tituloBusca && artistaBusca) {
+      if (backend._lyricsOvhForaDoAr) {
+        // erro DESTA música: o serviço cai com frequência, e desligar a etapa
+        // no primeiro soluço deixaria as seguintes sem tentativa (QA A2)
+        erro = ERRO_LYRICS_OVH_FORA_DO_AR;
         return propostaDaIdentidade();
       }
       return {
         ...base,
+        // a etapa não propõe nome novo: os nomes são os do PEDIDO, e a letra é
+        // a mudança inteira
         proposed_title: tituloBusca,
         proposed_artist: artistaBusca,
         lyrics: FIXTURE_LYRICS,
+        // MÉDIA, nunca ALTA: sem duração não há confirmação independente, e
+        // ALTA chegaria pré-marcada (DECISIONS #49)
         confidence: "media",
-        fonte: FONTE_VAGALUME,
+        fonte: FONTE_LYRICS_OVH,
         conflito: null,
         substitui_nome_escrito: false,
+        marcar_instrumental: false,
+        refrao: null,
+        // A RESSALVA, em TODA proposta desta fonte: ela não diz a que música a
+        // letra pertence, e é a única etapa cujo casamento não é verificável.
+        aviso: AVISO_SEM_CONFERENCIA,
         error: null,
       };
     }
 
     // resto: só o que as etapas 1 e 2 acharam
     return propostaDaIdentidade();
+  }
+
+  /**
+   * O desfecho da etapa 5 para UMA música, como proposta (porte do
+   * `enrich::proposta_da_transcricao`).
+   *
+   * Note o que NUNCA muda aqui: `proposed_title` e `proposed_artist` são o que
+   * já está no arquivo. A transcrição não identifica música nenhuma, então não
+   * há nome para propor — e portanto não há como ela sobrescrever etiqueta
+   * real, em confiança nenhuma. É garantia de construção, não regra a lembrar
+   * (DECISIONS #103).
+   */
+  function propostaDaTranscricao(song: SongRecord): EnrichProposal {
+    const base: EnrichProposal = {
+      song_id: song.id,
+      file_path: song.file_path,
+      current_title: song.title,
+      current_artist: song.artist,
+      proposed_title: song.title,
+      proposed_artist: song.artist,
+      lyrics: null,
+      has_lyrics: song.has_lyrics,
+      letra_origem: song.letra_origem ?? null,
+      confidence: "baixa",
+      fonte: FONTE_ERRO,
+      conflito: null,
+      substitui_nome_escrito: false,
+      marcar_instrumental: false,
+      refrao: null,
+      aviso: null,
+      error: null,
+    };
+    // A etapa 5 NÃO desfaz trabalho humano: marca de instrumental e letra
+    // existente são escolha de gente (DECISIONS #71 e #79), e as horas de CPU
+    // que estas duas travas economizam são reais.
+    if (song.instrumental === true) {
+      return { ...base, error: AVISO_INSTRUMENTAL_NAO_TRANSCREVE };
+    }
+    if (song.has_lyrics) return { ...base, error: AVISO_JA_TEM_LETRA };
+    if (state.deletedFiles.includes(song.file_path)) {
+      return { ...base, error: `arquivo não encontrado: ${song.file_path}` };
+    }
+    const saida = state.transcricoes[song.file_path];
+    if (saida && "erro" in saida) return { ...base, error: saida.erro };
+    if (saida && "letra" in saida) {
+      return {
+        ...base,
+        lyrics: saida.letra,
+        refrao: saida.refrao,
+        // MÉDIA, nunca ALTA: ALTA chega pré-marcada (DECISIONS #49), e letra
+        // escrita por máquina é justamente a que precisa de olho humano antes
+        // de entrar no arquivo.
+        confidence: "media",
+        fonte: FONTE_TRANSCRICAO,
+      };
+    }
+    // Sem nada ensinado, o motor ouviu o áudio inteiro e não achou voz: é o
+    // desfecho de instrumental, e ele vem com o MOTIVO medido — é a única
+    // explicação que alguém vai receber para uma marca definitiva.
+    const motivo =
+      saida && "instrumental" in saida
+        ? saida.instrumental
+        : "o áudio foi ouvido inteiro e não há voz nenhuma nele";
+    return {
+      ...base,
+      marcar_instrumental: true,
+      confidence: "media",
+      fonte: FONTE_TRANSCRICAO,
+      aviso: motivo,
+    };
   }
 
   function songWords(song: SongRecord): string[] {
@@ -1252,7 +1571,7 @@ export function createMockBackend(): MockBackend {
     _nextPickedFolder: "/musicas/mock",
     _offline: false,
     _enrichDelayMs: 0,
-    _vagalumeKeyRecusada: false,
+    _lyricsOvhForaDoAr: false,
     _acessorio: {
       publicado: true,
       erro: null,
@@ -1262,10 +1581,10 @@ export function createMockBackend(): MockBackend {
       // `estado` é o CACHE, e o cache é persistido: baixou uma vez, o app não
       // pergunta de novo nem depois de reiniciar (regra 3 do PRD V9).
       get estado(): AcessorioInfo["estado"] {
-        return state.acessorioEstado;
+        return estadoDe(ACESSORIO_FPCALC.nome);
       },
       set estado(v: AcessorioInfo["estado"]) {
-        state.acessorioEstado = v;
+        state.acessoriosEstado[ACESSORIO_FPCALC.nome] = v;
         save();
       },
     },
@@ -1549,26 +1868,33 @@ export function createMockBackend(): MockBackend {
     async enrichFolderScan(
       folderPrefix: string,
       scanId: string,
-      vagalumeKey: string | null = null,
-      // ausente vale "completar", como o Modo::default do Rust: esquecer o
-      // campo nunca dispara a varredura que lê o áudio de todas as músicas
-      modo: Modo = "completar",
     ): Promise<EnrichScanResult> {
       enrichCancelled.delete(scanId);
       // candidatas pré-contadas ANTES do trabalho (como o scan_all): o total
       // do progresso não muda no meio da varredura
       const candidatas = state.songs.filter((song) =>
-        candidataDoFunil(song, folderPrefix, modo),
+        candidataDoFunil(song, folderPrefix),
       );
 
       const total = candidatas.length;
       const proposals: EnrichProposal[] = [];
       // vale para a varredura toda, como o `EstadoDaVarredura` do Rust
       const estado = novoEstadoDaVarredura();
+      /**
+       * V10 — quem sobrou sem letra, para a pergunta do fim. A lista é montada
+       * música a música, e não deduzida das propostas: uma proposta pode ter
+       * sido descartada por no-op e a música continuar sem letra.
+       */
+      const sobraram: Array<{ id: number; duracao: number }> = [];
       /** O objeto do QA A2 — a conta sai do estado, nunca de um zero fixo. */
       const fechar = (propostas: EnrichProposal[]): EnrichScanResult => ({
         propostas,
         sem_perguntar_ao_som: estado.semPerguntarAoSom,
+        sem_letra_no_fim: sobraram.map((s) => s.id),
+        segundos_de_transcricao: segundosParaTranscrever(
+          sobraram.map((s) => s.duracao),
+          RAZAO_DE_REFERENCIA,
+        ),
       });
       // primeiro evento com done=0 antes de começar: só o total na tela
       // (mesmo contrato do Rust — `atual` vazio nesse evento)
@@ -1585,13 +1911,13 @@ export function createMockBackend(): MockBackend {
           enrichCancelled.delete(scanId);
           return fechar([]);
         }
-        const proposta = propostaDoFunil(
-          song,
-          vagalumeKey,
-          undefined,
-          estado,
-          modo,
-        );
+        const proposta = propostaDoFunil(song, undefined, estado, "varredura");
+        // Sobra para a etapa 5 quem continuaria SEM LETRA depois de aplicar
+        // tudo o que esta varredura achou. Instrumental não entra: música sem
+        // voz não é transcrita (V8/F17).
+        if (etapasDeLetraValemAPena(song) && proposta.lyrics === null) {
+          sobraram.push({ id: song.id, duracao: song.duration_seconds ?? 0 });
+        }
         proposals.push(proposta);
         // emitido DEPOIS de cada música, com o nome da que acabou de sair e a
         // etapa em que ela foi resolvida (mesmo ponto do on_progress do Rust)
@@ -1608,21 +1934,123 @@ export function createMockBackend(): MockBackend {
       return fechar(proposals.filter((p) => !propostaNoOp(p)));
     },
 
-    async enrichCount(
-      folderPrefix: string,
-      modo: Modo = "completar",
-    ): Promise<number> {
+    async enrichCount(folderPrefix: string): Promise<Contagem> {
       // MESMA função que a varredura usa (ALTO-2): é o ponto inteiro deste
-      // comando existir — a contagem não pode discordar do que vai rodar. E
-      // isso vale por MODO: a conferência olha outra população.
-      return state.songs.filter((song) =>
-        candidataDoFunil(song, folderPrefix, modo),
-      ).length;
+      // comando existir — a contagem não pode discordar do que vai rodar.
+      const candidatas = state.songs.filter((song) =>
+        candidataDoFunil(song, folderPrefix),
+      );
+      const semLetra = candidatas.filter(etapasDeLetraValemAPena).length;
+      const som = somAtivo();
+      // V10 — a conta inteira mora no backend (DECISIONS #80): a etapa 2 roda
+      // em TODAS, as etapas de letra só em quem não tem letra.
+      const porMusica = som ? SEGUNDOS_ETAPA_SOM : 0;
+      const porMusicaSemLetra = SEGUNDOS_ETAPA_LRCLIB + SEGUNDOS_ETAPA_LYRICS_OVH;
+      // a lista de etapas é a das que VÃO rodar nesta máquina (DECISIONS #101).
+      // A etapa 4 não tem interruptor: ela não pede chave, então existe em
+      // toda máquina com internet (DECISIONS #110).
+      const etapas = [ETAPA_NOME_ARQUIVO];
+      if (som) etapas.push(ETAPA_IMPRESSAO_DIGITAL);
+      etapas.push(ETAPA_LRCLIB, ETAPA_LYRICS_OVH);
+      return {
+        total: candidatas.length,
+        sem_letra: semLetra,
+        segundos_estimados: candidatas.length * porMusica + semLetra * porMusicaSemLetra,
+        etapas,
+        transcricao_disponivel: transcricaoPronta(),
+      };
+    },
+
+    /**
+     * A etapa 5 (V10). Comando à parte, e não uma etapa da varredura: são
+     * MINUTOS por música, e a pergunta só pode ser feita no fim.
+     *
+     * Nada é gravado — o que sai são propostas para a MESMA revisão, inclusive
+     * a de marcar instrumental.
+     */
+    async transcreverMusicas(
+      songIds: number[],
+      scanId: string,
+    ): Promise<TranscricaoResultado> {
+      if (!transcricaoPronta()) throw new Error(ERRO_SEM_MODELO);
+      enrichCancelled.delete(scanId);
+      const total = songIds.length;
+      const propostas: EnrichProposal[] = [];
+      let audioMedido = 0;
+      let relogioMedido = 0;
+
+      emitirProgressoDaTranscricao(scanId, 0, total, "", 0, null);
+      for (let feitas = 0; feitas < total; feitas++) {
+        // o cancelamento é consultado DENTRO da fila: aqui esperar a próxima
+        // música seria esperar minutos por um clique
+        if (enrichCancelled.has(scanId)) break;
+        const song = state.songs.find((s) => s.id === songIds[feitas]);
+        if (!song) continue; // saiu da biblioteca no meio: nada a fazer
+        const nome = nomeArquivo(song);
+        const restantes = (feitos: number): number | null =>
+          feitos > 0
+            ? Math.ceil((relogioMedido / feitos) * (total - feitos))
+            : null;
+        emitirProgressoDaTranscricao(
+          scanId,
+          feitas,
+          total,
+          nome,
+          0,
+          restantes(feitas),
+        );
+        // uma música leva MINUTOS: sem o progresso DENTRO dela, a barra fica
+        // parada tempo demais para parecer viva (a lição da v0.8.1)
+        for (const porcento of [25, 50, 75]) {
+          if (backend._enrichDelayMs > 0) {
+            await new Promise((r) => setTimeout(r, backend._enrichDelayMs));
+          }
+          emitirProgressoDaTranscricao(
+            scanId,
+            feitas,
+            total,
+            nome,
+            porcento,
+            restantes(feitas),
+          );
+        }
+        const proposta = propostaDaTranscricao(song);
+        if (proposta.lyrics !== null || proposta.marcar_instrumental) {
+          // só conta como medição o que o motor de fato ouviu
+          const duracao = song.duration_seconds ?? 0;
+          audioMedido += duracao;
+          relogioMedido += duracao * RAZAO_DE_REFERENCIA;
+        }
+        propostas.push(proposta);
+        emitirProgressoDaTranscricao(
+          scanId,
+          feitas + 1,
+          total,
+          nome,
+          100,
+          restantes(feitas + 1),
+        );
+      }
+      enrichCancelled.delete(scanId);
+      return {
+        propostas,
+        // a razão MEDIDA nesta máquina — é ela que troca a estimativa
+        // declarada pela verdadeira, e quem faz essa conta é o backend
+        razao_medida: audioMedido > 0 ? relogioMedido / audioMedido : null,
+      };
+    },
+
+    async onTranscricaoProgresso(
+      cb: (p: TranscricaoProgresso) => void,
+    ): Promise<() => void> {
+      transcricaoProgressListeners.add(cb);
+      return () => {
+        transcricaoProgressListeners.delete(cb);
+      };
     },
 
     async enrichSongScan(
       songId: number,
-      vagalumeKey: string | null = null,
       scanId: string | null = null,
       title: string | null = null,
       artist: string | null = null,
@@ -1645,7 +2073,12 @@ export function createMockBackend(): MockBackend {
       // que quer, e o filtro do lote existe para poupar rede em centenas de
       // arquivos, não para recusar um pedido explícito. (O curto-circuito de
       // letra para instrumental continua DENTRO do funil: é integridade.)
-      const proposta = propostaDoFunil(song, vagalumeKey, { title, artist });
+      const proposta = propostaDoFunil(
+        song,
+        { title, artist },
+        undefined,
+        "uma-musica",
+      );
       // sem letra nova E sem nada a corrigir = procuramos e não veio nada novo
       return propostaNoOp(proposta) ? null : proposta;
     },
@@ -1735,11 +2168,16 @@ export function createMockBackend(): MockBackend {
           // Letra do Vagalume fica marcada como tal; qualquer outra fonte
           // limpa a marca — letra oficial nunca é transcrição.
           if (song.lyrics !== ap.lyrics) {
-            song.letra_origem =
-              ap.fonte?.toLowerCase() === "vagalume" ? ORIGEM_VAGALUME : null;
+            song.letra_origem = origemDaFonte(ap.fonte);
           }
           song.lyrics = ap.lyrics;
           song.has_lyrics = true;
+        }
+        // V10 — a marca de instrumental é eco do que a pessoa CONFIRMOU na
+        // revisão. Só MARCA: desmarcar continua sendo exclusividade do editor,
+        // porque a marca é escolha humana (DECISIONS #71).
+        if (ap.marcar_instrumental === true) {
+          song.instrumental = true;
         }
         if (ap.add_temas?.trim()) {
           // temas SOMAM aos existentes (normalização deduplica e ordena)
@@ -1769,39 +2207,50 @@ export function createMockBackend(): MockBackend {
       // lista VAZIA = não publicamos binário para esta plataforma. É outra
       // coisa que "ausente", e a tela não pode oferecer download.
       if (!backend._acessorio.publicado) return [];
-      return [infoDoAcessorio()];
+      return CATALOGO.map((a) => infoDoAcessorio(a));
     },
 
     async acessorioBaixar(
       nome: string,
       downloadId: string,
     ): Promise<AcessorioDownload> {
-      if (!backend._acessorio.publicado || nome !== ACESSORIO_FPCALC.nome) {
+      const acessorio = CATALOGO.find((a) => a.nome === nome);
+      if (!backend._acessorio.publicado || !acessorio) {
         throw new Error(ERRO_ACESSORIO_DESCONHECIDO);
       }
-      if (state.acessorioEstado === "indisponivel") {
+      if (estadoDe(acessorio.nome) === "indisponivel") {
         // sem a chave do AcoustID compilada nesta build, o acessório não teria
-        // o que fazer: 5 MB baixados para nada é pior que não oferecer
+        // o que fazer: MB baixados para nada é pior que não oferecer
         throw new Error(ERRO_ACESSORIO_INDISPONIVEL);
       }
       downloadsCancelados.delete(downloadId);
       const { pedacos, atrasoMs, anunciaTotal } = backend._acessorio;
-      const tamanho = ACESSORIO_FPCALC.tamanho_bytes;
+      const tamanho = acessorio.tamanho_bytes;
       const total = anunciaTotal ? tamanho : null;
-      for (let i = 1; i <= Math.max(1, pedacos); i++) {
+      const fatias = Math.max(1, pedacos);
+      for (let i = 1; i <= fatias; i++) {
         if (atrasoMs > 0) {
           await new Promise((r) => setTimeout(r, atrasoMs));
         }
         // cancelamento verificado DENTRO do download, não só entre arquivos:
-        // são 5 MB hoje e 180 MB na versão seguinte
+        // eram 5 MB e passaram a ser 180
         if (downloadsCancelados.has(downloadId)) {
           downloadsCancelados.delete(downloadId);
-          return { cancelado: true, acessorio: infoDoAcessorio() };
+          return { cancelado: true, acessorio: infoDoAcessorio(acessorio) };
         }
+        const baixados = Math.round((tamanho * i) / fatias);
         emitirProgressoDoAcessorio({
-          nome: ACESSORIO_FPCALC.nome,
-          baixados: Math.round((tamanho * i) / Math.max(1, pedacos)),
+          nome: acessorio.nome,
+          baixados,
           total,
+          // V10 — velocidade MEDIDA, e `null` enquanto a amostra é curta
+          // demais para render número honesto (DECISIONS #106): no primeiro
+          // pedaço a velocidade aparente é absurda, e um "faltam 0 segundos"
+          // que dura dez minutos é pior que nenhum número.
+          segundos_restantes:
+            total === null || i <= 1
+              ? null
+              : Math.ceil((total - baixados) / BANDA_REFERENCIA_BYTES_S),
           download_id: downloadId,
         });
       }
@@ -1821,9 +2270,9 @@ export function createMockBackend(): MockBackend {
           ERROS_DE_GRAVACAO[falhaDeGravacao as keyof typeof ERROS_DE_GRAVACAO],
         );
       }
-      state.acessorioEstado = "pronto";
+      state.acessoriosEstado[acessorio.nome] = "pronto";
       save();
-      return { cancelado: false, acessorio: infoDoAcessorio() };
+      return { cancelado: false, acessorio: infoDoAcessorio(acessorio) };
     },
 
     async acessorioCancelar(downloadId: string): Promise<void> {
@@ -1913,6 +2362,16 @@ export function createMockBackend(): MockBackend {
 
     _ensinarFalhaDoSom(filePath: string, mensagem: string): void {
       state.somFalha[filePath] = mensagem;
+      save();
+    },
+
+    _estadoDoAcessorio(nome: string, estado: AcessorioInfo["estado"]): void {
+      state.acessoriosEstado[nome] = estado;
+      save();
+    },
+
+    _ensinarTranscricao(filePath: string, saida: SaidaDaTranscricao): void {
+      state.transcricoes[filePath] = saida;
       save();
     },
 

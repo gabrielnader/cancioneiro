@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { textoDoProgressoDaTranscricao } from "../lib/curadoria";
 import { buildFolderTree, type FolderNode } from "../lib/folderTree";
 import { useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
@@ -139,6 +140,7 @@ function EnrichBackgroundIndicator() {
   const status = useEnrichStore((s) => s.status);
   const overlayOpen = useEnrichStore((s) => s.overlayOpen);
   const progress = useEnrichStore((s) => s.progress);
+  const transcricaoProgress = useEnrichStore((s) => s.transcricaoProgress);
   const proposals = useEnrichStore((s) => s.proposals);
   const openOverlay = useEnrichStore((s) => s.openOverlay);
 
@@ -149,11 +151,25 @@ function EnrichBackgroundIndicator() {
       ? progress
         ? `Buscando dados… ${progress.done} de ${progress.total}`
         : "Buscando dados…"
-      : proposals.length === 1
-        ? "Revisar 1 proposta"
-        : `Revisar ${proposals.length} propostas`;
+      : // V10 — a etapa 5 leva HORAS em segundo plano: sem o indicador ela
+        // desaparece de vista, e a pessoa não tem como voltar nem cancelar
+        status === "transcribing"
+        ? transcricaoProgress
+          ? textoDoProgressoDaTranscricao(
+              transcricaoProgress.done,
+              transcricaoProgress.total,
+            )
+          : "Escrevendo as letras…"
+        : proposals.length === 1
+          ? "Revisar 1 proposta"
+          : `Revisar ${proposals.length} propostas`;
   // backend antigo (ou evento inicial) pode vir sem etapa: a linha some
-  const etapa = status === "scanning" ? (progress?.etapa ?? "") : "";
+  const etapa =
+    status === "scanning"
+      ? (progress?.etapa ?? "")
+      : status === "transcribing"
+        ? (transcricaoProgress?.atual ?? "")
+        : "";
 
   return (
     <button

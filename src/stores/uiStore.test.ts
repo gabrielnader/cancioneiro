@@ -36,27 +36,16 @@ describe("uiStore (F3 — persistência de painel e fonte)", () => {
   });
 });
 
-// V8/F18 — a chave gratuita do Vagalume é preferência da pessoa, não segredo
-// do produto: mora junto das outras preferências e sobrevive ao reinício.
-describe("uiStore — chave do Vagalume (V8/F18)", () => {
-  it("padrão: vazia — sem chave, a etapa do Vagalume é pulada em silêncio", () => {
-    expect(createUiStore().getState().vagalumeApiKey).toBe("");
-  });
-
-  it("a chave é guardada sem espaços em volta e persiste entre sessões", async () => {
-    const store = createUiStore();
-    store.getState().setVagalumeApiKey("  minha-chave  ");
-    expect(store.getState().vagalumeApiKey).toBe("minha-chave");
-
-    const reopened = createUiStore();
-    await Promise.resolve();
-    expect(reopened.getState().vagalumeApiKey).toBe("minha-chave");
-  });
-
-  it("apagar o campo volta ao estado sem chave", () => {
-    const store = createUiStore();
-    store.getState().setVagalumeApiKey("x");
-    store.getState().setVagalumeApiKey("");
-    expect(store.getState().vagalumeApiKey).toBe("");
+// V10 — a chave do Vagalume SAIU das preferências (DECISIONS #110): a etapa
+// que a pedia foi removida do produto, e o `lyrics.ovh` que tomou o lugar dela
+// não pede credencial nenhuma. Guardar preferência que nada lê é convite a
+// alguém reintroduzir o campo "porque o estado já existe".
+describe("uiStore — nenhuma credencial guardada (V10)", () => {
+  it("não há preferência de chave, nem no estado nem no que é persistido", () => {
+    const estado = createUiStore().getState() as unknown as Record<string, unknown>;
+    expect(estado.vagalumeApiKey).toBeUndefined();
+    expect(estado.setVagalumeApiKey).toBeUndefined();
+    const salvo = localStorage.getItem("cancioneiro-ui") ?? "";
+    expect(salvo.toLowerCase()).not.toContain("vagalume");
   });
 });

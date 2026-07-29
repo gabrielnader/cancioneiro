@@ -61,9 +61,25 @@ function fakeBackend(overrides: Partial<Backend> = {}): Backend {
     onScanProgress: vi.fn(async () => () => {}),
     onEnrichProgress: vi.fn(async () => () => {}),
     writeTags: vi.fn(async () => song(1, "Aurora")),
-    enrichCount: vi.fn(async () => 0),
-    // QA A2 — a varredura devolve um OBJETO, não a lista de propostas
-    enrichFolderScan: vi.fn(async () => ({ propostas: [], sem_perguntar_ao_som: 0 })),
+    // V10 — a contagem devolve um OBJETO: total, quantas sem letra, a
+    // estimativa PRONTA e as etapas que vão rodar nesta máquina
+    enrichCount: vi.fn(async () => ({
+      total: 0,
+      sem_letra: 0,
+      segundos_estimados: 0,
+      etapas: [],
+      transcricao_disponivel: false,
+    })),
+    // QA A2 — a varredura devolve um OBJETO, não a lista de propostas; V10
+    // acrescentou a fila da etapa 5 e o tempo dela
+    enrichFolderScan: vi.fn(async () => ({
+      propostas: [],
+      sem_perguntar_ao_som: 0,
+      sem_letra_no_fim: [],
+      segundos_de_transcricao: 0,
+    })),
+    transcreverMusicas: vi.fn(async () => ({ propostas: [], razao_medida: null })),
+    onTranscricaoProgresso: vi.fn(async () => () => {}),
     enrichSongScan: vi.fn(async () => null),
     enrichCancelScan: vi.fn(async () => {}),
     enrichApply: vi.fn(async () => []),

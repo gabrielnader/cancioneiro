@@ -19,25 +19,22 @@ interface UiState {
    */
   checkUpdatesOnStart: boolean;
   /**
-   * V8/F18 — chave gratuita e PESSOAL do Vagalume, digitada por quem usa.
+   * V10 — `vagalumeApiKey` SAIU (DECISIONS #110).
    *
-   * Ela É GRAVADA EM DISCO, em texto puro, no localStorage das preferências
-   * ("cancioneiro-ui"), junto de tamanho da fonte e afins. Isso é decisão de
-   * produto, não descuido: 40 pessoas sem suporte redigitando uma chave de API
-   * a cada sessão é pior do que uma chave gratuita guardada na máquina de quem
-   * a criou. O que o produto deve é DIZER isso — e a copy ao lado do campo, em
-   * Configurações, diz (QA MÉDIO-10: quatro lugares afirmavam o contrário).
+   * A etapa do Vagalume foi removida do produto (API descontinuada, chave que
+   * o dono do produto nunca conseguiu, código que nunca rodou contra o serviço
+   * real), e o `lyrics.ovh` que tomou o lugar dela não pede credencial. Com
+   * isso **nenhuma etapa do funil pede nada de quem usa**, e não há mais
+   * preferência de credencial a guardar — nem em disco, nem em memória.
    *
-   * Vazia = a etapa do Vagalume é pulada em silêncio. Ela não entra no banco
-   * de músicas, não é escrita nos MP3 e não vai a lugar nenhum além do próprio
-   * Vagalume, como parâmetro da consulta.
+   * A chave que existir no `localStorage` de instalações antigas fica lá,
+   * inerte: o `persist` do zustand ignora chave que o estado não declara, e
+   * apagar preferência alheia não é trabalho desta versão.
    */
-  vagalumeApiKey: string;
   toggleLyricsPanel: () => void;
   cycleFontLevel: () => void;
   setView: (view: View) => void;
   setCheckUpdatesOnStart: (value: boolean) => void;
-  setVagalumeApiKey: (value: string) => void;
 }
 
 export function createUiStore() {
@@ -48,16 +45,12 @@ export function createUiStore() {
         fontLevel: 0,
         view: "library" as View,
         checkUpdatesOnStart: true,
-        vagalumeApiKey: "",
         toggleLyricsPanel: () =>
           set((s) => ({ lyricsPanelVisible: !s.lyricsPanelVisible })),
         cycleFontLevel: () =>
           set((s) => ({ fontLevel: ((s.fontLevel + 1) % 3) as FontLevel })),
         setView: (view) => set({ view }),
         setCheckUpdatesOnStart: (value) => set({ checkUpdatesOnStart: value }),
-        // colar de um site costuma trazer espaço/quebra de linha junto, e a
-        // chave iria assim para a URL da consulta
-        setVagalumeApiKey: (value) => set({ vagalumeApiKey: value.trim() }),
       }),
       {
         name: "cancioneiro-ui",
@@ -65,7 +58,6 @@ export function createUiStore() {
           lyricsPanelVisible: s.lyricsPanelVisible,
           fontLevel: s.fontLevel,
           checkUpdatesOnStart: s.checkUpdatesOnStart,
-          vagalumeApiKey: s.vagalumeApiKey,
         }),
       },
     ),

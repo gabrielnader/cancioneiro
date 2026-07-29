@@ -1,6 +1,5 @@
 import type {
   Folder,
-  Modo,
   Playlist,
   PlaylistItem,
   ScanProgress,
@@ -49,8 +48,9 @@ export interface EnrichProposal {
   letra_origem: string | null;
   confidence: "alta" | "media" | "baixa";
   /**
-   * De ONDE o dado veio, em pt-BR e pronto para exibir ("LRCLIB", "Vagalume",
-   * "nome do arquivo"…) — V8/F18. Quem cura decide olhando a procedência: a
+   * De ONDE o dado veio, em pt-BR e pronto para exibir ("LRCLIB",
+   * "lyrics.ovh", "nome do arquivo", "transcrição do áudio") — V8/F18. Quem
+   * cura decide olhando a procedência: a
    * mesma confiança significa coisas diferentes vindo de um banco com duração
    * conferida ou de um palpite de nome de arquivo.
    */
@@ -80,6 +80,33 @@ export interface EnrichProposal {
    * sai daqui com `false`.
    */
   substitui_nome_escrito: boolean;
+  /**
+   * V10 — a etapa 5 ouviu o áudio inteiro e não achou voz: esta música é
+   * INSTRUMENTAL. É PROPOSTA, não gravação: a marca tira o arquivo da fila de
+   * letra para sempre (vence até o `--forcar-tudo` do lado Python) e só o
+   * editor a desfaz. Quem grava é o `apply`, com o `marcar_instrumental` que a
+   * pessoa confirmou.
+   */
+  marcar_instrumental: boolean;
+  /**
+   * V10 — o trecho mais repetido da letra que a máquina escreveu.
+   *
+   * Só informação, e com um uso prático: quem vai conferir 47 letras escritas
+   * por máquina precisa reconhecer a música de relance, SEM abrir cada uma. O
+   * refrão nunca vira consulta nem nome proposto — a identificação por ele
+   * ficou de fora por medição (DECISIONS #74 e #103).
+   */
+  refrao: string | null;
+  /**
+   * V10 — explicação de uma linha que a pessoa PODE aplicar, ao contrário do
+   * `error`, que descreve uma linha que ela não pode.
+   *
+   * Nasceu do instrumental: "20 caracteres em 5m00s de áudio dão 0,07, abaixo
+   * do mínimo de 0,30" é a única explicação que alguém vai receber para uma
+   * marca definitiva. Pôr isso em `error` desabilitaria justamente a linha que
+   * precisa de um clique.
+   */
+  aviso: string | null;
   /** Erro por música (ex.: "sem conexão") — a linha fica desabilitada. */
   error: string | null;
 }
@@ -104,6 +131,86 @@ export interface EnrichScanResult {
    * texto na tela.
    */
   sem_perguntar_ao_som: number;
+  /**
+   * V10 — quem chegou ao FIM da varredura ainda sem letra, em ids. É
+   * exatamente o que `transcreverMusicas` recebe: a regra de quem sobrou é UMA
+   * e mora no backend (DECISIONS #80), e por isso a lista vem pronta em vez de
+   * ser deduzida das propostas aqui. Música instrumental não entra.
+   */
+  sem_letra_no_fim: number[];
+  /**
+   * Segundos estimados para transcrever essas músicas NESTA máquina. Enquanto
+   * a máquina não transcreveu nada é número DECLARADO (a razão de referência
+   * do Rust), e por isso a copy diz "cerca de" (DECISIONS #106).
+   */
+  segundos_de_transcricao: number;
+}
+
+/**
+ * O que a etapa 5 (`transcrever_musicas`) devolve — as propostas vão para a
+ * MESMA revisão da varredura, inclusive a de marcar instrumental.
+ */
+export interface TranscricaoResultado {
+  propostas: EnrichProposal[];
+  /**
+   * Segundos de CPU por segundo de ÁUDIO medidos nesta máquina, quando houve o
+   * que medir. Fica no contrato porque é o backend que troca a estimativa
+   * declarada pela verdadeira; o frontend NÃO refaz a conta com ela — cópia da
+   * regra em TypeScript é a DECISIONS #80, que neste projeto já deixou o único
+   * botão do produto cinza.
+   */
+  razao_medida: number | null;
+}
+
+/**
+ * Progresso da etapa 5 (evento Tauri `transcricao:progresso`).
+ *
+ * `porcento_da_musica` existe porque UMA música leva minutos: uma barra que só
+ * anda entre arquivos fica parada tempo demais para parecer viva, e a v0.8.1
+ * já ensinou o preço de deixar a pessoa olhando para uma tela sem sinal de
+ * vida (DECISIONS #92).
+ */
+export interface TranscricaoProgresso {
+  done: number;
+  total: number;
+  /** Nome-base do arquivo em transcrição (vazio no evento inicial). */
+  atual: string;
+  porcento_da_musica: number;
+  /**
+   * Quanto falta da FILA inteira, pela velocidade MEDIDA. `null` enquanto
+   * nenhuma música terminou: antes disso não há o que medir, e número
+   * inventado é pior que número nenhum (DECISIONS #85 e #86).
+   */
+  segundos_restantes: number | null;
+  /** Mesma disciplina do `scan_id` do funil: evento alheio é descartado. */
+  scan_id: string;
+}
+
+/**
+ * O tamanho do trabalho que a varredura vai dar — o que `enrich_count`
+ * devolve desde a V10 (era um número).
+ *
+ * **A conta mora toda no Rust.** Havia um modelo de custo em TypeScript aqui
+ * (`SEGUNDOS_POR_MUSICA` e a contagem de candidatas), e ele divergiu duas
+ * vezes: uma zerou a contagem e deixou o único ponto de entrada do produto
+ * cinza (DECISIONS #80), a outra errou a etapa do som por 7x (DECISIONS #102).
+ * O frontend recebe o número pronto e só o formata.
+ */
+export interface Contagem {
+  /** Músicas que a varredura vai OLHAR — todas as disponíveis da pasta. */
+  total: number;
+  /** Destas, quantas não têm letra: as únicas que passam pelas etapas 3 e 4. */
+  sem_letra: number;
+  /** Segundos estimados da varredura inteira, com as etapas desta máquina. */
+  segundos_estimados: number;
+  /** As etapas que VÃO rodar, em pt-BR e na ordem do funil (DECISIONS #101). */
+  etapas: string[];
+  /**
+   * A etapa 5 pode ser oferecida nesta máquina (transcritor E modelo prontos)?
+   * É o que decide se a pergunta do fim oferece o trabalho ou o download —
+   * combinar dois estados de acessório é regra, e regra duplicada diverge.
+   */
+  transcricao_disponivel: boolean;
 }
 
 /**
@@ -150,10 +257,10 @@ export interface EnrichApply {
   current_artist: string | null;
   /**
    * Eco do `fonte` da proposta (V8/F18): é ele que decide a procedência
-   * gravada em `TXXX:LETRA_ORIGEM`. Letra do Vagalume fica marcada como tal;
-   * qualquer outra fonte LIMPA a marca — letra oficial nunca é transcrição
-   * (DECISIONS #54). Ausente, o backend não grava procedência nenhuma: nunca
-   * grava a errada.
+   * gravada em `TXXX:LETRA_ORIGEM`. Letra do `lyrics.ovh` e letra da etapa 5
+   * ficam marcadas como tais; qualquer outra fonte LIMPA a marca — letra
+   * oficial nunca é transcrição (DECISIONS #54). Ausente, o backend não grava
+   * procedência nenhuma: nunca grava a errada.
    */
   fonte: string | null;
   /**
@@ -166,6 +273,13 @@ export interface EnrichApply {
    * marcação de aplicar, e sempre desmarcada por padrão — está marcada.
    */
   substituir_letra?: boolean;
+  /**
+   * V10 — marca esta música como INSTRUMENTAL (eco do
+   * `EnrichProposal.marcar_instrumental`, confirmado por quem revisou). Só
+   * MARCA: desmarcar continua sendo exclusividade do editor, porque a marca é
+   * escolha humana e nenhuma rotina a desfaz sozinha (DECISIONS #71).
+   */
+  marcar_instrumental?: boolean;
 }
 
 /**
@@ -190,8 +304,11 @@ export interface EnrichApplyResult {
  * dizer ANTES de baixar ("o que vai baixar, quanto ocupa"), mais o estado.
  */
 export interface AcessorioInfo {
-  /** Identidade estável, e o que `acessorioBaixar` recebe. */
-  nome: "fpcalc";
+  /**
+   * Identidade estável, e o que `acessorioBaixar` recebe. Eram um só até a
+   * v0.9.0; a V10 acrescenta o transcritor e o modelo que ele consulta.
+   */
+  nome: "fpcalc" | "whisper-cli" | "modelo-de-transcricao";
   /**
    * Para que serve, em pt-BR e PRONTO PARA EXIBIR. Vem do backend de propósito:
    * quem cura não sabe o que é "impressão digital acústica", e a frase que
@@ -201,6 +318,20 @@ export interface AcessorioInfo {
   /** Nome do arquivo, igual no lançamento e no cache. */
   arquivo: string;
   tamanho_bytes: number;
+  /**
+   * Quanto o download deve levar, em segundos, numa conexão de REFERÊNCIA
+   * (V10 — 1 MB/s, deliberadamente conservadora). A dispensa do tempo valia
+   * para 5 MB; para 180 MB não vale — oferecer o download sem dizer se ele
+   * leva três minutos ou três horas não é oferecer escolha nenhuma. É número
+   * declarado, e por isso a copy diz "cerca de" (DECISIONS #106).
+   */
+  segundos_estimados: number;
+  /**
+   * É um PROGRAMA que o aplicativo executa (`true`) ou um DADO que ele só lê
+   * (`false`)? O modelo são 180 MB que ninguém executa, e "um programa de 2 MB
+   * e um arquivo de 181 MB" é outra conversa que "dois programas".
+   */
+  executavel: boolean;
   /**
    * - "ausente": estado normal de quem ainda não baixou;
    * - "pronto": conferido pelo SHA-256 — só aqui a etapa do som existe;
@@ -231,6 +362,13 @@ export interface AcessorioProgresso {
    * um estado, e o zero viraria uma barra parada em 0% (DECISIONS #86).
    */
   total: number | null;
+  /**
+   * Quanto ainda falta, em segundos, pela velocidade MEDIDA desta conexão
+   * (V10). `null` enquanto a amostra é curta demais para render número
+   * honesto: num download de 180 MB, um "faltam 0 segundos" que dura dez
+   * minutos é pior que nenhum número (DECISIONS #86 e #106).
+   */
+  segundos_restantes: number | null;
   /**
    * Download que emitiu o evento. A UI DESCARTA o que não for o seu — mesma
    * disciplina do `scan_id` do funil, e pelo mesmo motivo (M4).
@@ -280,9 +418,9 @@ export interface Backend {
     /**
      * Procedência da letra que está sendo gravada (V8/F18 — ALTO-4):
      * `null`/omitido limpa a marca quando a letra mudou (comportamento de
-     * sempre) e "vagalume" a registra. Sem isto, a letra aceita do Vagalume
-     * pelo editor ficava indistinguível de uma do LRCLIB — mesmo acervo,
-     * duas pilhas, dois arquivos diferentes no disco.
+     * sempre) e "lyrics.ovh" a registra. Sem isto, a letra aceita pelo editor
+     * ficava indistinguível de uma do LRCLIB — mesmo acervo, duas pilhas,
+     * dois arquivos diferentes no disco.
      */
     letraOrigem?: string | null,
   ): Promise<Song>;
@@ -292,30 +430,41 @@ export interface Backend {
    * `scanId` identifica esta varredura nos eventos de progresso e é a chave
    * do cancelamento (M4).
    *
-   * `vagalumeKey` é a chave GRATUITA da própria pessoa, guardada aqui no
-   * frontend como preferência (V8/F18). Vazia/`null` = a etapa do Vagalume é
-   * pulada em silêncio — não é erro, é uma etapa opcional.
+   * V10 — sem credencial nenhuma no payload (DECISIONS #110).
    */
-  enrichFolderScan(
-    folderPrefix: string,
-    scanId: string,
-    vagalumeKey: string | null,
-    /**
-     * O TRABALHO desta varredura (V9). Ausente = "completar", o barato: o
-     * padrão nunca é a varredura que lê o áudio de todas as músicas.
-     */
-    modo?: Modo,
-  ): Promise<EnrichScanResult>;
+  enrichFolderScan(folderPrefix: string, scanId: string): Promise<EnrichScanResult>;
   /**
-   * Quantas músicas o `enrichFolderScan` consultaria sob `folderPrefix` — a
-   * contagem que a seção de curadoria mostra ANTES de disparar (V8/F18).
+   * O tamanho do trabalho que a varredura de `folderPrefix` vai dar — o que a
+   * seção de curadoria mostra ANTES de disparar (V8/F18).
    *
    * Vem do backend, e não de um filtro em TypeScript, porque é a MESMA função
    * que a varredura usa: a cópia que existia aqui divergia da regra do Rust em
    * três casos e chegava a zerar a contagem, desabilitando o disparo e
-   * afirmando que a pasta estava completa antes de qualquer busca.
+   * afirmando que a pasta estava completa antes de qualquer busca. Desde a V10
+   * ela traz também a estimativa de TEMPO, pelo mesmo motivo.
+   *
+   * **Nenhum comando do funil pede credencial** (V10, DECISIONS #110): a etapa
+   * 4 passou a ser o `lyrics.ovh`, que não pede chave, e o Vagalume saiu. Há
+   * guarda no backend lendo o próprio fonte contra a volta de um parâmetro de
+   * credencial — não reintroduza "por compatibilidade".
    */
-  enrichCount(folderPrefix: string, modo?: Modo): Promise<number>;
+  enrichCount(folderPrefix: string): Promise<Contagem>;
+  /**
+   * A etapa 5 (V10): escreve a letra ouvindo o áudio das músicas pedidas.
+   *
+   * `songIds` é exatamente o `sem_letra_no_fim` que a varredura devolveu.
+   * Custa MINUTOS por música e horas por acervo, roda em segundo plano e é
+   * cancelável pelo MESMO `enrichCancelScan(scanId)` da varredura. Nada é
+   * gravado: o que volta são propostas para a mesma revisão.
+   */
+  transcreverMusicas(
+    songIds: number[],
+    scanId: string,
+  ): Promise<TranscricaoResultado>;
+  /** Assina `transcricao:progresso` — mesmo contrato dos outros progressos. */
+  onTranscricaoProgresso(
+    cb: (p: TranscricaoProgresso) => void,
+  ): Promise<() => void>;
   /**
    * O mesmo funil, para UMA música só — o "caso pontual" do editor (V8/F18).
    * Não emite progresso (é uma música) e devolve `null` quando nenhuma etapa
@@ -324,7 +473,6 @@ export interface Backend {
    */
   enrichSongScan(
     songId: number,
-    vagalumeKey: string | null,
     /**
      * Identifica esta busca para o cancelamento (B1). Sem id ela era
      * incancelável: offline, sete palpites de 10 s cada deixavam o editor em
@@ -473,32 +621,40 @@ function tauriBackend(): Backend {
         // para "não mexer" (Option<bool> = None).
         instrumental: instrumental ?? null,
         // null = "a letra mudou, limpe a marca" (comportamento de sempre);
-        // "vagalume" = grave a procedência (ALTO-4).
+        // "lyrics.ovh" = grave a procedência (ALTO-4).
         letraOrigem: letraOrigem ?? null,
       });
     },
-    async enrichFolderScan(folderPrefix, scanId, vagalumeKey, modo) {
+    async enrichFolderScan(folderPrefix, scanId) {
       const { invoke } = await import("@tauri-apps/api/core");
+      // V10 — o payload não leva credencial nenhuma (DECISIONS #110): nenhuma
+      // etapa do funil pede chave, e o backend recusa quem tentar mandar.
       return invoke<EnrichScanResult>("enrich_folder_scan", {
         folderPrefix,
         scanId,
-        // string vazia é "não tenho chave" tanto quanto null; o backend pula a
-        // etapa. Nunca vai para log — é a chave pessoal de quem está usando.
-        vagalumeKey: vagalumeKey || null,
-        // ausente vale "completar" no Rust (Modo::default): esquecer o campo
-        // nunca dispara a varredura cara por engano
-        modo: modo ?? null,
       });
     },
-    async enrichCount(folderPrefix, modo) {
+    async enrichCount(folderPrefix) {
       const { invoke } = await import("@tauri-apps/api/core");
-      return invoke<number>("enrich_count", { folderPrefix, modo: modo ?? null });
+      return invoke<Contagem>("enrich_count", { folderPrefix });
     },
-    async enrichSongScan(songId, vagalumeKey, scanId, title, artist) {
+    async transcreverMusicas(songIds, scanId) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<TranscricaoResultado>("transcrever_musicas", {
+        songIds,
+        scanId,
+      });
+    },
+    async onTranscricaoProgresso(cb) {
+      const { listen } = await import("@tauri-apps/api/event");
+      return listen<TranscricaoProgresso>("transcricao:progresso", (e) =>
+        cb(e.payload),
+      );
+    },
+    async enrichSongScan(songId, scanId, title, artist) {
       const { invoke } = await import("@tauri-apps/api/core");
       return invoke<EnrichProposal | null>("enrich_song_scan", {
         songId,
-        vagalumeKey: vagalumeKey || null,
         // com id, o "Cancelar busca" do editor para a rede de verdade (B1)
         scanId: scanId || null,
         // o que está DIGITADO vence a etiqueta do banco (ALTO-3a); vazio volta

@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { EnrichProposal } from "./api";
-import type { Modo } from "./types";
+
 import {
   ERRO_FPCALC,
   ERRO_FPCALC_NAO_EXECUTA,
@@ -47,11 +47,8 @@ async function varrer(
   backend: MockBackend,
   folderPrefix: string,
   scanId: string,
-  vagalumeKey: string | null = null,
-  modo?: Modo,
 ): Promise<EnrichProposal[]> {
-  return (await backend.enrichFolderScan(folderPrefix, scanId, vagalumeKey, modo))
-    .propostas;
+  return (await backend.enrichFolderScan(folderPrefix, scanId)).propostas;
 }
 
 // ---------------------------------------------------------------------------
@@ -367,27 +364,38 @@ describe("as regras chegam ao funil (V9)", () => {
     return songs.find((s) => s.file_path === "/musicas/teste/com_letra.mp3")!;
   }
 
-  // 1. candidataDoFunil — o caso caro da DECISIONS #89. Com a etiqueta
-  //    truncada julgada REAL, a música fica "completa" e some da curadoria
-  //    para sempre: ninguém nunca vai saber que ela está ali.
-  it("etiqueta truncada pelo ID3 devolve a música à contagem de candidatas", async () => {
-    const song = await comLetra();
+  // 1. is_placeholder — o caso caro da DECISIONS #89. V10: com o caminho
+  //    único TODA música disponível entra na varredura, então o que a
+  //    etiqueta truncada muda é a PROPOSTA — a etapa 1 volta a ter o que
+  //    preencher, em vez de a música sair da lista em silêncio.
+  it("etiqueta truncada pelo ID3 vale VAZIO, e a busca tem o que preencher", async () => {
+    await backend.addFolder("/musicas/teste");
+    const songs = await backend.listSongs();
+    // uma música SEM letra: é ela que passa pelas etapas de letra (V10 — o
+    // portão de completude virou o guarda dessas etapas, DECISIONS #102)
+    const song = songs.find((s) => s.title === "Instrumental Sem Letra")!;
     await backend.writeTags(
       song.id,
       "Coração Sertanejo",
       "04 Faixa 4 Artista Desconheci",
-      "letra qualquer",
+      null,
       null,
     );
-    expect(await backend.enrichCount("", "completar")).toBe(3);
+    const propostas = await varrer(backend, "", "s1");
+    const linha = propostas.find((p) => p.song_id === song.id)!;
+    // a etiqueta truncada não é etiqueta: o artista de verdade é proposto no
+    // lugar dela, em vez de a música passar por completa e sumir para sempre
+    expect(linha.proposed_artist).toBe("Artista Teste");
   });
 
   // ...e o contrário: um título REAL que a regra antiga engolia não pode
-  //    virar candidata por engano — "Pista" é título do repertório.
-  it("'Pista' é título real: a música com ele continua completa", async () => {
+  //    virar proposta por engano — "Pista" é título do repertório, e propor
+  //    trocá-lo pelo palpite do nome do arquivo apagaria a curadoria de alguém.
+  it("'Pista' é título real: a música com ele não vira proposta", async () => {
     const song = await comLetra();
     await backend.writeTags(song.id, "Pista", "Artista Teste", "letra qualquer", null);
-    expect(await backend.enrichCount("", "completar")).toBe(2);
+    const propostas = await varrer(backend, "", "s1");
+    expect(propostas.map((p) => p.song_id)).not.toContain(song.id);
   });
 
   // 2. discordaDoSom — variação de grafia não pode virar conflito. Seis dos
@@ -407,13 +415,13 @@ describe("as regras chegam ao funil (V9)", () => {
       artista: "Milionário y José Rico",
       confianca: "alta",
     });
-    const linhas = await varrer(backend, "", "s1", null, "conferencia");
+    const linhas = await varrer(backend, "", "s1");
     expect(linhas.find((p) => p.song_id === song.id)?.conflito ?? null).toBeNull();
   });
 
   // ...e a contenção curta, que o mock absolvia: "Sol" dentro de "Sol
-  //    Nascente" são músicas diferentes, e engolir isso é o modo de falha
-  //    que o modo de conferência existe para pegar.
+  //    Nascente" são músicas diferentes, e engolir isso é o modo de falha que
+  //    a etapa do som existe para pegar.
   it("nome curto contido num maior CONTINUA conflito", async () => {
     const song = await comLetra();
     await backend.writeTags(song.id, "Sol", "Artista Teste", null, null);
@@ -423,7 +431,7 @@ describe("as regras chegam ao funil (V9)", () => {
       artista: "Artista Teste",
       confianca: "alta",
     });
-    const linhas = await varrer(backend, "", "s1", null, "conferencia");
+    const linhas = await varrer(backend, "", "s1");
     expect(linhas.find((p) => p.song_id === song.id)?.conflito).toEqual({
       titulo: "Sol Nascente",
       artista: "Artista Teste",
@@ -450,7 +458,7 @@ describe("as regras chegam ao funil (V9)", () => {
       artista: "Luiz Gonzaga",
       confianca: "alta",
     });
-    const linhas = await varrer(backend, "", "s1", null, "conferencia");
+    const linhas = await varrer(backend, "", "s1");
     const linha = linhas.find((p) => p.song_id === semTags.id)!;
     // etiqueta de GENTE: o som a CONTRADIZ, e isso é conflito. Comparando
     // normalizado ela passava por invenção do indexador, e o som sobrescrevia
@@ -472,7 +480,7 @@ describe("as regras chegam ao funil (V9)", () => {
       artista: "Luiz Gonzaga",
       confianca: "alta",
     });
-    const linhas = await varrer(backend, "", "s1", null, "conferencia");
+    const linhas = await varrer(backend, "", "s1");
     const linha = linhas.find((p) => p.song_id === semTags.id)!;
     expect(linha.conflito).toBeNull();
     expect(linha.proposed_title).toBe("Asa Branca");
@@ -483,7 +491,7 @@ describe("as regras chegam ao funil (V9)", () => {
   it("trocar um placeholder por outro não vira proposta", async () => {
     const song = await comLetra();
     await backend.writeTags(song.id, "AudioTrack 17", "faixa 3 mp3", null, null);
-    const linhas = await varrer(backend, "", "s1", null, "completar");
+    const linhas = await varrer(backend, "", "s1");
     const linha = linhas.find((p) => p.song_id === song.id);
     // ela é candidata (as duas etiquetas valem vazio), mas o artista proposto
     // não pode ser o lixo que já estava lá
@@ -517,7 +525,7 @@ describe("contrato mock × Rust — o retorno da varredura (QA A2)", () => {
 
   it("devolve um OBJETO, não a lista — e zero é o caso normal", async () => {
     await backend.addFolder("/musicas/teste");
-    const r = await backend.enrichFolderScan("", "s1", null, "completar");
+    const r = await backend.enrichFolderScan("", "s1");
     expect(Array.isArray(r)).toBe(false);
     expect(Array.isArray(r.propostas)).toBe(true);
     expect(r.sem_perguntar_ao_som).toBe(0);
@@ -527,7 +535,7 @@ describe("contrato mock × Rust — o retorno da varredura (QA A2)", () => {
     await backend.addFolder("/musicas/teste");
     const caminhos = (await backend.listSongs()).map((s) => s.file_path);
     backend._ensinarFalhaDoSom(caminhos[0], ERRO_FPCALC_NAO_EXECUTA);
-    const r = await backend.enrichFolderScan("", "s1", null, "completar");
+    const r = await backend.enrichFolderScan("", "s1");
     expect(r.sem_perguntar_ao_som).toBe(0);
   });
 
@@ -536,9 +544,9 @@ describe("contrato mock × Rust — o retorno da varredura (QA A2)", () => {
   it("veredito sobre a máquina desliga a etapa e conta as que sobraram", async () => {
     const caminhos = await pastaComSom();
     backend._ensinarFalhaDoSom(caminhos[0], ERRO_FPCALC_NAO_EXECUTA);
-    const r = await backend.enrichFolderScan("", "s1", null, "conferencia");
-    // 3 candidatas na conferência: a 1ª falhou (linha de erro), as outras 2
-    // não foram perguntadas
+    const r = await backend.enrichFolderScan("", "s1");
+    // 3 candidatas (V10 — a varredura olha todas): a 1ª falhou (linha de
+    // erro), as outras 2 não chegaram a ser perguntadas
     expect(r.sem_perguntar_ao_som).toBe(2);
     const linha = r.propostas.find((p) => p.file_path === caminhos[0])!;
     expect(linha.error).toBe(ERRO_FPCALC_NAO_EXECUTA);
@@ -558,7 +566,7 @@ describe("contrato mock × Rust — o retorno da varredura (QA A2)", () => {
       artista: "Luiz Gonzaga",
       confianca: "alta",
     });
-    const r = await backend.enrichFolderScan("", "s1", null, "conferencia");
+    const r = await backend.enrichFolderScan("", "s1");
     expect(r.sem_perguntar_ao_som).toBe(0);
     // e a música seguinte FOI perguntada: o som respondeu por ela
     const seguinte = r.propostas.find((p) => p.file_path === caminhos[2])!;
@@ -572,8 +580,8 @@ describe("contrato mock × Rust — o retorno da varredura (QA A2)", () => {
   it("a música que disparou o veredito não é contada duas vezes", async () => {
     const caminhos = await pastaComSom();
     backend._ensinarFalhaDoSom(caminhos[0], ERRO_FPCALC_NAO_EXECUTA);
-    const candidatas = await backend.enrichCount("", "conferencia");
-    const r = await backend.enrichFolderScan("", "s1", null, "conferencia");
+    const { total: candidatas } = await backend.enrichCount("");
+    const r = await backend.enrichFolderScan("", "s1");
     // a régua é a POPULAÇÃO da varredura, não o tamanho da lista de propostas:
     // proposta que não muda nada é descartada antes de chegar à UI, e usá-la
     // de referência mediria outra coisa
@@ -585,8 +593,8 @@ describe("contrato mock × Rust — o retorno da varredura (QA A2)", () => {
   it("a conta não vaza de uma varredura para a seguinte", async () => {
     const caminhos = await pastaComSom();
     backend._ensinarFalhaDoSom(caminhos[0], ERRO_FPCALC_NAO_EXECUTA);
-    const primeira = await backend.enrichFolderScan("", "s1", null, "conferencia");
-    const segunda = await backend.enrichFolderScan("", "s2", null, "conferencia");
+    const primeira = await backend.enrichFolderScan("", "s1");
+    const segunda = await backend.enrichFolderScan("", "s2");
     expect(segunda.sem_perguntar_ao_som).toBe(primeira.sem_perguntar_ao_som);
   });
 });
