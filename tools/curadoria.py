@@ -424,14 +424,23 @@ def duracao_confirmada(path, info: dict, medida: float | None = None,
 
 
 def rotulo_letra(info: dict) -> str:
-    """Coluna "letra" do relatório: NÃO, INSTRUMENTAL, SIM, SIM (transcrição)
-    ou SIM (Vagalume) — o selo de procedência (TXXX:LETRA_ORIGEM).
+    """Coluna "letra" do relatório: NÃO, INSTRUMENTAL, SIM, SIM (transcrição),
+    SIM (Vagalume) ou SIM (lyrics.ovh) — o selo de procedência
+    (TXXX:LETRA_ORIGEM).
 
     "(transcrição)" continua EXCLUSIVO da letra saída do áudio (V5/F14):
     é o rótulo que o curador aprendeu a ler como "isto pode estar errado".
-    "(Vagalume)" é letra OFICIAL, mas de uma fonte que não pôde ser
-    confirmada pela duração (V6.1). Origem desconhecida (arquivo gravado
-    por uma versão futura) cai no SIM genérico, nunca em transcrição.
+    "(Vagalume)" e "(lyrics.ovh)" são letra OFICIAL, mas de fontes que a
+    duração não pôde confirmar (V6.1, V10) — e o lyrics.ovh não devolve nem
+    o nome da música, então o casamento dele nunca foi conferido por
+    ninguém. Origem desconhecida (arquivo gravado por uma versão futura)
+    cai no SIM genérico, nunca em transcrição.
+
+    Os rótulos são escritos aqui, e não lidos do `ORIGEM_ROTULOS` do
+    embed_lyrics, de propósito: lá "transcrição automática" é uma frase de
+    ficha; aqui "(transcrição)" é uma coluna estreita que o curador aprendeu
+    a reconhecer. Unificar os dois trocaria um vocabulário estabelecido por
+    economia de três linhas.
 
     V8/F17: INSTRUMENTAL toma o lugar do NÃO — informação, não cobrança,
     igualzinho ao que o player faz com o selo cinza "Sem letra". A letra
@@ -446,6 +455,8 @@ def rotulo_letra(info: dict) -> str:
         return "SIM (transcrição)"
     if origem == el.ORIGEM_VAGALUME:
         return "SIM (Vagalume)"
+    if origem == el.ORIGEM_LYRICS_OVH:
+        return "SIM (lyrics.ovh)"
     return "SIM"
 
 

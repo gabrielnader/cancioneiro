@@ -1023,6 +1023,17 @@ class TestRelatorio:
         assert curadoria.rotulo_letra(
             info(letra="x", origem=el.ORIGEM_TRANSCRICAO,
                  instrumental=True)) == "SIM (transcrição)"
+        # V10: fonte oficial que a duração não confirma, como o Vagalume — e,
+        # diferente dele, ela não devolve o nome da música, então o casamento
+        # nunca foi conferido. Quem for auditar o acervo depois precisa
+        # distinguir isso de uma letra confirmada, e o SIM genérico não conta.
+        assert curadoria.rotulo_letra(
+            info(letra="x", origem=el.ORIGEM_LYRICS_OVH)) == "SIM (lyrics.ovh)"
+        # origem que este código não conhece nunca vira transcrição: o rótulo
+        # "(transcrição)" é o que o curador aprendeu a ler como "pode estar
+        # errado", e emprestá-lo a um valor desconhecido seria mentir
+        assert curadoria.rotulo_letra(
+            info(letra="x", origem="fonte-de-uma-versao-futura")) == "SIM"
 
     def test_resumo_conta_instrumentais(self, acervo, base_mp3, capsys):
         outro = acervo / "com voz.mp3"
