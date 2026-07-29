@@ -691,6 +691,10 @@ describe("as duas vozes de uma linha de conflito", () => {
     const linha = (over: Partial<Parameters<typeof rotuloDaMarcacao>[0]> = {}) =>
       rotuloDaMarcacao({
         current_title: "sem_tags",
+        current_artist: null,
+        // por padrão a linha NÃO muda nome nenhum: proposto == atual
+        proposed_title: "sem_tags",
+        proposed_artist: null,
         conflito: null,
         marcar_instrumental: false,
         lyrics: null,
@@ -722,6 +726,100 @@ describe("as duas vozes de uma linha de conflito", () => {
       expect(linha({ conflito: { titulo: "t" } })).toBe(
         "Aceitar o que o som diz: sem_tags",
       );
+    });
+
+    // QA A2 — o achado de acessibilidade. A etapa 5 do Rust parte da mesma
+    // `proposta_baixa` da etapa 1, então a linha "sem voz" TAMBÉM grava título
+    // e artista. Quem enxerga vê o "atual → proposto" ali do lado; quem navega
+    // pela lista de campos de formulário do leitor de tela recebia só
+    // "Marcar como instrumental" — metade do que o clique faz, e a metade que
+    // reescreve a etiqueta do arquivo de alguém ficava de fora.
+    describe("o rótulo anuncia tudo que a linha grava", () => {
+      const comNome = {
+        current_title: "AudioTrack 03",
+        current_artist: null,
+        proposed_title: "Oh! Chuva",
+        proposed_artist: "Falamansa",
+      };
+
+      it("instrumental que também preenche nome diz as duas coisas", () => {
+        expect(
+          linha({ ...comNome, marcar_instrumental: true, fonte: FONTE_TRANSCRICAO }),
+        ).toBe(
+          "Marcar como instrumental e gravar o nome Oh! Chuva — Falamansa:" +
+            " AudioTrack 03",
+        );
+      });
+
+      it("a letra da máquina que também preenche nome diz as duas coisas", () => {
+        expect(
+          linha({ ...comNome, lyrics: "chove chuva", fonte: FONTE_TRANSCRICAO }),
+        ).toBe(
+          "Aplicar a letra escrita ouvindo o áudio e gravar o nome" +
+            " Oh! Chuva — Falamansa: AudioTrack 03",
+        );
+      });
+
+      it("só o artista mudando, o nome sai inteiro — é ele que vai ao arquivo", () => {
+        expect(
+          linha({
+            current_title: "Meninos",
+            current_artist: null,
+            proposed_title: "Meninos",
+            proposed_artist: "Xangai",
+            marcar_instrumental: true,
+            fonte: FONTE_TRANSCRICAO,
+          }),
+        ).toBe("Marcar como instrumental e gravar o nome Meninos — Xangai: Meninos");
+      });
+
+      // O rótulo é DERIVADO da proposta, não uma frase fixa: se a etapa 5
+      // parar de propor nome (o backend está decidindo), ele volta sozinho a
+      // dizer só o que sobrou.
+      it("sem nome novo, o rótulo não inventa uma gravação que não acontece", () => {
+        expect(
+          linha({
+            current_title: "Baião de Quatro Toques",
+            current_artist: "Zé Dantas",
+            proposed_title: "Baião de Quatro Toques",
+            proposed_artist: "Zé Dantas",
+            marcar_instrumental: true,
+            fonte: FONTE_TRANSCRICAO,
+          }),
+        ).toBe("Marcar como instrumental: Baião de Quatro Toques");
+      });
+
+      // Espaço das pontas não é mudança: anunciar "gravar o nome" para uma
+      // regravação idêntica seria ruído em toda linha da etapa 5.
+      it("diferença só de espaço nas pontas não é nome novo", () => {
+        expect(
+          linha({
+            current_title: "Asa Branca",
+            current_artist: "  Luiz Gonzaga  ",
+            proposed_title: " Asa Branca ",
+            proposed_artist: "Luiz Gonzaga",
+            marcar_instrumental: true,
+            fonte: FONTE_TRANSCRICAO,
+          }),
+        ).toBe("Marcar como instrumental: Asa Branca");
+      });
+
+      // A linha comum NÃO ganha a enumeração: "Aplicar proposta" não promete
+      // uma lista de efeitos, então não omite nenhum — e o "atual → proposto"
+      // da linha está no mesmo item de lista, ao alcance do leitor de tela.
+      // Enumerar aqui só faria o rótulo de 72 linhas iguais ficar três vezes
+      // mais longo.
+      it("a linha comum continua com o rótulo genérico", () => {
+        expect(linha({ ...comNome })).toBe("Aplicar proposta: AudioTrack 03");
+      });
+
+      // O conflito não propõe: aceitar grava o que o SOM disse, e a linha já
+      // nomeia os dois lados. O rótulo dela continua sendo o dela.
+      it("o conflito não entra nesta conta", () => {
+        expect(linha({ ...comNome, conflito: { titulo: "t" } })).toBe(
+          "Aceitar o que o som diz: AudioTrack 03",
+        );
+      });
     });
   });
 
@@ -826,10 +924,10 @@ describe("as duas vozes de uma linha de conflito", () => {
 // ---------------------------------------------------------------------------
 
 describe("a pergunta do fim (PRD V10)", () => {
-  it("é a frase do PRD, com o número e o tempo desta máquina", () => {
+  it("é a frase do PRD, com o número e o tempo", () => {
     expect(textoDaOfertaDeTranscricao(47, 10_800)).toBe(
       "Sobraram 47 músicas sem letra. Escrever a letra ouvindo o áudio leva" +
-        " cerca de 3 horas neste computador.",
+        " cerca de 3 horas — pode levar mais nesta máquina.",
     );
   });
 
@@ -841,8 +939,28 @@ describe("a pergunta do fim (PRD V10)", () => {
   // reusado sem olhar.
   it("tempo curto não vira 'cerca de menos de'", () => {
     const t = textoDaOfertaDeTranscricao(1, 30);
-    expect(t).toContain("leva menos de 1 minuto neste computador");
+    expect(t).toContain("leva menos de 1 minuto");
     expect(t).not.toContain("cerca de menos");
+  });
+
+  /*
+    QA A1 — o número é DECLARADO, e a frase dizia "neste computador".
+
+    A DECISIONS #106 separa as duas coisas por nome: `RAZAO_DE_REFERENCIA` é um
+    palpite de fábrica (1,0), e a razão MEDIDA é outra grandeza. Enquanto o que
+    chega à tela é o palpite, "neste computador" afirma uma medição que não
+    houve — e o erro tem sinal: o `whisper-cli` do macOS passou a sair sem
+    Metal e sem Accelerate, então o palpite é OTIMISTA. Prometer menos do que
+    leva é a DECISIONS #85, e prometer mais para quem vai esperar horas é o
+    caminho de fechar o programa no meio achando que travou.
+  */
+  it("não afirma uma medição que não houve", () => {
+    for (const segundos of [30, 240, 10_800]) {
+      const t = textoDaOfertaDeTranscricao(47, segundos);
+      expect(t, t).not.toContain("neste computador");
+      // e a estimativa se declara como piso, não como promessa
+      expect(t, t).toContain("pode levar mais nesta máquina");
+    }
   });
 
   it("o botão diz que começa agora, e a pergunta não vira parágrafo", () => {

@@ -1677,11 +1677,14 @@ test.describe("V10 — a etapa que resolve (F18 fase 3)", () => {
     await expect(dialog.getByText("via transcrição do áudio")).toBeVisible();
 
     // aplicar grava a letra, e o painel avisa que ela é automática (V5/F14).
-    // O rótulo da caixa diz o que ELA decide: esta música tem duas linhas na
-    // revisão — o nome que a etapa 1 achou e a letra que a etapa 5 escreveu.
+    // O rótulo da caixa diz TUDO que ELA decide: esta música tem duas linhas
+    // na revisão — o nome que a etapa 1 achou e a letra que a etapa 5
+    // escreveu —, e a linha da etapa 5 grava as duas coisas, porque no Rust
+    // ela parte da MESMA `proposta_baixa` da etapa 1 (QA A2). O nome aqui sai
+    // "sem tags" porque a fixture se chama `sem_tags.mp3`.
     await dialog
       .getByRole("checkbox", {
-        name: "Aplicar a letra escrita ouvindo o áudio: sem_tags",
+        name: "Aplicar a letra escrita ouvindo o áudio e gravar o nome sem tags: sem_tags",
       })
       .check();
     await dialog.getByRole("button", { name: /Aplicar selecionadas/ }).click();

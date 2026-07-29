@@ -723,6 +723,44 @@ function placeholderFaixa(chave: string): boolean {
 }
 
 /**
+ * Os rótulos de COLETÂNEA — porte do `ROTULOS_DE_COLETANEA` do Rust
+ * (DECISIONS #105). Faltavam inteiros aqui: o mock não tinha regra nenhuma
+ * para eles, então a suíte e o E2E nunca exercitaram a decisão 105 no lado
+ * TypeScript. É a mesma família de defeito do QA A2 — o mock certificando um
+ * contrato diferente do backend —, só que por OMISSÃO.
+ *
+ * O que limita a lista é a lição da DECISIONS #89: só entram rótulos que
+ * NENHUMA canção usa como nome.
+ */
+const ROTULOS_DE_COLETANEA = new Set([
+  "various artists", "various artist", "various",
+  "varios artistas", "varias artistas",
+  "varios interpretes", "varias interpretes",
+  "artistas variados", "artistas diversos", "interpretes diversos",
+  "varios", "varias", "diversos",
+  "v a", "compilation", "compilacao", "coletanea", "coletaneas",
+]);
+
+/**
+ * A abreviação escrita SEM acento. "VA" é coletânea; "Vá" é o verbo, e a
+ * normalização tira o acento — as duas chegariam à mesma chave. Duas letras
+ * não dão margem a mais nada, então a única prova disponível é o acento do
+ * texto ORIGINAL.
+ */
+const ROTULOS_DE_COLETANEA_SEM_ACENTO = new Set(["va"]);
+
+/** True quando o texto original traz algum diacrítico (porte do `tem_acento`). */
+function temAcento(texto: string): boolean {
+  return normalize(texto) !== texto.toLowerCase();
+}
+
+/** True quando o texto é o rótulo de uma COLETÂNEA, e não um nome. */
+function eRotuloDeColetanea(chave: string, bruto: string): boolean {
+  if (ROTULOS_DE_COLETANEA.has(chave)) return true;
+  return ROTULOS_DE_COLETANEA_SEM_ACENTO.has(chave) && !temAcento(bruto);
+}
+
+/**
  * Porte COMPLETO do `enrich::is_placeholder` (que por sua vez porta o
  * `eh_placeholder` do `tools/curadoria.py`). Exportado porque quatro regras
  * da V9 dependem dele e porque o contrato com o Rust é testado caso a caso
@@ -732,6 +770,7 @@ export function isPlaceholder(texto: string): boolean {
   const chave = chaveDeTag(texto);
   if (chave === "" || soDigitos(chave)) return true;
   if (PLACEHOLDERS_EXATOS.has(chave)) return true;
+  if (eRotuloDeColetanea(chave, texto)) return true;
   if (placeholderFaixa(chave)) return true;
   if (PLACEHOLDERS_TRECHO.some((m) => chave.includes(m))) return true;
   // Só números e palavras de maquinário E com marca de ripador junto: não
@@ -1262,6 +1301,62 @@ export function createMockBackend(): MockBackend {
     return tagReal(digitado ?? song.title);
   }
 
+  /**
+   * A PROPOSTA BAIXA — porte do `enrich::proposta_baixa` do Rust.
+   *
+   * Palpite da etapa 1: tag REAL vence o nome do arquivo (nunca apaga), e a
+   * tag placeholder vale VAZIO, então o palpite entra no lugar dela.
+   *
+   * Mora aqui fora, e não dentro do `passarPeloFunil`, porque o Rust também a
+   * tem em um lugar só: a etapa 5 parte DELA (`proposta_da_transcricao` chama
+   * `proposta_baixa`). Enquanto era uma função aninhada, a etapa 5 do mock
+   * montava a proposta à mão e devolvia `proposed_* = atual`, sempre — um
+   * contrato que o backend não cumpre, e o terceiro do mesmo tipo (QA A2).
+   */
+  function propostaBaixa(
+    song: SongRecord,
+    digitado: { title?: string | null; artist?: string | null } | undefined,
+    error: string | null,
+  ): EnrichProposal {
+    const artistaTag = tagReal(digitado?.artist ?? song.artist);
+    const bruto = nomeArquivo(song).replace(/\.[^.]+$/, "");
+    const stem = bruto.replace(/_/g, " ").replace(/\s+/g, " ").trim();
+    const divisor = stem.indexOf(" - ");
+    const [guessArtist, guessTitle] =
+      divisor > 0
+        ? [stem.slice(0, divisor).trim(), stem.slice(divisor + 3).trim()]
+        : [null, stem];
+    // Um título que é o PRÓPRIO nome do arquivo não é etiqueta de ninguém:
+    // foi o indexador que o copiou do disco quando o MP3 não tinha TIT2
+    // (mesma noção do arquivoParaBusca daqui de cima). Tratá-lo como tag
+    // real faria a etapa 1 propor exatamente o que já está lá — e é só por
+    // isso que uma música sem tag nenhuma tem o que receber aqui.
+    const tituloDeTag = tituloEscrito(song, digitado?.title);
+    return {
+      song_id: song.id,
+      file_path: song.file_path,
+      current_title: song.title,
+      current_artist: song.artist,
+      // CRÍTICO-1: a revisão precisa saber que existe letra ali, e de que tipo
+      has_lyrics: song.has_lyrics,
+      letra_origem: song.letra_origem ?? null,
+      proposed_title: tituloDeTag || guessTitle || song.title,
+      proposed_artist: artistaTag || guessArtist,
+      lyrics: null,
+      confidence: "baixa",
+      fonte: error !== null ? FONTE_ERRO : FONTE_ARQUIVO,
+      conflito: null,
+      // calculado num lugar só, na saída do funil (como no Rust)
+      substitui_nome_escrito: false,
+      // V10 — a varredura nunca marca instrumental nem extrai refrão: as
+      // duas coisas saem da etapa 5, que é outro comando.
+      marcar_instrumental: false,
+      refrao: null,
+      aviso: null,
+      error,
+    };
+  }
+
   function passarPeloFunil(
     song: SongRecord,
     digitado: { title?: string | null; artist?: string | null } | undefined,
@@ -1282,35 +1377,7 @@ export function createMockBackend(): MockBackend {
 
     /** Palpite da etapa 1: tag REAL vence o nome do arquivo (nunca apaga). */
     function propostaDoArquivo(error: string | null): EnrichProposal {
-      const bruto = nomeArquivo(song).replace(/\.[^.]+$/, "");
-      const stem = bruto.replace(/_/g, " ").replace(/\s+/g, " ").trim();
-      const divisor = stem.indexOf(" - ");
-      const [guessArtist, guessTitle] =
-        divisor > 0
-          ? [stem.slice(0, divisor).trim(), stem.slice(divisor + 3).trim()]
-          : [null, stem];
-      // Um título que é o PRÓPRIO nome do arquivo não é etiqueta de ninguém:
-      // foi o indexador que o copiou do disco quando o MP3 não tinha TIT2
-      // (mesma noção do arquivoParaBusca daqui de cima). Tratá-lo como tag
-      // real faria a etapa 1 propor exatamente o que já está lá — e é só por
-      // isso que uma música sem tag nenhuma tem o que receber aqui.
-      const tituloDeTag = tituloEscrito(song, digitado?.title);
-      return {
-        ...base,
-        proposed_title: tituloDeTag || guessTitle || song.title,
-        proposed_artist: artistaTag || guessArtist,
-        lyrics: null,
-        confidence: "baixa",
-        fonte: error !== null ? FONTE_ERRO : FONTE_ARQUIVO,
-        conflito: null,
-        substitui_nome_escrito: false,
-        // V10 — a varredura nunca marca instrumental nem extrai refrão: as
-        // duas coisas saem da etapa 5, que é outro comando.
-        marcar_instrumental: false,
-        refrao: null,
-        aviso: null,
-        error,
-      };
+      return propostaBaixa(song, digitado, error);
     }
 
     // arquivo sumido do disco: reporta sem gastar "rede"
@@ -1495,31 +1562,24 @@ export function createMockBackend(): MockBackend {
    * O desfecho da etapa 5 para UMA música, como proposta (porte do
    * `enrich::proposta_da_transcricao`).
    *
-   * Note o que NUNCA muda aqui: `proposed_title` e `proposed_artist` são o que
-   * já está no arquivo. A transcrição não identifica música nenhuma, então não
-   * há nome para propor — e portanto não há como ela sobrescrever etiqueta
-   * real, em confiança nenhuma. É garantia de construção, não regra a lembrar
-   * (DECISIONS #103).
+   * Ela parte da MESMA `propostaBaixa` da etapa 1 — é o que o Rust faz —, e
+   * por isso a linha da etapa 5 **carrega uma proposta de NOME**: quando a
+   * etiqueta é placeholder ("AudioTrack 03" vale campo vazio, DECISIONS #65),
+   * o palpite do nome do arquivo entra no lugar dela. Etiqueta REAL continua
+   * intocada, e é daí que sai o `substitui_nome_escrito: false`.
+   *
+   * Aqui morava a afirmação contrária ("`proposed_*` são o que já está no
+   * arquivo… garantia de construção"). Ela era falsa desde sempre, e o QA a
+   * mediu rodando o Rust: `AudioTrack 03` / None saía como `Oh! Chuva` /
+   * `Falamansa`. Quem depende disso é o rótulo acessível da linha — ver
+   * `curadoria.rotuloDaMarcacao`.
    */
   function propostaDaTranscricao(song: SongRecord): EnrichProposal {
+    // `error: null` porque o palpite é o mesmo com ou sem desfecho; os ramos
+    // abaixo trocam a `fonte` para `erro` junto com a mensagem, como no Rust.
     const base: EnrichProposal = {
-      song_id: song.id,
-      file_path: song.file_path,
-      current_title: song.title,
-      current_artist: song.artist,
-      proposed_title: song.title,
-      proposed_artist: song.artist,
-      lyrics: null,
-      has_lyrics: song.has_lyrics,
-      letra_origem: song.letra_origem ?? null,
-      confidence: "baixa",
+      ...propostaBaixa(song, undefined, null),
       fonte: FONTE_ERRO,
-      conflito: null,
-      substitui_nome_escrito: false,
-      marcar_instrumental: false,
-      refrao: null,
-      aviso: null,
-      error: null,
     };
     // A etapa 5 NÃO desfaz trabalho humano: marca de instrumental e letra
     // existente são escolha de gente (DECISIONS #71 e #79), e as horas de CPU

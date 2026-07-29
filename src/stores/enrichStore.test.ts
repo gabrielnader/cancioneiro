@@ -76,6 +76,9 @@ describe("enrichStore (V5 — F13)", () => {
       scanInFlight: false,
       semLetraNoFim: [],
       segundosDeTranscricao: 0,
+      // a medição é da MÁQUINA e sobrevive ao `close()` de propósito (QA A1):
+      // aqui ela precisa ser zerada à mão, ou um teste mede o vizinho
+      razaoMedida: null,
       transcricao: { disponivel: false, download: null },
       transcricaoProgress: null,
       transcricaoDispensada: false,
@@ -904,6 +907,70 @@ describe("enrichStore (V5 — F13)", () => {
       expect(
         useEnrichStore.getState().proposals.map((p) => p.song_id),
       ).toEqual([1, 10]);
+    });
+
+    /*
+      QA A1 — a razão MEDIDA era destruída na chegada.
+
+      O `startTranscricao` fazia `const { propostas } = ...` e o outro campo do
+      contrato caía no chão. A DECISIONS #106 promete que "a primeira
+      transcrição desta máquina devolve a razão real, e é ela que passa a
+      valer" — e o único jeito de passar a valer é ela sobreviver ao retorno.
+
+      A conta continua sendo do Rust (DECISIONS #106 e #80): a tela não
+      multiplica nada com este número. Ela o GUARDA, para poder devolvê-lo
+      quando o backend publicar por onde recebê-lo. Guardar é a metade que dá
+      para fazer sem inventar contrato — e inventar contrato aqui é
+      exatamente o defeito A2 desta mesma rodada.
+    */
+    it("a razão medida sobrevive ao retorno da etapa 5", async () => {
+      setBackendForTests(backendComTranscricao());
+      await useEnrichStore.getState().startScan("", {
+        disponivel: true,
+        download: null,
+      });
+      expect(useEnrichStore.getState().razaoMedida).toBeNull();
+
+      await useEnrichStore.getState().startTranscricao();
+
+      expect(useEnrichStore.getState().razaoMedida).toBe(1.2);
+    });
+
+    // Fila que não mediu nada (só erros, ou cancelada antes da primeira
+    // música) devolve `null`, e `null` não pode virar zero: "0 vezes o áudio"
+    // é a estimativa de que a transcrição é instantânea.
+    it("fila sem medição nenhuma não inventa razão", async () => {
+      setBackendForTests(
+        backendComTranscricao({
+          transcreverMusicas: vi.fn(async () => ({
+            propostas: [],
+            razao_medida: null,
+          })),
+        }),
+      );
+      await useEnrichStore.getState().startScan("", {
+        disponivel: true,
+        download: null,
+      });
+      await useEnrichStore.getState().startTranscricao();
+
+      expect(useEnrichStore.getState().razaoMedida).toBeNull();
+    });
+
+    // A razão é da MÁQUINA, não da revisão: fechar a revisão joga fora as
+    // propostas, e jogar fora a medição junto obrigaria a próxima varredura a
+    // medir tudo de novo.
+    it("fechar a revisão não apaga a medição da máquina", async () => {
+      setBackendForTests(backendComTranscricao());
+      await useEnrichStore.getState().startScan("", {
+        disponivel: true,
+        download: null,
+      });
+      await useEnrichStore.getState().startTranscricao();
+      useEnrichStore.getState().close();
+
+      expect(useEnrichStore.getState().proposals).toEqual([]);
+      expect(useEnrichStore.getState().razaoMedida).toBe(1.2);
     });
 
     it("o progresso do evento chega ao store, e o de outra fila é descartado", async () => {

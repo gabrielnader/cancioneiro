@@ -1683,9 +1683,10 @@ describe("EnrichReview (V5 — F13)", () => {
 
     it("marcar instrumental nunca chega marcado, nem entra no 'Marcar todas'", () => {
       renderReview([SEM_VOZ, VAZIO]);
-      // o rótulo diz o que a linha decide, e não "aplicar proposta"
+      // o rótulo diz TUDO que a linha decide, e não "aplicar proposta": esta
+      // proposta também traz nome, e o clique grava os dois (QA A2)
       const caixa = screen.getByRole("checkbox", {
-        name: "Marcar como instrumental: faixa 1",
+        name: "Marcar como instrumental e gravar o nome Faixa Um — Artista Um: faixa 1",
       });
       expect(caixa).not.toBeChecked();
       fireEvent.click(screen.getByRole("button", { name: "Marcar todas" }));
@@ -1800,7 +1801,38 @@ describe("EnrichReview (V5 — F13)", () => {
     it("o aviso não desabilita a linha", () => {
       renderReview([SEM_VOZ]);
       expect(
-        screen.getByRole("checkbox", { name: "Marcar como instrumental: Chorinho" }),
+        screen.getByRole("checkbox", {
+          name:
+            "Marcar como instrumental e gravar o nome Chorinho — Artista Um: Chorinho",
+        }),
+      ).toBeEnabled();
+    });
+
+    // QA A2 — o caso medido rodando o Rust: BANCO "AudioTrack 03" / sem
+    // artista, PROPOSTO "Oh! Chuva" / "Falamansa", marcar_instrumental=true.
+    // Quem enxerga vê o "atual → proposto" na linha; quem chega pela caixa
+    // recebia só "Marcar como instrumental" e decidia sobre metade do clique.
+    it("a caixa da etapa 5 anuncia o nome que ela também grava", () => {
+      renderReview([
+        proposal({
+          song_id: 42,
+          current_title: "AudioTrack 03",
+          current_artist: null,
+          proposed_title: "Oh! Chuva",
+          proposed_artist: "Falamansa",
+          lyrics: null,
+          confidence: "media",
+          fonte: FONTE_TRANSCRICAO,
+          marcar_instrumental: true,
+          aviso: "o áudio foi ouvido inteiro e não há voz nenhuma nele",
+        }),
+      ]);
+      expect(
+        screen.getByRole("checkbox", {
+          name:
+            "Marcar como instrumental e gravar o nome Oh! Chuva — Falamansa:" +
+            " AudioTrack 03",
+        }),
       ).toBeEnabled();
     });
 
@@ -1811,7 +1843,10 @@ describe("EnrichReview (V5 — F13)", () => {
       setBackendForTests({ enrichApply } as unknown as Backend);
       renderReview([SEM_VOZ]);
       fireEvent.click(
-        screen.getByRole("checkbox", { name: "Marcar como instrumental: Chorinho" }),
+        screen.getByRole("checkbox", {
+          name:
+            "Marcar como instrumental e gravar o nome Chorinho — Artista Um: Chorinho",
+        }),
       );
       await act(async () => {
         fireEvent.click(
@@ -2101,6 +2136,61 @@ describe("EnrichReview (V5 — F13)", () => {
       ).toBeEnabled();
     });
 
+    /*
+      QA M3 — o número da pergunta é o que o BACKEND mandou, e nada mais.
+
+      O backend vai parar de incluir em `sem_letra_no_fim` as músicas que
+      voltaram com erro (elas não ficaram sem letra: elas não foram
+      perguntadas). A tela não pode ter uma conta própria por cima disso — a
+      DECISIONS #80 é exatamente esse defeito, e o preço dele foi o botão do
+      produto ficando cinza porque duas cópias da mesma regra divergiram.
+
+      Aqui a lista do backend tem UMA música e a revisão mostra três linhas de
+      erro. Se a tela contasse alguma coisa, o número mudaria.
+    */
+    it("a conta é a do backend, mesmo com linhas de erro na tela", () => {
+      const comErro = (id: number) =>
+        proposal({
+          song_id: id,
+          current_title: `faixa ${id}`,
+          lyrics: null,
+          error: "sem conexão",
+        });
+      renderReview([comErro(81), comErro(82), comErro(83)], 50, 0, {
+        semLetraNoFim: [81],
+        segundosDeTranscricao: 600,
+        disponivel: true,
+      });
+      expect(
+        screen.getByText(textoDaOfertaDeTranscricao(1, 600)),
+      ).toBeVisible();
+      expect(screen.getByText(/Sobrou 1 música sem letra/)).toBeVisible();
+    });
+
+    // E a lista viaja inteira para a etapa 5: nem filtrada nem recontada.
+    it("os ids mandados são os do backend, sem filtro da tela", async () => {
+      const transcreverMusicas = vi.fn(async () => ({
+        propostas: [],
+        razao_medida: null,
+      }));
+      setBackendForTests({
+        transcreverMusicas,
+        onTranscricaoProgresso: vi.fn(async () => () => {}),
+      } as unknown as Backend);
+      renderReview(
+        [proposal({ song_id: 81, lyrics: null, error: "sem conexão" })],
+        50,
+        0,
+        { semLetraNoFim: [81, 82], segundosDeTranscricao: 600, disponivel: true },
+      );
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: ROTULO_COMECAR_TRANSCRICAO }),
+        );
+      });
+      expect(transcreverMusicas).toHaveBeenCalledWith([81, 82], expect.any(String));
+    });
+
     it("sem ninguém sobrando, não pergunta nada", () => {
       renderReview([ALTA], 50);
       expect(
@@ -2160,6 +2250,145 @@ describe("EnrichReview (V5 — F13)", () => {
         );
       });
       expect(transcreverMusicas).toHaveBeenCalledWith([7, 8], expect.any(String));
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // QA M2 — a etapa 5 chega HORAS depois, numa revisão que já foi conferida
+  // ---------------------------------------------------------------------------
+  //
+  // Ela ACRESCENTA propostas à lista aberta. A seleção era recalculada do zero
+  // a cada mudança de identidade de `proposals`: o grupo dobrado que a pessoa
+  // desmarcou de propósito voltava pré-marcado, e o que ela marcou à mão se
+  // perdia — sem aviso, e depois de horas de espera em que ela pode nem estar
+  // olhando.
+  describe("a etapa 5 não apaga a conferência já feita", () => {
+    /** Preenchimento (grupo dobrado, pré-marcado por padrão). */
+    const PREENCHE = proposal({
+      song_id: 70,
+      current_title: "sem_tags",
+      current_artist: null,
+      proposed_title: "Oh! Chuva",
+      proposed_artist: "Falamansa",
+      lyrics: null,
+      confidence: "baixa",
+      fonte: "nome do arquivo",
+    });
+    /** Letra em MÉDIA: nunca chega pré-marcada. */
+    const LETRA_MEDIA = proposal({
+      song_id: 71,
+      current_title: "Chegança",
+      current_artist: "Antonio Nobrega",
+      proposed_title: "Chegança",
+      proposed_artist: "Antonio Nobrega",
+      lyrics: "ó da barca",
+      confidence: "media",
+      fonte: "lyrics.ovh",
+      aviso: "este site não diz a que música a letra pertence",
+    });
+    /** O que a etapa 5 traz horas depois. */
+    const DA_TRANSCRICAO = proposal({
+      song_id: 72,
+      current_title: "AudioTrack 03",
+      current_artist: null,
+      proposed_title: "Oh! Chuva",
+      proposed_artist: "Falamansa",
+      lyrics: "chove chuva",
+      confidence: "media",
+      fonte: FONTE_TRANSCRICAO,
+      refrao: "chove chuva",
+    });
+
+    /** Acrescenta as propostas da etapa 5, como o `startTranscricao` faz. */
+    function chegaATranscricao(novas: EnrichProposal[]) {
+      act(() => {
+        useEnrichStore.setState((s) => ({
+          proposals: [...s.proposals, ...novas],
+          semLetraNoFim: [],
+          segundosDeTranscricao: 0,
+        }));
+      });
+    }
+
+    const caixaDoPreenchimento = () =>
+      screen.getByRole("checkbox", { name: "Aplicar proposta: sem_tags" });
+    const caixaDaLetra = () =>
+      screen.getByRole("checkbox", { name: "Aplicar proposta: Chegança" });
+
+    it("o que a pessoa desmarcou continua desmarcado", () => {
+      renderReview([PREENCHE, LETRA_MEDIA]);
+      // o grupo dobrado nasce fechado: abrir para chegar à linha
+      fireEvent.click(screen.getByRole("button", { name: "abrir para ver" }));
+      expect(caixaDoPreenchimento()).toBeChecked();
+      fireEvent.click(caixaDoPreenchimento());
+      expect(caixaDoPreenchimento()).not.toBeChecked();
+
+      chegaATranscricao([DA_TRANSCRICAO]);
+
+      expect(caixaDoPreenchimento()).not.toBeChecked();
+    });
+
+    it("o que a pessoa marcou à mão continua marcado", () => {
+      renderReview([PREENCHE, LETRA_MEDIA]);
+      expect(caixaDaLetra()).not.toBeChecked();
+      fireEvent.click(caixaDaLetra());
+
+      chegaATranscricao([DA_TRANSCRICAO]);
+
+      expect(caixaDaLetra()).toBeChecked();
+    });
+
+    // O padrão continua valendo — para as propostas NOVAS, que ninguém viu
+    // ainda. Letra de máquina é MÉDIA, então ela chega desmarcada.
+    it("as propostas novas recebem o padrão delas", () => {
+      renderReview([PREENCHE, LETRA_MEDIA]);
+      chegaATranscricao([DA_TRANSCRICAO]);
+      expect(
+        screen.getByRole("checkbox", {
+          name:
+            "Aplicar a letra escrita ouvindo o áudio e gravar o nome" +
+            " Oh! Chuva — Falamansa: AudioTrack 03",
+        }),
+      ).not.toBeChecked();
+    });
+
+    // ...e um preenchimento NOVO chega pré-marcado, como chegaria numa
+    // varredura: preservar a seleção antiga não pode virar "nada mais é
+    // pré-marcado".
+    it("preenchimento novo chega pré-marcado, como sempre", () => {
+      renderReview([LETRA_MEDIA]);
+      chegaATranscricao([
+        proposal({
+          song_id: 73,
+          current_title: "faixa_09",
+          current_artist: null,
+          proposed_title: "Asa Branca",
+          proposed_artist: "Luiz Gonzaga",
+          lyrics: null,
+          confidence: "baixa",
+          fonte: "nome do arquivo",
+        }),
+      ]);
+      fireEvent.click(screen.getByRole("button", { name: "abrir para ver" }));
+      expect(
+        screen.getByRole("checkbox", { name: "Aplicar proposta: faixa_09" }),
+      ).toBeChecked();
+    });
+
+    // Uma varredura NOVA é outra coisa: a lista foi trocada, não acrescentada,
+    // e aí o padrão vale para tudo de novo.
+    it("uma varredura nova recomeça do padrão", () => {
+      renderReview([PREENCHE, LETRA_MEDIA]);
+      fireEvent.click(screen.getByRole("button", { name: "abrir para ver" }));
+      fireEvent.click(caixaDoPreenchimento());
+      expect(caixaDoPreenchimento()).not.toBeChecked();
+
+      act(() => {
+        useEnrichStore.setState({ proposals: [PREENCHE, LETRA_MEDIA] });
+      });
+
+      fireEvent.click(screen.getByRole("button", { name: "abrir para ver" }));
+      expect(caixaDoPreenchimento()).toBeChecked();
     });
   });
 

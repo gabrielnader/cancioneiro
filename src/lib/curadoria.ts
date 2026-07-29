@@ -507,6 +507,33 @@ export function rotuloAceitarSom(tituloAtual: string): string {
   return `Aceitar o que o som diz: ${tituloAtual}`;
 }
 
+/** Dois campos de nome valem o mesmo texto (espaços das pontas à parte). */
+function mesmoNome(a: string | null, b: string | null): boolean {
+  return (a ?? "").trim() === (b ?? "").trim();
+}
+
+/**
+ * O nome que ESTA linha vai gravar, ou `null` quando ela não muda nome nenhum.
+ *
+ * Sai inteiro — título E artista — mesmo quando só um dos dois mudou: é o par
+ * completo que vai para o arquivo, e anunciar só a metade que mudou faria o
+ * rótulo descrever uma gravação parcial que não existe.
+ */
+function nomeQueEstaLinhaGrava(p: {
+  current_title: string;
+  current_artist: string | null;
+  proposed_title: string;
+  proposed_artist: string | null;
+}): string | null {
+  const igual =
+    mesmoNome(p.current_title, p.proposed_title) &&
+    mesmoNome(p.current_artist, p.proposed_artist);
+  if (igual) return null;
+  const titulo = p.proposed_title.trim();
+  const artista = (p.proposed_artist ?? "").trim();
+  return artista ? `${titulo} — ${artista}` : titulo;
+}
+
 /**
  * O rótulo acessível da marcação de uma linha — o que ELA decide.
  *
@@ -517,22 +544,43 @@ export function rotuloAceitarSom(tituloAtual: string): string {
  * teclado ou ouve a tela — e ambíguas até para quem vê, porque cada uma decide
  * uma coisa diferente.
  *
- * Só as linhas da etapa 5 ganham rótulo próprio: são as únicas que podem
- * duplicar uma música, e o que elas decidem não é "uma proposta" genérica.
+ * **QA A2 — o rótulo que enumera precisa enumerar tudo.** A etapa 5 do Rust
+ * parte da mesma `proposta_baixa` da etapa 1, então a linha "sem voz" grava
+ * título e artista junto com a marca. "Marcar como instrumental: AudioTrack
+ * 03" soa como a descrição completa do clique e não era: quem chega pela
+ * lista de campos de formulário do leitor de tela decidia sobre metade do
+ * efeito — e a metade escondida é a que reescreve a etiqueta do arquivo.
+ *
+ * "Aplicar proposta" fica como está de propósito: ela não promete uma lista de
+ * efeitos, então não omite nenhum, e o "atual → proposto" está no mesmo item
+ * de lista, ao alcance de quem ouve. Enumerar nas 72 linhas do grupo dobrado
+ * triplicaria o rótulo de cada uma sem responder nada.
+ *
+ * E o texto é DERIVADO da proposta: se a etapa 5 parar de propor nome, o
+ * rótulo volta sozinho a dizer só o que sobrou.
  */
 export function rotuloDaMarcacao(p: {
   current_title: string;
+  current_artist: string | null;
+  proposed_title: string;
+  proposed_artist: string | null;
   conflito: unknown | null;
   marcar_instrumental: boolean;
   lyrics: string | null;
   fonte: string;
 }): string {
+  // Conflito não propõe nada: aceitar grava o que o SOM disse, e a linha já
+  // nomeia os dois lados campo a campo.
   if (p.conflito) return rotuloAceitarSom(p.current_title);
-  if (p.marcar_instrumental) return `Marcar como instrumental: ${p.current_title}`;
+  const acoes: string[] = [];
+  if (p.marcar_instrumental) acoes.push("Marcar como instrumental");
   if (p.lyrics !== null && ehLetraDeMaquina(p.fonte)) {
-    return `Aplicar a letra escrita ouvindo o áudio: ${p.current_title}`;
+    acoes.push("Aplicar a letra escrita ouvindo o áudio");
   }
-  return `Aplicar proposta: ${p.current_title}`;
+  if (acoes.length === 0) return `Aplicar proposta: ${p.current_title}`;
+  const nome = nomeQueEstaLinhaGrava(p);
+  if (nome !== null) acoes.push(`gravar o nome ${nome}`);
+  return `${acoes.join(" e ")}: ${p.current_title}`;
 }
 
 /**
@@ -683,6 +731,25 @@ export function textoDoCabecalho(propostas: number): string {
 /**
  * A pergunta do fim. As duas frases do PRD, e nada mais — a interrogação está
  * no botão, que é onde ela pode ser respondida.
+ *
+ * **QA A1 — a frase dizia "neste computador", e o número não é desta máquina.**
+ * A DECISIONS #106 separa as duas grandezas por nome: `RAZAO_DE_REFERENCIA` é
+ * um palpite de fábrica (1,0, escolhido justamente por não haver medição), e a
+ * razão MEDIDA é o que a primeira transcrição desta máquina devolve. Enquanto o
+ * que chega aqui é o palpite, "neste computador" afirma uma medição que não
+ * houve.
+ *
+ * E o erro tem sinal conhecido: o `whisper-cli` do macOS passou a sair do CI
+ * como binário universal, sem Metal e sem Accelerate, então o palpite é
+ * OTIMISTA. Por isso a frase não fica só neutra — ela diz que pode levar mais.
+ * Prometer menos do que leva é a DECISIONS #85; o contrário faz alguém esperar
+ * o triplo do anunciado e fechar o programa achando que travou.
+ *
+ * Quando o backend passar a devolver `segundos_de_transcricao` calculado com a
+ * razão medida (o laço que a DECISIONS #106 promete fechar), é esta frase que
+ * muda — e a mudança precisa ser explícita, com o backend dizendo QUAL número
+ * mandou. A tela não tem como descobrir isso sozinha, e adivinhar aqui seria
+ * inventar a medição de novo.
  */
 export function textoDaOfertaDeTranscricao(
   quantas: number,
@@ -696,7 +763,10 @@ export function textoDaOfertaDeTranscricao(
     segundos < 60
       ? "leva menos de 1 minuto"
       : `leva ${cercaDe(segundos)}`;
-  return `${sobraram}. Escrever a letra ouvindo o áudio ${tempo} neste computador.`;
+  return (
+    `${sobraram}. Escrever a letra ouvindo o áudio ${tempo}` +
+    ` — pode levar mais nesta máquina.`
+  );
 }
 
 /** O botão da pergunta do fim. */

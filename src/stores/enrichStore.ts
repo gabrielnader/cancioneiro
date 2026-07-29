@@ -71,8 +71,33 @@ interface EnrichState {
    * por no-op e a música continuar sem letra).
    */
   semLetraNoFim: number[];
-  /** Segundos estimados para transcrever essas músicas NESTA máquina. */
+  /** Segundos estimados para transcrever essas músicas, como o backend contou. */
   segundosDeTranscricao: number;
+  /**
+   * QA A1 — segundos de CPU por segundo de ÁUDIO **medidos nesta máquina** na
+   * última fila da etapa 5; `null` enquanto nunca se mediu nada.
+   *
+   * Ela era descartada na chegada (`const { propostas } = ...`), e a
+   * DECISIONS #106 promete o contrário: "a primeira transcrição desta máquina
+   * devolve a razão real, e é ela que passa a valer". Só passa a valer o que
+   * sobrevive ao retorno.
+   *
+   * A tela NÃO calcula nada com este número — a conta é do Rust (DECISIONS
+   * #106), e a cópia em TypeScript já divergiu uma vez (DECISIONS #80). O que
+   * ela faz é PARAR DE JOGAR FORA um campo do contrato: foi o descarte, e não
+   * a falta de fórmula, que deixou a promessa da #106 desligada.
+   *
+   * Onde o laço se fecha é decisão do backend, e as duas saídas cabem aqui sem
+   * mudar esta linha: se ele publicar por onde receber a razão de volta, é
+   * daqui que ela sai; se ele passar a guardá-la sozinho, este valor vira o que
+   * a tela sabe sobre a máquina — e continua sendo mais do que zero. Inventar o
+   * parâmetro de envio antes de o contrato existir seria o defeito A2 desta
+   * mesma rodada, do outro lado.
+   *
+   * Ela também NÃO é limpa pelo `close()`: é medição da MÁQUINA, e não desta
+   * revisão.
+   */
+  razaoMedida: number | null;
   /** O que esta máquina pode fazer quanto à etapa 5 (vem do disparo). */
   transcricao: EstadoDaTranscricao;
   /** Último evento `transcricao:progresso`; null = nenhum ainda. */
@@ -162,6 +187,7 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
   semPerguntarAoSom: 0,
   semLetraNoFim: [],
   segundosDeTranscricao: 0,
+  razaoMedida: null,
   transcricao: SEM_TRANSCRICAO,
   transcricaoProgress: null,
   transcricaoDispensada: false,
@@ -336,13 +362,18 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
     await subscribing;
 
     try {
-      const { propostas } = await getBackend().transcreverMusicas(
-        semLetraNoFim,
-        scanId,
-      );
+      // QA A1 — `razao_medida` vem no contrato e era jogada fora aqui. Ela é o
+      // que a DECISIONS #106 chama de "razão real desta máquina"; sem guardá-la
+      // não há laço a fechar.
+      const { propostas, razao_medida: razaoMedida } =
+        await getBackend().transcreverMusicas(semLetraNoFim, scanId);
       if (seq !== scanSeq) return; // cancelado no meio: descarta
       set((s) => ({
         status: "review",
+        // `null` = esta fila não mediu nada (só erros, ou cancelada antes da
+        // primeira música). Não sobrescreve uma medição anterior, e nunca vira
+        // zero: "0 vezes o áudio" anunciaria transcrição instantânea.
+        razaoMedida: razaoMedida ?? s.razaoMedida,
         // ACRESCENTA: a varredura pode ter deixado propostas que a pessoa
         // ainda não aplicou, e jogá-las fora seria perder trabalho dela
         proposals: [...s.proposals, ...propostas],

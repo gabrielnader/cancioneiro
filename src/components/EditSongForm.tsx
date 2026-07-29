@@ -593,7 +593,19 @@ export function EditSongForm({
           type="button"
           disabled={fetchBusy || loteRodando}
           aria-describedby={loteRodando ? "editor-busca-bloqueada" : undefined}
-          title="Procura título, artista e letra desta música: primeiro no próprio arquivo, depois no LRCLIB e no Vagalume"
+          /*
+            V10 — a dica nomeia as etapas que REALMENTE rodam, na ordem em que
+            rodam. Ela prometia o Vagalume, que saiu do produto (DECISIONS
+            #110), e calava as duas que entraram: o reconhecimento pelo som e o
+            lyrics.ovh. Quem lê isto está decidindo se manda buscar, e a lista
+            é a informação.
+
+            A etapa do som depende do acessório estar baixado nesta máquina —
+            quem sabe disso é o backend (DECISIONS #101), e quem mostra o
+            estado é a tela de Configurações. Aqui a lista é do que o botão
+            tenta, e nenhuma etapa promete resultado.
+          */
+          title="Procura título, artista e letra desta música: primeiro no próprio arquivo, depois pelo som da gravação, no LRCLIB e no lyrics.ovh"
           onClick={() => void handleBuscarDados()}
           className="rounded-md border border-[#0F766E] px-3 py-1.5 text-[14px] font-medium text-[#0F766E] hover:bg-[#F0FDFA] disabled:opacity-60"
         >

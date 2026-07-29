@@ -222,10 +222,46 @@ export function EnrichReview() {
   const dialogRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
   const previouslyFocused = useRef<HTMLElement | null>(null);
+  /**
+   * A lista de propostas do render anterior, para distinguir a lista TROCADA
+   * (varredura nova) da lista ACRESCENTADA (a etapa 5 chegando).
+   */
+  const propostasAnteriores = useRef<readonly EnrichProposal[]>([]);
 
   // a varredura resolve com o overlay já aberto: re-inicializa a seleção
   useEffect(() => {
-    setSelected(defaultSelection(proposals, applyErrors));
+    const anteriores = propostasAnteriores.current;
+    propostasAnteriores.current = proposals;
+    /*
+      QA M2 — a etapa 5 termina HORAS depois e ACRESCENTA propostas a esta
+      revisão. `proposals` muda de identidade, e recalcular a seleção do zero
+      apagava a conferência já feita: o grupo dobrado que a pessoa desmarcou
+      de propósito voltava pré-marcado, e o que ela marcou à mão sumia — sem
+      aviso, e possivelmente sem ninguém olhando.
+
+      "Acrescentou" é reconhecido por REFERÊNCIA: o `startTranscricao` faz
+      `[...anteriores, ...novas]`, então as antigas continuam sendo os MESMOS
+      objetos nas MESMAS posições — e a seleção é por posição. Qualquer outra
+      mudança (varredura nova, `retainFailures`, fechar) cai no caminho de
+      baixo e recomeça do padrão, que é o comportamento de sempre.
+    */
+    const acrescentou =
+      anteriores.length > 0 &&
+      proposals.length > anteriores.length &&
+      anteriores.every((p, i) => proposals[i] === p);
+    const padrao = defaultSelection(proposals, applyErrors);
+    if (acrescentou) {
+      // o padrão vale só para as propostas NOVAS — ninguém as viu ainda
+      setSelected((atual) => {
+        const juntas = new Set(atual);
+        for (const i of padrao) if (i >= anteriores.length) juntas.add(i);
+        return juntas;
+      });
+      // consentimentos e o grupo que a pessoa abriu também são conferência
+      // feita: zerá-los aqui fecharia a lista debaixo da mão dela
+      return;
+    }
+    setSelected(padrao);
     setSubstituir(new Set());
     setConsentidos(new Set());
     setAbertos(new Set());

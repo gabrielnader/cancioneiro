@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import type { EnrichProposal } from "./api";
+import { grupoDaProposta } from "./curadoria";
 
 import {
   ERRO_FPCALC,
@@ -173,6 +174,64 @@ describe("contrato mock × Rust — is_placeholder (DECISIONS #88, #89)", () => 
     expect(isPlaceholder("Pista")).toBe(false);
     expect(isPlaceholder("Pista 3")).toBe(true);
   });
+});
+
+// ---------------------------------------------------------------------------
+// Regra 1b — os rótulos de COLETÂNEA (DECISIONS #105), que faltavam inteiros
+// ---------------------------------------------------------------------------
+//
+// O mock não tinha regra NENHUMA para eles: a decisão 105 existe desde a v0.10
+// no Rust e nunca foi exercitada do lado TypeScript. É a mesma família do QA
+// A2 — mock e backend discordando —, aqui por OMISSÃO, que é a forma mais
+// silenciosa: nenhum teste falha por uma regra que ninguém escreveu.
+//
+// Tabela do `rotulo_de_coletanea_nao_e_artista`, do
+// `nenhum_titulo_legitimo_de_uma_palavra_cai_na_regra_nova` e do
+// `va_sem_acento_e_rotulo_e_va_com_acento_e_titulo` (`enrich.rs`).
+//
+// ATENÇÃO A QUEM VIER DEPOIS (QA B2): a regra do Rust vale para QUALQUER
+// campo, inclusive o TÍTULO — e o argumento da decisão 105 ("rótulos que
+// nenhuma canção usa como NOME") foi escrito pensando em artista. Um título
+// "Diversos" vale VAZIO hoje. Se o Rust restringir a regra ao slot de artista,
+// são estas linhas que quebram, e é assim que tem de ser.
+const COLETANEA: Array<[string, boolean]> = [
+  ["Various Artists", true],
+  ["various artist", true],
+  ["[Various Artists]", true],
+  ["Various", true],
+  ["Vários Artistas", true],
+  ["Vários Intérpretes", true],
+  ["Artistas Variados", true],
+  ["Artistas Diversos", true],
+  ["Intérpretes Diversos", true],
+  ["Vários", true],
+  ["Várias", true],
+  ["Diversos", true],
+  ["V.A.", true],
+  ["VA", true],
+  ["Compilation", true],
+  ["Compilação", true],
+  ["Coletânea", true],
+  ["Coletâneas", true],
+  // ...e os nomes de UMA palavra que a decisão 105 mandou ficar de fora, com
+  // teste fixando cada um: são títulos reais do repertório.
+  ["Vai", false],
+  ["Vamos", false],
+  ["Valsa", false],
+  ["Variações", false],
+  ["Compilado", false],
+  ["Artista", false],
+  // "Vá" é o verbo. A normalização tira o acento e as duas chegariam à mesma
+  // chave; a única prova disponível é o acento do texto ORIGINAL.
+  ["Vá", false],
+];
+
+describe("contrato mock × Rust — rótulo de coletânea (DECISIONS #105)", () => {
+  for (const [texto, esperado] of COLETANEA) {
+    it(`${JSON.stringify(texto)} → ${esperado}`, () => {
+      expect(isPlaceholder(texto)).toBe(esperado);
+    });
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -398,6 +457,43 @@ describe("as regras chegam ao funil (V9)", () => {
     expect(propostas.map((p) => p.song_id)).not.toContain(song.id);
   });
 
+  /*
+    1b. QA B2 — o rótulo de coletânea no slot de TÍTULO.
+
+    A decisão 105 argumentou "rótulos que nenhuma canção usa como NOME"
+    pensando em ARTISTA, e a regra do Rust vale para qualquer campo. Este teste
+    fixa o que acontece HOJE, de ponta a ponta, para o defeito ter um lugar
+    onde aparecer em vez de ser invisível:
+
+    - um título "Diversos" vale VAZIO (DECISIONS #65), então o palpite do nome
+      do arquivo entra por cima dele;
+    - `substitui_nome_escrito` é FALSE, porque para o funil não havia nome
+      escrito — logo a linha NÃO ganha o aviso "isto troca um título que já
+      existe" e NÃO fica de fora da pré-marcação;
+    - e a linha cai no grupo `preenchimentos`, que a revisão mostra DOBRADO,
+      FECHADO e PRÉ-MARCADO, sob a frase "N músicas sem título ou artista vão
+      receber o nome que está no arquivo" — frase que, para esta música, é
+      falsa: ela TEM título, e a pessoa o vê na biblioteca.
+
+    Ou seja: a tela deixa isso invisível, e a correção não é dela — é da lista
+    do Rust. Quando o `e_rotulo_de_coletanea` passar a valer só para artista,
+    é este teste que quebra, e a correção é trocar o esperado aqui.
+  */
+  it("título 'Diversos' vale VAZIO e é substituído sem aviso de nome escrito", async () => {
+    await backend.addFolder("/musicas/teste");
+    const songs = await backend.listSongs();
+    const song = songs.find((s) => s.title === "Instrumental Sem Letra")!;
+    await backend.writeTags(song.id, "Diversos", "Banda Fixture", null, null);
+    const propostas = await varrer(backend, "", "s1");
+    const linha = propostas.find((p) => p.song_id === song.id)!;
+    expect(linha.current_title).toBe("Diversos");
+    // o palpite do nome do arquivo entra no lugar do título que a pessoa vê
+    expect(linha.proposed_title).toBe("sem letra");
+    // ...e sem a marca que faria a linha chegar desmarcada e com aviso
+    expect(linha.substitui_nome_escrito).toBe(false);
+    expect(grupoDaProposta(linha, null)).toBe("preenchimentos");
+  });
+
   // 2. discordaDoSom — variação de grafia não pode virar conflito. Seis dos
   //    oito conflitos do acervo real de 94 arquivos eram exatamente isto.
   it("o som com outra grafia do mesmo nome não abre conflito", async () => {
@@ -596,5 +692,93 @@ describe("contrato mock × Rust — o retorno da varredura (QA A2)", () => {
     const primeira = await backend.enrichFolderScan("", "s1");
     const segunda = await backend.enrichFolderScan("", "s2");
     expect(segunda.sem_perguntar_ao_som).toBe(primeira.sem_perguntar_ao_som);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regra 6 — a etapa 5 devolve a proposta de NOME da etapa 1 (QA A2)
+// ---------------------------------------------------------------------------
+//
+// O mock devolvia `proposed_title: song.title` e `proposed_artist:
+// song.artist` — proposto IGUAL ao atual, sempre — e o comentário dele dizia
+// que isso era "garantia de construção". Não é o que o Rust faz: o
+// `proposta_da_transcricao` parte do `proposta_baixa`, o MESMO da etapa 1, e
+// esse palpite vem do NOME DO ARQUIVO quando a etiqueta é placeholder.
+//
+// Rodado pelo QA numa música típica da etapa 5:
+//
+//     BANCO    : title="AudioTrack 03"  artist=None
+//     PROPOSTO : "Oh! Chuva" / Some("Falamansa")
+//     marcar_instrumental=true   substitui_nome_escrito=false
+//
+// A diferença não é cosmética: é a etiqueta do arquivo de alguém sendo
+// reescrita por uma linha que a tela anunciava como "marcar instrumental".
+//
+// A metade Rust deste par é o comportamento fixado em `proposta_baixa`
+// (`enrich.rs`) mais o repasse de `proposta_da_transcricao`; o esperado
+// abaixo é o que aquele código produz hoje.
+describe("contrato mock × Rust — a etapa 5 propõe NOME (QA A2)", () => {
+  let backend: MockBackend;
+
+  beforeEach(() => {
+    localStorage.clear();
+    backend = createMockBackend();
+  });
+
+  /**
+   * Uma música sem letra, com etiqueta de ripador no título — a candidata
+   * típica da etapa 5. Devolve o registro depois da regravação.
+   */
+  async function comEtiquetaDeRipador(artista: string | null) {
+    // a etapa 5 só existe com os dois acessórios prontos
+    backend._estadoDoAcessorio("whisper-cli", "pronto");
+    backend._estadoDoAcessorio("modelo-de-transcricao", "pronto");
+    await backend.addFolder("/musicas/teste");
+    const songs = await backend.listSongs();
+    const song = songs.find((s) => s.file_path === "/musicas/teste/sem_letra.mp3")!;
+    await backend.writeTags(song.id, "AudioTrack 03", artista, null, null);
+    return song;
+  }
+
+  it("propõe o palpite do nome do arquivo, e não a etiqueta atual", async () => {
+    const song = await comEtiquetaDeRipador(null);
+    backend._ensinarTranscricao(song.file_path, {
+      instrumental: "20 caracteres em 5m00s dão 0,07 caractere por segundo",
+    });
+    const { propostas } = await backend.transcreverMusicas([song.id], "t1");
+    const p = propostas[0];
+    // o que o QA mediu no Rust: a linha PROPÕE nome
+    expect(p.current_title).toBe("AudioTrack 03");
+    expect(p.proposed_title).toBe("sem letra");
+    expect(p.marcar_instrumental).toBe(true);
+    // e não é troca de nome escrito: "AudioTrack 03" é placeholder, ou seja,
+    // campo VAZIO (DECISIONS #65) — por isso a linha não chega com o aviso
+    expect(p.substitui_nome_escrito).toBe(false);
+  });
+
+  // A outra metade do `proposta_baixa`: etiqueta REAL nunca é apagada pelo
+  // palpite. Sem esta, "alinhar o mock ao Rust" poderia virar "o mock passou a
+  // propor o nome do arquivo por cima do artista que alguém escreveu".
+  it("etiqueta REAL sobrevive ao palpite", async () => {
+    const song = await comEtiquetaDeRipador("Falamansa");
+    backend._ensinarTranscricao(song.file_path, {
+      letra: "chove chuva",
+      refrao: "chove chuva",
+    });
+    const { propostas } = await backend.transcreverMusicas([song.id], "t1");
+    const p = propostas[0];
+    expect(p.proposed_artist).toBe("Falamansa");
+    expect(p.lyrics).toBe("chove chuva");
+  });
+
+  // A linha que não se aplica (adiada ou falha) também vem do `proposta_baixa`
+  // no Rust: ela informa, e o nome que carrega é o mesmo das outras.
+  it("a linha que só informa carrega o mesmo palpite", async () => {
+    const song = await comEtiquetaDeRipador(null);
+    backend._ensinarTranscricao(song.file_path, { erro: "o motor não respondeu" });
+    const { propostas } = await backend.transcreverMusicas([song.id], "t1");
+    const p = propostas[0];
+    expect(p.error).toBe("o motor não respondeu");
+    expect(p.proposed_title).toBe("sem letra");
   });
 });
