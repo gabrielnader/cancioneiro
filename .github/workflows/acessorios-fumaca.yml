@@ -1,0 +1,103 @@
+name: acessorios-fumaca
+
+# Prova que o acessório baixado REALMENTE EXECUTA em cada sistema operacional.
+#
+# Existe por uma lição cara: a v0.8.0 saiu com as quatro suítes verdes e
+# congelava o aplicativo inteiro, porque comando síncrono do Tauri roda na
+# thread principal (decisão 92). Nenhuma suíte podia pegar — o E2E roda contra
+# o mock, no navegador. Era defeito que só existia dentro do binário, no
+# sistema operacional real.
+#
+# Baixar e executar binário tem a mesma forma de risco, e mais uma camada: o
+# macOS recusa executável sem assinatura (regra mais estrita no Apple
+# Silicon), e o Windows tem SmartScreen. Um `fpcalc` que não roda deixaria a
+# etapa do som NASCER MORTA em metade das 40 máquinas, e a única pessoa a
+# descobrir seria quem não tem a quem perguntar.
+#
+# Este fluxo faz, em cada sistema, o mesmo que o aplicativo faz: baixa do
+# lançamento de acessórios, confere o SHA-256 e EXECUTA.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Lançamento de acessórios a testar"
+        required: true
+        default: "acessorios-v1"
+  # roda junto do CI para não virar teste que ninguém lembra de disparar
+  push:
+    branches: ["**"]
+    paths:
+      - "src-tauri/src/acessorios.rs"
+      - ".github/workflows/acessorios-fumaca.yml"
+
+jobs:
+  executa:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - so: macos-latest      # Apple Silicon
+            arquivo: fpcalc-macos-universal
+            sha: ede0f92ac30807799872f8700d5e334e9ddef738a6b1b9d154097954619d68f8
+          - so: macos-13          # Intel
+            arquivo: fpcalc-macos-universal
+            sha: ede0f92ac30807799872f8700d5e334e9ddef738a6b1b9d154097954619d68f8
+          - so: windows-latest
+            arquivo: fpcalc-windows-x86_64.exe
+            sha: 659ea2dba1a12d7df4fe2b6f23f60fd9414ae61aca1b014ee8fa37c5e09b930b
+          - so: ubuntu-24.04
+            arquivo: fpcalc-linux-x86_64
+            sha: 085a1adf67b4a71a2e57b7b05bc425c1ea21b371b2b43049fc8ba37b53cb472b
+    runs-on: ${{ matrix.so }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Baixar como o aplicativo baixa
+        shell: bash
+        env:
+          TAG: ${{ github.event.inputs.tag || 'acessorios-v1' }}
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "${{ matrix.arquivo }}" \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${{ matrix.arquivo }}"
+
+      - name: Conferir o SHA-256 (a mesma trava do aplicativo)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if command -v sha256sum >/dev/null; then
+            soma=$(sha256sum "${{ matrix.arquivo }}" | cut -d' ' -f1)
+          else
+            soma=$(shasum -a 256 "${{ matrix.arquivo }}" | cut -d' ' -f1)
+          fi
+          echo "esperado ${{ matrix.sha }}"
+          echo "obtido   $soma"
+          [ "$soma" = "${{ matrix.sha }}" ]
+
+      - name: O que o sistema acha deste binário (macOS)
+        # Informativo, e roda mesmo quando a execução falha: é aqui que se lê
+        # se o binário tem assinatura e se o Gatekeeper o aceita.
+        if: startsWith(matrix.so, 'macos')
+        continue-on-error: true
+        run: |
+          chmod +x "${{ matrix.arquivo }}"
+          echo "== codesign =="; codesign -dv --verbose=2 "./${{ matrix.arquivo }}" 2>&1 || true
+          echo "== spctl =="; spctl -a -vvv -t execute "./${{ matrix.arquivo }}" 2>&1 || true
+          echo "== quarentena =="; xattr -l "./${{ matrix.arquivo }}" 2>&1 || true
+          echo "== arquitetura =="; file "./${{ matrix.arquivo }}" 2>&1 || true
+
+      - name: EXECUTAR — é isto que o teste prova
+        shell: bash
+        run: |
+          set -euo pipefail
+          chmod +x "${{ matrix.arquivo }}" || true
+          ./${{ matrix.arquivo }} -version
+
+      - name: Executar de verdade, sobre um MP3
+        # `-version` prova que o processo sobe; gerar impressão digital prova
+        # que ele DECODIFICA áudio — que é para o que o aplicativo o usa.
+        shell: bash
+        run: |
+          set -euo pipefail
+          ./${{ matrix.arquivo }} -json fixtures/com_letra.mp3
