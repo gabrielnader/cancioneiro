@@ -117,6 +117,9 @@ fn remedir_os_78_por_cento_com_o_whisper_cpp() {
     let whisper = variavel("CANCIONEIRO_WHISPER_CLI");
     let modelo = variavel("CANCIONEIRO_WHISPER_MODELO");
     let lista = variavel("CANCIONEIRO_REMEDICAO");
+    // a pasta onde o WAV temporário de cada faixa é criado — NUNCA ao lado do
+    // MP3: o acervo desta medição pode ser de alguém que ninguém pode ver
+    let trabalho = tempfile::tempdir().expect("pasta temporária");
     let casos = casos(&lista);
     assert!(!casos.is_empty(), "a lista de trechos está vazia");
 
@@ -134,9 +137,10 @@ fn remedir_os_78_por_cento_com_o_whisper_cpp() {
             &whisper,
             &modelo,
             &caso.arquivo,
+            trabalho.path(),
             transcricao::IDIOMA,
             &|| false,
-            &|_p| {},
+            &|_p: u8| {},
         );
         let gasto = comeco.elapsed().as_secs_f64();
         let nome = caso

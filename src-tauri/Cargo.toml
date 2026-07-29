@@ -33,6 +33,19 @@ ureq = { version = "2", features = ["tls"] }
 # escrever a nossa daria uma linha de defesa auditada por uma pessoa só. A
 # crate já estava na árvore como dependência transitiva do Tauri.
 sha2 = "0.10"
+# V10 — a etapa 5 DECODIFICA o MP3 aqui dentro e entrega ao whisper-cli um WAV
+# 16 kHz mono, que é o único formato que ele lê com certeza em todas as
+# plataformas (ele só decodifica outros quando compilado com ffmpeg, o que é
+# opção de Linux e brigaria com o `BUILD_SHARED_LIBS=OFF` que faz do acessório
+# UM arquivo conferível). Escolhido por ser PURO RUST: nenhuma biblioteca de
+# sistema, nenhum compilador C, o mesmo código nas quatro plataformas que o CI
+# constrói — um `minimp3` (binding C) precisaria de toolchain por plataforma.
+# Só a feature `mp3` (mais `id3v2`, para o leitor pular a tag do começo do
+# arquivo): sem wav, flac, ogg, mkv, vorbis, adpcm, pcm nem o resto dos
+# metadados. Licença MPL-2.0 (copyleft por ARQUIVO — não contamina o
+# aplicativo; obriga a publicar modificações nos arquivos dela, e não fazemos
+# nenhuma).
+symphonia = { version = "0.6", default-features = false, features = ["mp3", "id3v2"] }
 
 [dev-dependencies]
 tempfile = "3"

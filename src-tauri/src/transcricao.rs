@@ -234,6 +234,13 @@ pub const ERRO_AUDIO: &str = "não foi possível ouvir o áudio deste arquivo";
 /// anterior de propósito: aqui o processo foi encerrado por nós.
 pub const ERRO_TRAVOU: &str = "o programa que escreve a letra parou de responder e foi encerrado";
 
+/// Não foi possível preparar o áudio para o motor: a pasta de trabalho não
+/// aceitou a escrita, ou o disco encheu. Frase distinta de propósito — o
+/// problema não é o MP3 nem o transcritor, e mandar a pessoa procurar defeito
+/// neles seria mandá-la procurar no lugar errado.
+pub const ERRO_TEMPORARIO: &str =
+    "não foi possível preparar o áudio neste computador — verifique o espaço em disco";
+
 /// Teto de SILÊNCIO do motor, não de duração total.
 ///
 /// Transcrever é a única etapa que leva minutos por música, e um teto absoluto
@@ -546,16 +553,28 @@ pub enum Desfecho {
 /// Decide o desfecho a partir do que o motor devolveu — porte do laço de
 /// decisão do `cmd_transcrever`.
 ///
-/// `duracao_do_motor` é o número que o próprio transcritor informou (0,0 =
-/// não informou) e é a ÚNICA prova de duração que esta etapa aceita: quem
-/// decodificou o áudio sabe quanto áudio existe, e é o topo da ordem de
-/// autoridade da DECISIONS #72. `duracao_do_cabecalho` entra em um lugar só —
-/// decidir se a transcrição rala vira `Adiada` —, e nunca decide sozinha:
-/// margem de segurança não protege contra erro de ordem de grandeza.
-pub fn decidir(bruto: &str, duracao_do_motor: f64, duracao_do_cabecalho: f64) -> Desfecho {
+/// # A ordem de autoridade da duração (DECISIONS #72, atualizada na V10)
+///
+/// `duracao_provada` é a duração MEDIDA do áudio, e desde a V10 ela vem da
+/// nossa própria decodificação: contagem exata de amostras dividida por
+/// 16 000. É o topo da ordem, acima do número que o motor informa no stderr
+/// (que hoje só corrobora) e muito acima do cabeçalho do MP3.
+///
+/// `duracao_do_cabecalho` entra em UM lugar só — decidir se a transcrição rala
+/// vira `Adiada` —, e nunca decide sozinha. Ela é o número que já mentiu por
+/// uma ordem de grandeza: 300 s reais lidos como 2365 s, e uma música cantada
+/// marcada instrumental para sempre. Margem de segurança não protege contra
+/// erro de ordem de grandeza; só corroboração protege.
+///
+/// **`Adiada` ficou inalcançável pelo caminho real**, e é de propósito que ela
+/// não foi removida: se um dia alguém acrescentar uma porta que chegue aqui
+/// sem prova de duração, o produto ADIA em vez de marcar instrumental por
+/// engano. O custo de manter é um `if`; o custo de remover seria descobrir o
+/// contrário dentro do arquivo de alguém.
+pub fn decidir(bruto: &str, duracao_provada: f64, duracao_do_cabecalho: f64) -> Desfecho {
     decidir_com_densidade(
         bruto,
-        duracao_do_motor,
+        duracao_provada,
         duracao_do_cabecalho,
         DENSIDADE_MINIMA_LETRA,
     )
@@ -564,7 +583,7 @@ pub fn decidir(bruto: &str, duracao_do_motor: f64, duracao_do_cabecalho: f64) ->
 /// O `decidir` com o piso de densidade explícito — a porta que os testes usam.
 pub fn decidir_com_densidade(
     bruto: &str,
-    duracao_do_motor: f64,
+    duracao_provada: f64,
     duracao_do_cabecalho: f64,
     densidade_minima: f64,
 ) -> Desfecho {
@@ -577,14 +596,14 @@ pub fn decidir_com_densidade(
     // faixa de 15 minutos pode ser um refrão repetido cinquenta vezes. O que
     // se quer medir é quanto o MOTOR ouviu.
     let caracteres = conteudo.trim().chars().count();
-    let prova = duracao_do_motor > 0.0;
-    let rala_com_prova = prova && sem_conteudo(conteudo, duracao_do_motor, densidade_minima);
+    let prova = duracao_provada > 0.0;
+    let rala_com_prova = prova && sem_conteudo(conteudo, duracao_provada, densidade_minima);
 
     if caracteres > 0
         && !prova
         && sem_conteudo(conteudo, duracao_do_cabecalho, densidade_minima)
     {
-        // A ÚNICA coisa que acusa "instrumental" aqui é a duração do
+        // A ÚNICA coisa que acusaria "instrumental" aqui é a duração do
         // cabeçalho — e ela não é medição. Marcar tira o arquivo da fila para
         // sempre, e desfazer é trabalho de gente: errar para este lado é
         // destruir dado de quem não tem a quem recorrer.
@@ -602,10 +621,10 @@ pub fn decidir_com_densidade(
         let motivo = if caracteres == 0 {
             "a transcrição voltou vazia e o áudio foi lido até o fim".to_string()
         } else {
-            let densidade = caracteres as f64 / duracao_do_motor;
+            let densidade = caracteres as f64 / duracao_provada;
             format!(
                 "{caracteres} caracteres em {} de áudio dão {}, abaixo do mínimo de {}",
-                duracao_em_pt_br(duracao_do_motor),
+                duracao_em_pt_br(duracao_provada),
                 decimal_pt_br(densidade),
                 decimal_pt_br(densidade_minima)
             )
@@ -616,7 +635,7 @@ pub fn decidir_com_densidade(
     Desfecho::Transcrita {
         refrao: refrao(&letra),
         letra,
-        duracao: duracao_do_motor,
+        duracao: duracao_provada,
     }
 }
 
@@ -633,6 +652,389 @@ fn duracao_em_pt_br(segundos: f64) -> String {
 /// "0,07" — vírgula decimal, sem depender de locale.
 fn decimal_pt_br(valor: f64) -> String {
     format!("{valor:.2}").replace('.', ",")
+}
+
+// ===========================================================================
+// A DECODIFICAÇÃO — por que ela existe, e por que ela é uma boa notícia
+// ===========================================================================
+//
+// O `whisper-cli` lê **WAV PCM 16 bits, 16 kHz, mono**, e só. Ele decodifica
+// outros formatos quando compilado com ffmpeg, o que é opção de Linux e
+// brigaria com o `BUILD_SHARED_LIBS=OFF` que faz do acessório UM arquivo
+// conferível por UM SHA-256. Entregar a ele um MP3 e torcer seria a
+// DECISIONS #96 outra vez: hash prova que baixou o arquivo certo, não que ele
+// faz o que a gente precisa.
+//
+// Então o aplicativo **não depende do formato de entrada do binário**: ele
+// decodifica aqui dentro, em Rust puro, e entrega o que o motor sabe ler.
+//
+// # A boa notícia: a duração deixa de ser um problema
+//
+// Decodificar dá a CONTAGEM EXATA DE AMOSTRAS. Isso é duração medida do
+// áudio — o topo da ordem de autoridade da DECISIONS #72, acima do número que
+// o motor informa e muito acima do cabeçalho do MP3.
+//
+// É a resposta ao incidente que criou aquela decisão: sem cabeçalho Xing, 300
+// segundos reais foram lidos como 2365, e uma música CANTADA foi marcada
+// instrumental para sempre. Com a contagem de amostras, 355 caracteres em 300
+// s dão 1,18 c/s (letra) em vez de 0,15 c/s (instrumental). A regra da F17
+// não mudou; o que mudou é que ela passou a receber o número certo.
+//
+// # Onde o temporário NÃO vai
+//
+// **Nunca ao lado do MP3.** São acervos que o dono do produto não pode nem
+// ver, e a regra "nenhum arquivo é renomeado ou movido" tem um irmão que
+// nunca havia sido escrito: nada é CRIADO dentro do acervo. O destino é
+// passado por quem chama (a pasta de dados do aplicativo), e a guarda de
+// `Drop` o apaga em qualquer saída — sucesso, erro, cancelamento ou pânico —,
+// o mesmo padrão do `.parcial` do `acessorios.rs`.
+
+/// A taxa que o motor exige. Não é preferência: é o formato que ele lê.
+pub const TAXA_DO_MOTOR: u32 = 16_000;
+
+/// Meia-largura do núcleo de reamostragem, em amostras de ENTRADA.
+const TAPS: isize = 24;
+
+/// Corte do filtro, como fração da menor das duas Nyquist. 0,45 deixa margem
+/// para a transição do filtro caber abaixo da Nyquist de destino — é o que
+/// impede o conteúdo acima de 8 kHz de DOBRAR para dentro da banda de voz.
+const FATOR_DE_CORTE: f64 = 0.45;
+
+/// De quantos em quantos pacotes o cancelamento é consultado durante a
+/// decodificação. Um pacote de MP3 são 1152 amostras (~26 ms a 44,1 kHz),
+/// então 64 pacotes são ~1,7 s de áudio — muito menos que o tempo que a
+/// decodificação leva por si.
+const PACOTES_ENTRE_CHECAGENS: usize = 64;
+
+/// Reamostrador de sinc janelado (Blackman), em FLUXO.
+///
+/// Em fluxo porque um set de duas horas a 16 kHz seriam centenas de MB se o
+/// áudio inteiro fosse acumulado em memória, e essas máquinas são modestas. A
+/// janela guarda só o que o núcleo ainda alcança.
+///
+/// Sinc janelado, e não decimação simples, porque decimar 44,1 kHz para 16 kHz
+/// sem filtrar DOBRA tudo o que está acima de 8 kHz para dentro da banda de
+/// voz — pratos e sibilância viram chiado exatamente onde o modelo procura
+/// palavra. O peso é normalizado pela soma, o que garante ganho unitário em
+/// corrente contínua seja qual for a janela.
+struct Reamostrador {
+    /// Amostras de entrada por amostra de saída.
+    passo: f64,
+    /// Corte, em ciclos por amostra de ENTRADA.
+    corte: f64,
+    janela: Vec<f32>,
+    /// Posição de leitura dentro de `janela`, em amostras de entrada.
+    pos: f64,
+}
+
+impl Reamostrador {
+    fn novo(taxa_entrada: u32, taxa_saida: u32) -> Self {
+        let (entrada, saida) = (taxa_entrada as f64, taxa_saida as f64);
+        Reamostrador {
+            passo: entrada / saida,
+            corte: FATOR_DE_CORTE * entrada.min(saida) / entrada,
+            // a janela começa com zeros à esquerda para a primeira amostra de
+            // saída cair no instante zero do áudio, e não TAPS amostras adiante
+            janela: vec![0.0; TAPS as usize],
+            pos: TAPS as f64,
+        }
+    }
+
+    /// sinc(x) = sen(pi x) / (pi x), com o limite em zero.
+    fn sinc(x: f64) -> f64 {
+        if x.abs() < 1e-9 {
+            1.0
+        } else {
+            (std::f64::consts::PI * x).sin() / (std::f64::consts::PI * x)
+        }
+    }
+
+    /// Blackman sobre [-TAPS, TAPS].
+    fn janela_de_blackman(x: f64) -> f64 {
+        let t = std::f64::consts::PI * x / TAPS as f64;
+        0.42 + 0.5 * t.cos() + 0.08 * (2.0 * t).cos()
+    }
+
+    fn amostra_em(&self, pos: f64) -> f32 {
+        let centro = pos.floor() as isize;
+        let frac = pos - centro as f64;
+        let (mut soma, mut peso_total) = (0.0f64, 0.0f64);
+        for k in (1 - TAPS)..=TAPS {
+            let i = centro + k;
+            if i < 0 || i as usize >= self.janela.len() {
+                continue;
+            }
+            let x = k as f64 - frac;
+            let peso = Self::sinc(2.0 * self.corte * x) * Self::janela_de_blackman(x);
+            soma += self.janela[i as usize] as f64 * peso;
+            peso_total += peso;
+        }
+        if peso_total.abs() < 1e-12 {
+            return 0.0;
+        }
+        (soma / peso_total) as f32
+    }
+
+    /// Consome mais entrada e escreve o que já der em `saida`.
+    fn alimentar(&mut self, entrada: &[f32], saida: &mut Vec<i16>) {
+        self.janela.extend_from_slice(entrada);
+        let limite = self.janela.len() as f64 - TAPS as f64;
+        while self.pos < limite {
+            saida.push(para_i16(self.amostra_em(self.pos)));
+            self.pos += self.passo;
+        }
+        // descarta o que o núcleo já não alcança
+        let base = (self.pos.floor() as usize).saturating_sub(TAPS as usize);
+        if base > 0 {
+            self.janela.drain(..base);
+            self.pos -= base as f64;
+        }
+    }
+
+    /// Fim do áudio: preenche a cauda com silêncio para não perder as últimas
+    /// amostras.
+    fn finalizar(&mut self, saida: &mut Vec<i16>) {
+        let cauda = vec![0.0f32; TAPS as usize];
+        self.alimentar(&cauda, saida);
+    }
+}
+
+/// f32 no intervalo [-1, 1] para PCM de 16 bits, com corte nos extremos.
+fn para_i16(v: f32) -> i16 {
+    (v.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16
+}
+
+/// Apaga o arquivo ao sair do escopo, aconteça o que acontecer — retorno
+/// cedo, erro no meio, cancelamento ou pânico. Mesmo padrão do `.parcial` do
+/// `acessorios.rs`, e pela mesma razão: é o que garante "não deixa lixo" sem
+/// espalhar `remove_file` por seis caminhos de saída.
+pub struct Temporario(pub PathBuf);
+
+impl Drop for Temporario {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// O que a decodificação produziu.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Decodificado {
+    /// Amostras de 16 kHz mono escritas no WAV.
+    pub amostras: u64,
+    /// Duração em segundos, MEDIDA (amostras / taxa). É a prova de duração.
+    pub duracao: f64,
+}
+
+/// Decodifica o MP3 e grava um WAV 16 kHz mono em `destino`.
+///
+/// `Ok(None)` é cancelamento. `Err(ERRO_AUDIO)` é o áudio que não pôde ser
+/// lido — arquivo danificado, formato que não é MP3, faixa vazia —, e é erro
+/// de UMA música: a fila segue.
+///
+/// Nada é lido nem escrito ao lado do MP3: a única escrita é em `destino`.
+pub fn decodificar_para_wav(
+    mp3: &Path,
+    destino: &Path,
+    cancelado: &dyn Fn() -> bool,
+) -> Result<Option<Decodificado>> {
+    use symphonia::core::audio::GenericAudioBufferRef;
+    use symphonia::core::codecs::audio::AudioDecoderOptions;
+    use symphonia::core::formats::probe::Hint;
+    use symphonia::core::formats::FormatOptions;
+    use symphonia::core::io::MediaSourceStream;
+    use symphonia::core::meta::MetadataOptions;
+
+    let arquivo = std::fs::File::open(mp3).map_err(|_| AppError(ERRO_AUDIO.into()))?;
+    let fluxo = MediaSourceStream::new(Box::new(arquivo), Default::default());
+    let mut hint = Hint::new();
+    hint.with_extension("mp3");
+    let mut formato = symphonia::default::get_probe()
+        .probe(&hint, fluxo, FormatOptions::default(), MetadataOptions::default())
+        .map_err(|_| AppError(ERRO_AUDIO.into()))?;
+    let faixa = formato
+        .tracks()
+        .iter()
+        .find(|t| t.codec_params.as_ref().is_some_and(|p| p.audio().is_some()))
+        .ok_or_else(|| AppError(ERRO_AUDIO.into()))?;
+    let id_da_faixa = faixa.id;
+    let parametros = faixa
+        .codec_params
+        .as_ref()
+        .and_then(|p| p.audio())
+        .ok_or_else(|| AppError(ERRO_AUDIO.into()))?
+        .clone();
+    let mut decodificador = symphonia::default::get_codecs()
+        .make_audio_decoder(&parametros, &AudioDecoderOptions::default())
+        .map_err(|_| AppError(ERRO_AUDIO.into()))?;
+
+    let mut wav = Wav::criar(destino)?;
+    let mut reamostrador: Option<Reamostrador> = None;
+    let mut mono: Vec<f32> = Vec::new();
+    let mut entrelacado: Vec<f32> = Vec::new();
+    let mut pcm: Vec<i16> = Vec::new();
+    let mut pacotes = 0usize;
+
+    loop {
+        // O cancelamento é consultado DURANTE a decodificação: uma faixa longa
+        // leva segundos aqui, e a etapa 5 inteira leva minutos — cada trecho
+        // que ignora o "Cancelar" é tempo que a pessoa fica olhando um botão
+        // que não responde (QA A4).
+        pacotes += 1;
+        if pacotes % PACOTES_ENTRE_CHECAGENS == 0 && cancelado() {
+            return Ok(None); // o `Temporario` de quem chamou apaga o arquivo
+        }
+        let pacote = match formato.next_packet() {
+            Ok(Some(p)) => p,
+            Ok(None) => break,
+            // fluxo truncado no fim é comum em acervo de gravação de casa, e
+            // o que já veio continua valendo
+            Err(_) => break,
+        };
+        if pacote.track_id != id_da_faixa {
+            continue;
+        }
+        let quadro = match decodificador.decode_ref(&pacote.as_packet_ref()) {
+            Ok(q) => q,
+            Err(symphonia::core::errors::Error::DecodeError(_)) => continue, // quadro ruim: pula
+            Err(_) => break,
+        };
+        let taxa = quadro.spec().rate();
+        let canais = quadro.num_planes().max(1);
+        if taxa == 0 {
+            return Err(AppError(ERRO_AUDIO.into()));
+        }
+        let r = reamostrador.get_or_insert_with(|| Reamostrador::novo(taxa, TAXA_DO_MOTOR));
+
+        entrelacado.clear();
+        match &quadro {
+            GenericAudioBufferRef::F32(_) | GenericAudioBufferRef::F64(_) => {
+                quadro.copy_to_vec_interleaved(&mut entrelacado)
+            }
+            _ => quadro.copy_to_vec_interleaved(&mut entrelacado),
+        }
+        // mono é a MÉDIA dos canais: descartar um canal perderia a voz quando
+        // ela estiver panoramizada para o outro lado
+        mono.clear();
+        mono.reserve(entrelacado.len() / canais + 1);
+        for bloco in entrelacado.chunks(canais) {
+            mono.push(bloco.iter().sum::<f32>() / bloco.len() as f32);
+        }
+        pcm.clear();
+        r.alimentar(&mono, &mut pcm);
+        wav.escrever(&pcm)?;
+    }
+
+    if let Some(mut r) = reamostrador {
+        pcm.clear();
+        r.finalizar(&mut pcm);
+        wav.escrever(&pcm)?;
+    }
+    let amostras = wav.finalizar()?;
+    if amostras == 0 {
+        // nem um quadro decodificou: isto não é "música sem voz", é áudio que
+        // não pôde ser lido — e as duas coisas são diferentes (V7/F16)
+        return Err(AppError(ERRO_AUDIO.into()));
+    }
+    Ok(Some(Decodificado {
+        amostras,
+        duracao: amostras as f64 / TAXA_DO_MOTOR as f64,
+    }))
+}
+
+/// Escritor de WAV PCM 16 bits mono, em fluxo: o cabeçalho sai com os
+/// tamanhos zerados e é corrigido no fim, quando o total é conhecido. Assim o
+/// áudio nunca precisa caber na memória.
+struct Wav {
+    arquivo: std::io::BufWriter<std::fs::File>,
+    amostras: u64,
+}
+
+impl Wav {
+    const CABECALHO: usize = 44;
+
+    fn criar(destino: &Path) -> Result<Self> {
+        if let Some(pasta) = destino.parent() {
+            std::fs::create_dir_all(pasta).map_err(|_| AppError(ERRO_TEMPORARIO.into()))?;
+        }
+        let arquivo = std::fs::File::create(destino).map_err(|_| AppError(ERRO_TEMPORARIO.into()))?;
+        let mut wav = Wav {
+            arquivo: std::io::BufWriter::new(arquivo),
+            amostras: 0,
+        };
+        wav.escrever_cabecalho(0)?;
+        Ok(wav)
+    }
+
+    fn escrever_cabecalho(&mut self, bytes_de_audio: u32) -> Result<()> {
+        use std::io::Write;
+        let taxa = TAXA_DO_MOTOR;
+        let bytes_por_segundo = taxa * 2; // mono, 16 bits
+        let mut c = Vec::with_capacity(Self::CABECALHO);
+        c.extend_from_slice(b"RIFF");
+        c.extend_from_slice(&(36 + bytes_de_audio).to_le_bytes());
+        c.extend_from_slice(b"WAVEfmt ");
+        c.extend_from_slice(&16u32.to_le_bytes()); // tamanho do bloco fmt
+        c.extend_from_slice(&1u16.to_le_bytes()); // PCM
+        c.extend_from_slice(&1u16.to_le_bytes()); // mono
+        c.extend_from_slice(&taxa.to_le_bytes());
+        c.extend_from_slice(&bytes_por_segundo.to_le_bytes());
+        c.extend_from_slice(&2u16.to_le_bytes()); // alinhamento do bloco
+        c.extend_from_slice(&16u16.to_le_bytes()); // bits por amostra
+        c.extend_from_slice(b"data");
+        c.extend_from_slice(&bytes_de_audio.to_le_bytes());
+        debug_assert_eq!(c.len(), Self::CABECALHO);
+        self.arquivo
+            .write_all(&c)
+            .map_err(|_| AppError(ERRO_TEMPORARIO.into()))
+    }
+
+    fn escrever(&mut self, pcm: &[i16]) -> Result<()> {
+        use std::io::Write;
+        let mut bytes = Vec::with_capacity(pcm.len() * 2);
+        for a in pcm {
+            bytes.extend_from_slice(&a.to_le_bytes());
+        }
+        self.arquivo
+            .write_all(&bytes)
+            .map_err(|_| AppError(ERRO_TEMPORARIO.into()))?;
+        self.amostras += pcm.len() as u64;
+        Ok(())
+    }
+
+    /// Corrige os tamanhos do cabeçalho e devolve quantas amostras foram
+    /// escritas.
+    fn finalizar(mut self) -> Result<u64> {
+        use std::io::{Seek, SeekFrom, Write};
+        self.arquivo
+            .flush()
+            .map_err(|_| AppError(ERRO_TEMPORARIO.into()))?;
+        let bytes_de_audio = (self.amostras * 2).min(u32::MAX as u64) as u32;
+        let mut arquivo = self
+            .arquivo
+            .into_inner()
+            .map_err(|_| AppError(ERRO_TEMPORARIO.into()))?;
+        arquivo
+            .seek(SeekFrom::Start(0))
+            .map_err(|_| AppError(ERRO_TEMPORARIO.into()))?;
+        let mut cabecalho = Wav {
+            arquivo: std::io::BufWriter::new(arquivo),
+            amostras: 0,
+        };
+        cabecalho.escrever_cabecalho(bytes_de_audio)?;
+        cabecalho
+            .arquivo
+            .flush()
+            .map_err(|_| AppError(ERRO_TEMPORARIO.into()))?;
+        Ok(self.amostras)
+    }
+}
+
+/// Caminho do WAV temporário desta transcrição, na pasta que quem chama
+/// escolheu — **nunca** ao lado do MP3.
+fn caminho_temporario(pasta: &Path) -> PathBuf {
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    pasta.join(format!("transcricao-{}-{n}.wav", std::process::id()))
 }
 
 // ---------------------------------------------------------------------------
@@ -718,13 +1120,18 @@ pub fn argumentos(modelo: &Path, mp3: &Path, idioma: &str) -> Vec<String> {
     ]
 }
 
-/// Roda o `whisper-cli` sobre o MP3 e devolve a transcrição.
+/// Decodifica o MP3 e roda o `whisper-cli` sobre o WAV resultante.
 ///
 /// - `Ok(Some(saida))` — o motor rodou e terminou;
 /// - `Ok(None)` — a pessoa cancelou. Cancelar não é falha;
 /// - `Err` — o binário não sobe (`ERRO_NAO_EXECUTA`, veredito sobre a
-///   máquina), o motor falhou neste arquivo (`ERRO_AUDIO`) ou travou
+///   máquina), o áudio não pôde ser lido (`ERRO_AUDIO`), a pasta de trabalho
+///   não aceitou a escrita (`ERRO_TEMPORARIO`) ou o motor travou
 ///   (`ERRO_TRAVOU`).
+///
+/// `pasta_temporaria` é onde o WAV é criado, e **nunca** é a pasta do MP3:
+/// nada é criado dentro do acervo. O arquivo some em qualquer saída, inclusive
+/// pânico (ver `Temporario`).
 ///
 /// **Os canos precisam ser DRENADOS enquanto o filho roda** (QA A4 da
 /// v0.9.0). O cano tem 64 KiB; o `whisper-cli` despeja em stderr muito mais
@@ -737,10 +1144,12 @@ pub fn argumentos(modelo: &Path, mp3: &Path, idioma: &str) -> Vec<String> {
 /// linha e vira progresso e duração, que atravessam por um canal. Assim o
 /// callback fica na thread de quem chamou, sem exigir `Sync`, e um
 /// cancelamento não precisa esperar thread nenhuma.
+#[allow(clippy::too_many_arguments)]
 pub fn transcrever(
     whisper: &Path,
     modelo: &Path,
     mp3: &Path,
+    pasta_temporaria: &Path,
     idioma: &str,
     cancelado: &dyn Fn() -> bool,
     progresso: &dyn Fn(u8),
@@ -748,8 +1157,24 @@ pub fn transcrever(
     if !modelo.is_file() {
         return Err(AppError(ERRO_SEM_MODELO.into()));
     }
+    // O binário é conferido ANTES de decodificar. Não é só economia (uma
+    // faixa de cinco minutos leva segundos para decodificar): é a mesma
+    // disciplina do `acessorios::baixar`, que diz "indisponível" antes de
+    // gastar o download de alguém. A falha de SPAWN continua existindo logo
+    // abaixo, para o arquivo que existe e mesmo assim não roda.
+    if !whisper.is_file() {
+        return Err(AppError(ERRO_NAO_EXECUTA.into()));
+    }
+    // O WAV nasce guardado: a partir daqui ele some em qualquer caminho de
+    // saída que não seja o fim normal — e no fim normal também, quando o
+    // `Temporario` sai de escopo.
+    let temporario = Temporario(caminho_temporario(pasta_temporaria));
+    let Some(decodificado) = decodificar_para_wav(mp3, &temporario.0, cancelado)? else {
+        return Ok(None); // cancelado durante a decodificação
+    };
+
     let mut filho = std::process::Command::new(whisper)
-        .args(argumentos(modelo, mp3, idioma))
+        .args(argumentos(modelo, &temporario.0, idioma))
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
@@ -785,7 +1210,11 @@ pub fn transcrever(
         })
     });
 
-    let mut duracao = 0.0f64;
+    // A duração que o MOTOR anuncia é lida, mas não é a que sai daqui: ela
+    // serve de corroboração e de diagnóstico. Quem manda é a contagem de
+    // amostras da decodificação — ver a ordem de autoridade no cabeçalho da
+    // seção de decodificação.
+    let mut duracao_do_motor = 0.0f64;
     let mut ultimo_sinal = Instant::now();
     let status = loop {
         // O cancelamento é consultado a cada 20 ms, e não entre músicas: esta
@@ -799,7 +1228,7 @@ pub fn transcrever(
             houve_noticia = true;
             match noticia {
                 DoMotor::Progresso(p) => progresso(p),
-                DoMotor::Duracao(s) => duracao = s,
+                DoMotor::Duracao(s) => duracao_do_motor = s,
             }
         }
         if houve_noticia {
@@ -844,7 +1273,7 @@ pub fn transcrever(
     while let Ok(noticia) = recebe.try_recv() {
         match noticia {
             DoMotor::Progresso(p) => progresso(p),
-            DoMotor::Duracao(s) => duracao = s,
+            DoMotor::Duracao(s) => duracao_do_motor = s,
         }
     }
     if !status.success() {
@@ -852,7 +1281,14 @@ pub fn transcrever(
     }
     Ok(Some(SaidaDoMotor {
         texto: String::from_utf8_lossy(&saida).trim().to_string(),
-        duracao,
+        // a contagem de amostras é MEDIÇÃO; o número do motor só entra se, um
+        // dia, a decodificação deixar de informar a sua (hoje ela sempre
+        // informa, e há teste fixando a precedência)
+        duracao: if decodificado.duracao > 0.0 {
+            decodificado.duracao
+        } else {
+            duracao_do_motor
+        },
     }))
 }
 
@@ -1192,151 +1628,181 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // O motor de verdade, executado — a família de testes que a v0.9.0 deixou
-    // pronta para esta entrega
+    // O reamostrador: o que ele preserva e o que ele PRECISA jogar fora
     // -----------------------------------------------------------------------
 
-    /// Nunca cancela.
-    const SEGUE: &dyn Fn() -> bool = &|| false;
-    /// Ignora o progresso.
-    const SEM_PROGRESSO: &dyn Fn(u8) = &|_| {};
-
-    /// Um executável de mentira com o corpo de shell que se pedir.
-    #[cfg(unix)]
-    fn script(dir: &Path, corpo: &str) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let caminho = dir.join(format!("whisper-falso-{n}"));
-        std::fs::write(&caminho, format!("#!/bin/sh\n{corpo}")).unwrap();
-        std::fs::set_permissions(&caminho, std::fs::Permissions::from_mode(0o755)).unwrap();
-        caminho
+    /// Gera `n` amostras de um seno de `hz` na taxa `taxa`.
+    fn seno(hz: f64, taxa: u32, n: usize) -> Vec<f32> {
+        (0..n)
+            .map(|i| {
+                (2.0 * std::f64::consts::PI * hz * i as f64 / taxa as f64).sin() as f32 * 0.8
+            })
+            .collect()
     }
 
-    #[cfg(unix)]
-    fn modelo_falso(dir: &Path) -> PathBuf {
-        let caminho = dir.join("ggml-small-q5_1.bin");
-        std::fs::write(&caminho, b"modelo de mentira").unwrap();
-        caminho
+    fn rms(v: &[i16]) -> f64 {
+        if v.is_empty() {
+            return 0.0;
+        }
+        let s: f64 = v.iter().map(|a| (*a as f64).powi(2)).sum();
+        (s / v.len() as f64).sqrt()
     }
 
-    /// **QA A4, agora com o motor que o defeito esperava.** O `whisper-cli`
-    /// despeja progresso em stderr muito acima dos 64 KiB do cano; sem os dois
-    /// drenos, o filho bloqueia na própria escrita e a etapa nunca termina.
-    ///
-    /// O comentário do `fingerprint.rs` dizia, em julho: "defeito plantado
-    /// para detonar na entrega seguinte". É esta.
-    #[cfg(unix)]
+    fn reamostrar(entrada: &[f32], de: u32, para: u32) -> Vec<i16> {
+        let mut r = Reamostrador::novo(de, para);
+        let mut saida = Vec::new();
+        // alimentado em pedaços, como o decodificador faz: prova que o
+        // reamostrador em FLUXO não perde nem duplica nada nas emendas
+        for pedaco in entrada.chunks(577) {
+            r.alimentar(pedaco, &mut saida);
+        }
+        r.finalizar(&mut saida);
+        saida
+    }
+
+    /// **A razão de existir do filtro.** Decimar 44,1 kHz para 16 kHz sem
+    /// filtrar DOBRA tudo o que está acima de 8 kHz para dentro da banda de
+    /// voz: prato e sibilância viram chiado exatamente onde o modelo procura
+    /// palavra. Um tom de 12 kHz tem de SUMIR, não reaparecer em 4 kHz.
     #[test]
-    fn stderr_muito_maior_que_o_cano_nao_trava_a_transcricao() {
-        let dir = tempfile::tempdir().unwrap();
-        // ~400 KiB em stderr, seis vezes o cano
-        let whisper = script(
-            dir.path(),
-            r#"echo "main: processing 'x.mp3' (4800000 samples, 300.0 sec), 4 threads" >&2
-i=0
-while [ $i -lt 400 ]; do
-  awk 'BEGIN{s="";while(length(s)<1023)s=s "x";print s}' >&2
-  echo "whisper_print_progress_callback: progress = $((i / 4))%" >&2
-  i=$((i+1))
-done
-echo "Chove lá fora"
-echo "E aqui dentro canta o coração"
-"#,
+    fn o_reamostrador_corta_o_que_dobraria_para_dentro_da_voz() {
+        let baixo = reamostrar(&seno(400.0, 44_100, 44_100), 44_100, TAXA_DO_MOTOR);
+        let alto = reamostrar(&seno(12_000.0, 44_100, 44_100), 44_100, TAXA_DO_MOTOR);
+        let (r_baixo, r_alto) = (rms(&baixo), rms(&alto));
+        assert!(r_baixo > 10_000.0, "o tom de voz sobrevive: {r_baixo}");
+        assert!(
+            r_alto < r_baixo * 0.05,
+            "12 kHz precisa ser cortado, não dobrado: {r_alto} contra {r_baixo}"
         );
-        let modelo = modelo_falso(dir.path());
-        let mp3 = dir.path().join("x.mp3");
-        std::fs::write(&mp3, b"nao importa").unwrap();
-
-        let inicio = Instant::now();
-        let saida = transcrever(&whisper, &modelo, &mp3, IDIOMA, SEGUE, SEM_PROGRESSO)
-            .expect("stderr grande não é falha")
-            .expect("não foi cancelado");
-        let gasto = inicio.elapsed();
-
-        assert_eq!(saida.texto, "Chove lá fora\nE aqui dentro canta o coração");
-        assert!((saida.duracao - 300.0).abs() < 1e-9, "a duração do motor");
-        assert!(gasto < Duration::from_secs(60), "travou nos canos: {gasto:?}");
     }
 
-    /// O progresso do motor vira progresso por música — é o que a tela mostra
-    /// durante os minutos de uma faixa. Cresce e termina em 100.
-    #[cfg(unix)]
+    /// Ganho unitário em corrente contínua: o áudio não pode sair mais alto
+    /// nem mais baixo do que entrou.
     #[test]
-    fn o_progresso_do_stderr_chega_a_quem_chamou() {
+    fn o_reamostrador_preserva_o_nivel() {
+        let constante = vec![0.5f32; 44_100];
+        let saida = reamostrar(&constante, 44_100, TAXA_DO_MOTOR);
+        let meio = &saida[TAPS as usize * 3..saida.len() - TAPS as usize * 3];
+        let esperado = 0.5 * i16::MAX as f64;
+        for a in meio {
+            assert!(
+                (*a as f64 - esperado).abs() < esperado * 0.02,
+                "nível fora: {a} contra {esperado}"
+            );
+        }
+    }
+
+    /// O número de amostras de saída é o da conversão de taxa, com folga de
+    /// uma janela: é dele que sai a duração PROVADA.
+    #[test]
+    fn o_reamostrador_devolve_a_quantidade_certa_de_amostras() {
+        for (de, n) in [(44_100u32, 44_100usize), (48_000, 48_000), (22_050, 22_050)] {
+            let saida = reamostrar(&vec![0.1f32; n], de, TAXA_DO_MOTOR);
+            let esperado = n as f64 * TAXA_DO_MOTOR as f64 / de as f64;
+            assert!(
+                (saida.len() as f64 - esperado).abs() <= TAPS as f64 + 2.0,
+                "{de} Hz: {} amostras, esperado ~{esperado}",
+                saida.len()
+            );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // O WAV e o temporário
+    // -----------------------------------------------------------------------
+
+    /// O cabeçalho é o que o `whisper-cli` exige: PCM 16 bits, 16 kHz, MONO. Se
+    /// qualquer um dos três estiver errado, ele recusa o arquivo e a etapa 5
+    /// nasce morta nas 40 máquinas.
+    #[test]
+    fn o_wav_sai_em_pcm_16_bits_16_khz_mono() {
         let dir = tempfile::tempdir().unwrap();
-        let whisper = script(
+        let caminho = dir.path().join("a.wav");
+        let mut wav = Wav::criar(&caminho).unwrap();
+        wav.escrever(&[0i16, 1000, -1000]).unwrap();
+        assert_eq!(wav.finalizar().unwrap(), 3);
+
+        let bytes = std::fs::read(&caminho).unwrap();
+        let u16em = |i: usize| u16::from_le_bytes([bytes[i], bytes[i + 1]]);
+        let u32em = |i: usize| {
+            u32::from_le_bytes([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]])
+        };
+        assert_eq!(&bytes[0..4], b"RIFF");
+        assert_eq!(&bytes[8..12], b"WAVE");
+        assert_eq!(u16em(20), 1, "PCM");
+        assert_eq!(u16em(22), 1, "mono");
+        assert_eq!(u32em(24), 16_000, "16 kHz");
+        assert_eq!(u32em(28), 32_000, "bytes por segundo = 16000 * 2");
+        assert_eq!(u16em(32), 2, "alinhamento do bloco");
+        assert_eq!(u16em(34), 16, "16 bits por amostra");
+        assert_eq!(&bytes[36..40], b"data");
+        assert_eq!(u32em(40), 6, "o tamanho é corrigido no fim");
+        assert_eq!(u32em(4), 42, "e o RIFF também");
+        assert_eq!(bytes.len(), 44 + 6);
+    }
+
+    /// O temporário some ao sair do escopo, aconteça o que acontecer — é a
+    /// mesma guarda do `.parcial` do `acessorios.rs`, e é o que garante que
+    /// cancelamento e pânico não deixem WAV de 10 MB espalhado.
+    #[test]
+    fn o_temporario_some_no_drop_inclusive_no_panico() {
+        let dir = tempfile::tempdir().unwrap();
+        let caminho = dir.path().join("t.wav");
+        {
+            let _t = Temporario(caminho.clone());
+            std::fs::write(&caminho, b"audio").unwrap();
+            assert!(caminho.exists());
+        }
+        assert!(!caminho.exists(), "o Drop apaga");
+
+        let caminho = dir.path().join("panico.wav");
+        let c = caminho.clone();
+        let _ = std::panic::catch_unwind(move || {
+            let _t = Temporario(c.clone());
+            std::fs::write(&c, b"audio").unwrap();
+            panic!("no meio da transcrição");
+        });
+        assert!(!caminho.exists(), "o Drop apaga no desenrolar do pânico");
+    }
+
+    /// O nome do temporário é único por processo e por chamada: duas
+    /// transcrições ao mesmo tempo não podem escrever no mesmo arquivo.
+    #[test]
+    fn cada_temporario_tem_nome_proprio() {
+        let pasta = Path::new("/tmp/x");
+        let a = caminho_temporario(pasta);
+        let b = caminho_temporario(pasta);
+        assert_ne!(a, b);
+        assert!(a.starts_with(pasta) && b.starts_with(pasta));
+        assert!(a.extension().is_some_and(|e| e == "wav"));
+    }
+
+    // -----------------------------------------------------------------------
+    // O que o motor recebe
+    // -----------------------------------------------------------------------
+
+    /// Sem o modelo não se abre processo nenhum e não se decodifica nada: são
+    /// 180 MB, e a frase precisa dizer QUAL dos dois downloads falta.
+    #[test]
+    fn sem_modelo_a_transcricao_nem_comeca() {
+        let dir = tempfile::tempdir().unwrap();
+        let erro = transcrever(
+            Path::new("/bin/sh"),
+            Path::new("/nao/existe/modelo.bin"),
+            Path::new("/tmp/x.mp3"),
             dir.path(),
-            r#"echo "main: processing 'x.mp3' (1600000 samples, 100.0 sec), 4 threads" >&2
-for p in 5 25 50 75 100; do
-  echo "whisper_print_progress_callback: progress = $p%" >&2
-done
-echo "uma letra qualquer que seja comprida o suficiente"
-"#,
-        );
-        let modelo = modelo_falso(dir.path());
-        let mp3 = dir.path().join("x.mp3");
-        std::fs::write(&mp3, b"nao importa").unwrap();
-
-        let vistos = std::sync::Mutex::new(Vec::new());
-        let anota: &dyn Fn(u8) = &|p| vistos.lock().unwrap().push(p);
-        transcrever(&whisper, &modelo, &mp3, IDIOMA, SEGUE, anota)
-            .unwrap()
-            .unwrap();
-
-        let vistos = vistos.lock().unwrap().clone();
-        assert_eq!(vistos, vec![5, 25, 50, 75, 100], "{vistos:?}");
+            IDIOMA,
+            SEGUE,
+            SEM_PROGRESSO,
+        )
+        .expect_err("sem modelo é falha");
+        assert_eq!(erro.to_string(), ERRO_SEM_MODELO);
+        assert_eq!(sobrou_na_pasta(dir.path()), Vec::<String>::new());
     }
 
-    /// **Cancelar responde em segundos, não em minutos.** Transcrever é a
-    /// única etapa que leva minutos POR MÚSICA: um cancelamento que só é
-    /// consultado entre arquivos não é cancelamento.
-    ///
-    /// O falso é um shell que chama `sleep`, de propósito: matar o filho não
-    /// fecha os canos quando existe um NETO segurando a ponta de escrita, e
-    /// esperar as threads de dreno traria a demora toda de volta (QA A4).
-    #[cfg(unix)]
-    #[test]
-    fn cancelar_interrompe_a_transcricao_no_meio() {
-        let dir = tempfile::tempdir().unwrap();
-        let whisper = script(dir.path(), "sleep 60\n");
-        let modelo = modelo_falso(dir.path());
-        let mp3 = dir.path().join("x.mp3");
-        std::fs::write(&mp3, b"nao importa").unwrap();
-
-        let inicio = Instant::now();
-        let saida = transcrever(&whisper, &modelo, &mp3, IDIOMA, &|| true, SEM_PROGRESSO)
-            .expect("cancelar não é falha");
-        let gasto = inicio.elapsed();
-
-        assert!(saida.is_none(), "cancelar devolve None, não erro");
-        assert!(gasto < Duration::from_secs(5), "demorou {gasto:?}");
-    }
-
-    /// E o processo morre junto: deixar um `whisper-cli` vivo por música numa
-    /// fila de 47 arquivos consome a máquina de quem mandou PARAR — e este
-    /// consome a máquina inteira, não uns décimos de segundo como o `fpcalc`.
-    #[cfg(unix)]
-    #[test]
-    fn o_processo_cancelado_e_encerrado_e_nao_fica_orfao() {
-        let dir = tempfile::tempdir().unwrap();
-        let marca = dir.path().join("ainda-vivo");
-        let whisper = script(
-            dir.path(),
-            &format!("sleep 2\ntouch '{}'\n", marca.display()),
-        );
-        let modelo = modelo_falso(dir.path());
-        let mp3 = dir.path().join("x.mp3");
-        std::fs::write(&mp3, b"nao importa").unwrap();
-
-        let _ = transcrever(&whisper, &modelo, &mp3, IDIOMA, &|| true, SEM_PROGRESSO);
-        std::thread::sleep(Duration::from_millis(3500));
-        assert!(!marca.exists(), "o transcritor continuou rodando depois do PARE");
-    }
-
-    /// Binário que não sobe é VEREDITO sobre a máquina, não sobre o arquivo —
-    /// e é a única falha que desliga a etapa. A mensagem tem de ser distinta,
-    /// senão o funil não consegue diferenciar as duas coisas (QA A2).
+    /// Binário que não existe é VEREDITO sobre a máquina, e é conferido ANTES
+    /// de decodificar: decodificar cinco minutos de áudio para então descobrir
+    /// que o programa não está lá é gastar o tempo de quem espera.
     #[test]
     fn binario_que_nao_existe_e_veredito_sobre_a_maquina() {
         let dir = tempfile::tempdir().unwrap();
@@ -1346,6 +1812,7 @@ echo "uma letra qualquer que seja comprida o suficiente"
             Path::new("/nao/existe/whisper-cli"),
             &modelo,
             Path::new("/tmp/x.mp3"),
+            dir.path(),
             IDIOMA,
             SEGUE,
             SEM_PROGRESSO,
@@ -1353,60 +1820,43 @@ echo "uma letra qualquer que seja comprida o suficiente"
         .expect_err("binário ausente é falha");
         assert_eq!(erro.to_string(), ERRO_NAO_EXECUTA);
         assert_ne!(ERRO_NAO_EXECUTA, ERRO_AUDIO);
+        assert_eq!(
+            sobrou_na_pasta(dir.path()),
+            vec!["modelo.bin".to_string()],
+            "nem chegou a criar o temporário"
+        );
     }
 
-    /// Sem o modelo não se abre processo nenhum: são 180 MB, e a frase precisa
-    /// dizer QUAL dos dois downloads falta.
+    /// Nada de `-f arquivo.mp3`: o que vai para a linha de comando é o WAV.
     #[test]
-    fn sem_modelo_a_transcricao_nem_comeca() {
-        let erro = transcrever(
-            Path::new("/bin/sh"),
-            Path::new("/nao/existe/modelo.bin"),
-            Path::new("/tmp/x.mp3"),
+    fn o_motor_recebe_o_wav_e_nunca_o_mp3() {
+        let args = argumentos(
+            Path::new("/m/modelo.bin"),
+            Path::new("/dados/temporarios/transcricao-1-0.wav"),
             IDIOMA,
-            SEGUE,
-            SEM_PROGRESSO,
-        )
-        .expect_err("sem modelo é falha");
-        assert_eq!(erro.to_string(), ERRO_SEM_MODELO);
+        );
+        assert!(args.iter().any(|a| a.ends_with(".wav")));
+        assert!(!args.iter().any(|a| a.ends_with(".mp3")));
     }
 
-    /// Motor que falha NESTE arquivo é erro de UMA música: a mensagem é a de
-    /// áudio, não a de máquina, e a fila do chamador segue.
-    #[cfg(unix)]
-    #[test]
-    fn motor_que_falha_no_arquivo_e_erro_de_uma_musica_so() {
-        let dir = tempfile::tempdir().unwrap();
-        let whisper = script(dir.path(), "echo 'error: failed to open' >&2\nexit 1\n");
-        let modelo = modelo_falso(dir.path());
-        let mp3 = dir.path().join("x.mp3");
-        std::fs::write(&mp3, b"nao importa").unwrap();
-
-        let erro = transcrever(&whisper, &modelo, &mp3, IDIOMA, SEGUE, SEM_PROGRESSO)
-            .expect_err("saída 1 é falha");
-        assert_eq!(erro.to_string(), ERRO_AUDIO);
+    /// O que sobrou numa pasta, em ordem — para provar que nada ficou para
+    /// trás (o mesmo auxiliar do `acessorios.rs`).
+    fn sobrou_na_pasta(dir: &Path) -> Vec<String> {
+        let mut nomes: Vec<String> = std::fs::read_dir(dir)
+            .map(|it| {
+                it.flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default();
+        nomes.sort();
+        nomes
     }
 
-    /// O motor que não informa a duração não impede a transcrição — só tira a
-    /// prova. E sem prova, transcrição rala vira ADIADA (DECISIONS #72).
-    #[cfg(unix)]
-    #[test]
-    fn motor_que_nao_informa_a_duracao_deixa_a_prova_em_zero() {
-        let dir = tempfile::tempdir().unwrap();
-        let whisper = script(dir.path(), "echo 'la la la'\n");
-        let modelo = modelo_falso(dir.path());
-        let mp3 = dir.path().join("x.mp3");
-        std::fs::write(&mp3, b"nao importa").unwrap();
-
-        let saida = transcrever(&whisper, &modelo, &mp3, IDIOMA, SEGUE, SEM_PROGRESSO)
-            .unwrap()
-            .unwrap();
-        assert_eq!(saida.duracao, 0.0);
-        assert!(matches!(
-            decidir(&saida.texto, saida.duracao, 300.0),
-            Desfecho::Adiada { .. }
-        ));
-    }
+    /// Nunca cancela.
+    const SEGUE: &dyn Fn() -> bool = &|| false;
+    /// Ignora o progresso.
+    const SEM_PROGRESSO: &dyn Fn(u8) = &|_| {};
 
     /// Nenhuma mensagem deste módulo repassa texto do motor: ele fala inglês e
     /// despeja diagnóstico de decodificador, e quem lê não tem a quem

@@ -752,6 +752,10 @@ pub fn transcrever_musicas(
     let cache = diretorio_de_cache(&app)?;
     let (whisper, modelo) = crate::transcricao::acessorios_prontos(&cache)
         .ok_or_else(|| AppError(crate::transcricao::ERRO_SEM_MODELO.into()))?;
+    // A pasta de trabalho da decodificação. Fica ao lado do cache dos
+    // acessórios, sob o perfil do usuário: é onde o aplicativo já grava 180 MB
+    // e onde ele TEM permissão. O acervo nunca recebe arquivo nosso.
+    let pasta_temporaria = cache.join("temporarios");
     let cancel = state.scan_begin(&scan_id)?;
 
     // O relógio da fila: é dele que sai o "faltam N minutos" honesto. Começa
@@ -789,6 +793,10 @@ pub fn transcrever_musicas(
                     &whisper,
                     &modelo,
                     mp3,
+                    // o WAV temporário vai para a pasta de dados do
+                    // aplicativo — NUNCA para o lado do MP3 (ver o cabeçalho
+                    // da decodificação em transcricao.rs)
+                    &pasta_temporaria,
                     crate::transcricao::IDIOMA,
                     cancelado,
                     por_musica,
