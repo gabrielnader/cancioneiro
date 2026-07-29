@@ -16,6 +16,7 @@ function aplicar(
     lyrics?: string | null;
     add_temas?: string | null;
     fonte?: string | null;
+    substituir_letra?: boolean;
   },
 ): EnrichApply {
   return {
@@ -27,6 +28,7 @@ function aplicar(
     current_title: song.title,
     current_artist: song.artist,
     fonte: campos.fonte ?? null,
+    substituir_letra: campos.substituir_letra,
   };
 }
 
@@ -599,30 +601,69 @@ describe("mockBackend", () => {
         backend.writeTags(99999, "Título", null, null, null),
       ).rejects.toThrow();
     });
+
+    // ALTO-4 — letra do Vagalume aceita pelo EDITOR perdia a procedência:
+    // write_tags limpava a marca (a letra mudou) e nada era gravado no lugar,
+    // então a mesma letra ficava indistinguível de uma do LRCLIB. Duas pilhas
+    // no mesmo acervo, dois arquivos diferentes no disco.
+    it("letraOrigem 'vagalume' grava a procedência da letra nova", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const semLetra = songs.find((s) => s.title === "Instrumental Sem Letra")!;
+
+      const saved = await backend.writeTags(
+        semLetra.id,
+        semLetra.title,
+        semLetra.artist,
+        "letra do vagalume",
+        null,
+        null,
+        "vagalume",
+      );
+      expect(saved.letra_origem).toBe("vagalume");
+    });
+
+    it("sem letraOrigem, letra nova continua limpando a marca (DECISIONS #54)", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const comLetra = songs.find((s) => s.title === "Coração Sertanejo")!;
+      backend._markAsTranscribed(comLetra.file_path);
+
+      const saved = await backend.writeTags(
+        comLetra.id,
+        comLetra.title,
+        comLetra.artist,
+        "letra editada à mão",
+        null,
+      );
+      expect(saved.letra_origem).toBeNull();
+    });
+
+    it("letra inalterada preserva a marca, mesmo sem letraOrigem", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const comLetra = songs.find((s) => s.title === "Coração Sertanejo")!;
+      backend._markAsTranscribed(comLetra.file_path);
+
+      const saved = await backend.writeTags(
+        comLetra.id,
+        "Outro Título",
+        comLetra.artist,
+        FIXTURE_LYRICS,
+        null,
+      );
+      expect(saved.letra_origem).toBe("transcricao");
+    });
   });
 
-  describe("fetchLyricsOnline (V4 — F10)", () => {
-    it("título contendo 'coração sertanejo' (mesmo sem acento) devolve o match fixo", async () => {
-      const match = await backend.fetchLyricsOnline(
-        "coracao sertanejo",
-        "Qualquer Artista",
-        180,
-      );
-      expect(match).not.toBeNull();
-      expect(match!.lyrics).toBe(FIXTURE_LYRICS);
-      expect(match!.confidence).toBe("alta");
-      expect(match!.matched_title).toBe("Coração Sertanejo");
-    });
-
-    it("título sem match devolve null", async () => {
-      expect(await backend.fetchLyricsOnline("Outra Música", "A", 100)).toBeNull();
-    });
-
-    it("_offline = true rejeita com 'sem conexão'", async () => {
-      backend._offline = true;
-      await expect(
-        backend.fetchLyricsOnline("Coração Sertanejo", "Artista Teste", 180),
-      ).rejects.toThrow("sem conexão");
+  // B2/contrato 6: `fetch_lyrics_online` saiu do backend. Quem busca letra
+  // hoje é o funil (enrichSongScan), que passa pelas três etapas e diz de onde
+  // veio o dado — dois botões "buscar na internet" eram escolha às cegas.
+  describe("fetch_lyrics_online — a superfície antiga não existe mais", () => {
+    it("o backend não expõe mais fetchLyricsOnline", () => {
+      expect(
+        (backend as unknown as Record<string, unknown>).fetchLyricsOnline,
+      ).toBeUndefined();
     });
   });
 
@@ -807,10 +848,10 @@ describe("mockBackend", () => {
       ]);
     });
 
-    // V8/F17 — a varredura em lote é etapa de LETRA e pula o instrumental,
-    // igual ao enrich_scan do Rust. O mock precisa da mesma regra: é ele que
-    // o E2E e os testes de store enxergam como "o backend".
-    it("pula músicas instrumentais — nem candidata, nem no total do progresso", async () => {
+    // V8/F17 + ALTO-5 — instrumental com título e artista prontos está
+    // COMPLETA (a marca dispensa a letra): não entra na varredura. O que
+    // mudou nesta rodada é o outro lado — ver "instrumental sem artista".
+    it("instrumental com os dois nomes prontos está completa: nem candidata, nem no total", async () => {
       await backend.addFolder("/musicas/teste");
       backend._markAsInstrumental("/musicas/teste/sem_letra.mp3");
 
@@ -823,6 +864,95 @@ describe("mockBackend", () => {
         "/musicas/teste/sem_tags.mp3",
       ]);
       expect(new Set(totais)).toEqual(new Set([1]));
+    });
+
+    // ALTO-5, o único caso em que as três implementações discordavam: uma
+    // pasta de instrumentais marcados pela CLI, sem etiqueta de artista. O
+    // Rust os entrega (PRD V8/F17: "instrumental sem letra ainda pode — e
+    // deve — ter título e artista corretos"); o mock os excluía.
+    it("instrumental SEM artista é candidata: nome ela ainda pode ganhar", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const semTags = songs.find((s) => s.title === "sem_tags")!;
+      backend._markAsInstrumental(semTags.file_path);
+
+      const proposals = await backend.enrichFolderScan("", "s1", null);
+      expect(proposals.map((p) => p.song_id)).toContain(semTags.id);
+    });
+
+    // O curto-circuito de instrumental DENTRO do funil permanece: não é
+    // filtro de completude, é integridade. Um instrumental com nomes certos
+    // casa com a versão CANTADA no LRCLIB e sai ALTA — pré-marcada.
+    it("nenhuma etapa de LETRA roda para instrumental: a letra da versão cantada não é proposta", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const semLetra = songs.find((s) => s.title === "Instrumental Sem Letra")!;
+
+      // sem a marca, o LRCLIB conhece esta música e a proposta traz letra
+      const antes = (await backend.enrichFolderScan("", "s1", null)).find(
+        (p) => p.song_id === semLetra.id,
+      )!;
+      expect(antes.lyrics).not.toBeNull();
+
+      // com a marca ela continua candidata (está sem artista), mas nenhuma
+      // etapa de letra roda: nada de gravar a versão cantada num arquivo
+      // que não tem voz
+      backend._markAsInstrumental(semLetra.file_path);
+      await backend.writeTags(semLetra.id, semLetra.title, null, null, null);
+      const depois = (await backend.enrichFolderScan("", "s2", "chave")).filter(
+        (p) => p.song_id === semLetra.id && p.lyrics !== null,
+      );
+      expect(depois).toEqual([]);
+    });
+
+    // ALTO-2 — "Faixa 03" é placeholder para o Rust (tag-lixo de ripador):
+    // vale VAZIO, e uma música sem título real é incompleta mesmo com letra.
+    it("título placeholder ('Faixa 03') deixa a música incompleta, mesmo com letra e artista", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const comLetra = songs.find((s) => s.title === "Coração Sertanejo")!;
+      await backend.writeTags(comLetra.id, "Faixa 03", "Artista Teste", FIXTURE_LYRICS, null);
+
+      const proposals = await backend.enrichFolderScan("", "s1", null);
+      expect(proposals.map((p) => p.song_id)).toContain(comLetra.id);
+    });
+
+    it("artista placeholder ('Artista Desconhecido') também deixa incompleta", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const comLetra = songs.find((s) => s.title === "Coração Sertanejo")!;
+      await backend.writeTags(
+        comLetra.id,
+        "Coração Sertanejo",
+        "Artista Desconhecido",
+        FIXTURE_LYRICS,
+        null,
+      );
+
+      const proposals = await backend.enrichFolderScan("", "s1", null);
+      expect(proposals.map((p) => p.song_id)).toContain(comLetra.id);
+    });
+
+    // A proposta carrega o que a revisão precisa para não destruir nada
+    // (CRÍTICO-1): se a música JÁ tem letra, e de que tipo ela é.
+    it("toda proposta diz se a música já tem letra e de que procedência", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const comLetra = songs.find((s) => s.title === "Coração Sertanejo")!;
+      backend._markAsTranscribed(comLetra.file_path);
+      await backend.writeTags(comLetra.id, "Faixa 03", null, FIXTURE_LYRICS, null);
+
+      const proposta = (await backend.enrichFolderScan("", "s1", null)).find(
+        (p) => p.song_id === comLetra.id,
+      )!;
+      expect(proposta.has_lyrics).toBe(true);
+      expect(proposta.letra_origem).toBe("transcricao");
+
+      const semTags = (await backend.enrichFolderScan("", "s2", null)).find((p) =>
+        p.file_path.endsWith("sem_tags.mp3"),
+      )!;
+      expect(semTags.has_lyrics).toBe(false);
+      expect(semTags.letra_origem).toBeNull();
     });
 
     it("filtra por prefixo de pasta; '' = biblioteca inteira", async () => {
@@ -975,16 +1105,160 @@ describe("mockBackend", () => {
       expect(proposals.every((p) => p.error === null)).toBe(true);
     });
 
-    it("com chave, o que o LRCLIB não resolveu passa pelo Vagalume e ganha letra", async () => {
+    // ALTO-5.3 — a regra real (enrich.rs): o Vagalume só é consultado quando
+    // há título E artista REAIS para conferir. Ele não tem duração; a
+    // igualdade de palavras dos dois lados é a única prova que existe, e ela
+    // precisa de um pedido que já signifique alguma coisa.
+    it("com chave, música de tags reais que o LRCLIB não conhece passa pelo Vagalume", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const semTags = songs.find((s) => s.title === "sem_tags")!;
+      await backend.writeTags(semTags.id, "Ponto de Oxum", "Grupo Fixture", null, null);
+
+      const events: EnrichProgress[] = [];
+      await backend.onEnrichProgress((p) => events.push(p));
+      const proposals = await backend.enrichFolderScan("", "s1", "chave-de-teste");
+
+      const doVagalume = proposals.find((p) => p.song_id === semTags.id)!;
+      expect(doVagalume.fonte).toBe("Vagalume");
+      expect(doVagalume.lyrics).toBe(FIXTURE_LYRICS);
+      expect(doVagalume.confidence).toBe("media");
+      expect(events.some((e) => e.etapa === "procurando no Vagalume")).toBe(true);
+    });
+
+    // DECISIONS #63 — foi esta fonte que uma vez gravou "Ponto de Ogum"
+    // dentro de "Ponto de Oxum". Sem tag real dos DOIS lados não há o que
+    // conferir: identificar quem não tem tag é trabalho da impressão digital.
+    it("sem artista real, nem com chave o Vagalume é consultado", async () => {
       await backend.addFolder("/musicas/teste");
       const events: EnrichProgress[] = [];
       await backend.onEnrichProgress((p) => events.push(p));
       const proposals = await backend.enrichFolderScan("", "s1", "chave-de-teste");
 
       const semTags = proposals.find((p) => p.file_path.endsWith("sem_tags.mp3"))!;
-      expect(semTags.fonte).toBe("Vagalume");
-      expect(semTags.lyrics).toBe(FIXTURE_LYRICS);
-      expect(events.some((e) => e.etapa === "procurando no Vagalume")).toBe(true);
+      expect(semTags.fonte).toBe("nome do arquivo");
+      expect(semTags.lyrics).toBeNull();
+      expect(events.some((e) => e.etapa === "procurando no Vagalume")).toBe(false);
+    });
+
+    it("artista placeholder não conta como etiqueta real para o Vagalume", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const semTags = songs.find((s) => s.title === "sem_tags")!;
+      await backend.writeTags(
+        semTags.id,
+        "Ponto de Oxum",
+        "Artista Desconhecido",
+        null,
+        null,
+      );
+
+      const proposals = await backend.enrichFolderScan("", "s1", "chave-de-teste");
+      const proposta = proposals.find((p) => p.song_id === semTags.id)!;
+      expect(proposta.fonte).not.toBe("Vagalume");
+    });
+
+    // Chave recusada é veredito sobre a VARREDURA INTEIRA, não sobre uma
+    // música: 95 linhas repetindo "a chave foi recusada" seriam 95 cópias do
+    // mesmo aviso, e a etapa 3 continuaria batendo num serviço que já disse
+    // não. A primeira música reporta; as seguintes pulam em silêncio.
+    it("chave recusada: a primeira música avisa e a etapa 3 desliga pelo resto da varredura", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const semLetra = songs.find((s) => s.title === "Instrumental Sem Letra")!;
+      const semTags = songs.find((s) => s.title === "sem_tags")!;
+      // as duas com tags reais que o LRCLIB não conhece: as duas chegariam
+      // à etapa do Vagalume
+      await backend.writeTags(semLetra.id, "Xote da Alegria", "Banda Fixture", null, null);
+      await backend.writeTags(semTags.id, "Ponto de Oxum", "Grupo Fixture", null, null);
+      backend._vagalumeKeyRecusada = true;
+
+      const totais: number[] = [];
+      await backend.onEnrichProgress((p) => totais.push(p.total));
+      const proposals = await backend.enrichFolderScan("", "s1", "chave-errada");
+
+      // as duas foram conferidas...
+      expect(totais[0]).toBe(2);
+      // ...e só a primeira reporta a chave recusada; a outra passou em
+      // silêncio (sem proposta, porque não havia nada além da letra a propor)
+      const comErro = proposals.filter((p) => p.error !== null);
+      expect(comErro).toHaveLength(1);
+      expect(comErro[0].song_id).toBe(semLetra.id);
+      expect(comErro[0].error).toBe(
+        "a chave do Vagalume foi recusada — confira se copiou a chave inteira",
+      );
+      expect(proposals.some((p) => p.song_id === semTags.id && p.error !== null)).toBe(
+        false,
+      );
+    });
+
+    it("cada busca individual julga a chave por conta própria", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const semTags = songs.find((s) => s.title === "sem_tags")!;
+      await backend.writeTags(semTags.id, "Ponto de Oxum", "Grupo Fixture", null, null);
+      backend._vagalumeKeyRecusada = true;
+
+      const proposta = await backend.enrichSongScan(semTags.id, "chave-errada");
+      expect(proposta!.error).toBe(
+        "a chave do Vagalume foi recusada — confira se copiou a chave inteira",
+      );
+    });
+
+    // A régua estrita garante que o Vagalume devolveu as MESMAS palavras das
+    // tags atuais: a etapa não propõe trocar nome nenhum, a letra é a
+    // mudança inteira.
+    it("o caminho do Vagalume nunca propõe título ou artista novos", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const semTags = songs.find((s) => s.title === "sem_tags")!;
+      await backend.writeTags(semTags.id, "Ponto de Oxum", "Grupo Fixture", null, null);
+
+      const proposta = (await backend.enrichFolderScan("", "s1", "chave"))!.find(
+        (p) => p.song_id === semTags.id,
+      )!;
+      expect(proposta.proposed_title).toBe("Ponto de Oxum");
+      expect(proposta.proposed_artist).toBe("Grupo Fixture");
+    });
+  });
+
+  // ALTO-2 — a contagem que a seção de curadoria mostra ANTES de disparar sai
+  // do backend, pelo MESMO predicado da varredura. Regra duplicada em
+  // TypeScript foi exatamente o que subcontou até zerar o botão.
+  describe("enrichCount — a contagem de candidatas (V8 — F18)", () => {
+    it("bate com o total do progresso da varredura, música por música", async () => {
+      await backend.addFolder("/musicas/teste");
+      const totais: number[] = [];
+      await backend.onEnrichProgress((p) => totais.push(p.total));
+      await backend.enrichFolderScan("", "s1", null);
+
+      expect(await backend.enrichCount("")).toBe(totais[0]);
+    });
+
+    it("respeita o prefixo de pasta, na fronteira de separador", async () => {
+      await backend.addFolder("/acervo/1");
+      await backend.addFolder("/acervo/10");
+      const um = await backend.enrichCount("/acervo/1");
+      const tudo = await backend.enrichCount("");
+      expect(um).toBeGreaterThan(0);
+      expect(tudo).toBe(um * 2);
+    });
+
+    it("conta o instrumental sem artista — que o Rust também conta", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const semTags = songs.find((s) => s.title === "sem_tags")!;
+      backend._markAsInstrumental(semTags.file_path);
+      expect(await backend.enrichCount("")).toBe(2);
+    });
+
+    it("pasta inteira completa conta zero", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      for (const s of songs) {
+        await backend.writeTags(s.id, s.title, "Artista", "uma letra", null);
+      }
+      expect(await backend.enrichCount("")).toBe(0);
     });
   });
 
@@ -1022,15 +1296,83 @@ describe("mockBackend", () => {
     // O filtro do LOTE existe para poupar rede em centenas de arquivos. Um
     // pedido explícito, música por música, não é poupança nenhuma — e recusar
     // em silêncio deixaria a pessoa clicando num botão que não faz nada.
-    it("pedido à mão roda mesmo em música instrumental e em música completa", async () => {
+    // ALTO-3b: música COMPLETA é consultada mesmo assim ("quem clicou sabe o
+    // que quer"), e é isso que devolve um caminho para rebuscar uma letra.
+    it("pedido à mão roda mesmo em música completa, que já tem letra", async () => {
       await backend.addFolder("/musicas/teste");
       const songs = await backend.listSongs();
       const comLetra = songs.find((s) => s.title === "Coração Sertanejo")!;
-      backend._markAsInstrumental(comLetra.file_path);
 
       const proposta = await backend.enrichSongScan(comLetra.id, null);
       expect(proposta).not.toBeNull();
       expect(proposta!.fonte).toBe("LRCLIB");
+      // a revisão do editor precisa saber que existe letra ali (CRÍTICO-1)
+      expect(proposta!.has_lyrics).toBe(true);
+    });
+
+    // ...mas o curto-circuito de INSTRUMENTAL permanece: ele não é filtro de
+    // completude, é integridade (nenhuma etapa de letra roda sem voz).
+    it("instrumental: o funil roda, mas nenhuma etapa de letra", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const semTags = songs.find((s) => s.title === "sem_tags")!;
+      backend._markAsInstrumental(semTags.file_path);
+
+      const proposta = await backend.enrichSongScan(semTags.id, "chave");
+      expect(proposta).not.toBeNull();
+      expect(proposta!.lyrics).toBeNull();
+      expect(proposta!.fonte).toBe("nome do arquivo");
+    });
+
+    // ALTO-3a — a pessoa abre "Faixa 03", digita "Coracao Sertanejo" e clica
+    // buscar. Sem isto, o backend procurava "Faixa 03": a correção dela nunca
+    // era usada e nada na tela dizia isso.
+    it("o que está DIGITADO no editor substitui a etiqueta do banco na busca", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const semTags = songs.find((s) => s.title === "sem_tags")!;
+
+      const semAjuda = await backend.enrichSongScan(semTags.id, null);
+      expect(semAjuda?.fonte).toBe("nome do arquivo");
+
+      const comTitulo = await backend.enrichSongScan(
+        semTags.id,
+        null,
+        "busca-1",
+        "Coracao Sertanejo",
+        null,
+      );
+      expect(comTitulo!.fonte).toBe("LRCLIB");
+      expect(comTitulo!.confidence).toBe("alta");
+      expect(comTitulo!.lyrics).toBe(FIXTURE_LYRICS);
+    });
+
+    it("digitar título E artista reais abre a etapa do Vagalume", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const semTags = songs.find((s) => s.title === "sem_tags")!;
+
+      const proposta = await backend.enrichSongScan(
+        semTags.id,
+        "chave",
+        "busca-1",
+        "Ponto de Oxum",
+        "Grupo Fixture",
+      );
+      expect(proposta!.fonte).toBe("Vagalume");
+      expect(proposta!.proposed_title).toBe("Ponto de Oxum");
+    });
+
+    // B1 — sem id a busca individual era incancelável: offline, sete palpites
+    // de 10 s cada deixavam o editor em "Buscando…" por mais de um minuto.
+    it("cancelar pelo scanId encerra a busca individual", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      backend._enrichDelayMs = 5;
+      const busca = backend.enrichSongScan(songs[0].id, null, "individual-1");
+      await backend.enrichCancelScan("individual-1");
+      expect(await busca).toBeNull();
+      backend._enrichDelayMs = 0;
     });
 
     it("sem conexão devolve a proposta com o erro, nunca rejeita", async () => {
@@ -1174,7 +1516,12 @@ describe("mockBackend", () => {
       const [doLrclib] = await backend.enrichApply([
         aplicar(
           { ...semLetra, title: doVagalume.song!.title },
-          { lyrics: "letra do lrclib", fonte: "LRCLIB" },
+          {
+            lyrics: "letra do lrclib",
+            fonte: "LRCLIB",
+            // agora existe letra no arquivo: trocá-la exige consentimento
+            substituir_letra: true,
+          },
         ),
       ]);
       expect(doLrclib.song!.letra_origem).toBeNull();
@@ -1303,6 +1650,89 @@ describe("mockBackend", () => {
       expect(results[0].error).toContain("mudou depois da busca");
       expect(results[1].error).toBeNull();
       expect(results[1].song!.title).toBe("Dois");
+    });
+
+    // CRÍTICO-1 — a linha "letra encontrada" chegava pré-marcada e um clique
+    // apagava uma transcrição corrigida à mão. O backend passa a RECUSAR
+    // gravar letra por cima de letra sem consentimento explícito.
+    it("recusa gravar letra por cima de letra existente sem substituir_letra", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const comLetra = songs.find((s) => s.title === "Coração Sertanejo")!;
+
+      const [result] = await backend.enrichApply([
+        aplicar(comLetra, { lyrics: "outra letra qualquer", fonte: "LRCLIB" }),
+      ]);
+      expect(result.song).toBeNull();
+      expect(result.error).toBe(
+        'esta música já tem letra — marque "substituir a letra atual" para trocá-la',
+      );
+      // e a letra que estava lá continua lá
+      expect(await backend.getLyrics(comLetra.id)).toBe(FIXTURE_LYRICS);
+    });
+
+    it("com substituir_letra a troca acontece", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const comLetra = songs.find((s) => s.title === "Coração Sertanejo")!;
+
+      const [result] = await backend.enrichApply([
+        aplicar(comLetra, {
+          lyrics: "outra letra qualquer",
+          fonte: "LRCLIB",
+          substituir_letra: true,
+        }),
+      ]);
+      expect(result.error).toBeNull();
+      expect(await backend.getLyrics(comLetra.id)).toBe("outra letra qualquer");
+    });
+
+    it("música sem letra nenhuma não precisa de consentimento", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const semLetra = songs.find((s) => s.title === "Instrumental Sem Letra")!;
+
+      const [result] = await backend.enrichApply([
+        aplicar(semLetra, { lyrics: "letra nova", fonte: "LRCLIB" }),
+      ]);
+      expect(result.error).toBeNull();
+      expect(await backend.getLyrics(semLetra.id)).toBe("letra nova");
+    });
+
+    it("repassar a MESMA letra não é substituição e não pede consentimento", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const comLetra = songs.find((s) => s.title === "Coração Sertanejo")!;
+
+      const [result] = await backend.enrichApply([
+        aplicar(comLetra, { lyrics: FIXTURE_LYRICS, fonte: "LRCLIB" }),
+      ]);
+      expect(result.error).toBeNull();
+    });
+
+    // ALTO-5 — o mock comparava com `!==` cru enquanto o `mesmo_valor` do
+    // Rust apara espaços e trata None/"" como o mesmo ausente. A diferença
+    // recusava propostas boas dizendo "a música mudou".
+    it("obsolescência: espaço nas pontas e ausente/vazio valem o mesmo valor", async () => {
+      await backend.addFolder("/musicas/teste");
+      const songs = await backend.listSongs();
+      const semTags = songs.find((s) => s.title === "sem_tags")!;
+
+      const [result] = await backend.enrichApply([
+        {
+          song_id: semTags.id,
+          title: "Nome Novo",
+          artist: "Artista Novo",
+          lyrics: null,
+          add_temas: null,
+          current_title: "  sem_tags  ",
+          // o banco tem null; a proposta ecoou "" — é o mesmo ausente
+          current_artist: "",
+          fonte: null,
+        },
+      ]);
+      expect(result.error).toBeNull();
+      expect(result.song!.title).toBe("Nome Novo");
     });
 
     it("id inexistente vira resultado com error (não rejeita)", async () => {

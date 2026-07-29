@@ -9,7 +9,6 @@ import { isUnderFolder } from "./folderTree";
 import { HIGHLIGHT_END, HIGHLIGHT_START } from "./highlight";
 import type {
   Folder,
-  LyricsMatch,
   Playlist,
   PlaylistItem,
   ScanProgress,
@@ -48,9 +47,9 @@ export interface MockBackend extends Backend {
   /** Valor devolvido pelo próximo pickFolder(). */
   _nextPickedFolder: string;
   /**
-   * Simula falta de rede: fetchLyricsOnline rejeita com "sem conexão" (V4);
-   * enrichFolderScan NUNCA rejeita — cada proposta vem com error "sem
-   * conexão" (V5, DECISIONS #47 — mesma semântica do backend real).
+   * Simula falta de rede: o funil NUNCA rejeita — cada proposta vem com
+   * error "sem conexão" e a linha fica desabilitada (V5, DECISIONS #47 —
+   * mesma semântica do backend real).
    */
   _offline: boolean;
   /**
@@ -59,6 +58,12 @@ export interface MockBackend extends Backend {
    * barra de progresso nem o modo "segundo plano".
    */
   _enrichDelayMs: number;
+  /**
+   * Simula uma chave do Vagalume recusada pelo serviço (HTTP 401): a etapa 3
+   * falha com `ERRO_CHAVE_RECUSADA` e, como no Rust, desliga-se pelo resto da
+   * varredura — a primeira música avisa, as seguintes pulam em silêncio.
+   */
+  _vagalumeKeyRecusada: boolean;
   /** Popula a pasta /acervo com subpastas 1/ e 2/ para o E2E da árvore (V4 F11). */
   _seedFolderTree(): void;
 }
@@ -280,6 +285,94 @@ const ETAPA_PREPARANDO = "preparando";
 const FONTE_ARQUIVO = "nome do arquivo";
 const FONTE_LRCLIB = "LRCLIB";
 const FONTE_VAGALUME = "Vagalume";
+/** Fonte das linhas que existem para INFORMAR a falha (enrich::FONTE_ERRO). */
+const FONTE_ERRO = "erro";
+
+/**
+ * Recusa do apply quando a gravação trocaria uma letra que já existe sem o
+ * consentimento explícito da revisão (CRÍTICO-1). Texto idêntico ao do Rust:
+ * ele aparece na linha, e é o único lugar onde a pessoa vai ler o que fazer.
+ */
+/**
+ * Chave do Vagalume rejeitada pelo serviço — mesmo texto do
+ * `vagalume::ERRO_CHAVE_RECUSADA`. É o único erro de rede que vale para a
+ * varredura INTEIRA: os outros ("fora do ar", "espere um pouco") podem ter
+ * sido soluço, e a música seguinte merece a tentativa.
+ */
+const ERRO_CHAVE_RECUSADA =
+  "a chave do Vagalume foi recusada — confira se copiou a chave inteira";
+
+const RECUSA_LETRA_EXISTENTE =
+  'esta música já tem letra — marque "substituir a letra atual" para trocá-la';
+
+// ---------------------------------------------------------------------------
+// Placeholders — porte do `is_placeholder` do Rust (que por sua vez porta o
+// `eh_placeholder` do tools/curadoria.py). Tag placeholder vale VAZIO em todo
+// ponto: não é palpite, não abre o Vagalume e NÃO marca a música como
+// completa. Foi por não olhar isto que a contagem do app dava zero num CD
+// ripado inteiro de "Faixa 01…12 / Artista Desconhecido".
+// ---------------------------------------------------------------------------
+
+const PLACEHOLDERS_EXATOS = new Set([
+  "artist", "no artist", "unknown artist", "artista desconhecido",
+  "artista desconhecida", "unknown", "desconhecido", "desconhecida",
+  "no title", "sem titulo", "untitled", "unknown title", "titulo desconhecido",
+]);
+
+/** Chave normalizada: sem acento, minúscula, só alfanumérico e espaço. */
+function chaveDeTag(texto: string): string {
+  return normalize(texto)
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
+}
+
+/** "AudioTrack 02", "02 Faixa 3", "track", "Pista 3"… */
+const PLACEHOLDER_FAIXA = /^(?:\d+ )?(?:audio ?track|faixa|track|pista)(?: ?\d+)?$/;
+
+function isPlaceholder(texto: string): boolean {
+  const chave = chaveDeTag(texto);
+  if (chave === "" || /^\d+$/.test(chave)) return true;
+  if (PLACEHOLDERS_EXATOS.has(chave)) return true;
+  return PLACEHOLDER_FAIXA.test(chave);
+}
+
+/** A tag como o funil a enxerga: placeholder vira string vazia. */
+function tagReal(texto: string | null | undefined): string {
+  const t = (texto ?? "").trim();
+  return isPlaceholder(t) ? "" : t;
+}
+
+/**
+ * Dois campos valem o MESMO valor (porte do `mesmo_valor` do Rust): espaços
+ * das pontas removidos, `null` e "" tratados como o mesmo ausente. Comparar
+ * com `!==` cru recusava propostas boas dizendo "a música mudou".
+ */
+function mesmoValor(a: string | null | undefined, b: string | null | undefined): boolean {
+  return (a ?? "").trim() === (b ?? "").trim();
+}
+
+/**
+ * O "LRCLIB" do mock: um catálogo minúsculo e determinístico, com as músicas
+ * das fixtures. Quem tem tag real FORA do catálogo é exatamente o caso que a
+ * etapa 3 existe para atender — é assim que o mock ganha um caminho de
+ * Vagalume sem contrariar a regra real (título E artista de verdade).
+ */
+const LRCLIB_CATALOGO: Record<
+  string,
+  { titulo: string; artista: string; alta: boolean }
+> = {
+  // a única ALTA: a duração confere (é a fixture com_letra)
+  "coracao sertanejo": {
+    titulo: "Coração Sertanejo",
+    artista: "Artista Teste",
+    alta: true,
+  },
+  "instrumental sem letra": {
+    titulo: "Instrumental Sem Letra",
+    artista: "Banda Fixture",
+    alta: false,
+  },
+};
 
 /**
  * Etapa do funil em que uma proposta com esta procedência foi resolvida —
@@ -366,95 +459,135 @@ export function createMockBackend(): MockBackend {
   }
 
   /**
+   * Candidata da varredura — o MESMO predicado que o `enrichCount` usa
+   * (ALTO-2/ALTO-5). Porte do `candidata` do Rust:
+   *
+   * - indisponível fica de fora;
+   * - completa = título E artista REAIS (placeholder vale vazio) mais letra;
+   * - para o INSTRUMENTAL a letra sai da conta (V8/F17): sem voz não há letra
+   *   a buscar em fonte nenhuma. Mas ele NÃO é excluído — "instrumental sem
+   *   letra ainda pode (e deve) ter título e artista corretos" (PRD V8), e era
+   *   justamente essa pasta que o app declarava completa com o botão cinza.
+   */
+  function candidataDoFunil(song: SongRecord, folderPrefix: string): boolean {
+    if (!song.available) return false;
+    // prefixo casa na FRONTEIRA de separador ("/m/1" não casa "/m/10/a.mp3"),
+    // como isUnderFolder e o backend Rust
+    if (folderPrefix && !isUnderFolder(song.file_path, folderPrefix)) return false;
+    const nomesProntos = tagReal(song.title) !== "" && tagReal(song.artist) !== "";
+    const completa = nomesProntos && (song.instrumental === true || song.has_lyrics);
+    return !completa;
+  }
+
+  /**
    * O funil inteiro para UMA música (V8/F18), na ordem de custo crescente:
    * o que já está no arquivo → LRCLIB → Vagalume (só com chave). É o mesmo
    * caminho para o lote e para o caso pontual do editor — duas implementações
    * divergiriam, e é justamente a procedência que a pessoa usa para decidir.
+   *
+   * `digitado` são o título/artista VIVOS do editor, quando existem: quem
+   * clicou já corrigiu a etiqueta errada, e procurar pela etiqueta velha era
+   * um beco sem saída com cara de "a internet não tem a minha música".
    */
   function propostaDoFunil(
     song: SongRecord,
     vagalumeKey: string | null,
+    digitado?: { title?: string | null; artist?: string | null },
+    /** Estado da VARREDURA (não da música): a chave já foi recusada? */
+    estado: { chaveRecusada: boolean } = { chaveRecusada: false },
   ): EnrichProposal {
+    const tituloTag = tagReal(digitado?.title ?? song.title);
+    const artistaTag = tagReal(digitado?.artist ?? song.artist);
     const base = {
       song_id: song.id,
       file_path: song.file_path,
       current_title: song.title,
       current_artist: song.artist,
+      // CRÍTICO-1: a revisão precisa saber que existe letra ali, e de que tipo
+      has_lyrics: song.has_lyrics,
+      letra_origem: song.letra_origem ?? null,
     };
+
+    /** Palpite da etapa 1: tag REAL vence o nome do arquivo (nunca apaga). */
+    function propostaDoArquivo(error: string | null): EnrichProposal {
+      const bruto = nomeArquivo(song).replace(/\.[^.]+$/, "");
+      const stem = bruto.replace(/_/g, " ").replace(/\s+/g, " ").trim();
+      const divisor = stem.indexOf(" - ");
+      const [guessArtist, guessTitle] =
+        divisor > 0
+          ? [stem.slice(0, divisor).trim(), stem.slice(divisor + 3).trim()]
+          : [null, stem];
+      // Um título que é o PRÓPRIO nome do arquivo não é etiqueta de ninguém:
+      // foi o indexador que o copiou do disco quando o MP3 não tinha TIT2
+      // (mesma noção do arquivoParaBusca daqui de cima). Tratá-lo como tag
+      // real faria a etapa 1 propor exatamente o que já está lá — e é só por
+      // isso que uma música sem tag nenhuma tem o que receber aqui.
+      const tituloEhOArquivo = chaveDeTag(bruto) === chaveDeTag(song.title);
+      const tituloDeTag = tituloEhOArquivo ? "" : tituloTag;
+      return {
+        ...base,
+        proposed_title: tituloDeTag || guessTitle || song.title,
+        proposed_artist: artistaTag || guessArtist,
+        lyrics: null,
+        confidence: "baixa",
+        fonte: error !== null ? FONTE_ERRO : FONTE_ARQUIVO,
+        error,
+      };
+    }
 
     // arquivo sumido do disco: reporta sem gastar "rede"
     if (state.deletedFiles.includes(song.file_path)) {
-      return {
-        ...base,
-        proposed_title: song.title,
-        proposed_artist: song.artist,
-        lyrics: null,
-        confidence: "baixa",
-        fonte: FONTE_ARQUIVO,
-        error: `arquivo não encontrado: ${song.file_path}`,
-      };
+      return propostaDoArquivo(`arquivo não encontrado: ${song.file_path}`);
     }
 
-    // sem rede: o backend real NUNCA rejeita por rede — o erro vem POR MÚSICA
+    // V8/F17 — as etapas 2 e 3 são etapas de LETRA e param aqui para música
+    // sem voz. NÃO é filtro de completude (o instrumental é candidato e pode
+    // ganhar nome): é integridade. Um instrumental com nomes certos casa com
+    // a versão CANTADA no LRCLIB, sai ALTA e chega PRÉ-MARCADA (DECISIONS
+    // #49) — um clique gravaria a letra de outra gravação no arquivo.
+    if (song.instrumental === true) {
+      return propostaDoArquivo(null);
+    }
+
+    // sem rede: o backend real NUNCA rejeita — o erro vem POR MÚSICA
     // na proposta e a linha fica desabilitada (DECISIONS #47)
     if (backend._offline) {
-      return {
-        ...base,
-        proposed_title: song.title,
-        proposed_artist: song.artist,
-        lyrics: null,
-        confidence: "baixa",
-        fonte: FONTE_LRCLIB,
-        error: "sem conexão",
-      };
+      return propostaDoArquivo("sem conexão");
     }
 
-    // "LRCLIB" determinístico: o único hit ALTA é o da fixture (mesmo
-    // conhecimento do fetchLyricsOnline)
-    if (normalize(song.title).includes("coracao sertanejo")) {
+    // --- etapa 2: LRCLIB (título + duração conferida) ----------------------
+    const hit = LRCLIB_CATALOGO[chaveDeTag(tituloTag)];
+    if (hit) {
       return {
         ...base,
-        proposed_title: "Coração Sertanejo",
-        proposed_artist: "Artista Teste",
+        proposed_title: hit.titulo,
+        proposed_artist: hit.artista,
         lyrics: FIXTURE_LYRICS,
-        confidence: "alta",
+        confidence: hit.alta ? "alta" : "media",
         fonte: FONTE_LRCLIB,
         error: null,
       };
     }
 
-    // título+artista reais → match MÉDIA com letra encontrada no LRCLIB
-    if (song.artist !== null) {
+    // --- etapa 3: Vagalume, só com chave E com as DUAS tags reais ----------
+    //
+    // A regra é a do enrich.rs: o Vagalume não tem duração, e a igualdade de
+    // palavras dos dois lados é a única prova que existe — ela precisa de um
+    // pedido que já signifique alguma coisa. Palpite de nome de arquivo não é
+    // isso. E o caminho NUNCA propõe nome novo: a letra é a mudança inteira
+    // (DECISIONS #63 — "Ponto de Ogum" dentro de "Ponto de Oxum").
+    if (vagalumeKey && tituloTag && artistaTag && !estado.chaveRecusada) {
+      if (backend._vagalumeKeyRecusada) {
+        // veredito sobre a varredura inteira: registra e desliga a etapa —
+        // repetir o mesmo aviso em 95 linhas não informa ninguém, e insistir
+        // seria bater num serviço que já disse não
+        estado.chaveRecusada = true;
+        return propostaDoArquivo(ERRO_CHAVE_RECUSADA);
+      }
       return {
         ...base,
-        proposed_title: song.title,
-        proposed_artist: song.artist,
-        lyrics: FIXTURE_LYRICS,
-        confidence: "media",
-        fonte: FONTE_LRCLIB,
-        error: null,
-      };
-    }
-
-    // resto: só o palpite do nome do arquivo
-    const stem = nomeArquivo(song)
-      .replace(/\.mp3$/i, "")
-      .replace(/_/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    const divisor = stem.indexOf(" - ");
-    const [guessArtist, guessTitle] =
-      divisor > 0
-        ? [stem.slice(0, divisor).trim(), stem.slice(divisor + 3).trim()]
-        : [null, stem];
-
-    // Vagalume é a ÚLTIMA etapa e só existe com a chave gratuita da pessoa
-    // (V8/F18). Sem chave, pula em silêncio: não é erro nem aviso.
-    if (vagalumeKey) {
-      return {
-        ...base,
-        proposed_title: guessTitle || song.title,
-        proposed_artist: guessArtist,
+        proposed_title: tituloTag,
+        proposed_artist: artistaTag,
         lyrics: FIXTURE_LYRICS,
         confidence: "media",
         fonte: FONTE_VAGALUME,
@@ -462,15 +595,8 @@ export function createMockBackend(): MockBackend {
       };
     }
 
-    return {
-      ...base,
-      proposed_title: guessTitle || song.title,
-      proposed_artist: guessArtist,
-      lyrics: null,
-      confidence: "baixa",
-      fonte: FONTE_ARQUIVO,
-      error: null,
-    };
+    // resto: só o palpite da etapa 1
+    return propostaDoArquivo(null);
   }
 
   function songWords(song: SongRecord): string[] {
@@ -483,6 +609,7 @@ export function createMockBackend(): MockBackend {
     _nextPickedFolder: "/musicas/mock",
     _offline: false,
     _enrichDelayMs: 0,
+    _vagalumeKeyRecusada: false,
 
     async addFolder(path: string): Promise<ScanResult> {
       let folder = state.folders.find((f) => f.path === path);
@@ -720,6 +847,7 @@ export function createMockBackend(): MockBackend {
       lyrics: string | null,
       temas: string | null,
       instrumental?: boolean | null,
+      letraOrigem?: string | null,
     ): Promise<Song> {
       const song = state.songs.find((s) => s.id === songId);
       if (!song) {
@@ -741,7 +869,12 @@ export function createMockBackend(): MockBackend {
       // apagar a letra a derruba; repassar a mesma letra (caminho do lote) a
       // preserva. Nunca inventa marca em arquivo que não tinha.
       if (song.lyrics !== letraAnterior) {
-        song.letra_origem = null;
+        // ALTO-4 — quem grava DECLARA a procedência da letra que está
+        // gravando: `null` limpa a marca (comportamento de sempre) e
+        // "vagalume" a registra. Sem isso, a letra que o editor aceitou do
+        // Vagalume ficava indistinguível de uma do LRCLIB, e o mesmo acervo
+        // virava duas pilhas.
+        song.letra_origem = letraOrigem ?? null;
       }
       // A marca de instrumental descreve a MÚSICA, não a letra (V8/F17): só a
       // escolha explícita mexe nela. `undefined`/null = "não mexer", e por isso
@@ -754,25 +887,6 @@ export function createMockBackend(): MockBackend {
       return toSong(song);
     },
 
-    async fetchLyricsOnline(
-      title: string,
-      artist: string | null,
-      _durationSeconds: number,
-    ): Promise<LyricsMatch | null> {
-      if (backend._offline) {
-        throw new Error("sem conexão");
-      }
-      if (normalize(title).includes("coracao sertanejo")) {
-        return {
-          lyrics: FIXTURE_LYRICS,
-          matched_title: "Coração Sertanejo",
-          matched_artist: artist?.trim() || "Artista Teste",
-          confidence: "alta",
-        };
-      }
-      return null;
-    },
-
     async enrichFolderScan(
       folderPrefix: string,
       scanId: string,
@@ -781,24 +895,14 @@ export function createMockBackend(): MockBackend {
       enrichCancelled.delete(scanId);
       // candidatas pré-contadas ANTES do trabalho (como o scan_all): o total
       // do progresso não muda no meio da varredura
-      const candidatas = state.songs.filter((song) => {
-        if (!song.available) return false;
-        // prefixo casa na FRONTEIRA de separador ("/m/1" não casa
-        // "/m/10/a.mp3"), como isUnderFolder e o backend Rust
-        if (folderPrefix && !isUnderFolder(song.file_path, folderPrefix)) {
-          return false;
-        }
-        // V8/F17 — instrumental é pulado por TODA etapa de letra, inclusive
-        // esta (mesma regra do enrich_scan do Rust). Sem isso, a varredura
-        // propõe a letra da versão cantada para uma peça sem voz — e ALTA
-        // chega pré-marcada na revisão (DECISIONS #49).
-        if (song.instrumental === true) return false;
-        // incompleta = sem letra OU sem artista (regra simplificada do Rust)
-        return !(song.has_lyrics && song.artist !== null);
-      });
+      const candidatas = state.songs.filter((song) =>
+        candidataDoFunil(song, folderPrefix),
+      );
 
       const total = candidatas.length;
       const proposals: EnrichProposal[] = [];
+      // vale para a varredura toda, como o `chave_recusada` do Rust
+      const estado = { chaveRecusada: false };
       // primeiro evento com done=0 antes de começar: só o total na tela
       // (mesmo contrato do Rust — `atual` vazio nesse evento)
       emitEnrichProgress(scanId, 0, total, "", ETAPA_PREPARANDO);
@@ -814,7 +918,7 @@ export function createMockBackend(): MockBackend {
           enrichCancelled.delete(scanId);
           return [];
         }
-        const proposta = propostaDoFunil(song, vagalumeKey);
+        const proposta = propostaDoFunil(song, vagalumeKey, undefined, estado);
         proposals.push(proposta);
         // emitido DEPOIS de cada música, com o nome da que acabou de sair e a
         // etapa em que ela foi resolvida (mesmo ponto do on_progress do Rust)
@@ -831,18 +935,40 @@ export function createMockBackend(): MockBackend {
       return proposals.filter((p) => !propostaNoOp(p));
     },
 
+    async enrichCount(folderPrefix: string): Promise<number> {
+      // MESMA função que a varredura usa (ALTO-2): é o ponto inteiro deste
+      // comando existir — a contagem não pode discordar do que vai rodar.
+      return state.songs.filter((song) => candidataDoFunil(song, folderPrefix))
+        .length;
+    },
+
     async enrichSongScan(
       songId: number,
       vagalumeKey: string | null = null,
+      scanId: string | null = null,
+      title: string | null = null,
+      artist: string | null = null,
     ): Promise<EnrichProposal | null> {
       const song = state.songs.find((s) => s.id === songId);
       if (!song) return null;
+      if (scanId) enrichCancelled.delete(scanId);
+      // no app real esta é uma ida à rede que pode levar dezenas de segundos
+      if (backend._enrichDelayMs > 0) {
+        await new Promise((r) => setTimeout(r, backend._enrichDelayMs));
+      }
+      // B1 — a busca individual é cancelável: com a rede fora do ar ela
+      // segurava o editor em "Buscando…" por mais de um minuto, sem saída
+      if (scanId && enrichCancelled.has(scanId)) {
+        enrichCancelled.delete(scanId);
+        return null;
+      }
       // O caso pontual é pedido À MÃO, música por música: aqui a marca de
       // instrumental e a completude NÃO excluem ninguém — quem clicou sabe o
       // que quer, e o filtro do lote existe para poupar rede em centenas de
-      // arquivos, não para recusar um pedido explícito.
-      const proposta = propostaDoFunil(song, vagalumeKey);
-      // sem letra nova E sem nada a corrigir = o funil não achou nada
+      // arquivos, não para recusar um pedido explícito. (O curto-circuito de
+      // letra para instrumental continua DENTRO do funil: é integridade.)
+      const proposta = propostaDoFunil(song, vagalumeKey, { title, artist });
+      // sem letra nova E sem nada a corrigir = procuramos e não veio nada novo
       return propostaNoOp(proposta) ? null : proposta;
     },
 
@@ -888,7 +1014,10 @@ export function createMockBackend(): MockBackend {
         // A5: a varredura demora minutos; se a música mudou nesse meio-tempo
         // (edição à mão), a proposta está velha e reverteria o trabalho do
         // usuário em silêncio — recusa por música, o lote segue
-        if (song.title !== ap.current_title || song.artist !== ap.current_artist) {
+        if (
+          !mesmoValor(song.title, ap.current_title) ||
+          !mesmoValor(song.artist, ap.current_artist)
+        ) {
           results.push({
             song_id: ap.song_id,
             song: null,
@@ -903,6 +1032,24 @@ export function createMockBackend(): MockBackend {
         song.title = ap.title.trim();
         if (ap.artist?.trim()) {
           song.artist = ap.artist.trim();
+        }
+        // CRÍTICO-1 — nunca apagar vale também para a LETRA: gravar letra
+        // nova por cima de uma que já existe exige o consentimento explícito
+        // da revisão. Sem ele o backend recusa, e a linha mostra o que fazer.
+        // Repassar a MESMA letra não é substituição (é o caminho do lote que
+        // preserva a marca de origem).
+        if (
+          ap.lyrics?.trim() &&
+          song.lyrics !== null &&
+          song.lyrics !== ap.lyrics &&
+          ap.substituir_letra !== true
+        ) {
+          results.push({
+            song_id: ap.song_id,
+            song: null,
+            error: RECUSA_LETRA_EXISTENTE,
+          });
+          continue;
         }
         if (ap.lyrics?.trim()) {
           // Mesma regra do writer: letra diferente invalida a marca de origem

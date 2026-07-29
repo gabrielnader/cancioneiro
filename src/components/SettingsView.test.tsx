@@ -7,6 +7,7 @@ import {
   corDoTexto,
 } from "../test/contrast";
 import { estimativaTexto, VAGALUME_URL } from "../lib/curadoria";
+import type { ContagemCandidatas } from "../lib/curadoria";
 import type { Song } from "../lib/types";
 import { useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
@@ -16,12 +17,17 @@ import { SettingsView } from "./SettingsView";
 /** Fundo da tela de Configurações — todo texto novo é lido em cima dele. */
 const FUNDO_CONFIGURACOES = "#F9FAFB";
 
+/** Contagem já respondida pelo backend. */
+const pronta = (total: number): ContagemCandidatas => ({ estado: "pronta", total });
+
 function song(id: number, filePath: string, over: Partial<Song> = {}): Song {
   return {
     id,
     file_path: filePath,
     folder_id: 1,
-    title: `Faixa ${id}`,
+    // título REAL: "Faixa 3" é placeholder de ripador para o funil, e uma
+    // música de título placeholder está incompleta mesmo com letra (ALTO-2)
+    title: `Canção ${id}`,
     artist: "Artista",
     album: null,
     duration_seconds: 100,
@@ -31,9 +37,16 @@ function song(id: number, filePath: string, over: Partial<Song> = {}): Song {
   };
 }
 
+/** enrichCount da vez — cada teste pode trocá-lo antes de renderizar. */
+let enrichCount: ReturnType<typeof vi.fn>;
+
 function estadoBase() {
+  // a contagem de candidatas vem do BACKEND (mesma função da varredura):
+  // por padrão, as duas incompletas do acervo de teste
+  enrichCount = vi.fn(async (prefix: string) => (prefix === "/acervo/1" ? 1 : 2));
   setBackendForTests({
     onScanProgress: vi.fn(async () => () => {}),
+    enrichCount,
   } as unknown as Backend);
   useUiStore.setState({ view: "settings", vagalumeApiKey: "" });
   useLibraryStore.setState({
@@ -115,14 +128,44 @@ describe("SettingsView — seção de curadoria (V8 F18)", () => {
     ]);
   });
 
-  it("a estimativa acompanha a pasta escolhida", () => {
+  // ALTO-2 — a contagem NÃO é recalculada em TypeScript: ela vem do backend,
+  // pela mesma função que a varredura usa. A cópia local divergia em três
+  // casos (instrumental sem artista, "Faixa 03", "Artista Desconhecido"),
+  // subcontava até zero e desabilitava o único ponto de entrada do produto.
+  it("a estimativa vem do backend e acompanha a pasta escolhida", async () => {
     render(<SettingsView />);
-    // biblioteca inteira: duas incompletas
-    expect(screen.getByText(estimativaTexto(2))).toBeInTheDocument();
+    expect(await screen.findByText(estimativaTexto(pronta(2), 3))).toBeInTheDocument();
+    expect(enrichCount).toHaveBeenCalledWith("");
+
     fireEvent.change(screen.getByLabelText("Pasta a curar"), {
       target: { value: "/acervo/1" },
     });
-    expect(screen.getByText(estimativaTexto(1))).toBeInTheDocument();
+    expect(await screen.findByText(estimativaTexto(pronta(1), 2))).toBeInTheDocument();
+    expect(enrichCount).toHaveBeenCalledWith("/acervo/1");
+  });
+
+  // A contagem virou uma chamada: enquanto ela não volta, a tela diz o que
+  // está fazendo — e NUNCA desabilita o disparo por isso.
+  it("contagem ainda em curso: texto honesto e botão liberado", () => {
+    enrichCount.mockImplementation(() => new Promise(() => {}));
+    render(<SettingsView />);
+    expect(
+      screen.getByText(estimativaTexto({ estado: "contando" }, 3)),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Buscar dados desta pasta" }),
+    ).toBeEnabled();
+  });
+
+  it("contagem que falhou não vira impedimento: admite e deixa buscar", async () => {
+    enrichCount.mockRejectedValue(new Error("sem banco"));
+    render(<SettingsView />);
+    expect(
+      await screen.findByText(estimativaTexto({ estado: "indisponivel" }, 3)),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Buscar dados desta pasta" }),
+    ).toBeEnabled();
   });
 
   it("dispara a varredura com o prefixo escolhido", () => {
@@ -136,37 +179,58 @@ describe("SettingsView — seção de curadoria (V8 F18)", () => {
     expect(startScan).toHaveBeenCalledWith("/acervo/2");
   });
 
-  it("pasta sem nenhuma música incompleta: não deixa disparar e diz por quê", () => {
-    useLibraryStore.setState({
-      allSongs: [song(1, "/acervo/1/completa.mp3")],
-    });
+  it("pasta sem nenhuma música incompleta: não deixa disparar e diz por quê", async () => {
+    enrichCount.mockResolvedValue(0);
+    useLibraryStore.setState({ allSongs: [song(1, "/acervo/1/completa.mp3")] });
     render(<SettingsView />);
-    const botao = screen.getByRole("button", { name: "Buscar dados desta pasta" });
-    expect(botao).toBeDisabled();
-    expect(screen.getByText(estimativaTexto(0))).toBeInTheDocument();
+    expect(
+      await screen.findByText(estimativaTexto(pronta(0), 1)),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Buscar dados desta pasta" }),
+    ).toBeDisabled();
   });
 
-  it("uma varredura já rodando bloqueia o disparo, com o motivo na dica", () => {
+  // MÉDIO-11 — sem pasta nenhuma a tela dizia "nenhuma música desta pasta
+  // está sem título, artista ou letra": descrevia ZERO músicas como completas.
+  it("biblioteca sem música: não afirma completude, diz o que fazer", async () => {
+    enrichCount.mockResolvedValue(0);
+    useLibraryStore.setState({ allSongs: [], folders: [] });
+    render(<SettingsView />);
+    const secao = secaoCuradoria();
+    expect(secao).toHaveTextContent("Não há nenhuma música nesta pasta");
+    expect(secao).toHaveTextContent("Adicione uma pasta de música");
+    await screen.findByText(/Não há nenhuma música nesta pasta/);
+  });
+
+  // MÉDIO-14 — <button> desabilitado não recebe foco e `title` não é anunciado
+  // de forma confiável: quem usa teclado ou leitor de tela via um botão cinza
+  // e nenhuma explicação. O motivo é TEXTO na tela, ligado ao botão.
+  it("uma varredura já rodando bloqueia o disparo, com o motivo VISÍVEL", () => {
     useEnrichStore.setState({ status: "scanning" });
     render(<SettingsView />);
     const botao = screen.getByRole("button", { name: "Buscar dados desta pasta" });
     expect(botao).toBeDisabled();
-    expect(botao).toHaveAttribute(
-      "title",
-      "Uma busca de dados já está em andamento",
+    const motivo = screen.getByText(
+      "Uma busca de dados já está em andamento — espere ela terminar.",
     );
+    expect(motivo).toBeVisible();
+    expect(botao).toHaveAttribute("aria-describedby", motivo.id);
   });
 
-  // M4: depois do "Cancelar" o invoke ainda responde por alguns segundos.
-  it("varredura cancelada e ainda respondendo: segue bloqueado, com o porquê", () => {
+  // M4: depois do "Cancelar" o invoke ainda responde por alguns segundos —
+  // e neste estado a tela não renderizava NADA (nem scanning, nem review).
+  it("varredura cancelada e ainda respondendo: segue bloqueado, com o porquê na tela", () => {
     useEnrichStore.setState({ status: "idle", scanInFlight: true });
     render(<SettingsView />);
     expect(
       screen.getByRole("button", { name: "Buscar dados desta pasta" }),
-    ).toHaveAttribute(
-      "title",
-      "Terminando de encerrar a busca anterior — aguarde alguns segundos",
-    );
+    ).toBeDisabled();
+    expect(
+      screen.getByText(
+        "Terminando de encerrar a busca anterior — aguarde alguns segundos.",
+      ),
+    ).toBeVisible();
   });
 
   it("com a varredura em segundo plano, a seção mostra contagem, etapa e o caminho de volta", () => {
@@ -204,6 +268,19 @@ describe("SettingsView — chave do Vagalume (V8 F18)", () => {
     expect(texto).toContain("Sem a chave");
   });
 
+  // MÉDIO-10 — a chave É gravada em disco (localStorage das preferências), e
+  // quatro lugares diziam que não. A decisão de produto é mantê-la guardada:
+  // 40 pessoas sem suporte redigitando uma chave a cada sessão é pior. O que
+  // muda é a verdade do texto, que é a única coisa que essas pessoas têm.
+  it("diz a verdade sobre onde a chave fica guardada e para onde ela vai", () => {
+    render(<SettingsView />);
+    const texto = secaoCuradoria().textContent ?? "";
+    expect(texto).toContain("Ela fica guardada nas preferências do aplicativo");
+    expect(texto).toContain("neste computador");
+    expect(texto).toContain("não vai para o banco de músicas");
+    expect(texto).toContain("não vai para nenhum outro lugar além do próprio Vagalume");
+  });
+
   it("digitar guarda nas preferências; apagar volta ao estado sem chave", () => {
     render(<SettingsView />);
     const campo = screen.getByLabelText("Chave do Vagalume (opcional)");
@@ -236,22 +313,74 @@ describe("SettingsView — chave do Vagalume (V8 F18)", () => {
 describe("SettingsView — acessibilidade da seção nova", () => {
   beforeEach(estadoBase);
 
-  it("todo texto da curadoria passa em AA (4,5:1) no fundo de Configurações", () => {
-    render(<SettingsView />);
-    const secao = secaoCuradoria();
-    // varre TODOS os elementos da seção, não uma lista que o autor lembrou
-    // (DECISIONS #76): texto novo entra passando ou não entra.
+  /**
+   * Fundo REAL do elemento: o do ancestral mais próximo que declara um, e
+   * não o da página. O bloco de progresso é #F0FDFA e o texto dele nunca
+   * tinha sido medido contra o próprio fundo.
+   */
+  function fundoDe(el: HTMLElement, raiz: HTMLElement): string {
+    let atual: HTMLElement | null = el;
+    while (atual) {
+      const m = /bg-\[(#[0-9a-fA-F]{6})\]/.exec(atual.className ?? "");
+      if (m) return m[1];
+      if (atual === raiz) break;
+      atual = atual.parentElement;
+    }
+    return FUNDO_CONFIGURACOES;
+  }
+
+  function varrerContraste(secao: HTMLElement): number {
     const comCor = [...secao.querySelectorAll<HTMLElement>("*")].filter((el) =>
       /text-\[#[0-9a-fA-F]{6}\]/.test(el.className),
     );
-    expect(comCor.length).toBeGreaterThan(0);
     for (const el of comCor) {
-      const classe = el.className;
-      const razao = contrastRatio(corDoTexto(classe), FUNDO_CONFIGURACOES);
+      const cor = corDoTexto(el.className);
+      const razao = contrastRatio(cor, fundoDe(el, secao));
       expect(
         razao,
-        `"${el.textContent?.slice(0, 40)}" em ${corDoTexto(classe)}`,
+        `"${el.textContent?.slice(0, 40)}" em ${cor} sobre ${fundoDe(el, secao)}`,
       ).toBeGreaterThanOrEqual(AA_TEXTO_NORMAL);
+    }
+    return comCor.length;
+  }
+
+  // MÉDIO-14 — a varredura só rodava no estado `idle`, e a afirmação "varre
+  // TODOS os elementos" (DECISIONS #76) só valia de um estado: o bloco de
+  // progresso (#115E59 sobre #F0FDFA) nunca era medido.
+  it("todo texto da curadoria passa em AA — em TODOS os estados da seção", () => {
+    const estados: Array<[string, () => void]> = [
+      ["parada", () => {}],
+      [
+        "varrendo",
+        () =>
+          useEnrichStore.setState({
+            status: "scanning",
+            overlayOpen: false,
+            progress: {
+              done: 25,
+              total: 95,
+              atual: "x.mp3",
+              etapa: "procurando no LRCLIB",
+              scan_id: "s1",
+            },
+          }),
+      ],
+      [
+        "revisão pendente",
+        () => useEnrichStore.setState({ status: "review", proposals: [] }),
+      ],
+      [
+        "encerrando",
+        () => useEnrichStore.setState({ status: "idle", scanInFlight: true }),
+      ],
+    ];
+    for (const [nome, preparar] of estados) {
+      estadoBase();
+      preparar();
+      const { unmount } = render(<SettingsView />);
+      const medidos = varrerContraste(secaoCuradoria());
+      expect(medidos, `estado ${nome} sem texto medido`).toBeGreaterThan(0);
+      unmount();
     }
   });
 

@@ -6,14 +6,27 @@ import {
 } from "react";
 import { audioController } from "../hooks/playerAudioCore";
 import { getBackend, type EnrichApply, type EnrichProposal } from "../lib/api";
-import { textoAplicado, textoSemPropostas } from "../lib/curadoria";
+import {
+  LABEL_SUBSTITUIR_LETRA,
+  avisoLetraExistente,
+  textoAplicado,
+  textoSemPropostas,
+} from "../lib/curadoria";
 import { useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlayerStore } from "../stores/playerStore";
 import { usePlaylistStore } from "../stores/playlistStore";
 import { useToastStore } from "../stores/toastStore";
 
-/** Seleção inicial: ALTA pré-marcada; MÉDIA/BAIXA a cargo do humano. */
+/**
+ * Seleção inicial: ALTA pré-marcada; MÉDIA/BAIXA a cargo do humano.
+ *
+ * A pré-marcação continua (DECISIONS #49) PORQUE ela agora só aplica NOMES:
+ * a letra que passaria por cima de uma letra existente depende de uma segunda
+ * marcação, separada e sempre desmarcada (ver `substituiriaLetra`). Era essa
+ * combinação — ALTA pré-marcada + letra embutida na mesma marcação — que
+ * apagava uma transcrição corrigida à mão com um clique.
+ */
 function defaultSelection(
   proposals: EnrichProposal[],
   applyErrors: Record<number, string>,
@@ -28,6 +41,23 @@ function defaultSelection(
       )
       .map((p) => p.song_id),
   );
+}
+
+/**
+ * A recusa do backend quando falta consentimento cita, textualmente, o rótulo
+ * da marcação. É por esse texto que a UI reconhece o caso: o banco pode estar
+ * atrasado em relação ao arquivo (alguém escreveu a letra à mão DURANTE a
+ * varredura), e aí quem sabe da verdade é o backend, não a proposta.
+ */
+function erroPedeConsentimento(erro: string | null): boolean {
+  if (erro === null) return false;
+  return erro.toLowerCase().includes(LABEL_SUBSTITUIR_LETRA.toLowerCase());
+}
+
+/** Esta linha gravaria letra NOVA por cima de uma letra que já existe? */
+function substituiriaLetra(p: EnrichProposal, erro: string | null): boolean {
+  if (p.lyrics === null) return false;
+  return p.has_lyrics || erroPedeConsentimento(erro);
 }
 
 const BADGES: Record<
@@ -63,6 +93,17 @@ export function EnrichReview() {
   const retainFailures = useEnrichStore((s) => s.retainFailures);
   const push = useToastStore((s) => s.push);
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  /**
+   * Consentimento POR LINHA para trocar uma letra que já existe. Vive separado
+   * de `selected` de propósito: aplicar a linha e destruir a letra são duas
+   * decisões diferentes, e só uma delas é reversível.
+   */
+  const [substituir, setSubstituir] = useState<Set<number>>(new Set());
+  /**
+   * Recusas de consentimento que a pessoa acabou de resolver marcando a
+   * substituição: a linha volta a ser aplicável sem esperar nova varredura.
+   */
+  const [consentidos, setConsentidos] = useState<Set<number>>(new Set());
   const [busy, setBusy] = useState(false);
   /** Único texto lido por leitor de tela: só transições, nunca cada arquivo. */
   const [anuncio, setAnuncio] = useState("");
@@ -73,6 +114,8 @@ export function EnrichReview() {
   // a varredura resolve com o overlay já aberto: re-inicializa a seleção
   useEffect(() => {
     setSelected(defaultSelection(proposals, applyErrors));
+    setSubstituir(new Set());
+    setConsentidos(new Set());
   }, [proposals, applyErrors]);
 
   const visible = status !== "idle" && overlayOpen;
@@ -140,7 +183,13 @@ export function EnrichReview() {
 
   /** Erro da linha: o da proposta (varredura) ou o devolvido pelo apply. */
   function rowError(p: EnrichProposal): string | null {
-    return p.error ?? applyErrors[p.song_id] ?? null;
+    if (p.error !== null) return p.error;
+    const doApply = applyErrors[p.song_id];
+    if (doApply === undefined) return null;
+    // recusa por falta de consentimento que a pessoa já resolveu: a linha
+    // volta a valer (o erro descrevia a tentativa anterior, não esta)
+    if (consentidos.has(p.song_id) && erroPedeConsentimento(doApply)) return null;
+    return doApply;
   }
 
   /** Focus trap mínimo: Tab no fim volta ao início (e vice-versa). */
@@ -190,6 +239,28 @@ export function EnrichReview() {
     });
   }
 
+  /**
+   * Marca/desmarca a substituição da letra desta linha. Marcar é também a
+   * resposta ao backend que recusou por falta de consentimento: a linha
+   * destrava e passa a valer para o próximo "Aplicar".
+   */
+  function toggleSubstituir(songId: number) {
+    const marcando = !substituir.has(songId);
+    const alternar = (prev: Set<number>) => {
+      const next = new Set(prev);
+      if (marcando) {
+        next.add(songId);
+      } else {
+        next.delete(songId);
+      }
+      return next;
+    };
+    setSubstituir(alternar);
+    setConsentidos(alternar);
+    // marcar a substituição só faz sentido com a linha aplicada
+    if (marcando) setSelected((prev) => new Set(prev).add(songId));
+  }
+
   async function handleApply() {
     const chosen = proposals.filter(
       (p) => rowError(p) === null && selected.has(p.song_id),
@@ -211,17 +282,30 @@ export function EnrichReview() {
     // nunca-apaga: null = "não mexer"; temas não fazem parte das propostas F13.
     // current_* = o que a varredura viu: o backend recusa a proposta se a
     // música mudou desde então (A5), em vez de reverter a edição manual.
-    const aplicacoes: EnrichApply[] = chosen.map((p) => ({
-      song_id: p.song_id,
-      title: p.proposed_title,
-      artist: p.proposed_artist ?? null,
-      lyrics: p.lyrics ?? null,
-      add_temas: null,
-      current_title: p.current_title,
-      current_artist: p.current_artist,
-      // a procedência viaja junto: é ela que decide o TXXX:LETRA_ORIGEM
-      fonte: p.fonte || null,
-    }));
+    //
+    // CRÍTICO-1 — "nunca apaga" vale para a LETRA: quando a linha passaria por
+    // cima de uma letra existente, a letra só viaja se a segunda marcação
+    // estiver marcada. Sem ela a linha aplica só título e artista, que é o
+    // valor real dessas linhas.
+    const aplicacoes: EnrichApply[] = chosen.map((p) => {
+      const trocaLetra = substituiriaLetra(p, applyErrors[p.song_id] ?? null);
+      const consentida = substituir.has(p.song_id);
+      const letra = trocaLetra && !consentida ? null : (p.lyrics ?? null);
+      return {
+        song_id: p.song_id,
+        title: p.proposed_title,
+        artist: p.proposed_artist ?? null,
+        lyrics: letra,
+        add_temas: null,
+        current_title: p.current_title,
+        current_artist: p.current_artist,
+        // a procedência viaja junto: é ela que decide o TXXX:LETRA_ORIGEM
+        fonte: p.fonte || null,
+        ...(trocaLetra && consentida ? { substituir_letra: true } : {}),
+      };
+    });
+    /** O que foi realmente ENVIADO por música — é isso que o aviso conta. */
+    const enviado = new Map(aplicacoes.map((a) => [a.song_id, a]));
 
     // Estado ANTES da gravação: é a única forma honesta de dizer "ganhou
     // letra" — uma proposta com letra pode ser para uma música que já tinha
@@ -252,12 +336,21 @@ export function EnrichReview() {
         // Os dois grupos são disjuntos (quem ganhou letra não é recontada na
         // correção de nome): senão as contas somariam mais que o total.
         let ganharamLetra = 0;
+        let letraSubstituida = 0;
         let nomeCorrigido = 0;
         for (const r of gravadas) {
           const p = proposals.find((x) => x.song_id === r.song_id);
-          if (!p) continue;
-          if (p.lyrics !== null && antes.get(p.song_id) !== true) {
-            ganharamLetra++;
+          const a = enviado.get(r.song_id);
+          if (!p || !a) continue;
+          // conta pelo que FOI ENVIADO: a linha marcada sem substituição não
+          // mandou letra nenhuma, e dizer que ela "ganhou letra" seria contar
+          // uma mudança que não houve
+          if (a.lyrics !== null) {
+            if (antes.get(p.song_id) === true) {
+              letraSubstituida++;
+            } else {
+              ganharamLetra++;
+            }
           } else if (
             p.proposed_title !== p.current_title ||
             (p.proposed_artist ?? null) !== (p.current_artist ?? null)
@@ -266,7 +359,12 @@ export function EnrichReview() {
           }
         }
         push(
-          textoAplicado(ganharamLetra, nomeCorrigido, gravadas.length),
+          textoAplicado({
+            ganharamLetra,
+            letraSubstituida,
+            nomeCorrigido,
+            gravadas: gravadas.length,
+          }),
           "success",
         );
       }
@@ -295,8 +393,21 @@ export function EnrichReview() {
     }
   }
 
+  // MÉDIO-12 — o cabeçalho conta OFERTAS. Linha com erro não é proposta: ela
+  // existe para informar que a música foi tentada e falhou, e somá-la à
+  // confiança produzia "95 propostas — 0 alta, 0 média, 95 baixa" seguido de
+  // um "Aplicar selecionadas (0)" desabilitado e sem explicação.
+  const ofertas = proposals.filter((p) => rowError(p) === null);
+  const comErro = proposals.length - ofertas.length;
   const counts = { alta: 0, media: 0, baixa: 0 };
-  for (const p of proposals) counts[p.confidence]++;
+  for (const p of ofertas) counts[p.confidence]++;
+  const quantasOfertas =
+    ofertas.length === 1 ? "1 proposta" : `${ofertas.length} propostas`;
+  const tituloDoCabecalho =
+    ofertas.length === 0
+      ? "Nenhuma proposta para aplicar."
+      : `${quantasOfertas} — ${counts.alta} alta, ${counts.media} média,` +
+        ` ${counts.baixa} baixa`;
 
   return (
     <div
@@ -400,14 +511,13 @@ export function EnrichReview() {
           <>
             <div className="flex flex-wrap items-center gap-2 pb-3">
               <h2 className="text-[16px] font-semibold text-[#111827]">
-                {proposals.length === 1
-                  ? "1 proposta"
-                  : `${proposals.length} propostas`}{" "}
-                — {counts.alta} alta, {counts.media} média, {counts.baixa} baixa
+                {tituloDoCabecalho}
               </h2>
               <span className="ml-auto flex gap-2">
                 <button
                   type="button"
+                  // marca as linhas aplicáveis e SÓ isso: a substituição de
+                  // letra nunca entra num gesto de massa (CRÍTICO-1)
                   onClick={() =>
                     setSelected(
                       new Set(
@@ -423,19 +533,38 @@ export function EnrichReview() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setSelected(new Set())}
+                  onClick={() => {
+                    setSelected(new Set());
+                    // "nada será aplicado" inclui não trocar letra nenhuma
+                    setSubstituir(new Set());
+                    setConsentidos(new Set());
+                  }}
                   className="rounded-md px-2 py-1 text-[13px] font-medium text-[#0F766E] hover:bg-[#F0FDFA]"
                 >
                   Desmarcar todas
                 </button>
               </span>
             </div>
+            {comErro > 0 && (
+              // as linhas de erro existem para INFORMAR (DECISIONS #47): dizer
+              // quantas são aqui em cima evita a leitura de que a busca
+              // "não achou nada" quando na verdade ela nem chegou lá
+              <p className="pb-3 text-[13px] text-[#5B6472]">
+                {comErro === 1
+                  ? "1 música não pôde ser consultada — o motivo está na linha dela."
+                  : `${comErro} músicas não puderam ser consultadas — o motivo está em cada linha.`}
+              </p>
+            )}
 
             <ul className="min-h-0 flex-1 divide-y divide-[#F3F4F6] overflow-y-auto">
               {proposals.map((p) => {
                 const error = rowError(p);
                 const disabled = error !== null;
                 const badge = BADGES[p.confidence];
+                const trocaLetra = substituiriaLetra(
+                  p,
+                  applyErrors[p.song_id] ?? null,
+                );
                 return (
                   <li
                     key={p.song_id}
@@ -454,18 +583,24 @@ export function EnrichReview() {
                         <span className="truncate text-[#6B7280]">
                           {nomeCompleto(p.current_title, p.current_artist)}
                         </span>
-                        <span aria-hidden="true" className="text-[#9CA3AF]">
+                        {/* a seta é decorativa (aria-hidden), mas continua
+                            sendo tinta na tela de quem enxerga pouco: #9CA3AF
+                            dava 2,5:1 no branco. #6B7280 dá 4,8:1 e a varredura
+                            de contraste deste arquivo não precisa de exceções
+                            (DECISIONS #76). */}
+                        <span aria-hidden="true" className="text-[#6B7280]">
                           →
                         </span>
                         <span className="truncate font-medium text-[#111827]">
                           {nomeCompleto(p.proposed_title, p.proposed_artist)}
                         </span>
                       </span>
-                      {error !== null ? (
+                      {error !== null && (
                         <span className="block text-[13px] text-[#B91C1C]">
                           {error}
                         </span>
-                      ) : (
+                      )}
+                      {error === null && (
                         // V8/F18 — procedência sempre à vista: ALTA vinda do
                         // LRCLIB (que confere a duração) e ALTA vinda de um
                         // palpite de nome de arquivo não se decidem igual.
@@ -478,6 +613,32 @@ export function EnrichReview() {
                           )}
                         </span>
                       )}
+                      {/*
+                        CRÍTICO-1 — a linha que substituiria uma letra existente
+                        DIZ isso, visível, e traz a sua própria marcação. Ela
+                        aparece mesmo com erro na linha: quando a recusa do
+                        backend foi justamente a falta deste consentimento, é
+                        aqui que a pessoa responde — senão a mensagem manda
+                        marcar algo que não existe na tela.
+                      */}
+                      {trocaLetra && (
+                        <>
+                          <span className="mt-0.5 block text-[13px] text-[#854D0E]">
+                            {avisoLetraExistente(p.letra_origem)}
+                          </span>
+                          <label className="mt-0.5 flex items-start gap-2 text-[13px] text-[#374151]">
+                            <input
+                              type="checkbox"
+                              aria-label={`${LABEL_SUBSTITUIR_LETRA}: ${p.current_title}`}
+                              disabled={busy}
+                              checked={substituir.has(p.song_id)}
+                              onChange={() => toggleSubstituir(p.song_id)}
+                              className="mt-0.5 h-4 w-4 shrink-0 accent-[#0F766E]"
+                            />
+                            <span>{LABEL_SUBSTITUIR_LETRA}</span>
+                          </label>
+                        </>
+                      )}
                     </span>
                     <span
                       className={`mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[11px] font-semibold ${badge.className}`}
@@ -489,7 +650,19 @@ export function EnrichReview() {
               })}
             </ul>
 
-            <div className="mt-4 flex shrink-0 items-center justify-end gap-2">
+            <div className="mt-4 flex shrink-0 flex-wrap items-center justify-end gap-2">
+              {/*
+                MÉDIO-12 — "Aplicar selecionadas (0)" cinza, sem uma palavra de
+                explicação, era um beco: a pessoa tinha acabado de clicar em
+                "Marcar todas" e nada acontecera.
+              */}
+              {selected.size === 0 && (
+                <p className="mr-auto text-[13px] text-[#5B6472]">
+                  {ofertas.length === 0
+                    ? "Não há nada a aplicar nesta lista."
+                    : "Marque ao menos uma linha para aplicar."}
+                </p>
+              )}
               {closeButton}
               <button
                 type="button"

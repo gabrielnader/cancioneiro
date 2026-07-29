@@ -763,8 +763,10 @@ test.describe("V4", () => {
 
     await panel.getByRole("button", { name: "Editar" }).click();
     await panel.getByRole("button", { name: "Buscar dados na internet" }).click();
+    // ALTO-3b: o texto fala de "nada novo" — a busca ACONTECEU, e é só isso
+    // que o `null` do backend passou a significar
     await expect(
-      panel.getByText(/Não achamos esta música nos sites de letra/),
+      panel.getByText(/não achamos nada novo para esta música nos sites de letra/),
     ).toBeVisible();
     // não lê como fracasso nem como "esta música está completa"
     await expect(panel.getByText(/Isso é comum/)).toBeVisible();
@@ -1039,10 +1041,13 @@ test.describe("V5 — Completar dados em lote (F13)", () => {
     await expect(page.getByRole("button", { name: /Buscando dados/ })).toHaveCount(0);
     // o invoke ainda está respondendo: começar outra agora sobreporia as duas
     await expect(abrir).toBeDisabled();
-    await expect(abrir).toHaveAttribute(
-      "title",
-      "Terminando de encerrar a busca anterior — aguarde alguns segundos",
-    );
+    // MÉDIO-14: o motivo é TEXTO na tela (botão desabilitado não recebe foco,
+    // e `title` não é anunciado de forma confiável)
+    await expect(
+      page.getByText(
+        "Terminando de encerrar a busca anterior — aguarde alguns segundos.",
+      ),
+    ).toBeVisible();
 
     // quando o invoke enfim responde, o botão volta e a varredura recomeça do zero
     await expect(abrir).toBeEnabled({ timeout: 15000 });
@@ -1150,6 +1155,19 @@ test.describe("V8 — O funil dentro do app (F18)", () => {
     await resetApp(page);
     await addMockFolder(page);
 
+    // QA ALTO-5: o Vagalume só é consultado quando existem título E artista
+    // REAIS para conferir (enrich.rs) — ele não tem duração, e a igualdade de
+    // palavras dos dois lados é a única prova que existe. Então a música que
+    // vai chegar lá é uma de tags boas que o LRCLIB não conhece, e não a
+    // sem_tags (que antes exercitava uma chamada que o backend nunca faria).
+    const panel = page.getByLabel("Painel de letra");
+    await page.getByText("sem_tags", { exact: true }).first().click();
+    await panel.getByRole("button", { name: "Editar" }).click();
+    await panel.getByLabel("Título").fill("Ponto de Oxum");
+    await panel.getByLabel("Artista").fill("Grupo Fixture");
+    await panel.getByRole("button", { name: "Salvar no arquivo" }).click();
+    await expect(page.getByText("Alterações salvas em sem_tags.mp3.")).toBeVisible();
+
     await page.getByRole("button", { name: "Configurações" }).click();
     const campo = page.getByLabel("Chave do Vagalume (opcional)");
     // o endereço para pegar a chave gratuita está ali, escrito
@@ -1158,7 +1176,11 @@ test.describe("V8 — O funil dentro do app (F18)", () => {
     ).toBeVisible();
     await campo.fill("chave-de-teste");
 
-    // preferência como as outras: sobrevive ao reinício do app
+    // preferência como as outras: sobrevive ao reinício do app — e a tela diz
+    // que ela fica guardada nesta máquina (QA MÉDIO-10)
+    await expect(
+      page.getByText(/Ela fica guardada nas preferências do aplicativo/),
+    ).toBeVisible();
     await page.reload();
     await page.getByRole("button", { name: "Configurações" }).click();
     await expect(page.getByLabel("Chave do Vagalume (opcional)")).toHaveValue(
@@ -1170,10 +1192,36 @@ test.describe("V8 — O funil dentro do app (F18)", () => {
     const dialog = page.getByRole("dialog", { name: "Completar dados" });
     await expect(dialog.getByText("via Vagalume")).toBeVisible();
     await expect(dialog.getByText("via LRCLIB")).toBeVisible();
-    // sem chave, a mesma música vinha BAIXA e sem letra
+    // e esse caminho NUNCA propõe nome novo (DECISIONS #63): a letra é a
+    // mudança inteira
+    await expect(dialog.getByText("Ponto de Oxum — Grupo Fixture")).toHaveCount(2);
     await expect(
       dialog.getByText("2 propostas — 0 alta, 2 média, 0 baixa"),
     ).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
+  // QA ALTO-5 — sem artista real, nem com chave o Vagalume entra: identificar
+  // quem não tem etiqueta é trabalho da impressão digital (fase 2), e chutar
+  // pelo nome do arquivo é como se grava "Ponto de Ogum" dentro de "Ponto de
+  // Oxum" (DECISIONS #63).
+  test("sem etiqueta de artista, a chave do Vagalume não muda nada", async ({
+    page,
+  }) => {
+    const errors = trackErrors(page);
+    await resetApp(page);
+    await addMockFolder(page);
+
+    await page.getByRole("button", { name: "Configurações" }).click();
+    await page.getByLabel("Chave do Vagalume (opcional)").fill("chave-de-teste");
+    await page.getByRole("button", { name: "Buscar dados desta pasta" }).click();
+
+    const dialog = page.getByRole("dialog", { name: "Completar dados" });
+    await expect(
+      dialog.getByText("2 propostas — 0 alta, 1 média, 1 baixa"),
+    ).toBeVisible();
+    await expect(dialog.getByText("via Vagalume")).toHaveCount(0);
+    await expect(dialog.getByText("via nome do arquivo")).toBeVisible();
     expect(errors).toEqual([]);
   });
 
@@ -1214,17 +1262,92 @@ test.describe("V8 — O funil dentro do app (F18)", () => {
     expect(errors).toEqual([]);
   });
 
-  test("pasta sem música incompleta: o disparo fica bloqueado, com o motivo escrito", async ({
+  // QA MÉDIO-11 — sem nenhuma pasta adicionada, a tela afirmava "nenhuma
+  // música desta pasta está sem título, artista ou letra": descrevia ZERO
+  // músicas como completas. Sem música não há completude a declarar — há uma
+  // pasta a somar, e é isso que o texto tem de dizer.
+  test("biblioteca vazia: o disparo fica bloqueado dizendo o que fazer, sem fingir completude", async ({
     page,
   }) => {
     await resetApp(page);
     await page.getByRole("button", { name: "Configurações" }).click();
+    const secao = page.getByRole("region", { name: "Curadoria do acervo" });
+    await expect(secao.getByText(/Não há nenhuma música nesta pasta/)).toBeVisible();
+    await expect(secao.getByText(/Adicione uma pasta de música/)).toBeVisible();
+    // MÉDIO-14: o motivo do bloqueio é texto na tela, não `title=`
     await expect(
-      page.getByText(/Nenhuma música desta pasta está sem título, artista ou letra/),
+      secao.getByText("Não há música nesta pasta para procurar."),
     ).toBeVisible();
     await expect(
       page.getByRole("button", { name: "Buscar dados desta pasta" }),
     ).toBeDisabled();
+  });
+
+  // QA CRÍTICO-1 — o caminho inteiro do defeito mais grave: a varredura acha
+  // letra para uma música que JÁ TEM letra (uma transcrição corrigida à mão),
+  // a linha chega pré-marcada por ser ALTA, e um clique em "Aplicar
+  // selecionadas" destruía o trabalho. Agora a linha avisa, a substituição é
+  // uma segunda marcação, e sem ela só título e artista são aplicados.
+  test("proposta que substituiria uma letra: avisa, pede consentimento e preserva a letra", async ({
+    page,
+  }) => {
+    const errors = trackErrors(page);
+    await resetApp(page);
+    await addMockFolder(page);
+
+    // a curadoria transcreveu a letra desta música, e alguém a corrigiu; a
+    // etiqueta de título é lixo de ripador, então ela volta a ser candidata
+    await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__CANCIONEIRO_MOCK__._markAsTranscribed(
+        "/musicas/mock/com_letra.mp3",
+      );
+    });
+    const panel = page.getByLabel("Painel de letra");
+    await page.getByText("Coração Sertanejo").first().click();
+    await panel.getByRole("button", { name: "Editar" }).click();
+    await panel.getByLabel("Letra", { exact: true }).fill("Letra conferida à mão");
+    // sem etiqueta de artista ela volta a ser candidata da varredura — é
+    // assim que uma música COM letra reaparece na revisão
+    await panel.getByLabel("Artista").fill("");
+    await panel.getByRole("button", { name: "Salvar no arquivo" }).click();
+    await expect(page.getByText("Alterações salvas em com_letra.mp3.")).toBeVisible();
+    await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__CANCIONEIRO_MOCK__._markAsTranscribed(
+        "/musicas/mock/com_letra.mp3",
+      );
+    });
+    await page.reload();
+
+    await dispararCuradoria(page);
+    const dialog = page.getByRole("dialog", { name: "Completar dados" });
+
+    // a linha DIZ que existe letra ali, e de que tipo ela é
+    await expect(
+      dialog.getByText(/Esta música já tem letra, escrita ouvindo o áudio/),
+    ).toBeVisible();
+    // a substituição é uma segunda marcação, desmarcada por padrão
+    const substituir = dialog.getByRole("checkbox", {
+      name: /Substituir a letra atual/,
+    });
+    await expect(substituir).not.toBeChecked();
+    // "Marcar todas" nunca marca a substituição
+    await dialog
+      .getByRole("button", { name: "Marcar todas", exact: true })
+      .click();
+    await expect(substituir).not.toBeChecked();
+
+    await dialog.getByRole("button", { name: /Aplicar selecionadas/ }).click();
+    await expect(page.getByText(/A biblioteca já está atualizada/)).toBeVisible();
+
+    // a letra escrita à mão continua no arquivo
+    await page.getByRole("button", { name: "Biblioteca", exact: true }).click();
+    await page.getByText("Coração Sertanejo").first().click();
+    await expect(
+      page.getByLabel("Painel de letra").getByTestId("lyrics-body"),
+    ).toHaveText("Letra conferida à mão");
+    expect(errors).toEqual([]);
   });
 });
 
@@ -1305,6 +1428,49 @@ test.describe("V8 — Marca de instrumental (F17)", () => {
         name: "Aplicar proposta: Instrumental Sem Letra",
       }),
     ).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+});
+
+test.describe("V8 — instrumental sem etiqueta (QA ALTO-5)", () => {
+  // O único caso em que as três implementações discordavam: uma pasta de
+  // instrumentais marcados pela CLI, sem etiqueta de artista. O Rust os
+  // entrega ("instrumental sem letra ainda pode — e deve — ter título e
+  // artista corretos", PRD V8/F17); o app os excluía da contagem, dava zero e
+  // desabilitava o botão dizendo que a pasta estava completa.
+  test("instrumental sem artista entra na varredura — e não recebe proposta de letra", async ({
+    page,
+  }) => {
+    const errors = trackErrors(page);
+    await resetApp(page);
+    await addMockFolder(page);
+    await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__CANCIONEIRO_MOCK__._markAsInstrumental(
+        "/musicas/mock/sem_tags.mp3",
+      );
+    });
+    await page.reload();
+
+    // a contagem (que vem do backend) conta as duas, e o disparo continua vivo
+    await page.getByRole("button", { name: "Configurações" }).click();
+    await expect(
+      page.getByText(/2 músicas desta pasta estão incompletas/),
+    ).toBeVisible();
+    const disparo = page.getByRole("button", { name: "Buscar dados desta pasta" });
+    await expect(disparo).toBeEnabled();
+    await disparo.click();
+
+    const dialog = page.getByRole("dialog", { name: "Completar dados" });
+    await expect(
+      dialog.getByText("2 propostas — 0 alta, 1 média, 1 baixa"),
+    ).toBeVisible();
+    // ela está na lista: o que ela pode ganhar é NOME
+    await expect(
+      dialog.getByRole("checkbox", { name: "Aplicar proposta: sem_tags" }),
+    ).toBeVisible();
+    // e nenhuma etapa de letra rodou para ela: só a outra traz letra
+    await expect(dialog.getByText("letra encontrada")).toHaveCount(1);
     expect(errors).toEqual([]);
   });
 });

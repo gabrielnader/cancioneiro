@@ -42,8 +42,13 @@ interface EnrichState {
    * Quantas músicas incompletas a última varredura conferiu (total do último
    * evento de progresso). É o que separa "não havia nada a fazer" de
    * "conferimos N e não achamos nada" quando não sobra proposta nenhuma (A6).
+   *
+   * `null` = NÃO SABEMOS: a assinatura do progresso é best-effort e falha em
+   * silêncio. Antes isso virava `0`, e o texto do zero afirmava que a pasta
+   * estava completa — uma varredura de 95 músicas terminava anunciando
+   * sucesso que ninguém verificou (QA MÉDIO-11).
    */
-  scannedTotal: number;
+  scannedTotal: number | null;
   /** Erros do último apply, por song_id — a linha fica visível com o erro (A5). */
   applyErrors: Record<number, string>;
   /**
@@ -75,7 +80,13 @@ let scanSeq = 0;
 // contador de reserva: jsdom antigo/WebView sem crypto.randomUUID
 let scanCounter = 0;
 
-function novoScanId(): string {
+/**
+ * Identificador de uma busca. Exportado porque o funil individual do editor
+ * também precisa de um (B1): sem id, a busca de uma música só não podia ser
+ * cancelada — e com a rede fora do ar ela segura o editor por mais de um
+ * minuto.
+ */
+export function novoScanId(): string {
   const c = globalThis.crypto;
   if (c && typeof c.randomUUID === "function") return c.randomUUID();
   return `scan-${Date.now()}-${++scanCounter}`;
@@ -139,16 +150,19 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
 
     try {
       // A chave do Vagalume é preferência de quem usa (V8/F18) e viaja como
-      // PARÂMETRO: o backend não guarda credencial nenhuma. Sem chave, a
-      // etapa é pulada em silêncio — não é erro.
+      // PARÂMETRO a cada varredura: o BACKEND não guarda credencial nenhuma —
+      // quem guarda é o frontend, no localStorage das preferências, e a tela
+      // de Configurações diz isso com todas as letras. Sem chave, a etapa é
+      // pulada em silêncio — não é erro.
       const proposals = await getBackend().enrichFolderScan(
         folderPrefix,
         scanId,
         useUiStore.getState().vagalumeApiKey || null,
       );
       if (seq !== scanSeq) return; // cancelado durante a busca: descarta
-      // quantas candidatas foram efetivamente conferidas (A6)
-      const conferidas = get().progress?.total ?? 0;
+      // quantas candidatas foram efetivamente conferidas (A6); null quando o
+      // canal de progresso não respondeu — nunca 0 por omissão (MÉDIO-11)
+      const conferidas = get().progress?.total ?? null;
       const emSegundoPlano = !get().overlayOpen;
       if (emSegundoPlano && proposals.length === 0) {
         // nada a mostrar e ninguém olhando: só o aviso — que diz a verdade

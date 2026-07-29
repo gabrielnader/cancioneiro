@@ -21,6 +21,10 @@ function proposal(overrides: Partial<EnrichProposal> = {}): EnrichProposal {
     lyrics: "letra",
     confidence: "alta",
     fonte: "LRCLIB",
+    // a música não tinha letra: a proposta acrescenta (CRÍTICO-1 — é o par
+    // has_lyrics + lyrics que diz se a aplicação DESTRUIRIA uma letra)
+    has_lyrics: false,
+    letra_origem: null,
     error: null,
     ...overrides,
   };
@@ -392,7 +396,10 @@ describe("enrichStore (V5 — F13)", () => {
       );
     });
 
-    it("fim em segundo plano SEM propostas e SEM candidatas: toast honesto e volta a idle", async () => {
+    // MÉDIO-11 — este backend nem tem canal de progresso: não sabemos quantas
+    // músicas foram conferidas. Antes isso virava `0`, e o aviso afirmava que
+    // a pasta estava completa. Sem o número, o texto não conta ninguém.
+    it("fim em segundo plano SEM propostas e SEM progresso: aviso sem contagem inventada", async () => {
       setBackendForTests({
         enrichFolderScan: vi.fn(async () => []),
       } as unknown as Backend);
@@ -401,8 +408,9 @@ describe("enrichStore (V5 — F13)", () => {
       useEnrichStore.getState().hideOverlay();
       await pending;
 
+      expect(useEnrichStore.getState().scannedTotal).toBeNull();
       expect(useToastStore.getState().toasts[0].message).toBe(
-        textoSemPropostas(0),
+        textoSemPropostas(null),
       );
       expect(useEnrichStore.getState().status).toBe("idle");
       expect(useEnrichStore.getState().overlayOpen).toBe(false);

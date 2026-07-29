@@ -1,8 +1,12 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { audioController } from "../hooks/playerAudioCore";
 import { getBackend, type EnrichProposal } from "../lib/api";
-import { SEM_RESULTADO_INDIVIDUAL } from "../lib/curadoria";
-import type { Song } from "../lib/types";
+import {
+  SEM_RESULTADO_INDIVIDUAL,
+  SEM_RESULTADO_INSTRUMENTAL,
+} from "../lib/curadoria";
+import { ORIGEM_VAGALUME, type Song } from "../lib/types";
+import { novoScanId, useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlayerStore } from "../stores/playerStore";
 import { usePlaylistStore } from "../stores/playlistStore";
@@ -87,6 +91,29 @@ export function EditSongForm({
   const [fetchBusy, setFetchBusy] = useState(false);
   // V8/F18 — resultado do funil desta música, mostrado na própria ficha
   const [resultado, setResultado] = useState<ResultadoBusca | null>(null);
+  /**
+   * ALTO-4 — procedência da letra que está no formulário AGORA, quando ela
+   * veio de uma proposta que a declara (hoje, só o Vagalume). Ela viaja no
+   * `writeTags` e vira o `TXXX:LETRA_ORIGEM`: sem isso, a letra aceita do
+   * Vagalume era gravada indistinguível de uma do LRCLIB, e o mesmo acervo
+   * virava duas pilhas — a CLI marcando "vagalume", o app não marcando nada.
+   *
+   * A marca descreve o TEXTO que está lá: mexer na letra à mão a derruba.
+   */
+  const [letraOrigemPendente, setLetraOrigemPendente] = useState<string | null>(
+    null,
+  );
+  /** Busca individual em curso — a chave do cancelamento (B1). */
+  const buscaAtual = useRef<string | null>(null);
+  /**
+   * MÉDIO-15 — a varredura em lote e o funil individual têm cada um a SUA
+   * pausa de cortesia; rodando juntos, dobram a taxa de consultas ao LRCLIB e
+   * ao Vagalume, que é exatamente o que a cortesia compartilhada existe para
+   * evitar. Enquanto o lote roda (inclusive encerrando), a busca daqui espera.
+   */
+  const loteRodando = useEnrichStore(
+    (s) => s.status === "scanning" || s.scanInFlight,
+  );
 
   /**
    * Confirma o texto pendente do input de tema como chip e devolve a lista
@@ -119,15 +146,28 @@ export function EditSongForm({
    * mandar (mesma regra do lote — nada é aplicado sem revisão).
    */
   async function handleBuscarDados() {
+    const scanId = novoScanId();
+    buscaAtual.current = scanId;
     setFetchBusy(true);
     setResultado(null);
     try {
       const proposta = await getBackend().enrichSongScan(
         song.id,
         useUiStore.getState().vagalumeApiKey || null,
+        scanId,
+        // ALTO-3a — o que a pessoa DIGITOU vence a etiqueta do banco. Antes,
+        // quem corrigia "Faixa 03" para "Asa Branca" e clicava buscar via o
+        // backend procurar "Faixa 03": a correção não era usada e nada na
+        // tela dizia isso. Sem suporte a quem perguntar, o desfecho lido era
+        // "a internet não tem a minha música".
+        title.trim(),
+        artist.trim() ? artist.trim() : null,
       );
+      // cancelada no meio: a resposta que chegar depois não é mais notícia
+      if (buscaAtual.current !== scanId) return;
       setResultado(proposta ? { tipo: "proposta", proposta } : { tipo: "vazio" });
     } catch {
+      if (buscaAtual.current !== scanId) return;
       // o resultado é inline: um toast some sozinho e esta é a única
       // explicação que a pessoa vai receber — não há suporte para perguntar
       setResultado({
@@ -135,23 +175,55 @@ export function EditSongForm({
         mensagem: "Sem conexão — a busca de dados precisa de internet.",
       });
     } finally {
-      setFetchBusy(false);
+      if (buscaAtual.current === scanId) {
+        buscaAtual.current = null;
+        setFetchBusy(false);
+      }
+    }
+  }
+
+  /**
+   * B1 — desistir da busca. O invoke pode continuar respondendo por alguns
+   * segundos (o backend para na próxima consulta); a guarda do `buscaAtual`
+   * garante que a resposta atrasada não apareça na ficha.
+   */
+  function cancelarBusca() {
+    const scanId = buscaAtual.current;
+    buscaAtual.current = null;
+    setFetchBusy(false);
+    if (!scanId) return;
+    try {
+      void getBackend()
+        .enrichCancelScan(scanId)
+        .catch(() => {
+          // backend antigo/sem o comando: a guarda acima já basta
+        });
+    } catch {
+      // fakes de teste sem enrichCancelScan: idem
     }
   }
 
   /** Traz a proposta para o formulário (ainda sem tocar no arquivo). */
   function usarProposta(p: EnrichProposal) {
-    if (
+    // Trocar a letra e corrigir o nome são duas decisões diferentes: recusar
+    // a troca não pode jogar fora a correção de título/artista que veio
+    // junto (é a mesma regra da revisão em lote — CRÍTICO-1).
+    const trocarLetra =
       p.lyrics !== null &&
-      lyrics.trim() &&
-      // copy mantida da V4: é a pergunta que as pessoas já conhecem
-      !window.confirm("Substituir a letra atual pelo resultado da busca?")
-    ) {
-      return;
-    }
+      (!lyrics.trim() ||
+        // copy mantida da V4: é a pergunta que as pessoas já conhecem
+        window.confirm("Substituir a letra atual pelo resultado da busca?"));
+
     if (p.proposed_title.trim()) setTitle(p.proposed_title);
     if (p.proposed_artist?.trim()) setArtist(p.proposed_artist);
-    if (p.lyrics !== null) setLyrics(p.lyrics);
+    if (trocarLetra && p.lyrics !== null) {
+      setLyrics(p.lyrics);
+      // ALTO-4: só o Vagalume DECLARA procedência; qualquer outra fonte
+      // limpa a marca (letra oficial nunca é transcrição — DECISIONS #54)
+      setLetraOrigemPendente(
+        p.fonte.toLowerCase() === "vagalume" ? ORIGEM_VAGALUME : null,
+      );
+    }
     setResultado(null);
   }
 
@@ -186,6 +258,9 @@ export function EditSongForm({
         finalTemas.length > 0 ? finalTemas.join("; ") : null,
         // três estados (V8/F17): undefined = "não mexer na marca"
         instrumentalTocado ? instrumental : undefined,
+        // ALTO-4 — procedência da letra que está sendo gravada: "vagalume"
+        // quando ela veio de lá e ninguém a editou depois; null limpa a marca
+        letraOrigemPendente,
       );
       useLibraryStore.getState().updateSong(saved);
       usePlaylistStore.getState().updateSongInItems(saved);
@@ -317,7 +392,12 @@ export function EditSongForm({
         <textarea
           id="edit-letra"
           value={lyrics}
-          onChange={(e) => setLyrics(e.target.value)}
+          onChange={(e) => {
+            setLyrics(e.target.value);
+            // a marca descreve o texto que está aqui: se a pessoa mexeu, ela
+            // não vale mais (ALTO-4)
+            setLetraOrigemPendente(null);
+          }}
           className="w-full flex-1 resize-none rounded-md border border-[#D1D5DB] bg-white px-3 py-2 text-[15px] leading-relaxed text-[#111827] outline-none focus:border-[#0F766E]"
         />
       </div>
@@ -333,8 +413,12 @@ export function EditSongForm({
           className="shrink-0 rounded-md border border-[#E5E7EB] bg-[#F9FAFB] p-3"
         >
           {resultado.tipo === "vazio" ? (
+            // ALTO-3b — `null` passou a significar UMA coisa: procuramos e
+            // não veio nada novo. Para a música marcada como instrumental,
+            // porém, nenhuma etapa de LETRA rodou — dizer "não achamos nos
+            // sites de letra" contaria uma busca que não aconteceu.
             <p className="text-[13px] leading-relaxed text-[#374151]">
-              {SEM_RESULTADO_INDIVIDUAL}
+              {instrumental ? SEM_RESULTADO_INSTRUMENTAL : SEM_RESULTADO_INDIVIDUAL}
             </p>
           ) : resultado.tipo === "falha" ? (
             <p className="text-[13px] text-[#B91C1C]">{resultado.mensagem}</p>
@@ -396,16 +480,46 @@ export function EditSongForm({
         </div>
       )}
 
+      {/*
+        MÉDIO-15 — o motivo do bloqueio é TEXTO na tela, não `title=`: botão
+        desabilitado não recebe foco e `title` não é anunciado de forma
+        confiável. Sem ele, quem clicasse veria um botão cinza e nada mais.
+      */}
+      {loteRodando && (
+        <p id="editor-busca-bloqueada" className="shrink-0 text-[13px] text-[#5B6472]">
+          A busca desta pasta está rodando — espere ela terminar para não
+          consultar os sites de letra duas vezes ao mesmo tempo.
+        </p>
+      )}
+      {fetchBusy && (
+        // B1 — a busca pode demorar (cada consulta espera até 10 s antes de
+        // desistir). Dizer isso é o que separa "está trabalhando" de "travou".
+        <p className="shrink-0 text-[13px] text-[#5B6472]">
+          Procurando nos sites de letra… pode demorar se os sites de letra
+          estiverem lentos. Dá para cancelar e continuar editando.
+        </p>
+      )}
+
       <div className="flex shrink-0 flex-wrap items-center gap-2">
         <button
           type="button"
-          disabled={fetchBusy}
+          disabled={fetchBusy || loteRodando}
+          aria-describedby={loteRodando ? "editor-busca-bloqueada" : undefined}
           title="Procura título, artista e letra desta música: primeiro no próprio arquivo, depois no LRCLIB e no Vagalume"
           onClick={() => void handleBuscarDados()}
           className="rounded-md border border-[#0F766E] px-3 py-1.5 text-[14px] font-medium text-[#0F766E] hover:bg-[#F0FDFA] disabled:opacity-60"
         >
           {fetchBusy ? "Buscando…" : "Buscar dados na internet"}
         </button>
+        {fetchBusy && (
+          <button
+            type="button"
+            onClick={cancelarBusca}
+            className="rounded-md px-3 py-1.5 text-[14px] font-medium text-[#374151] hover:bg-[#F3F4F6]"
+          >
+            Cancelar busca
+          </button>
+        )}
         <span className="ml-auto flex items-center gap-2">
           <button
             type="button"

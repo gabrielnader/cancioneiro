@@ -5,10 +5,10 @@ import {
   ETAPAS_FORA_DO_APP,
   VAGALUME_URL,
   estimativaTexto,
-  musicasACurar,
   opcoesDePasta,
+  type ContagemCandidatas,
 } from "../lib/curadoria";
-import { buildFolderTree } from "../lib/folderTree";
+import { buildFolderTree, isUnderFolder } from "../lib/folderTree";
 import { getAppVersion } from "../lib/updater";
 import { useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
@@ -220,19 +220,65 @@ function CuradoriaSection() {
   // a pasta pode ter sumido do acervo desde então: cai na biblioteca inteira
   const pasta = opcoes.some((o) => o.path === escolhida) ? escolhida : "";
 
-  const candidatas = useMemo(
-    () => musicasACurar(allSongs, pasta).length,
+  /**
+   * Quantas músicas há na pasta, ponto — fato local e barato. Não é a regra
+   * do funil (essa é do backend): serve só para separar "está tudo completo"
+   * de "não há nada aqui", que a contagem sozinha devolve como o mesmo zero.
+   */
+  const musicasNaPasta = useMemo(
+    () =>
+      allSongs.filter((s) => !pasta || isUnderFolder(s.file_path, pasta)).length,
     [allSongs, pasta],
   );
 
-  const bloqueado = varrendo || encerrando || candidatas === 0;
+  /**
+   * A contagem de candidatas vem do backend (`enrich_count`), pela MESMA
+   * função que a varredura usa. Ela é assíncrona: recomeça a cada troca de
+   * pasta e a cada mudança do acervo (aplicar propostas muda quem falta), e
+   * enquanto não chega a tela diz que está contando — nunca "0".
+   */
+  const [contagem, setContagem] = useState<ContagemCandidatas>({
+    estado: "contando",
+  });
+  useEffect(() => {
+    let atual = true;
+    setContagem({ estado: "contando" });
+    getBackend()
+      .enrichCount(pasta)
+      .then((total) => {
+        if (atual) setContagem({ estado: "pronta", total });
+      })
+      .catch(() => {
+        // contagem é conveniência; a busca não depende dela para rodar
+        if (atual) setContagem({ estado: "indisponivel" });
+      });
+    return () => {
+      atual = false;
+    };
+  }, [pasta, allSongs]);
+
+  /**
+   * O disparo só é bloqueado por fatos SABIDOS: uma busca em andamento, uma
+   * busca encerrando, uma pasta sem música ou uma contagem que voltou zero.
+   * Contagem pendente ou indisponível NUNCA bloqueia — desabilitar o único
+   * ponto de entrada do produto por não saber ainda é o defeito que o QA
+   * reprovou, agora sem a desculpa da regra duplicada.
+   */
+  const pastaVazia = musicasNaPasta === 0;
+  const nadaACurar = contagem.estado === "pronta" && contagem.total === 0;
+  const bloqueado = varrendo || encerrando || pastaVazia || nadaACurar;
+  // MÉDIO-14 — o motivo é TEXTO na tela, não `title=`: botão desabilitado não
+  // recebe foco, e `title` não é anunciado de forma confiável por leitor de
+  // tela. Fica ligado ao botão por aria-describedby.
   const motivo = varrendo
-    ? "Uma busca de dados já está em andamento"
+    ? "Uma busca de dados já está em andamento — espere ela terminar."
     : encerrando
-      ? "Terminando de encerrar a busca anterior — aguarde alguns segundos"
-      : candidatas === 0
-        ? "Não há música incompleta nesta pasta"
-        : "Procurar título, artista e letra das músicas incompletas desta pasta";
+      ? "Terminando de encerrar a busca anterior — aguarde alguns segundos."
+      : pastaVazia
+        ? "Não há música nesta pasta para procurar."
+        : nadaACurar
+          ? "Nenhuma música desta pasta precisa de busca agora."
+          : null;
 
   return (
     <section className="mt-8 max-w-2xl" aria-labelledby="curadoria-titulo">
@@ -293,18 +339,25 @@ function CuradoriaSection() {
         </select>
       </div>
 
-      <p className="mt-2 text-[13px] text-[#5B6472]">{estimativaTexto(candidatas)}</p>
+      <p className="mt-2 text-[13px] text-[#5B6472]">
+        {estimativaTexto(contagem, musicasNaPasta)}
+      </p>
 
       <div className="mt-3">
         <button
           type="button"
           disabled={bloqueado}
-          title={motivo}
+          aria-describedby={motivo ? "curadoria-motivo" : undefined}
           onClick={() => void startScan(pasta)}
           className="rounded-md bg-[#0F766E] px-4 py-2 text-[15px] font-medium text-white hover:bg-[#115E59] disabled:cursor-not-allowed disabled:bg-[#9CA3AF]"
         >
           Buscar dados desta pasta
         </button>
+        {motivo && (
+          <p id="curadoria-motivo" className="mt-1 text-[13px] text-[#5B6472]">
+            {motivo}
+          </p>
+        )}
       </div>
 
       {/*
@@ -359,8 +412,10 @@ function CuradoriaSection() {
           id="curadoria-vagalume"
           // Campo de TEXTO, não de senha: é a chave de um serviço gratuito da
           // própria pessoa, num app sem conta e sem telemetria — esconder
-          // atrás de bolinhas só atrapalharia conferir a colagem. Ela nunca é
-          // impressa em log nem sai daqui a não ser na consulta ao Vagalume.
+          // atrás de bolinhas só atrapalharia conferir a colagem. Ela fica
+          // guardada em disco (localStorage das preferências), o que o texto
+          // abaixo diz; não é impressa em log e não sai daqui a não ser como
+          // parâmetro da consulta ao Vagalume.
           type="text"
           spellCheck={false}
           autoComplete="off"
@@ -375,6 +430,19 @@ function CuradoriaSection() {
             {VAGALUME_URL}
           </span>{" "}
           e cole aqui. Sem a chave, a busca simplesmente pula essa etapa.
+        </p>
+        {/*
+          MÉDIO-10 — a chave é gravada em disco, junto das outras preferências,
+          e quatro lugares do projeto diziam que não. Guardá-la é decisão de
+          produto (40 pessoas sem suporte redigitando uma chave a cada sessão é
+          pior); o que não pode é o texto mentir sobre isso. Aqui está o que
+          acontece de verdade, com o alcance que ela tem.
+        */}
+        <p className="mt-1 text-[13px] leading-relaxed text-[#5B6472]">
+          Ela fica guardada nas preferências do aplicativo, neste computador,
+          para você não precisar colar de novo a cada vez. A chave não vai para
+          o banco de músicas, não é escrita nos seus MP3 e não vai para nenhum
+          outro lugar além do próprio Vagalume, na hora da busca.
         </p>
       </div>
     </section>

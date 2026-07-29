@@ -10,13 +10,19 @@ import {
   type EnrichProgress,
   type EnrichProposal,
 } from "../lib/api";
-import { textoAplicado, textoSemPropostas } from "../lib/curadoria";
+import {
+  LABEL_SUBSTITUIR_LETRA,
+  avisoLetraExistente,
+  textoAplicado,
+  textoSemPropostas,
+} from "../lib/curadoria";
 import type { Song } from "../lib/types";
 import { useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlayerStore } from "../stores/playerStore";
 import { usePlaylistStore } from "../stores/playlistStore";
 import { useToastStore } from "../stores/toastStore";
+import { AA_TEXTO_NORMAL, contrastRatio, corDoTexto } from "../test/contrast";
 import { EnrichReview } from "./EnrichReview";
 
 function song(id: number, title: string): Song {
@@ -45,10 +51,30 @@ function proposal(overrides: Partial<EnrichProposal>): EnrichProposal {
     lyrics: "letra da um",
     confidence: "alta",
     fonte: "LRCLIB",
+    // por padrão a música NÃO tem letra: a proposta acrescenta
+    has_lyrics: false,
+    letra_origem: null,
     error: null,
     ...overrides,
   };
 }
+
+/**
+ * O caso do CRÍTICO-1: a varredura achou letra para uma música que JÁ TEM
+ * letra — e uma escrita ouvindo o áudio, corrigida à mão.
+ */
+const SOBRE_TRANSCRICAO = proposal({
+  song_id: 5,
+  file_path: "/acervo/5.mp3",
+  current_title: "AudioTrack 03",
+  current_artist: null,
+  proposed_title: "Oh! Chuva",
+  proposed_artist: "Falamansa",
+  lyrics: "letra vinda do LRCLIB",
+  confidence: "alta",
+  has_lyrics: true,
+  letra_origem: "transcricao",
+});
 
 const ALTA = proposal({
   song_id: 1,
@@ -268,10 +294,41 @@ describe("EnrichReview (V5 — F13)", () => {
     expect(screen.getByText(textoSemPropostas(1))).toBeInTheDocument();
   });
 
-  it("header com contadores por confiança", () => {
+  // MÉDIO-12 — as linhas de ERRO entravam na conta por confiança: com o lote
+  // inteiro falhando a pessoa lia "95 propostas — 0 alta, 0 média, 95 baixa",
+  // clicava "Marcar todas" (que ignora erros) e recebia "Aplicar selecionadas
+  // (0)", desabilitado, sem uma linha de explicação.
+  it("header conta só as OFERTAS; as linhas com erro são ditas à parte", () => {
     renderReview([ALTA, MEDIA, BAIXA, COM_ERRO]);
     expect(
-      screen.getByText("4 propostas — 1 alta, 1 média, 2 baixa"),
+      screen.getByText("3 propostas — 1 alta, 1 média, 1 baixa"),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "1 música não pôde ser consultada — o motivo está na linha dela.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("todas com erro: o header não promete proposta nenhuma", () => {
+    renderReview([COM_ERRO]);
+    expect(
+      screen.getByText("Nenhuma proposta para aplicar."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "1 música não pôde ser consultada — o motivo está na linha dela.",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("nada marcado: o botão desabilitado vem com o motivo escrito", () => {
+    renderReview([MEDIA]);
+    expect(
+      screen.getByRole("button", { name: "Aplicar selecionadas (0)" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByText("Marque ao menos uma linha para aplicar."),
     ).toBeInTheDocument();
   });
 
@@ -429,7 +486,14 @@ describe("EnrichReview (V5 — F13)", () => {
 
     const toasts = useToastStore.getState().toasts;
     expect(toasts).toHaveLength(1);
-    expect(toasts[0].message).toBe(textoAplicado(1, 0, 1));
+    expect(toasts[0].message).toBe(
+      textoAplicado({
+        ganharamLetra: 1,
+        letraSubstituida: 0,
+        nomeCorrigido: 0,
+        gravadas: 1,
+      }),
+    );
     expect(toasts[0].kind).toBe("success");
     // pós-save igual ao EditSongForm: library + playlist + player
     expect(useLibraryStore.getState().allSongs[0].title).toBe("Faixa Um");
@@ -456,7 +520,14 @@ describe("EnrichReview (V5 — F13)", () => {
 
     const toasts = useToastStore.getState().toasts;
     expect(toasts).toHaveLength(1);
-    expect(toasts[0].message).toBe(textoAplicado(2, 0, 2));
+    expect(toasts[0].message).toBe(
+      textoAplicado({
+        ganharamLetra: 2,
+        letraSubstituida: 0,
+        nomeCorrigido: 0,
+        gravadas: 2,
+      }),
+    );
     expect(toasts[0].kind).toBe("success");
     expect(useEnrichStore.getState().status).toBe("idle");
   });
@@ -488,7 +559,14 @@ describe("EnrichReview (V5 — F13)", () => {
     expect(useLibraryStore.getState().allSongs[0].title).toBe("Faixa Um");
     const toasts = useToastStore.getState().toasts;
     expect(toasts).toHaveLength(2);
-    expect(toasts[0].message).toBe(textoAplicado(1, 0, 1));
+    expect(toasts[0].message).toBe(
+      textoAplicado({
+        ganharamLetra: 1,
+        letraSubstituida: 0,
+        nomeCorrigido: 0,
+        gravadas: 1,
+      }),
+    );
     expect(toasts[0].kind).toBe("success");
     expect(toasts[1].message).toBe("1 não pôde ser gravada.");
     expect(toasts[1].kind).toBe("error");
@@ -641,6 +719,214 @@ describe("EnrichReview (V5 — F13)", () => {
     renderReview([ALTA]);
     fireEvent.click(screen.getByRole("button", { name: "Fechar" }));
     expect(useEnrichStore.getState().status).toBe("idle");
+  });
+
+  // -------------------------------------------------------------------------
+  // CRÍTICO-1 — a revisão não sabia nem mostrava que uma letra seria destruída
+  // -------------------------------------------------------------------------
+  describe("proposta que substituiria uma letra existente", () => {
+    it("a linha DIZ que já existe letra, e de que tipo ela é", () => {
+      renderReview([SOBRE_TRANSCRICAO]);
+      expect(
+        screen.getByText(avisoLetraExistente("transcricao")),
+      ).toBeInTheDocument();
+    });
+
+    it("música com letra sem procedência declarada: o aviso genérico", () => {
+      renderReview([proposal({ has_lyrics: true, letra_origem: null })]);
+      expect(screen.getByText(avisoLetraExistente(null))).toBeInTheDocument();
+    });
+
+    it("música sem letra nenhuma não ganha aviso nem marcação de substituição", () => {
+      renderReview([ALTA]);
+      expect(screen.queryByText(/já tem letra/)).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole("checkbox", { name: new RegExp(LABEL_SUBSTITUIR_LETRA) }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("a marcação de substituir nasce DESMARCADA, mesmo em proposta ALTA pré-marcada", () => {
+      renderReview([SOBRE_TRANSCRICAO]);
+      // a pré-marcação de ALTA continua (DECISIONS #49) — mas agora ela só
+      // aplica NOMES, e é isso que a torna segura de novo
+      expect(
+        screen.getByRole("checkbox", { name: /Aplicar proposta/ }),
+      ).toBeChecked();
+      expect(
+        screen.getByRole("checkbox", { name: new RegExp(LABEL_SUBSTITUIR_LETRA) }),
+      ).not.toBeChecked();
+    });
+
+    it("sem a marcação, aplicar manda lyrics: null — só título e artista", async () => {
+      const enrichApply = vi.fn(async (aplicacoes: EnrichApply[]) =>
+        aplicacoes.map((a) => ok(song(a.song_id, a.title))),
+      );
+      setBackendForTests({ enrichApply } as unknown as Backend);
+      renderReview([SOBRE_TRANSCRICAO]);
+
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Aplicar selecionadas (1)" }),
+        );
+      });
+      expect(enrichApply).toHaveBeenCalledWith([
+        {
+          song_id: 5,
+          title: "Oh! Chuva",
+          artist: "Falamansa",
+          lyrics: null,
+          add_temas: null,
+          current_title: "AudioTrack 03",
+          current_artist: null,
+          fonte: "LRCLIB",
+        },
+      ]);
+    });
+
+    it("com a marcação, a letra viaja junto do consentimento", async () => {
+      const enrichApply = vi.fn(async (aplicacoes: EnrichApply[]) =>
+        aplicacoes.map((a) => ok(song(a.song_id, a.title))),
+      );
+      setBackendForTests({ enrichApply } as unknown as Backend);
+      renderReview([SOBRE_TRANSCRICAO]);
+
+      fireEvent.click(
+        screen.getByRole("checkbox", { name: new RegExp(LABEL_SUBSTITUIR_LETRA) }),
+      );
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Aplicar selecionadas (1)" }),
+        );
+      });
+      expect(enrichApply).toHaveBeenCalledWith([
+        expect.objectContaining({
+          song_id: 5,
+          lyrics: "letra vinda do LRCLIB",
+          substituir_letra: true,
+        }),
+      ]);
+    });
+
+    it("'Marcar todas' NUNCA marca a substituição de letra", () => {
+      renderReview([SOBRE_TRANSCRICAO, MEDIA]);
+      fireEvent.click(screen.getByRole("button", { name: "Marcar todas" }));
+      expect(
+        screen.getByRole("checkbox", { name: new RegExp(LABEL_SUBSTITUIR_LETRA) }),
+      ).not.toBeChecked();
+      expect(
+        screen.getByRole("button", { name: "Aplicar selecionadas (2)" }),
+      ).toBeEnabled();
+    });
+
+    it("'Desmarcar todas' desfaz também a substituição", () => {
+      renderReview([SOBRE_TRANSCRICAO]);
+      const substituir = screen.getByRole("checkbox", {
+        name: new RegExp(LABEL_SUBSTITUIR_LETRA),
+      });
+      fireEvent.click(substituir);
+      expect(substituir).toBeChecked();
+      fireEvent.click(screen.getByRole("button", { name: "Desmarcar todas" }));
+      expect(
+        screen.getByRole("checkbox", { name: new RegExp(LABEL_SUBSTITUIR_LETRA) }),
+      ).not.toBeChecked();
+    });
+
+    // MÉDIO-13 — a metade destrutiva ficava invisível: a linha era contada
+    // como "teve título ou artista corrigido".
+    it("o aviso final conta a letra substituída, separada das que ganharam letra", async () => {
+      setBackendForTests({
+        enrichApply: vi.fn(async (aplicacoes: EnrichApply[]) =>
+          aplicacoes.map((a) => ok(song(a.song_id, a.title))),
+        ),
+      } as unknown as Backend);
+      useLibraryStore.setState({
+        allSongs: [
+          { ...song(1, "faixa 1"), has_lyrics: false },
+          { ...song(5, "AudioTrack 03"), has_lyrics: true },
+        ],
+      });
+
+      renderReview([ALTA, SOBRE_TRANSCRICAO]);
+      fireEvent.click(
+        screen.getByRole("checkbox", { name: new RegExp(LABEL_SUBSTITUIR_LETRA) }),
+      );
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Aplicar selecionadas (2)" }),
+        );
+      });
+
+      expect(useToastStore.getState().toasts[0].message).toBe(
+        textoAplicado({
+          ganharamLetra: 1,
+          letraSubstituida: 1,
+          nomeCorrigido: 0,
+          gravadas: 2,
+        }),
+      );
+    });
+
+    // O backend pode recusar mesmo assim: o banco dizia "sem letra" e o
+    // arquivo tinha (alguém escreveu à mão durante a varredura). A linha
+    // precisa mostrar a mensagem — e oferecer o caminho que ela indica.
+    it("recusa do backend por falta de consentimento: mensagem na linha e saída à mão", async () => {
+      const recusa =
+        'esta música já tem letra — marque "substituir a letra atual" para trocá-la';
+      const enrichApply = vi
+        .fn<(a: EnrichApply[]) => Promise<EnrichApplyResult[]>>()
+        .mockResolvedValueOnce([failed(1, recusa)])
+        .mockResolvedValueOnce([ok(song(1, "Faixa Um"))]);
+      setBackendForTests({ enrichApply } as unknown as Backend);
+
+      renderReview([ALTA]);
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Aplicar selecionadas (1)" }),
+        );
+      });
+
+      // a linha continua na tela, com o motivo escrito
+      expect(screen.getByText(recusa)).toBeInTheDocument();
+      // e com a marcação que o próprio texto manda usar
+      const substituir = screen.getByRole("checkbox", {
+        name: new RegExp(LABEL_SUBSTITUIR_LETRA),
+      });
+      expect(substituir).toBeEnabled();
+
+      fireEvent.click(substituir);
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Aplicar selecionadas (1)" }),
+        );
+      });
+      expect(enrichApply).toHaveBeenCalledTimes(2);
+      expect(enrichApply.mock.calls[1][0][0]).toMatchObject({
+        lyrics: "letra da um",
+        substituir_letra: true,
+      });
+    });
+  });
+
+  // O overlay é lido em notebook, em sala mal iluminada, por quem está
+  // conduzindo uma reunião (DECISIONS #69/#76). O texto novo desta rodada — o
+  // aviso de letra existente, o rótulo da substituição, a nota das linhas com
+  // erro e o motivo do botão desabilitado — entra medido, ou não entra.
+  it("todo texto do overlay passa em AA sobre o fundo em que aparece", () => {
+    renderReview([SOBRE_TRANSCRICAO, MEDIA, COM_ERRO]);
+    const dialog = screen.getByRole("dialog", { name: "Completar dados" });
+    const comCor = [...dialog.querySelectorAll<HTMLElement>("*")].filter((el) =>
+      /text-\[#[0-9a-fA-F]{6}\]/.test(el.className),
+    );
+    expect(comCor.length).toBeGreaterThan(0);
+    for (const el of comCor) {
+      // o fundo é o do diálogo (branco), exceto nos selos, que trazem o seu
+      const proprio = /bg-\[(#[0-9a-fA-F]{6})\]/.exec(el.className);
+      const fundo = proprio ? proprio[1] : "#FFFFFF";
+      expect(
+        contrastRatio(corDoTexto(el.className), fundo),
+        `"${el.textContent?.slice(0, 40)}"`,
+      ).toBeGreaterThanOrEqual(AA_TEXTO_NORMAL);
+    }
   });
 
   describe("modal: Esc e foco (QA achado 3)", () => {

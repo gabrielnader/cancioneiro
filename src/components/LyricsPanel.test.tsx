@@ -6,7 +6,11 @@ import { useLibraryStore } from "../stores/libraryStore";
 import { usePlayerStore } from "../stores/playerStore";
 import { usePlaylistStore } from "../stores/playlistStore";
 import { useToastStore } from "../stores/toastStore";
-import { SEM_RESULTADO_INDIVIDUAL } from "../lib/curadoria";
+import {
+  SEM_RESULTADO_INDIVIDUAL,
+  SEM_RESULTADO_INSTRUMENTAL,
+} from "../lib/curadoria";
+import { useEnrichStore } from "../stores/enrichStore";
 import type { Song } from "../lib/types";
 import { useUiStore } from "../stores/uiStore";
 import {
@@ -179,12 +183,15 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
         artist: string | null,
         lyrics: string | null,
         temas: string | null,
+        _instrumental?: boolean | null,
+        letraOrigem?: string | null,
       ): Promise<Song> => ({
         ...song(songId, songId === 1),
         title,
         artist,
         temas,
         has_lyrics: lyrics !== null,
+        letra_origem: letraOrigem ?? null,
       }),
     );
     enrichSongScan = vi.fn(async () => ({
@@ -197,6 +204,8 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
       lyrics: "Letra vinda da internet\nSegunda linha",
       confidence: "alta" as const,
       fonte: "LRCLIB",
+      has_lyrics: true,
+      letra_origem: null,
       error: null,
     }));
     setBackendForTests({
@@ -209,6 +218,8 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
 
   beforeEach(() => {
     setupEditBackend();
+    // MÉDIO-15: o editor consulta o estado do lote antes de ir à rede
+    useEnrichStore.setState({ status: "idle", scanInFlight: false });
     useToastStore.setState({ toasts: [] });
     usePlaylistStore.setState({ items: [], activePlaylistId: null });
     usePlayerStore.setState({ current: null, isPlaying: false });
@@ -313,6 +324,8 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
       // V8/F17: ninguém tocou no controle de instrumental, então o editor
       // não manda nada — a marca do MP3 fica como está.
       undefined,
+      // ALTO-4: esta gravação não declara procedência de letra nenhuma
+      null,
     );
     expect(useToastStore.getState().toasts).toEqual([
       expect.objectContaining({
@@ -345,6 +358,7 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
       LYRICS,
       "água; esperança; fé",
       undefined,
+      null,
     );
   });
 
@@ -362,6 +376,7 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
       LYRICS,
       "água; esperança",
       undefined,
+      null,
     );
   });
 
@@ -436,7 +451,15 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
     fireEvent.click(
       screen.getByRole("button", { name: "Buscar dados na internet" }),
     );
-    await waitFor(() => expect(enrichSongScan).toHaveBeenCalledWith(1, null));
+    await waitFor(() =>
+      expect(enrichSongScan).toHaveBeenCalledWith(
+        1,
+        null,
+        expect.any(String),
+        "Coração Sertanejo",
+        "Artista Teste",
+      ),
+    );
     // procedência e confiança à vista, como na revisão do lote
     expect(await screen.findByText(/via LRCLIB/)).toBeInTheDocument();
     expect(screen.getByText("ALTA")).toBeInTheDocument();
@@ -453,7 +476,13 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
       screen.getByRole("button", { name: "Buscar dados na internet" }),
     );
     await waitFor(() =>
-      expect(enrichSongScan).toHaveBeenCalledWith(1, "chave-da-pessoa"),
+      expect(enrichSongScan).toHaveBeenCalledWith(
+        1,
+        "chave-da-pessoa",
+        expect.any(String),
+        "Coração Sertanejo",
+        "Artista Teste",
+      ),
     );
     useUiStore.getState().setVagalumeApiKey("");
   });
@@ -470,6 +499,8 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
       lyrics: "Letra vinda da internet\nSegunda linha",
       confidence: "media",
       fonte: "Vagalume",
+      has_lyrics: true,
+      letra_origem: null,
       error: null,
     });
     await enterEditMode();
@@ -554,6 +585,8 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
       lyrics: null,
       confidence: "baixa",
       fonte: "LRCLIB",
+      has_lyrics: true,
+      letra_origem: null,
       error: "sem conexão",
     });
     await enterEditMode();
@@ -619,6 +652,243 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
       name: "Buscar dados na internet",
     });
     expect(restaurado).toBeEnabled();
+  });
+
+  // ALTO-3a — a pessoa abre "Faixa 03", digita o título real e clica buscar.
+  // O backend procurava "Faixa 03": a correção dela nunca era usada, e nada na
+  // tela dizia isso. Para quem não tem suporte, é um beco sem saída que parece
+  // "a internet não tem a minha música".
+  it("a busca leva o título e o artista DIGITADOS, não os do banco", async () => {
+    await enterEditMode();
+    fireEvent.change(screen.getByLabelText("Título"), {
+      target: { value: "  Asa Branca  " },
+    });
+    fireEvent.change(screen.getByLabelText("Artista"), {
+      target: { value: "Luiz Gonzaga" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Buscar dados na internet" }),
+    );
+    await waitFor(() =>
+      expect(enrichSongScan).toHaveBeenCalledWith(
+        1,
+        null,
+        expect.any(String),
+        "Asa Branca",
+        "Luiz Gonzaga",
+      ),
+    );
+  });
+
+  it("campo de artista vazio volta a valer como 'use o que está no arquivo'", async () => {
+    await enterEditMode();
+    fireEvent.change(screen.getByLabelText("Artista"), { target: { value: "  " } });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Buscar dados na internet" }),
+    );
+    await waitFor(() =>
+      expect(enrichSongScan).toHaveBeenCalledWith(
+        1,
+        null,
+        expect.any(String),
+        "Coração Sertanejo",
+        null,
+      ),
+    );
+  });
+
+  // ALTO-3b — a música completa passou a ser consultada mesmo assim ("quem
+  // clicou sabe o que quer"), e é isto que devolve ao app um caminho para
+  // rebuscar a letra de uma música que já tem letra. A confirmação é a trava.
+  it("música que já tem letra pode ser rebuscada, com confirmação antes de trocar", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    await enterEditMode();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Buscar dados na internet" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Usar estes dados" }));
+    expect(confirmSpy).toHaveBeenCalledWith(
+      "Substituir a letra atual pelo resultado da busca?",
+    );
+    expect(screen.getByLabelText("Letra")).toHaveValue(
+      "Letra vinda da internet\nSegunda linha",
+    );
+    confirmSpy.mockRestore();
+  });
+
+  // Recusar a troca de letra não pode jogar fora a correção de NOME que veio
+  // junto: são duas decisões diferentes (a mesma regra da revisão em lote).
+  it("recusar a troca de letra ainda aproveita título e artista", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+    enrichSongScan.mockResolvedValueOnce({
+      song_id: 1,
+      file_path: "/acervo/1.mp3",
+      current_title: "Coração Sertanejo",
+      current_artist: "Artista Teste",
+      proposed_title: "Coração Sertanejo (ao vivo)",
+      proposed_artist: "Outro Artista",
+      lyrics: "Letra vinda da internet",
+      confidence: "media",
+      fonte: "LRCLIB",
+      has_lyrics: true,
+      letra_origem: null,
+      error: null,
+    });
+    await enterEditMode();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Buscar dados na internet" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Usar estes dados" }));
+
+    expect(screen.getByLabelText("Letra")).toHaveValue(LYRICS);
+    expect(screen.getByLabelText("Título")).toHaveValue("Coração Sertanejo (ao vivo)");
+    expect(screen.getByLabelText("Artista")).toHaveValue("Outro Artista");
+    confirmSpy.mockRestore();
+  });
+
+  // ALTO-3b — instrumental para na etapa 1: nenhuma etapa de LETRA roda. Dizer
+  // "não achamos nos sites de letra" contaria uma busca que não aconteceu.
+  it("instrumental sem resultado: o aviso diz que letra não foi procurada", async () => {
+    enrichSongScan.mockResolvedValueOnce(null);
+    await enterEditMode();
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Esta música é instrumental" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Buscar dados na internet" }),
+    );
+    expect(await screen.findByText(SEM_RESULTADO_INSTRUMENTAL)).toBeInTheDocument();
+    expect(screen.queryByText(SEM_RESULTADO_INDIVIDUAL)).not.toBeInTheDocument();
+  });
+
+  // -------------------------------------------------------------------------
+  // ALTO-4 — a procedência da letra aceita no editor
+  // -------------------------------------------------------------------------
+  it("letra do Vagalume aceita no editor é GRAVADA como vinda do Vagalume", async () => {
+    enrichSongScan.mockResolvedValueOnce({
+      song_id: 1,
+      file_path: "/acervo/1.mp3",
+      current_title: "Coração Sertanejo",
+      current_artist: "Artista Teste",
+      proposed_title: "Coração Sertanejo",
+      proposed_artist: "Artista Teste",
+      lyrics: "letra do vagalume",
+      confidence: "media",
+      fonte: "Vagalume",
+      has_lyrics: true,
+      letra_origem: null,
+      error: null,
+    });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    await enterEditMode();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Buscar dados na internet" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Usar estes dados" }));
+    fireEvent.click(screen.getByRole("button", { name: "Salvar no arquivo" }));
+
+    await waitFor(() => expect(writeTags).toHaveBeenCalled());
+    expect(writeTags.mock.calls[0][6]).toBe("vagalume");
+    confirmSpy.mockRestore();
+  });
+
+  it("letra do LRCLIB não inventa procedência: a marca é limpa", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    await enterEditMode();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Buscar dados na internet" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Usar estes dados" }));
+    fireEvent.click(screen.getByRole("button", { name: "Salvar no arquivo" }));
+
+    await waitFor(() => expect(writeTags).toHaveBeenCalled());
+    expect(writeTags.mock.calls[0][6]).toBeNull();
+    confirmSpy.mockRestore();
+  });
+
+  // A marca descreve o TEXTO que está lá: se a pessoa mexeu na letra depois de
+  // aceitar, ela não é mais a letra do Vagalume.
+  it("editar a letra à mão depois de aceitar apaga a procedência pendente", async () => {
+    enrichSongScan.mockResolvedValueOnce({
+      song_id: 1,
+      file_path: "/acervo/1.mp3",
+      current_title: "Coração Sertanejo",
+      current_artist: "Artista Teste",
+      proposed_title: "Coração Sertanejo",
+      proposed_artist: "Artista Teste",
+      lyrics: "letra do vagalume",
+      confidence: "media",
+      fonte: "Vagalume",
+      has_lyrics: true,
+      letra_origem: null,
+      error: null,
+    });
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    await enterEditMode();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Buscar dados na internet" }),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Usar estes dados" }));
+    fireEvent.change(screen.getByLabelText("Letra"), {
+      target: { value: "letra do vagalume, com um verso corrigido" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Salvar no arquivo" }));
+
+    await waitFor(() => expect(writeTags).toHaveBeenCalled());
+    expect(writeTags.mock.calls[0][6]).toBeNull();
+    confirmSpy.mockRestore();
+  });
+
+  // -------------------------------------------------------------------------
+  // MÉDIO-15 — dois funis ao mesmo tempo dobram a taxa de consulta nos sites,
+  // que é justamente o que a cortesia compartilhada existe para evitar.
+  // -------------------------------------------------------------------------
+  it("com uma varredura em lote rodando, a busca do editor fica bloqueada e diz por quê", async () => {
+    useEnrichStore.setState({ status: "scanning", scanInFlight: true });
+    await enterEditMode();
+    const botao = screen.getByRole("button", { name: "Buscar dados na internet" });
+    expect(botao).toBeDisabled();
+    const motivo = screen.getByText(
+      "A busca desta pasta está rodando — espere ela terminar para não" +
+        " consultar os sites de letra duas vezes ao mesmo tempo.",
+    );
+    expect(motivo).toBeVisible();
+    expect(botao).toHaveAttribute("aria-describedby", motivo.id);
+    expect(enrichSongScan).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // B1 — sem id a busca individual era incancelável: offline, sete palpites de
+  // 10 s cada deixavam o editor em "Buscando…" por mais de um minuto.
+  // -------------------------------------------------------------------------
+  it("durante a busca dá para cancelar, e o resultado que chegar depois é ignorado", async () => {
+    const enrichCancelScan = vi.fn(async () => {});
+    setupEditBackend({ enrichCancelScan } as unknown as Partial<Backend>);
+    let resolveScan!: (v: unknown) => void;
+    enrichSongScan.mockImplementationOnce(
+      () => new Promise((resolve) => (resolveScan = resolve)),
+    );
+    await enterEditMode();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Buscar dados na internet" }),
+    );
+
+    // enquanto busca, a tela avisa que isso pode demorar
+    expect(
+      screen.getByText(/pode demorar se os sites de letra estiverem lentos/),
+    ).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Cancelar busca" }));
+    await waitFor(() => expect(enrichCancelScan).toHaveBeenCalled());
+    expect(
+      await screen.findByRole("button", { name: "Buscar dados na internet" }),
+    ).toBeEnabled();
+
+    // a resposta atrasada da busca cancelada não pode aparecer na ficha
+    await act(async () => {
+      resolveScan(null);
+    });
+    expect(screen.queryByText(SEM_RESULTADO_INDIVIDUAL)).not.toBeInTheDocument();
   });
 
   it("trocar a música selecionada sai do modo edição", async () => {

@@ -20,10 +20,17 @@ interface UiState {
   checkUpdatesOnStart: boolean;
   /**
    * V8/F18 — chave gratuita e PESSOAL do Vagalume, digitada por quem usa.
-   * Fica junto das outras preferências (localStorage) porque é isso que ela
-   * é: uma preferência de uma conta gratuita da própria pessoa, num app sem
-   * telemetria e sem servidor. Vazia = a etapa do Vagalume é pulada em
-   * silêncio. Nunca é impressa em log.
+   *
+   * Ela É GRAVADA EM DISCO, em texto puro, no localStorage das preferências
+   * ("cancioneiro-ui"), junto de tamanho da fonte e afins. Isso é decisão de
+   * produto, não descuido: 40 pessoas sem suporte redigitando uma chave de API
+   * a cada sessão é pior do que uma chave gratuita guardada na máquina de quem
+   * a criou. O que o produto deve é DIZER isso — e a copy ao lado do campo, em
+   * Configurações, diz (QA MÉDIO-10: quatro lugares afirmavam o contrário).
+   *
+   * Vazia = a etapa do Vagalume é pulada em silêncio. Ela não entra no banco
+   * de músicas, não é escrita nos MP3 e não vai a lugar nenhum além do próprio
+   * Vagalume, como parâmetro da consulta.
    */
   vagalumeApiKey: string;
   toggleLyricsPanel: () => void;

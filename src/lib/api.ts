@@ -1,6 +1,5 @@
 import type {
   Folder,
-  LyricsMatch,
   Playlist,
   PlaylistItem,
   ScanProgress,
@@ -22,6 +21,19 @@ export interface EnrichProposal {
   proposed_artist: string | null;
   /** Letra achada no LRCLIB (vem na proposta — o apply não volta à rede). */
   lyrics: string | null;
+  /**
+   * A música JÁ TEM letra no arquivo. Com `lyrics` não-nulo isto significa
+   * uma coisa só, e é a mais grave da tela: aplicar esta linha SUBSTITUIRIA
+   * uma letra que já existe (CRÍTICO-1 do QA — uma transcrição corrigida à
+   * mão foi destruída por um clique em "Aplicar selecionadas").
+   */
+  has_lyrics: boolean;
+  /**
+   * Procedência da letra ATUAL (o mesmo `TXXX:LETRA_ORIGEM` da Song):
+   * "transcricao" = escrita ouvindo o áudio. Decide o texto do aviso — quem
+   * cura precisa saber que tipo de trabalho o clique apagaria.
+   */
+  letra_origem: string | null;
   confidence: "alta" | "media" | "baixa";
   /**
    * De ONDE o dado veio, em pt-BR e pronto para exibir ("LRCLIB", "Vagalume",
@@ -84,6 +96,16 @@ export interface EnrichApply {
    * grava a errada.
    */
   fonte: string | null;
+  /**
+   * Consentimento EXPLÍCITO para gravar `lyrics` por cima de uma letra que já
+   * existe no arquivo. Ausente/false: o backend recusa a gravação com
+   * `esta música já tem letra — marque "substituir a letra atual" para
+   * trocá-la`, em vez de apagar em silêncio (CRÍTICO-1).
+   *
+   * A UI só o manda quando a segunda marcação da linha — separada da
+   * marcação de aplicar, e sempre desmarcada por padrão — está marcada.
+   */
+  substituir_letra?: boolean;
 }
 
 /**
@@ -138,13 +160,15 @@ export interface Backend {
     lyrics: string | null,
     temas: string | null,
     instrumental?: boolean | null,
+    /**
+     * Procedência da letra que está sendo gravada (V8/F18 — ALTO-4):
+     * `null`/omitido limpa a marca quando a letra mudou (comportamento de
+     * sempre) e "vagalume" a registra. Sem isto, a letra aceita do Vagalume
+     * pelo editor ficava indistinguível de uma do LRCLIB — mesmo acervo,
+     * duas pilhas, dois arquivos diferentes no disco.
+     */
+    letraOrigem?: string | null,
   ): Promise<Song>;
-  /** Busca a letra online por título+artista+duração — único ponto de rede (V4 F10). */
-  fetchLyricsOnline(
-    title: string,
-    artist: string | null,
-    durationSeconds: number,
-  ): Promise<LyricsMatch | null>;
   /**
    * Roda o funil nas músicas incompletas sob folderPrefix ("" = biblioteca
    * inteira) — ponto de rede EXPLÍCITO, pode levar minutos (F13/F18).
@@ -161,6 +185,16 @@ export interface Backend {
     vagalumeKey: string | null,
   ): Promise<EnrichProposal[]>;
   /**
+   * Quantas músicas o `enrichFolderScan` consultaria sob `folderPrefix` — a
+   * contagem que a seção de curadoria mostra ANTES de disparar (V8/F18).
+   *
+   * Vem do backend, e não de um filtro em TypeScript, porque é a MESMA função
+   * que a varredura usa: a cópia que existia aqui divergia da regra do Rust em
+   * três casos e chegava a zerar a contagem, desabilitando o disparo e
+   * afirmando que a pasta estava completa antes de qualquer busca.
+   */
+  enrichCount(folderPrefix: string): Promise<number>;
+  /**
    * O mesmo funil, para UMA música só — o "caso pontual" do editor (V8/F18).
    * Não emite progresso (é uma música) e devolve `null` quando nenhuma etapa
    * achou nada. Nada é gravado: quem grava é o "Salvar no arquivo" do editor,
@@ -169,6 +203,21 @@ export interface Backend {
   enrichSongScan(
     songId: number,
     vagalumeKey: string | null,
+    /**
+     * Identifica esta busca para o cancelamento (B1). Sem id ela era
+     * incancelável: offline, sete palpites de 10 s cada deixavam o editor em
+     * "Buscando…" por mais de um minuto, sem saída.
+     */
+    scanId?: string | null,
+    /**
+     * Título/artista VIVOS do formulário, quando quem clicou já corrigiu o
+     * que estava errado. Substituem as etiquetas do banco na busca: sem isso,
+     * a pessoa digitava "Asa Branca" em cima de "Faixa 03", clicava buscar, e
+     * o backend procurava "Faixa 03" — a correção dela nunca era usada e nada
+     * na tela dizia isso (ALTO-3a).
+     */
+    title?: string | null,
+    artist?: string | null,
   ): Promise<EnrichProposal | null>;
   /**
    * Pede o cancelamento da varredura `scanId`: ela para na próxima música e
@@ -269,7 +318,7 @@ function tauriBackend(): Backend {
       const { listen } = await import("@tauri-apps/api/event");
       return listen<ScanProgress>("scan:progress", (e) => cb(e.payload));
     },
-    async writeTags(songId, title, artist, lyrics, temas, instrumental) {
+    async writeTags(songId, title, artist, lyrics, temas, instrumental, letraOrigem) {
       const { invoke } = await import("@tauri-apps/api/core");
       return invoke<Song>("write_tags", {
         songId,
@@ -280,14 +329,9 @@ function tauriBackend(): Backend {
         // undefined viraria "ausente" no JSON; o backend espera null explícito
         // para "não mexer" (Option<bool> = None).
         instrumental: instrumental ?? null,
-      });
-    },
-    async fetchLyricsOnline(title, artist, durationSeconds) {
-      const { invoke } = await import("@tauri-apps/api/core");
-      return invoke<LyricsMatch | null>("fetch_lyrics_online", {
-        title,
-        artist,
-        durationSeconds,
+        // null = "a letra mudou, limpe a marca" (comportamento de sempre);
+        // "vagalume" = grave a procedência (ALTO-4).
+        letraOrigem: letraOrigem ?? null,
       });
     },
     async enrichFolderScan(folderPrefix, scanId, vagalumeKey) {
@@ -300,14 +344,21 @@ function tauriBackend(): Backend {
         vagalumeKey: vagalumeKey || null,
       });
     },
-    async enrichSongScan(songId, vagalumeKey) {
+    async enrichCount(folderPrefix) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<number>("enrich_count", { folderPrefix });
+    },
+    async enrichSongScan(songId, vagalumeKey, scanId, title, artist) {
       const { invoke } = await import("@tauri-apps/api/core");
       return invoke<EnrichProposal | null>("enrich_song_scan", {
         songId,
         vagalumeKey: vagalumeKey || null,
-        // uma música só: não há varredura para acompanhar nem cancelar, e o
-        // backend trata a ausência como "sem id" (nenhum progresso registrado)
-        scanId: null,
+        // com id, o "Cancelar busca" do editor para a rede de verdade (B1)
+        scanId: scanId || null,
+        // o que está DIGITADO vence a etiqueta do banco (ALTO-3a); vazio volta
+        // a valer como "use o que está no arquivo"
+        title: title?.trim() ? title.trim() : null,
+        artist: artist?.trim() ? artist.trim() : null,
       });
     },
     async enrichCancelScan(scanId) {
