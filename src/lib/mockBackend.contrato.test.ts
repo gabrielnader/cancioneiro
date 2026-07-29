@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import type { EnrichProposal } from "./api";
+import type { Modo } from "./types";
 import {
+  ERRO_FPCALC,
+  ERRO_FPCALC_NAO_EXECUTA,
   createMockBackend,
   discordaDoSom,
   isPlaceholder,
@@ -30,6 +34,25 @@ import {
  * FIDELIDADE dele ao backend. São perguntas diferentes, e a segunda é a que a
  * v0.9.0 foi reprovada por não fazer.
  */
+
+/**
+ * As PROPOSTAS de uma varredura em lote.
+ *
+ * Desde o QA A2 o backend devolve um objeto (`{ propostas,
+ * sem_perguntar_ao_som }`), e não a lista: só assim existe onde dizer que a
+ * etapa do som se desligou no meio. Os testes que só olham as propostas
+ * passam por aqui; os que olham a conta chamam `enrichFolderScan` direto.
+ */
+async function varrer(
+  backend: MockBackend,
+  folderPrefix: string,
+  scanId: string,
+  vagalumeKey: string | null = null,
+  modo?: Modo,
+): Promise<EnrichProposal[]> {
+  return (await backend.enrichFolderScan(folderPrefix, scanId, vagalumeKey, modo))
+    .propostas;
+}
 
 // ---------------------------------------------------------------------------
 // Regra 1 — is_placeholder (enrich.rs; espelho de eh_placeholder no Python)
@@ -384,7 +407,7 @@ describe("as regras chegam ao funil (V9)", () => {
       artista: "Milionário y José Rico",
       confianca: "alta",
     });
-    const linhas = await backend.enrichFolderScan("", "s1", null, "conferencia");
+    const linhas = await varrer(backend, "", "s1", null, "conferencia");
     expect(linhas.find((p) => p.song_id === song.id)?.conflito ?? null).toBeNull();
   });
 
@@ -400,7 +423,7 @@ describe("as regras chegam ao funil (V9)", () => {
       artista: "Artista Teste",
       confianca: "alta",
     });
-    const linhas = await backend.enrichFolderScan("", "s1", null, "conferencia");
+    const linhas = await varrer(backend, "", "s1", null, "conferencia");
     expect(linhas.find((p) => p.song_id === song.id)?.conflito).toEqual({
       titulo: "Sol Nascente",
       artista: "Artista Teste",
@@ -427,7 +450,7 @@ describe("as regras chegam ao funil (V9)", () => {
       artista: "Luiz Gonzaga",
       confianca: "alta",
     });
-    const linhas = await backend.enrichFolderScan("", "s1", null, "conferencia");
+    const linhas = await varrer(backend, "", "s1", null, "conferencia");
     const linha = linhas.find((p) => p.song_id === semTags.id)!;
     // etiqueta de GENTE: o som a CONTRADIZ, e isso é conflito. Comparando
     // normalizado ela passava por invenção do indexador, e o som sobrescrevia
@@ -449,7 +472,7 @@ describe("as regras chegam ao funil (V9)", () => {
       artista: "Luiz Gonzaga",
       confianca: "alta",
     });
-    const linhas = await backend.enrichFolderScan("", "s1", null, "conferencia");
+    const linhas = await varrer(backend, "", "s1", null, "conferencia");
     const linha = linhas.find((p) => p.song_id === semTags.id)!;
     expect(linha.conflito).toBeNull();
     expect(linha.proposed_title).toBe("Asa Branca");
@@ -460,10 +483,110 @@ describe("as regras chegam ao funil (V9)", () => {
   it("trocar um placeholder por outro não vira proposta", async () => {
     const song = await comLetra();
     await backend.writeTags(song.id, "AudioTrack 17", "faixa 3 mp3", null, null);
-    const linhas = await backend.enrichFolderScan("", "s1", null, "completar");
+    const linhas = await varrer(backend, "", "s1", null, "completar");
     const linha = linhas.find((p) => p.song_id === song.id);
     // ela é candidata (as duas etiquetas valem vazio), mas o artista proposto
     // não pode ser o lixo que já estava lá
     expect(linha?.proposed_artist ?? "").not.toBe("faixa 3 mp3");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// QA A2 — o retorno da varredura em lote, e a conta que ele carrega
+// ---------------------------------------------------------------------------
+//
+// `enrich_folder_scan` deixou de devolver `EnrichProposal[]` e passa a
+// devolver `{ propostas, sem_perguntar_ao_som }`. O mock precisa devolver o
+// objeto COM A CONTA CALCULADA: um zero fixo faria a suíte inteira certificar
+// um campo que nunca é exercitado, e a divergência só mudaria de lugar.
+
+describe("contrato mock × Rust — o retorno da varredura (QA A2)", () => {
+  let backend: MockBackend;
+
+  beforeEach(() => {
+    localStorage.clear();
+    backend = createMockBackend();
+  });
+
+  /** Pasta indexada, acessório pronto, e o som ensinado para as três fixtures. */
+  async function pastaComSom() {
+    await backend.addFolder("/musicas/teste");
+    backend._acessorio.estado = "pronto";
+    return (await backend.listSongs()).map((s) => s.file_path).sort();
+  }
+
+  it("devolve um OBJETO, não a lista — e zero é o caso normal", async () => {
+    await backend.addFolder("/musicas/teste");
+    const r = await backend.enrichFolderScan("", "s1", null, "completar");
+    expect(Array.isArray(r)).toBe(false);
+    expect(Array.isArray(r.propostas)).toBe(true);
+    expect(r.sem_perguntar_ao_som).toBe(0);
+  });
+
+  it("sem o acessório pronto a conta é zero: a etapa não existia para ninguém", async () => {
+    await backend.addFolder("/musicas/teste");
+    const caminhos = (await backend.listSongs()).map((s) => s.file_path);
+    backend._ensinarFalhaDoSom(caminhos[0], ERRO_FPCALC_NAO_EXECUTA);
+    const r = await backend.enrichFolderScan("", "s1", null, "completar");
+    expect(r.sem_perguntar_ao_som).toBe(0);
+  });
+
+  // O caso do achado: o binário não SOBE nesta máquina. A primeira música
+  // recebe a linha de erro; as seguintes nunca chegam a ser perguntadas.
+  it("veredito sobre a máquina desliga a etapa e conta as que sobraram", async () => {
+    const caminhos = await pastaComSom();
+    backend._ensinarFalhaDoSom(caminhos[0], ERRO_FPCALC_NAO_EXECUTA);
+    const r = await backend.enrichFolderScan("", "s1", null, "conferencia");
+    // 3 candidatas na conferência: a 1ª falhou (linha de erro), as outras 2
+    // não foram perguntadas
+    expect(r.sem_perguntar_ao_som).toBe(2);
+    const linha = r.propostas.find((p) => p.file_path === caminhos[0])!;
+    expect(linha.error).toBe(ERRO_FPCALC_NAO_EXECUTA);
+  });
+
+  // A incoerência que era o achado: um `fpcalc` que falha em UM arquivo (faixa
+  // curta, gravação silenciosa) não é veredito sobre nada. Desligar a etapa no
+  // primeiro soluço fazia uma conferência de 150 músicas perguntar ao som UMA
+  // vez e deixar 149 com aparência de conferidas.
+  it("falha de UM arquivo não desliga a etapa e não conta ninguém", async () => {
+    const caminhos = await pastaComSom();
+    backend._ensinarFalhaDoSom(caminhos[0], ERRO_FPCALC);
+    // sem_tags.mp3 não tem etiqueta de gente: o som PODE preencher o título
+    // dela, então a resposta dele é visível na proposta (DECISIONS #53)
+    backend._ensinarSom(caminhos[2], {
+      titulo: "Asa Branca",
+      artista: "Luiz Gonzaga",
+      confianca: "alta",
+    });
+    const r = await backend.enrichFolderScan("", "s1", null, "conferencia");
+    expect(r.sem_perguntar_ao_som).toBe(0);
+    // e a música seguinte FOI perguntada: o som respondeu por ela
+    const seguinte = r.propostas.find((p) => p.file_path === caminhos[2])!;
+    expect(seguinte.proposed_title).toBe("Asa Branca");
+  });
+
+  // A música que causou o desligamento NÃO entra na conta: ela tem a linha de
+  // erro, que é a informação. Contá-la duas vezes inflaria o número que a
+  // tela mostra — e o número é a única coisa que a pessoa tem para dimensionar
+  // o estrago.
+  it("a música que disparou o veredito não é contada duas vezes", async () => {
+    const caminhos = await pastaComSom();
+    backend._ensinarFalhaDoSom(caminhos[0], ERRO_FPCALC_NAO_EXECUTA);
+    const candidatas = await backend.enrichCount("", "conferencia");
+    const r = await backend.enrichFolderScan("", "s1", null, "conferencia");
+    // a régua é a POPULAÇÃO da varredura, não o tamanho da lista de propostas:
+    // proposta que não muda nada é descartada antes de chegar à UI, e usá-la
+    // de referência mediria outra coisa
+    expect(r.sem_perguntar_ao_som).toBe(candidatas - 1);
+  });
+
+  // Cada varredura recomeça do zero: o veredito é sobre AQUELA varredura, e
+  // um contador acumulado diria "300 músicas" na terceira tentativa.
+  it("a conta não vaza de uma varredura para a seguinte", async () => {
+    const caminhos = await pastaComSom();
+    backend._ensinarFalhaDoSom(caminhos[0], ERRO_FPCALC_NAO_EXECUTA);
+    const primeira = await backend.enrichFolderScan("", "s1", null, "conferencia");
+    const segunda = await backend.enrichFolderScan("", "s2", null, "conferencia");
+    expect(segunda.sem_perguntar_ao_som).toBe(primeira.sem_perguntar_ao_som);
   });
 });

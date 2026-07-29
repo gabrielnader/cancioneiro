@@ -7,6 +7,7 @@ import type {
   EnrichApplyResult,
   EnrichProgress,
   EnrichProposal,
+  EnrichScanResult,
 } from "./api";
 import type { Modo } from "./types";
 import { isUnderFolder } from "./folderTree";
@@ -79,8 +80,12 @@ export interface MockBackend extends Backend {
     /** false = não publicamos binário para esta plataforma → lista vazia. */
     publicado: boolean;
     estado: AcessorioInfo["estado"];
-    /** Desfecho do próximo download; null = instala normalmente. */
-    erro: "soma" | "rede" | null;
+    /**
+     * Desfecho do próximo download; null = instala normalmente. Além da soma
+     * que não confere e da rede que caiu, as quatro falhas de ESCRITA que o
+     * backend passou a nomear em pt-BR (QA M4).
+     */
+    erro: "soma" | "rede" | keyof typeof ERROS_DE_GRAVACAO | null;
     /** Atraso por pedaço (0 = instantâneo). Só o E2E precisa ver a barra. */
     atrasoMs: number;
     /** Em quantos pedaços o download é emitido. */
@@ -97,6 +102,14 @@ export interface MockBackend extends Backend {
     filePath: string,
     diz: { titulo: string; artista: string; confianca: "alta" | "media" },
   ): void;
+  /**
+   * Ensina uma FALHA do `fpcalc` para um arquivo (QA A2). A mensagem decide o
+   * alcance, como no Rust: `ERRO_FPCALC` é defeito deste arquivo e a fila
+   * segue; `ERRO_FPCALC_NAO_EXECUTA` é veredito sobre a máquina e desliga a
+   * etapa 2 pelo resto da varredura — a partir daí cada candidata que teria
+   * sido perguntada entra em `sem_perguntar_ao_som`.
+   */
+  _ensinarFalhaDoSom(filePath: string, mensagem: string): void;
 }
 
 const STORAGE_KEY = "cancioneiro-mock-db";
@@ -142,6 +155,13 @@ interface DbState {
   acessorioEstado: AcessorioInfo["estado"];
   /** O que o som responde, por arquivo. Permanente, como o próprio áudio. */
   somDiz: Record<string, SomDiz>;
+  /**
+   * Falha do `fpcalc` por arquivo (QA A2). A mensagem é a MESMA do Rust, e
+   * qual delas é decide o alcance: `ERRO_FPCALC` é defeito deste arquivo e o
+   * funil segue; `ERRO_FPCALC_NAO_EXECUTA` é veredito sobre a MÁQUINA e
+   * desliga a etapa pelo resto da varredura.
+   */
+  somFalha: Record<string, string>;
 }
 
 function freshState(): DbState {
@@ -157,6 +177,7 @@ function freshState(): DbState {
     nextItemId: 1,
     acessorioEstado: "ausente",
     somDiz: {},
+    somFalha: {},
   };
 }
 
@@ -375,6 +396,25 @@ const ERRO_ACESSORIO_INDISPONIVEL =
 const ERRO_ACESSORIO_DESCONHECIDO = "não há este acessório para este computador";
 
 /**
+ * As falhas de ESCRITA do download (QA M4 do backend), com as palavras do
+ * `acessorios.rs`. Seis pontos do módulo subiam `io::Error` pelo `?` e a
+ * pessoa lia a frase do sistema operacional, em inglês, direto na tela — e
+ * são justamente as falhas PROVÁVEIS num parque de máquinas que ninguém pode
+ * olhar. Exportadas para que os testes provem que a tela as mostra COMO
+ * VIERAM: reescrevê-las aqui criaria uma segunda versão da verdade.
+ */
+export const ERROS_DE_GRAVACAO = {
+  disco:
+    "não há espaço em disco para este download — libere espaço e tente de novo",
+  permissao:
+    "o computador não deixou gravar na pasta do aplicativo — se houver antivírus ou pasta " +
+    "sincronizada com a nuvem, pause e tente de novo",
+  emUso:
+    "o acessório está em uso por outro programa — feche o aplicativo, abra de novo e tente",
+  gravacao: "não foi possível gravar o download neste computador",
+} as const;
+
+/**
  * Recusa do apply quando a gravação trocaria uma letra que já existe sem o
  * consentimento explícito da revisão (CRÍTICO-1). Texto idêntico ao do Rust:
  * ele aparece na linha, e é o único lugar onde a pessoa vai ler o que fazer.
@@ -387,6 +427,18 @@ const ERRO_ACESSORIO_DESCONHECIDO = "não há este acessório para este computad
  */
 const ERRO_CHAVE_RECUSADA =
   "a chave do Vagalume foi recusada — confira se copiou a chave inteira";
+
+/**
+ * As duas falhas do `fpcalc`, com as palavras do Rust
+ * (`fingerprint::ERRO_FPCALC` e `ERRO_FPCALC_NAO_EXECUTA`). Exportadas porque
+ * os testes e o E2E precisam ensiná-las ao mock, e porque a DIFERENÇA entre
+ * elas é o achado A2: a primeira é defeito de UM arquivo (faixa curta,
+ * gravação silenciosa — três das quatro fixtures do projeto falham assim com
+ * o `fpcalc` de verdade) e a segunda é veredito sobre a máquina.
+ */
+export const ERRO_FPCALC = "não foi possível ler o som deste arquivo";
+export const ERRO_FPCALC_NAO_EXECUTA =
+  "o programa que reconhece o som não conseguiu ser executado neste computador";
 
 const RECUSA_LETRA_EXISTENTE =
   'esta música já tem letra — marque "substituir a letra atual" para trocá-la';
@@ -785,6 +837,32 @@ export function discordaDoSom(atual: string, identificado: string): boolean {
   return similaridadeDeNomes(a, b) < LIMIAR_MESMA_GRAFIA;
 }
 
+/**
+ * O que uma varredura aprende sobre SI MESMA enquanto roda — porte do
+ * `enrich::EstadoDaVarredura`.
+ *
+ * Um veredito é uma afirmação sobre a VARREDURA ("esta chave está recusada",
+ * "este acessório não roda nesta máquina"), nunca sobre um arquivo. Erro de um
+ * arquivo não entra aqui: ele vira a linha de erro daquela música e a fila
+ * segue (QA A2).
+ */
+interface EstadoDaVarredura {
+  /** O Vagalume recusou a chave: etapa 4 desligada pelo resto (DECISIONS #83). */
+  chaveRecusada: boolean;
+  /** O acessório do som não roda nesta máquina: etapa 2 desligada pelo resto. */
+  somDesligado: boolean;
+  /**
+   * Quantas músicas passaram sem que o som fosse perguntado por causa do
+   * desligamento acima. Sem este número, a pessoa vê uma linha vermelha, as
+   * outras 149 sem nada, e conclui que o resto foi conferido.
+   */
+  semPerguntarAoSom: number;
+}
+
+function novoEstadoDaVarredura(): EstadoDaVarredura {
+  return { chaveRecusada: false, somDesligado: false, semPerguntarAoSom: 0 };
+}
+
 export function createMockBackend(): MockBackend {
   let state = loadState();
   const progressListeners = new Set<(p: ScanProgress) => void>();
@@ -906,8 +984,8 @@ export function createMockBackend(): MockBackend {
     song: SongRecord,
     vagalumeKey: string | null,
     digitado?: { title?: string | null; artist?: string | null },
-    /** Estado da VARREDURA (não da música): a chave já foi recusada? */
-    estado: { chaveRecusada: boolean } = { chaveRecusada: false },
+    /** Estado da VARREDURA (não da música): vereditos e a conta do A2. */
+    estado: EstadoDaVarredura = novoEstadoDaVarredura(),
     modo: Modo = "completar",
   ): EnrichProposal {
     const proposta = passarPeloFunil(song, vagalumeKey, digitado, estado, modo);
@@ -960,7 +1038,7 @@ export function createMockBackend(): MockBackend {
     song: SongRecord,
     vagalumeKey: string | null,
     digitado: { title?: string | null; artist?: string | null } | undefined,
-    estado: { chaveRecusada: boolean },
+    estado: EstadoDaVarredura,
     modo: Modo,
   ): EnrichProposal {
     const tituloTag = tagReal(digitado?.title ?? song.title);
@@ -1017,8 +1095,26 @@ export function createMockBackend(): MockBackend {
     // Vem ANTES das bases de letra porque não devolve letra nenhuma: devolve
     // identidade, que é ENTRADA das outras etapas. Roda também para
     // instrumental — dá título e artista sem encostar em letra.
-    if (somAtivo()) {
-      const diz = state.somDiz[song.file_path];
+    // QA A2 — a etapa EXISTIA para esta música e não foi feita, porque um
+    // veredito anterior a desligou. Contar é o que permite à tela dizer
+    // quantas ficaram sem ser perguntadas, em vez de deixar a pessoa concluir
+    // que o silêncio é aprovação. Mesma ordem do Rust: conta-se ANTES, e a
+    // música que causou o desligamento não entra na conta (ela tem a linha de
+    // erro, que é a informação).
+    if (somAtivo() && estado.somDesligado) {
+      estado.semPerguntarAoSom++;
+    }
+    if (somAtivo() && !estado.somDesligado) {
+      const falha = state.somFalha[song.file_path];
+      const diz = state.somFalha[song.file_path] ? undefined : state.somDiz[song.file_path];
+      if (falha) {
+        // Falha do `fpcalc` é erro DESTA música e o funil SEGUE (as etapas de
+        // letra ainda rodam). Só o veredito sobre a máquina desliga a etapa,
+        // exatamente como a etapa 4 só se desliga com a chave recusada — a
+        // incoerência entre as duas era o achado A2.
+        if (falha === ERRO_FPCALC_NAO_EXECUTA) estado.somDesligado = true;
+        erro = falha;
+      }
       if (diz) {
         if (
           discordaDoSom(tituloEscrito(song, digitado?.title), diz.titulo) ||
@@ -1457,7 +1553,7 @@ export function createMockBackend(): MockBackend {
       // ausente vale "completar", como o Modo::default do Rust: esquecer o
       // campo nunca dispara a varredura que lê o áudio de todas as músicas
       modo: Modo = "completar",
-    ): Promise<EnrichProposal[]> {
+    ): Promise<EnrichScanResult> {
       enrichCancelled.delete(scanId);
       // candidatas pré-contadas ANTES do trabalho (como o scan_all): o total
       // do progresso não muda no meio da varredura
@@ -1467,8 +1563,13 @@ export function createMockBackend(): MockBackend {
 
       const total = candidatas.length;
       const proposals: EnrichProposal[] = [];
-      // vale para a varredura toda, como o `chave_recusada` do Rust
-      const estado = { chaveRecusada: false };
+      // vale para a varredura toda, como o `EstadoDaVarredura` do Rust
+      const estado = novoEstadoDaVarredura();
+      /** O objeto do QA A2 — a conta sai do estado, nunca de um zero fixo. */
+      const fechar = (propostas: EnrichProposal[]): EnrichScanResult => ({
+        propostas,
+        sem_perguntar_ao_som: estado.semPerguntarAoSom,
+      });
       // primeiro evento com done=0 antes de começar: só o total na tela
       // (mesmo contrato do Rust — `atual` vazio nesse evento)
       emitEnrichProgress(scanId, 0, total, "", ETAPA_PREPARANDO);
@@ -1482,7 +1583,7 @@ export function createMockBackend(): MockBackend {
         // cancelada: para de emitir e resolve sem propostas (M4)
         if (enrichCancelled.has(scanId)) {
           enrichCancelled.delete(scanId);
-          return [];
+          return fechar([]);
         }
         const proposta = propostaDoFunil(
           song,
@@ -1504,7 +1605,7 @@ export function createMockBackend(): MockBackend {
       }
       enrichCancelled.delete(scanId);
       // propostas sem nada a decidir não chegam à UI (mesmo corte do Rust)
-      return proposals.filter((p) => !propostaNoOp(p));
+      return fechar(proposals.filter((p) => !propostaNoOp(p)));
     },
 
     async enrichCount(
@@ -1712,6 +1813,14 @@ export function createMockBackend(): MockBackend {
       if (backend._acessorio.erro === "rede") {
         throw new Error(ERRO_DOWNLOAD_INTERROMPIDO);
       }
+      // As falhas de escrita chegam com a frase do backend, e cada uma termina
+      // dizendo o que fazer — porque não há a quem perguntar.
+      const falhaDeGravacao = backend._acessorio.erro;
+      if (falhaDeGravacao && falhaDeGravacao in ERROS_DE_GRAVACAO) {
+        throw new Error(
+          ERROS_DE_GRAVACAO[falhaDeGravacao as keyof typeof ERROS_DE_GRAVACAO],
+        );
+      }
       state.acessorioEstado = "pronto";
       save();
       return { cancelado: false, acessorio: infoDoAcessorio() };
@@ -1799,6 +1908,11 @@ export function createMockBackend(): MockBackend {
 
     _ensinarSom(filePath: string, diz: SomDiz): void {
       state.somDiz[filePath] = diz;
+      save();
+    },
+
+    _ensinarFalhaDoSom(filePath: string, mensagem: string): void {
+      state.somFalha[filePath] = mensagem;
       save();
     },
 

@@ -17,6 +17,7 @@ import {
   SEM_RESULTADO_INSTRUMENTAL,
   VAGALUME_URL,
   avisoLetraExistente,
+  avisoSemPerguntarAoSom,
   confiancaDoSom,
   estimativaTexto,
   estadoDoSom,
@@ -760,6 +761,115 @@ describe("o que a seção de curadoria promete", () => {
 
   it("o endereço da chave gratuita do Vagalume é o oficial", () => {
     expect(VAGALUME_URL).toBe("https://auth.vagalume.com.br/settings/api/");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// QA A2 — as músicas que a etapa 2 deixou de perguntar
+// ---------------------------------------------------------------------------
+//
+// Uma falha do `fpcalc` desligava a etapa 2 pelo resto da varredura. A pessoa
+// via UMA linha vermelha, as outras 149 sem nada, e concluía que o resto
+// tinha sido conferido. O backend agora conta quantas ficaram sem ser
+// perguntadas; se a tela não disser o número, o defeito continua idêntico —
+// silêncio lido como aprovação (DECISIONS #86).
+
+describe("avisoSemPerguntarAoSom (QA A2)", () => {
+  // Zero é o CASO NORMAL: toda varredura que correu bem termina assim, e um
+  // "0 músicas ficaram sem ser perguntadas" em cada desfecho é ruído que
+  // ensina a ignorar o aviso justamente quando ele importar.
+  it("zero não merece texto nenhum", () => {
+    for (const modo of ["completar", "conferencia"] as const) {
+      expect(avisoSemPerguntarAoSom(0, modo)).toBeNull();
+      expect(avisoSemPerguntarAoSom(-1, modo)).toBeNull();
+    }
+  });
+
+  it("diz o NÚMERO, que é a razão de o campo existir", () => {
+    for (const modo of ["completar", "conferencia"] as const) {
+      expect(avisoSemPerguntarAoSom(37, modo)).toContain("37");
+      expect(avisoSemPerguntarAoSom(1, modo)).toContain("1 música");
+    }
+  });
+
+  it("singular e plural concordam", () => {
+    expect(avisoSemPerguntarAoSom(1, "completar")).toContain(
+      "não chegou a ser perguntada",
+    );
+    expect(avisoSemPerguntarAoSom(2, "completar")).toContain(
+      "não chegaram a ser perguntadas",
+    );
+  });
+
+  // "O que fazer em seguida" não pode ser específico do veredito: o número
+  // não distingue o acessório que não roda do AcoustID que recusou o app, e
+  // mandar procurar defeito no lugar errado é pior que não mandar nada. O
+  // passo comum aos dois é repetir quando o som voltar.
+  it("diz o que fazer em seguida, sem chutar a causa", () => {
+    for (const modo of ["completar", "conferencia"] as const) {
+      const t = avisoSemPerguntarAoSom(37, modo)!;
+      expect(t.toLowerCase()).toContain("repita");
+      expect(t.toLowerCase()).not.toContain("antivírus");
+      expect(t.toLowerCase()).not.toContain("baixe");
+    }
+  });
+
+  // A conferência é o trabalho caro, disparado de propósito, que a pessoa
+  // esperou minutos para ver terminar. Se 37 de 40 não foram perguntadas, o
+  // texto não pode deixar a conferência passar por concluída.
+  it("na conferência, diz que aquelas músicas continuam pendentes", () => {
+    const t = avisoSemPerguntarAoSom(37, "conferencia")!;
+    expect(t.toLowerCase()).toContain("sem conferência");
+  });
+
+  it("cabe na régua da V9: 2 frases, 210 caracteres", () => {
+    for (const modo of ["completar", "conferencia"] as const) {
+      for (const n of [1, 37, 1999]) {
+        const t = avisoSemPerguntarAoSom(n, modo)!;
+        expect(t.length, t).toBeLessThanOrEqual(210);
+        expect(frases(t), t).toBeLessThanOrEqual(2);
+      }
+    }
+  });
+});
+
+describe("textoSemPropostas com a etapa 2 desligada no meio (QA A2)", () => {
+  // O desfecho vazio da conferência dizia "Conferimos 40 músicas e o som não
+  // contradisse nenhuma etiqueta". Com 37 nunca perguntadas isso é falso duas
+  // vezes: não conferimos 40, e o silêncio das 37 não é concordância.
+  it("a conferência para de afirmar que conferiu o que não perguntou", () => {
+    const texto = textoSemPropostas(40, "conferencia", 37);
+    expect(texto).toContain("37");
+    expect(texto).not.toContain("Conferimos 40");
+    expect(texto.toLowerCase()).toContain("repita");
+  });
+
+  it("a busca de sempre também conta as que ficaram de fora", () => {
+    const texto = textoSemPropostas(40, "completar", 37);
+    expect(texto).toContain("37");
+    expect(texto.toLowerCase()).toContain("repita");
+  });
+
+  // Sem o número, o texto é o de sempre — nada muda no caminho normal.
+  it("com zero, o desfecho é exatamente o de antes", () => {
+    for (const modo of ["completar", "conferencia"] as const) {
+      expect(textoSemPropostas(40, modo, 0)).toBe(textoSemPropostas(40, modo));
+    }
+  });
+
+  // O total do progresso é best-effort e pode não chegar (MÉDIO-11); o número
+  // do som vem no RETORNO da varredura e chega sempre. Um não depende do outro.
+  it("funciona mesmo sem o total do progresso", () => {
+    const texto = textoSemPropostas(null, "conferencia", 37);
+    expect(texto).toContain("37");
+  });
+
+  it("continua dentro da régua da V9", () => {
+    for (const modo of ["completar", "conferencia"] as const) {
+      const t = textoSemPropostas(150, modo, 149);
+      expect(t.length, t).toBeLessThanOrEqual(210);
+      expect(frases(t), t).toBeLessThanOrEqual(2);
+    }
   });
 });
 

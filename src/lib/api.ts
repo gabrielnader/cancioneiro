@@ -85,6 +85,28 @@ export interface EnrichProposal {
 }
 
 /**
+ * O que uma varredura em LOTE devolve — espelha `enrich::EnrichScanResult`.
+ *
+ * **Era um array puro de propostas até a v0.9.0**, e por isso não havia onde
+ * dizer que a etapa do som tinha sido desligada no meio: quem mandou conferir
+ * 150 músicas via UMA linha de erro e 149 linhas em branco, e lia o silêncio
+ * como aprovação (QA A2). "Não sabemos" precisa ser um estado (DECISIONS #86),
+ * e para isso precisa existir um campo.
+ *
+ * O `enrich_song_scan` (uma música só) NÃO mudou: lá não há "resto da
+ * varredura" para desligar.
+ */
+export interface EnrichScanResult {
+  propostas: EnrichProposal[];
+  /**
+   * Músicas que teriam sido perguntadas ao som e não foram, porque a etapa 2
+   * se desligou antes de chegar nelas. **Zero é o caso normal** e não merece
+   * texto na tela.
+   */
+  sem_perguntar_ao_som: number;
+}
+
+/**
  * Progresso da varredura do "Completar dados" (F13): o backend emite o evento
  * Tauri `enrich:progress` a cada música (chaves snake_case, como o serde do
  * struct Rust). O PRIMEIRO evento chega com done=0, antes de o trabalho
@@ -283,7 +305,7 @@ export interface Backend {
      * padrão nunca é a varredura que lê o áudio de todas as músicas.
      */
     modo?: Modo,
-  ): Promise<EnrichProposal[]>;
+  ): Promise<EnrichScanResult>;
   /**
    * Quantas músicas o `enrichFolderScan` consultaria sob `folderPrefix` — a
    * contagem que a seção de curadoria mostra ANTES de disparar (V8/F18).
@@ -457,7 +479,7 @@ function tauriBackend(): Backend {
     },
     async enrichFolderScan(folderPrefix, scanId, vagalumeKey, modo) {
       const { invoke } = await import("@tauri-apps/api/core");
-      return invoke<EnrichProposal[]>("enrich_folder_scan", {
+      return invoke<EnrichScanResult>("enrich_folder_scan", {
         folderPrefix,
         scanId,
         // string vazia é "não tenho chave" tanto quanto null; o backend pula a

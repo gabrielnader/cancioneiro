@@ -1482,6 +1482,92 @@ test.describe("V9 — o acessório do som, a conferência e o conflito (F18 fase
       page.getByRole("radio", { name: /Conferir se a etiqueta/ }),
     ).toBeDisabled();
   });
+
+  /**
+   * QA A2 — a conferência que parou no meio.
+   *
+   * Uma falha do `fpcalc` desligava a etapa 2 pelo resto da varredura: a
+   * pessoa via UMA linha vermelha, as outras sem nada, e concluía que o resto
+   * tinha sido conferido. É o trabalho CARO, disparado de propósito, que ela
+   * esperou minutos para ver terminar — e a tela não pode dá-lo por concluído.
+   *
+   * O E2E cobre o caminho inteiro porque o contrato mudou de forma
+   * (`enrich_folder_scan` devolve um objeto, não a lista): se o store voltar a
+   * tratar a resposta como array, a revisão nem abre.
+   */
+  test("conferência que para no meio: a tela diz quantas ficaram sem resposta", async ({
+    page,
+  }) => {
+    const errors = trackErrors(page);
+    await resetApp(page);
+    await addMockFolder(page);
+
+    await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const mock = (window as any).__CANCIONEIRO_MOCK__;
+      mock._acessorio.estado = "pronto";
+      // o binário não SOBE nesta máquina: veredito, não defeito do arquivo
+      mock._ensinarFalhaDoSom(
+        "/musicas/mock/com_letra.mp3",
+        "o programa que reconhece o som não conseguiu ser executado neste computador",
+      );
+    });
+
+    await page.getByRole("button", { name: "Configurações" }).click();
+    await page.getByRole("radio", { name: /Conferir se a etiqueta/ }).click();
+    await page.getByRole("button", { name: "Conferir esta pasta" }).click();
+
+    const dialog = page.getByRole("dialog", { name: "Completar dados" });
+    // o motivo, com as palavras do backend, na linha da música que falhou
+    await expect(
+      dialog.getByText(/não conseguiu ser executado neste computador/),
+    ).toBeVisible();
+    // e o número — que é a razão de o campo novo existir. Duas das três
+    // candidatas nunca chegaram a ser perguntadas.
+    //
+    // O aviso aparece DUAS vezes de propósito: na região viva (sr-only, para
+    // quem ouve a tela) e como texto visível. O locator exclui a região viva
+    // para provar que o texto está na tela, e não só no anúncio.
+    const avisoVisivel = dialog
+      .locator("p:not([role='status'])")
+      .filter({ hasText: /2 músicas não chegaram a ser perguntadas/ });
+    await expect(avisoVisivel).toBeVisible();
+    await expect(avisoVisivel).toContainText(/continuam sem conferência/);
+    // e quem ouve a tela recebe o mesmo desfecho, não um resumo otimista
+    await expect(dialog.locator("p[role='status']")).toContainText(
+      /2 músicas não chegaram a ser perguntadas/,
+    );
+    expect(errors).toEqual([]);
+  });
+
+  // O caminho normal não ganha aviso nenhum: zero é o caso comum, e um
+  // "0 músicas ficaram sem resposta" em cada desfecho ensina a ignorar o
+  // aviso justamente quando ele importar.
+  test("conferência que roda inteira não menciona música nenhuma sem resposta", async ({
+    page,
+  }) => {
+    await resetApp(page);
+    await addMockFolder(page);
+    await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const mock = (window as any).__CANCIONEIRO_MOCK__;
+      mock._acessorio.estado = "pronto";
+      mock._ensinarSom("/musicas/mock/com_letra.mp3", {
+        titulo: "Viver Feliz",
+        artista: "Nilson Chaves",
+        confianca: "alta",
+      });
+    });
+
+    await page.getByRole("button", { name: "Configurações" }).click();
+    await page.getByRole("radio", { name: /Conferir se a etiqueta/ }).click();
+    await page.getByRole("button", { name: "Conferir esta pasta" }).click();
+
+    const dialog = page.getByRole("dialog", { name: "Completar dados" });
+    await expect(dialog.getByText("CONFLITO")).toBeVisible();
+    await expect(dialog.getByText(/chegaram a ser perguntadas/)).toHaveCount(0);
+    await expect(dialog.getByText(/chegou a ser perguntada/)).toHaveCount(0);
+  });
 });
 
 test.describe("V8 — Marca de instrumental (F17)", () => {

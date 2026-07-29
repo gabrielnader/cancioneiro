@@ -4,6 +4,7 @@ import {
   type Backend,
   type EnrichProgress,
   type EnrichProposal,
+  type EnrichScanResult,
 } from "../lib/api";
 import { textoSemPropostas } from "../lib/curadoria";
 import { useEnrichStore } from "./enrichStore";
@@ -33,6 +34,18 @@ function proposal(overrides: Partial<EnrichProposal> = {}): EnrichProposal {
   };
 }
 
+/**
+ * O que a varredura em lote devolve desde o QA A2: um OBJETO, não a lista.
+ * `sem_perguntar_ao_som` conta as músicas que a etapa 2 deixou de perguntar
+ * depois de se desligar — zero é o caso normal, e é o padrão daqui.
+ */
+function scanResult(
+  propostas: EnrichProposal[],
+  semPerguntarAoSom = 0,
+): EnrichScanResult {
+  return { propostas, sem_perguntar_ao_som: semPerguntarAoSom };
+}
+
 describe("enrichStore (V5 — F13)", () => {
   beforeEach(() => {
     useEnrichStore.setState({
@@ -53,7 +66,7 @@ describe("enrichStore (V5 — F13)", () => {
 
   it("startScan: scanning → review com as propostas do backend", async () => {
     const proposals = [proposal()];
-    const enrichFolderScan = vi.fn(async () => proposals);
+    const enrichFolderScan = vi.fn(async () => scanResult(proposals));
     setBackendForTests({ enrichFolderScan } as unknown as Backend);
 
     const pending = useEnrichStore.getState().startScan("/acervo/1");
@@ -76,7 +89,7 @@ describe("enrichStore (V5 — F13)", () => {
   // V8/F18 — a chave é preferência de quem usa e viaja como PARÂMETRO da
   // varredura; o backend não guarda credencial nenhuma.
   it("startScan leva a chave do Vagalume configurada nas preferências", async () => {
-    const enrichFolderScan = vi.fn(async () => []);
+    const enrichFolderScan = vi.fn(async () => scanResult([]));
     setBackendForTests({ enrichFolderScan } as unknown as Backend);
     useUiStore.getState().setVagalumeApiKey("chave-da-pessoa");
 
@@ -95,7 +108,7 @@ describe("enrichStore (V5 — F13)", () => {
   // guarda qual deles rodou: o desfecho vazio de uma conferência não pode ser
   // narrado como o de uma busca de dados ("conferimos as N incompletas").
   it("startScan leva o modo pedido, e o desfecho vazio fala a língua dele", async () => {
-    const enrichFolderScan = vi.fn(async () => []);
+    const enrichFolderScan = vi.fn(async () => scanResult([]));
     setBackendForTests({ enrichFolderScan } as unknown as Backend);
 
     const pending = useEnrichStore.getState().startScan("", "conferencia");
@@ -115,9 +128,9 @@ describe("enrichStore (V5 — F13)", () => {
   });
 
   it("bloqueia disparo duplo enquanto a varredura está em andamento", async () => {
-    let resolve!: (p: EnrichProposal[]) => void;
+    let resolve!: (r: EnrichScanResult) => void;
     const enrichFolderScan = vi.fn(
-      () => new Promise<EnrichProposal[]>((r) => (resolve = r)),
+      () => new Promise<EnrichScanResult>((r) => (resolve = r)),
     );
     setBackendForTests({ enrichFolderScan } as unknown as Backend);
 
@@ -126,15 +139,15 @@ describe("enrichStore (V5 — F13)", () => {
     expect(enrichFolderScan).toHaveBeenCalledTimes(1);
     expect(useEnrichStore.getState().folderPrefix).toBe("");
 
-    resolve([proposal()]);
+    resolve(scanResult([proposal()]));
     await first;
     expect(useEnrichStore.getState().status).toBe("review");
   });
 
   it("fechar DURANTE a varredura descarta o resultado quando ele chegar (guarda de corrida)", async () => {
-    let resolve!: (p: EnrichProposal[]) => void;
+    let resolve!: (r: EnrichScanResult) => void;
     const enrichFolderScan = vi.fn(
-      () => new Promise<EnrichProposal[]>((r) => (resolve = r)),
+      () => new Promise<EnrichScanResult>((r) => (resolve = r)),
     );
     setBackendForTests({ enrichFolderScan } as unknown as Backend);
 
@@ -142,7 +155,7 @@ describe("enrichStore (V5 — F13)", () => {
     useEnrichStore.getState().close();
     expect(useEnrichStore.getState().status).toBe("idle");
 
-    resolve([proposal()]);
+    resolve(scanResult([proposal()]));
     await pending;
     expect(useEnrichStore.getState().status).toBe("idle");
     expect(useEnrichStore.getState().proposals).toEqual([]);
@@ -170,7 +183,7 @@ describe("enrichStore (V5 — F13)", () => {
   it("falha após fechar não emite toast (resultado descartado)", async () => {
     let reject!: (e: Error) => void;
     const enrichFolderScan = vi.fn(
-      () => new Promise<EnrichProposal[]>((_r, rj) => (reject = rj)),
+      () => new Promise<EnrichScanResult>((_r, rj) => (reject = rj)),
     );
     setBackendForTests({ enrichFolderScan } as unknown as Backend);
 
@@ -183,7 +196,7 @@ describe("enrichStore (V5 — F13)", () => {
 
   it("close limpa as propostas da revisão", async () => {
     setBackendForTests({
-      enrichFolderScan: vi.fn(async () => [proposal()]),
+      enrichFolderScan: vi.fn(async () => scanResult([proposal()])),
     } as unknown as Backend);
     await useEnrichStore.getState().startScan("");
     expect(useEnrichStore.getState().status).toBe("review");
@@ -196,7 +209,7 @@ describe("enrichStore (V5 — F13)", () => {
   describe("progresso da varredura (evento enrich:progress)", () => {
     it("guarda {done,total,atual} conforme os eventos chegam e zera ao terminar", async () => {
       let emit!: (p: EnrichProgress) => void;
-      let resolve!: (p: EnrichProposal[]) => void;
+      let resolve!: (r: EnrichScanResult) => void;
       const onEnrichProgress = vi.fn(async (cb: (p: EnrichProgress) => void) => {
         emit = cb;
         return () => {};
@@ -204,7 +217,7 @@ describe("enrichStore (V5 — F13)", () => {
       setBackendForTests({
         onEnrichProgress,
         enrichFolderScan: vi.fn(
-          () => new Promise<EnrichProposal[]>((r) => (resolve = r)),
+          () => new Promise<EnrichScanResult>((r) => (resolve = r)),
         ),
       } as unknown as Backend);
 
@@ -237,7 +250,7 @@ describe("enrichStore (V5 — F13)", () => {
       });
       expect(useEnrichStore.getState().progress?.done).toBe(12);
 
-      resolve([proposal()]);
+      resolve(scanResult([proposal()]));
       await pending;
       expect(useEnrichStore.getState().progress).toBeNull();
     });
@@ -251,7 +264,7 @@ describe("enrichStore (V5 — F13)", () => {
           emit = cb;
           return () => {};
         }),
-        enrichFolderScan: vi.fn(() => new Promise<EnrichProposal[]>(() => {})),
+        enrichFolderScan: vi.fn(() => new Promise<EnrichScanResult>(() => {})),
       } as unknown as Backend);
 
       void useEnrichStore.getState().startScan("");
@@ -284,7 +297,7 @@ describe("enrichStore (V5 — F13)", () => {
       const enrichCancelScan = vi.fn(async () => {});
       setBackendForTests({
         enrichCancelScan,
-        enrichFolderScan: vi.fn(() => new Promise<EnrichProposal[]>(() => {})),
+        enrichFolderScan: vi.fn(() => new Promise<EnrichScanResult>(() => {})),
       } as unknown as Backend);
 
       void useEnrichStore.getState().startScan("");
@@ -301,7 +314,7 @@ describe("enrichStore (V5 — F13)", () => {
       const enrichCancelScan = vi.fn(async () => {});
       setBackendForTests({
         enrichCancelScan,
-        enrichFolderScan: vi.fn(async () => [proposal()]),
+        enrichFolderScan: vi.fn(async () => scanResult([proposal()])),
       } as unknown as Backend);
 
       await useEnrichStore.getState().startScan("");
@@ -312,7 +325,7 @@ describe("enrichStore (V5 — F13)", () => {
 
     it("backend sem enrichCancelScan não quebra o cancelamento", async () => {
       setBackendForTests({
-        enrichFolderScan: vi.fn(() => new Promise<EnrichProposal[]>(() => {})),
+        enrichFolderScan: vi.fn(() => new Promise<EnrichScanResult>(() => {})),
       } as unknown as Backend);
       void useEnrichStore.getState().startScan("");
       expect(() => useEnrichStore.getState().close()).not.toThrow();
@@ -320,9 +333,9 @@ describe("enrichStore (V5 — F13)", () => {
     });
 
     it("scanInFlight segue true depois do cancelamento até o invoke responder", async () => {
-      let resolve!: (p: EnrichProposal[]) => void;
+      let resolve!: (r: EnrichScanResult) => void;
       const enrichFolderScan = vi.fn(
-        () => new Promise<EnrichProposal[]>((r) => (resolve = r)),
+        () => new Promise<EnrichScanResult>((r) => (resolve = r)),
       );
       setBackendForTests({
         enrichFolderScan,
@@ -339,7 +352,7 @@ describe("enrichStore (V5 — F13)", () => {
       await useEnrichStore.getState().startScan("/outra");
       expect(enrichFolderScan).toHaveBeenCalledTimes(1);
 
-      resolve([]);
+      resolve(scanResult([]));
       await pending;
       expect(useEnrichStore.getState().scanInFlight).toBe(false);
       // agora sim: nova varredura permitida
@@ -351,7 +364,7 @@ describe("enrichStore (V5 — F13)", () => {
       const unlisten = vi.fn();
       setBackendForTests({
         onEnrichProgress: vi.fn(async () => unlisten),
-        enrichFolderScan: vi.fn(async () => [proposal()]),
+        enrichFolderScan: vi.fn(async () => scanResult([proposal()])),
       } as unknown as Backend);
 
       await useEnrichStore.getState().startScan("");
@@ -360,7 +373,7 @@ describe("enrichStore (V5 — F13)", () => {
 
     it("backend sem onEnrichProgress não quebra a varredura", async () => {
       setBackendForTests({
-        enrichFolderScan: vi.fn(async () => [proposal()]),
+        enrichFolderScan: vi.fn(async () => scanResult([proposal()])),
       } as unknown as Backend);
       await useEnrichStore.getState().startScan("");
       expect(useEnrichStore.getState().status).toBe("review");
@@ -369,10 +382,10 @@ describe("enrichStore (V5 — F13)", () => {
 
   describe("segundo plano (a varredura é somente leitura — não trava o app)", () => {
     it("hideOverlay esconde o overlay e a varredura CONTINUA (resultado chega na store)", async () => {
-      let resolve!: (p: EnrichProposal[]) => void;
+      let resolve!: (r: EnrichScanResult) => void;
       setBackendForTests({
         enrichFolderScan: vi.fn(
-          () => new Promise<EnrichProposal[]>((r) => (resolve = r)),
+          () => new Promise<EnrichScanResult>((r) => (resolve = r)),
         ),
       } as unknown as Backend);
 
@@ -384,7 +397,7 @@ describe("enrichStore (V5 — F13)", () => {
       expect(useEnrichStore.getState().status).toBe("scanning");
 
       const proposals = [proposal(), proposal({ song_id: 2 })];
-      resolve(proposals);
+      resolve(scanResult(proposals));
       await pending;
       expect(useEnrichStore.getState().status).toBe("review");
       expect(useEnrichStore.getState().proposals).toEqual(proposals);
@@ -394,10 +407,9 @@ describe("enrichStore (V5 — F13)", () => {
 
     it("fim em segundo plano COM propostas: toast avisando (plural)", async () => {
       setBackendForTests({
-        enrichFolderScan: vi.fn(async () => [
-          proposal(),
-          proposal({ song_id: 2 }),
-        ]),
+        enrichFolderScan: vi.fn(async () =>
+          scanResult([proposal(), proposal({ song_id: 2 })]),
+        ),
       } as unknown as Backend);
 
       const pending = useEnrichStore.getState().startScan("");
@@ -414,7 +426,7 @@ describe("enrichStore (V5 — F13)", () => {
 
     it("fim em segundo plano com UMA proposta: toast no singular", async () => {
       setBackendForTests({
-        enrichFolderScan: vi.fn(async () => [proposal()]),
+        enrichFolderScan: vi.fn(async () => scanResult([proposal()])),
       } as unknown as Backend);
 
       const pending = useEnrichStore.getState().startScan("");
@@ -431,7 +443,7 @@ describe("enrichStore (V5 — F13)", () => {
     // a pasta estava completa. Sem o número, o texto não conta ninguém.
     it("fim em segundo plano SEM propostas e SEM progresso: aviso sem contagem inventada", async () => {
       setBackendForTests({
-        enrichFolderScan: vi.fn(async () => []),
+        enrichFolderScan: vi.fn(async () => scanResult([])),
       } as unknown as Backend);
 
       const pending = useEnrichStore.getState().startScan("");
@@ -450,14 +462,14 @@ describe("enrichStore (V5 — F13)", () => {
     // "nada a ajustar" fazia o coordenador entender "pasta completa".
     it("fim em segundo plano SEM propostas mas COM candidatas: toast honesto com o N varrido", async () => {
       let emit!: (p: EnrichProgress) => void;
-      let resolve!: (p: EnrichProposal[]) => void;
+      let resolve!: (r: EnrichScanResult) => void;
       setBackendForTests({
         onEnrichProgress: vi.fn(async (cb: (p: EnrichProgress) => void) => {
           emit = cb;
           return () => {};
         }),
         enrichFolderScan: vi.fn(
-          () => new Promise<EnrichProposal[]>((r) => (resolve = r)),
+          () => new Promise<EnrichScanResult>((r) => (resolve = r)),
         ),
       } as unknown as Backend);
 
@@ -472,7 +484,7 @@ describe("enrichStore (V5 — F13)", () => {
         etapa: "procurando no LRCLIB",
         scan_id,
       });
-      resolve([]);
+      resolve(scanResult([]));
       await pending;
 
       expect(useToastStore.getState().toasts[0].message).toBe(
@@ -483,14 +495,14 @@ describe("enrichStore (V5 — F13)", () => {
 
     it("uma candidata só: o texto honesto vai para o singular", async () => {
       let emit!: (p: EnrichProgress) => void;
-      let resolve!: (p: EnrichProposal[]) => void;
+      let resolve!: (r: EnrichScanResult) => void;
       setBackendForTests({
         onEnrichProgress: vi.fn(async (cb: (p: EnrichProgress) => void) => {
           emit = cb;
           return () => {};
         }),
         enrichFolderScan: vi.fn(
-          () => new Promise<EnrichProposal[]>((r) => (resolve = r)),
+          () => new Promise<EnrichScanResult>((r) => (resolve = r)),
         ),
       } as unknown as Backend);
 
@@ -504,7 +516,7 @@ describe("enrichStore (V5 — F13)", () => {
         etapa: "procurando no LRCLIB",
         scan_id: useEnrichStore.getState().scanId,
       });
-      resolve([]);
+      resolve(scanResult([]));
       await pending;
 
       expect(useToastStore.getState().toasts[0].message).toBe(
@@ -514,14 +526,14 @@ describe("enrichStore (V5 — F13)", () => {
 
     it("scannedTotal guarda o total varrido (último evento) para a tela de resultado", async () => {
       let emit!: (p: EnrichProgress) => void;
-      let resolve!: (p: EnrichProposal[]) => void;
+      let resolve!: (r: EnrichScanResult) => void;
       setBackendForTests({
         onEnrichProgress: vi.fn(async (cb: (p: EnrichProgress) => void) => {
           emit = cb;
           return () => {};
         }),
         enrichFolderScan: vi.fn(
-          () => new Promise<EnrichProposal[]>((r) => (resolve = r)),
+          () => new Promise<EnrichScanResult>((r) => (resolve = r)),
         ),
       } as unknown as Backend);
 
@@ -534,7 +546,7 @@ describe("enrichStore (V5 — F13)", () => {
         etapa: "procurando no LRCLIB",
         scan_id: useEnrichStore.getState().scanId,
       });
-      resolve([]);
+      resolve(scanResult([]));
       await pending;
 
       expect(useEnrichStore.getState().scannedTotal).toBe(94);
@@ -542,13 +554,96 @@ describe("enrichStore (V5 — F13)", () => {
     });
   });
 
+  // -------------------------------------------------------------------------
+  // QA A2 — o retorno virou objeto, e o número que ele traz precisa chegar
+  // -------------------------------------------------------------------------
+  //
+  // `enrich_folder_scan` deixou de devolver `EnrichProposal[]`. Se o store
+  // continuasse tratando a resposta como array, o app real receberia um objeto
+  // onde espera uma lista — e nenhuma suíte pegaria, porque o mock devolve o
+  // que o mock quiser. É a classe de defeito da DECISIONS #92: só existe
+  // dentro do binário.
+  describe("o resultado da varredura (QA A2)", () => {
+    it("lê as propostas de dentro do objeto, não da resposta inteira", async () => {
+      setBackendForTests({
+        enrichFolderScan: vi.fn(async () => scanResult([proposal()])),
+      } as unknown as Backend);
+      await useEnrichStore.getState().startScan("");
+      expect(useEnrichStore.getState().proposals).toHaveLength(1);
+      expect(useEnrichStore.getState().proposals[0].song_id).toBe(1);
+    });
+
+    it("guarda quantas músicas não chegaram a ser perguntadas ao som", async () => {
+      setBackendForTests({
+        enrichFolderScan: vi.fn(async () => scanResult([proposal()], 37)),
+      } as unknown as Backend);
+      await useEnrichStore.getState().startScan("", "conferencia");
+      expect(useEnrichStore.getState().semPerguntarAoSom).toBe(37);
+    });
+
+    it("a conta zera a cada varredura nova — nunca sobra da anterior", async () => {
+      setBackendForTests({
+        enrichFolderScan: vi.fn(async () => scanResult([proposal()], 37)),
+      } as unknown as Backend);
+      await useEnrichStore.getState().startScan("", "conferencia");
+      expect(useEnrichStore.getState().semPerguntarAoSom).toBe(37);
+
+      setBackendForTests({
+        enrichFolderScan: vi.fn(async () => scanResult([proposal()])),
+      } as unknown as Backend);
+      await useEnrichStore.getState().startScan("", "conferencia");
+      expect(useEnrichStore.getState().semPerguntarAoSom).toBe(0);
+    });
+
+    it("fechar a revisão também zera a conta", async () => {
+      setBackendForTests({
+        enrichFolderScan: vi.fn(async () => scanResult([proposal()], 37)),
+      } as unknown as Backend);
+      await useEnrichStore.getState().startScan("", "conferencia");
+      useEnrichStore.getState().close();
+      expect(useEnrichStore.getState().semPerguntarAoSom).toBe(0);
+    });
+
+    // O desfecho em segundo plano é onde o silêncio mais engana: a pessoa
+    // mandou conferir e foi fazer outra coisa. Um toast verde dizendo
+    // "conferimos 40 e o som não contradisse nenhuma" com 37 nunca perguntadas
+    // é a DECISIONS #86 em uma linha.
+    it("sem propostas e com a etapa parada: o toast conta, e não é de sucesso", async () => {
+      setBackendForTests({
+        enrichFolderScan: vi.fn(async () => scanResult([], 37)),
+      } as unknown as Backend);
+
+      const pending = useEnrichStore.getState().startScan("", "conferencia");
+      useEnrichStore.getState().hideOverlay();
+      await pending;
+
+      const toast = useToastStore.getState().toasts[0];
+      expect(toast.message).toBe(textoSemPropostas(null, "conferencia", 37));
+      expect(toast.message).toContain("37");
+      expect(toast.kind).toBe("warning");
+    });
+
+    it("sem propostas e com tudo perguntado: o toast é o de sempre", async () => {
+      setBackendForTests({
+        enrichFolderScan: vi.fn(async () => scanResult([])),
+      } as unknown as Backend);
+
+      const pending = useEnrichStore.getState().startScan("", "conferencia");
+      useEnrichStore.getState().hideOverlay();
+      await pending;
+
+      const toast = useToastStore.getState().toasts[0];
+      expect(toast.message).toBe(textoSemPropostas(null, "conferencia"));
+      expect(toast.kind).toBe("success");
+    });
+  });
+
   describe("retainFailures — o que não gravou fica na tela (A5)", () => {
     it("mantém só as linhas que falharam, com o erro devolvido pelo backend", async () => {
       setBackendForTests({
-        enrichFolderScan: vi.fn(async () => [
-          proposal({ song_id: 1 }),
-          proposal({ song_id: 2 }),
-        ]),
+        enrichFolderScan: vi.fn(async () =>
+          scanResult([proposal({ song_id: 1 }), proposal({ song_id: 2 })]),
+        ),
       } as unknown as Backend);
       await useEnrichStore.getState().startScan("");
 
@@ -566,7 +661,7 @@ describe("enrichStore (V5 — F13)", () => {
 
     it("erro nulo vira uma mensagem genérica (nunca uma linha sem explicação)", async () => {
       setBackendForTests({
-        enrichFolderScan: vi.fn(async () => [proposal({ song_id: 1 })]),
+        enrichFolderScan: vi.fn(async () => scanResult([proposal({ song_id: 1 })])),
       } as unknown as Backend);
       await useEnrichStore.getState().startScan("");
       useEnrichStore
@@ -579,7 +674,7 @@ describe("enrichStore (V5 — F13)", () => {
 
     it("close e uma nova varredura limpam os erros do apply anterior", async () => {
       setBackendForTests({
-        enrichFolderScan: vi.fn(async () => [proposal({ song_id: 1 })]),
+        enrichFolderScan: vi.fn(async () => scanResult([proposal({ song_id: 1 })])),
       } as unknown as Backend);
       await useEnrichStore.getState().startScan("");
       useEnrichStore
@@ -595,7 +690,7 @@ describe("enrichStore (V5 — F13)", () => {
 
     it("fim com o overlay ABERTO não emite toast (o overlay já mostra o resultado)", async () => {
       setBackendForTests({
-        enrichFolderScan: vi.fn(async () => [proposal()]),
+        enrichFolderScan: vi.fn(async () => scanResult([proposal()])),
       } as unknown as Backend);
       await useEnrichStore.getState().startScan("");
       expect(useToastStore.getState().toasts).toHaveLength(0);
@@ -603,7 +698,7 @@ describe("enrichStore (V5 — F13)", () => {
     });
 
     it("openOverlay reabre a revisão sem disparar nova varredura", async () => {
-      const enrichFolderScan = vi.fn(async () => [proposal()]);
+      const enrichFolderScan = vi.fn(async () => scanResult([proposal()]));
       setBackendForTests({ enrichFolderScan } as unknown as Backend);
 
       const pending = useEnrichStore.getState().startScan("");
@@ -618,7 +713,7 @@ describe("enrichStore (V5 — F13)", () => {
 
     it("varredura em segundo plano ainda bloqueia um segundo disparo", async () => {
       const enrichFolderScan = vi.fn(
-        () => new Promise<EnrichProposal[]>(() => {}),
+        () => new Promise<EnrichScanResult>(() => {}),
       );
       setBackendForTests({ enrichFolderScan } as unknown as Backend);
 
@@ -629,10 +724,10 @@ describe("enrichStore (V5 — F13)", () => {
     });
 
     it("cancelar (close) durante varredura em segundo plano descarta o resultado", async () => {
-      let resolve!: (p: EnrichProposal[]) => void;
+      let resolve!: (r: EnrichScanResult) => void;
       setBackendForTests({
         enrichFolderScan: vi.fn(
-          () => new Promise<EnrichProposal[]>((r) => (resolve = r)),
+          () => new Promise<EnrichScanResult>((r) => (resolve = r)),
         ),
       } as unknown as Backend);
 
@@ -640,7 +735,7 @@ describe("enrichStore (V5 — F13)", () => {
       useEnrichStore.getState().hideOverlay();
       useEnrichStore.getState().close();
 
-      resolve([proposal()]);
+      resolve(scanResult([proposal()]));
       await pending;
       expect(useEnrichStore.getState().status).toBe("idle");
       expect(useEnrichStore.getState().proposals).toEqual([]);

@@ -16,11 +16,12 @@ import {
   LABEL_SUA_ETIQUETA_DIZ,
   LABEL_SUBSTITUIR_LETRA,
   avisoLetraExistente,
+  avisoSemPerguntarAoSom,
   rotuloAceitarSom,
   textoAplicado,
   textoSemPropostas,
 } from "../lib/curadoria";
-import type { Song } from "../lib/types";
+import type { Modo, Song } from "../lib/types";
 import { useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlayerStore } from "../stores/playerStore";
@@ -127,7 +128,13 @@ function failed(songId: number, error: string): EnrichApplyResult {
   return { song_id: songId, song: null, error };
 }
 
-function renderReview(proposals: EnrichProposal[], scannedTotal = 0) {
+function renderReview(
+  proposals: EnrichProposal[],
+  scannedTotal = 0,
+  /** Quantas a etapa 2 deixou de perguntar (QA A2) — zero é o caso normal. */
+  semPerguntarAoSom = 0,
+  modo: Modo = "completar",
+) {
   useEnrichStore.setState({
     status: "review",
     overlayOpen: true,
@@ -135,6 +142,8 @@ function renderReview(proposals: EnrichProposal[], scannedTotal = 0) {
     proposals,
     progress: null,
     scannedTotal,
+    semPerguntarAoSom,
+    modo,
     applyErrors: {},
   });
   return render(<EnrichReview />);
@@ -917,6 +926,75 @@ describe("EnrichReview (V5 — F13)", () => {
   // -------------------------------------------------------------------------
   // V9 — o som contra a etiqueta: dois lados, nada pré-marcado
   // -------------------------------------------------------------------------
+  // -------------------------------------------------------------------------
+  // QA A2 — o que a varredura NÃO fez também é desfecho
+  // -------------------------------------------------------------------------
+  //
+  // Uma falha do `fpcalc` desligava a etapa 2 pelo resto da varredura. A tela
+  // mostrava UMA linha vermelha e o silêncio das outras 149 — e o silêncio era
+  // lido como aprovação. O backend passou a contar; se a tela não disser o
+  // número, o defeito continua igual (DECISIONS #86).
+  describe("as músicas que não chegaram a ser perguntadas ao som", () => {
+    it("zero não desenha aviso nenhum — é o caso normal", () => {
+      renderReview([ALTA]);
+      const dialog = screen.getByRole("dialog", { name: "Completar dados" });
+      expect(dialog.textContent ?? "").not.toContain("não chegaram a ser perguntadas");
+      expect(dialog.textContent ?? "").not.toContain("não chegou a ser perguntada");
+    });
+
+    it("com propostas, o aviso aparece com o número", () => {
+      renderReview([ALTA], 40, 37, "conferencia");
+      expect(
+        screen.getByText(avisoSemPerguntarAoSom(37, "conferencia")!),
+      ).toBeVisible();
+    });
+
+    // A lista rola: um aviso sobre o ALCANCE da varredura embaixo de 95 linhas
+    // é um aviso que ninguém lê. Ele fica acima do cabeçalho de contagem.
+    it("o aviso vem antes do cabeçalho de contagem, e não no fim da lista", () => {
+      renderReview([ALTA], 40, 37, "conferencia");
+      const aviso = screen.getByText(avisoSemPerguntarAoSom(37, "conferencia")!);
+      const cabecalho = screen.getByRole("heading", { level: 2 });
+      // Node.DOCUMENT_POSITION_FOLLOWING = o cabeçalho vem DEPOIS do aviso.
+      // Comparar posição no DOM, e não índice no texto, porque a região viva
+      // (sr-only) repete o mesmo aviso lá em cima e enganaria um indexOf.
+      expect(
+        aviso.compareDocumentPosition(cabecalho) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    // Sem propostas o desfecho é UM texto só: o de sempre já passa a contar as
+    // não perguntadas, então dois avisos seriam a mesma coisa dita duas vezes.
+    it("sem propostas, o desfecho vazio é quem conta — sem texto repetido", () => {
+      renderReview([], 40, 37, "conferencia");
+      expect(
+        screen.getByText(textoSemPropostas(40, "conferencia", 37)),
+      ).toBeVisible();
+      expect(
+        screen.queryByText(avisoSemPerguntarAoSom(37, "conferencia")!),
+      ).not.toBeInTheDocument();
+    });
+
+    // Quem ouve a tela em vez de vê-la recebe o mesmo desfecho, não um resumo
+    // otimista: a região viva é o único texto que o leitor de tela anuncia.
+    it("a região viva anuncia o desfecho junto com o número", () => {
+      renderReview([ALTA], 40, 37, "conferencia");
+      const vivo = document.querySelector("[role='status']");
+      expect(vivo?.textContent ?? "").toContain("37");
+    });
+
+    it("o aviso passa em AA sobre o próprio fundo", () => {
+      renderReview([ALTA], 40, 37, "conferencia");
+      const aviso = screen.getByText(avisoSemPerguntarAoSom(37, "conferencia")!);
+      // #854D0E sobre #FEF3C7 — o mesmo par do selo CONFLITO, já medido
+      expect(contrastRatio("#854D0E", "#FEF3C7")).toBeGreaterThanOrEqual(
+        AA_TEXTO_NORMAL,
+      );
+      expect(corDoTexto(aviso.className)).toBe("#854D0E");
+    });
+  });
+
   describe("linha de conflito", () => {
     /** O caso real: a etiqueta diz Caetano, o som diz Nilson Chaves. */
     const CONFLITO = proposal({

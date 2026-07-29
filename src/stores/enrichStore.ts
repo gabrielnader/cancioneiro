@@ -57,6 +57,17 @@ interface EnrichState {
    * sucesso que ninguém verificou (QA MÉDIO-11).
    */
   scannedTotal: number | null;
+  /**
+   * Quantas músicas a etapa 2 deixou de perguntar ao som porque se desligou no
+   * meio da última varredura (QA A2). Zero é o caso normal.
+   *
+   * Vem no RETORNO da varredura, e não do canal de progresso: é por isso que
+   * ele não some quando a assinatura de progresso falha, ao contrário do
+   * `scannedTotal`. Se a tela não disser este número, a pessoa vê uma linha
+   * vermelha, o silêncio das outras 149, e conclui que o resto foi conferido —
+   * a DECISIONS #86 acontecendo por omissão de escopo.
+   */
+  semPerguntarAoSom: number;
   /** Erros do último apply, por song_id — a linha fica visível com o erro (A5). */
   applyErrors: Record<number, string>;
   /**
@@ -114,6 +125,7 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
   progress: null,
   scanId: "",
   scannedTotal: 0,
+  semPerguntarAoSom: 0,
   applyErrors: {},
   scanInFlight: false,
   modo: "completar",
@@ -135,6 +147,7 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
       progress: null,
       scanId,
       scannedTotal: 0,
+      semPerguntarAoSom: 0,
       applyErrors: {},
       scanInFlight: true,
     });
@@ -166,43 +179,56 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
       // quem guarda é o frontend, no localStorage das preferências, e a tela
       // de Configurações diz isso com todas as letras. Sem chave, a etapa é
       // pulada em silêncio — não é erro.
-      const proposals = await getBackend().enrichFolderScan(
-        folderPrefix,
-        scanId,
-        useUiStore.getState().vagalumeApiKey || null,
-        modo,
-      );
+      // QA A2 — a resposta é um OBJETO, não a lista. O campo novo conta as
+      // músicas que a etapa 2 deixou de perguntar depois de se desligar, e
+      // sem ele não havia onde dizer que metade da varredura não aconteceu.
+      const { propostas, sem_perguntar_ao_som: semPerguntarAoSom } =
+        await getBackend().enrichFolderScan(
+          folderPrefix,
+          scanId,
+          useUiStore.getState().vagalumeApiKey || null,
+          modo,
+        );
       if (seq !== scanSeq) return; // cancelado durante a busca: descarta
       // quantas candidatas foram efetivamente conferidas (A6); null quando o
       // canal de progresso não respondeu — nunca 0 por omissão (MÉDIO-11)
       const conferidas = get().progress?.total ?? null;
       const emSegundoPlano = !get().overlayOpen;
-      if (emSegundoPlano && proposals.length === 0) {
+      if (emSegundoPlano && propostas.length === 0) {
         // nada a mostrar e ninguém olhando: só o aviso — que diz a verdade
-        // sobre as N conferidas sem resultado
+        // sobre as N conferidas sem resultado, e sobre as que nem chegaram a
+        // ser perguntadas ao som
         set({
           status: "idle",
           proposals: [],
           progress: null,
           scanId: "",
           scannedTotal: conferidas,
+          semPerguntarAoSom,
         });
         useToastStore
           .getState()
-          .push(textoSemPropostas(conferidas, modo), "success");
+          .push(
+            textoSemPropostas(conferidas, modo, semPerguntarAoSom),
+            // a etapa 2 ter parado no meio não é um desfecho bem-sucedido:
+            // o mesmo tom de "tudo certo" era o que fazia o silêncio passar
+            // por aprovação (QA A2)
+            semPerguntarAoSom > 0 ? "warning" : "success",
+          );
         return;
       }
       set({
         status: "review",
-        proposals,
+        proposals: propostas,
         progress: null,
         scanId: "",
         scannedTotal: conferidas,
+        semPerguntarAoSom,
       });
       if (emSegundoPlano) {
         // o toast desta base não carrega ação de clique: quem leva de volta à
         // revisão é o indicador "Revisar N propostas" da sidebar
-        useToastStore.getState().push(textoEncontrado(proposals.length), "success");
+        useToastStore.getState().push(textoEncontrado(propostas.length), "success");
       }
     } catch {
       if (seq !== scanSeq) return;
@@ -240,6 +266,7 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
       progress: null,
       scanId: "",
       scannedTotal: 0,
+      semPerguntarAoSom: 0,
       applyErrors: {},
     });
     // Cancelar de verdade: a guarda de corrida acima só descarta o RESULTADO;

@@ -28,6 +28,7 @@ import type { Song } from "../lib/types";
 import { useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
 import { useUiStore } from "../stores/uiStore";
+import { ERROS_DE_GRAVACAO } from "../lib/mockBackend";
 import { SettingsView } from "./SettingsView";
 
 /** Fundo da tela de Configurações — todo texto novo é lido em cima dele. */
@@ -609,18 +610,51 @@ describe("SettingsView — acessório do reconhecimento pelo som (V9)", () => {
   // O backend manda a frase pronta em pt-BR (soma que não confere, rede que
   // caiu). A tela a mostra COMO VEIO — reescrevê-la aqui seria inventar uma
   // segunda versão da verdade para quem não tem a quem perguntar.
-  it("falha do backend aparece com as palavras do backend", async () => {
-    const frase =
-      "o arquivo baixado não confere com o esperado — foi descartado, e esta etapa fica desligada";
-    acessorioBaixar.mockRejectedValue(new Error(frase));
-    render(<SettingsView />);
-    const botao = await screen.findByRole("button", {
-      name: rotuloBaixarAcessorio(acessorio("ausente"), false),
+  /**
+   * As frases que o backend manda prontas em pt-BR. A tela as mostra COMO
+   * VIERAM — reescrevê-las aqui criaria uma segunda versão da verdade sobre
+   * uma verificação de segurança (a soma SHA-256) e sobre falhas de disco,
+   * para quem não tem a quem perguntar.
+   *
+   * As quatro últimas são novas (QA M4 do backend): antes as falhas de ESCRITA
+   * subiam como `io::Error` e a pessoa lia a mensagem do sistema operacional,
+   * em inglês, direto na tela. São as falhas PROVÁVEIS num parque de máquinas
+   * que ninguém pode olhar.
+   */
+  const FRASES_DO_BACKEND = [
+    "o arquivo baixado não confere com o esperado — foi descartado, e esta etapa fica desligada",
+    "o download foi interrompido antes do fim — nada foi instalado",
+    ERROS_DE_GRAVACAO.disco,
+    ERROS_DE_GRAVACAO.permissao,
+    ERROS_DE_GRAVACAO.emUso,
+    ERROS_DE_GRAVACAO.gravacao,
+  ];
+
+  for (const frase of FRASES_DO_BACKEND) {
+    it(`falha do backend aparece com as palavras do backend: "${frase.slice(0, 40)}…"`, async () => {
+      acessorioBaixar.mockRejectedValue(new Error(frase));
+      render(<SettingsView />);
+      const botao = await screen.findByRole("button", {
+        name: rotuloBaixarAcessorio(acessorio("ausente"), false),
+      });
+      await act(async () => {
+        fireEvent.click(botao);
+      });
+      // texto EXATO: nada de recorte, reescrita ou prefixo "Error:"
+      expect(await screen.findByText(frase)).toBeVisible();
     });
-    await act(async () => {
-      fireEvent.click(botao);
-    });
-    expect(await screen.findByText(new RegExp(frase))).toBeInTheDocument();
+  }
+
+  // Cada frase termina dizendo o que fazer, porque não há a quem perguntar —
+  // e a que não diz (a genérica) é a única que não tem o que sugerir.
+  it("as falhas de escrita terminam com um passo seguinte", () => {
+    for (const frase of [
+      ERROS_DE_GRAVACAO.disco,
+      ERROS_DE_GRAVACAO.permissao,
+      ERROS_DE_GRAVACAO.emUso,
+    ]) {
+      expect(frase.toLowerCase(), frase).toMatch(/tente|tente de novo/);
+    }
   });
 
   it("o botão Parar chama o cancelamento com o id deste download", async () => {

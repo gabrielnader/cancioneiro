@@ -439,7 +439,25 @@ export function rotuloDoDisparo(modo: Modo): string {
  * isso: a terceira frase, que apontava para as ferramentas de fora, saiu no
  * passe de redução (ninguém aqui abre terminal).
  */
-export function textoSemPropostas(total: number | null, modo: Modo): string {
+export function textoSemPropostas(
+  total: number | null,
+  modo: Modo,
+  /**
+   * Quantas músicas a etapa 2 deixou de perguntar ao som depois de se
+   * desligar (QA A2). Vem no RETORNO da varredura, não do progresso — por
+   * isso ela não desaparece quando a assinatura de progresso falha.
+   */
+  semPerguntarAoSom = 0,
+): string {
+  // Vem ANTES de tudo porque é o fato DOMINANTE: dizer "conferimos 40 músicas
+  // e o som não contradisse nenhuma etiqueta" quando 37 nunca foram
+  // perguntadas é falso duas vezes — não conferimos 40, e o silêncio das 37
+  // não é concordância. É a DECISIONS #86 acontecendo por omissão de escopo.
+  if (semPerguntarAoSom > 0) {
+    return modo === "conferencia"
+      ? `${pararamNoMeio(semPerguntarAoSom)} Nas outras, o som não contradisse nenhuma etiqueta — repita quando ele voltar a funcionar.`
+      : `${pararamNoMeio(semPerguntarAoSom)} Nas outras não achamos nada — repita a busca quando ele voltar a funcionar.`;
+  }
   if (modo === "conferencia") return semDivergencias(total);
   // `null` = a varredura terminou mas o acompanhamento do progresso não
   // chegou (a assinatura é best-effort e o catch é silencioso). Antes isso
@@ -456,6 +474,47 @@ export function textoSemPropostas(total: number | null, modo: Modo): string {
       ? "Conferimos a única música incompleta desta pasta e não achamos nada."
       : `Conferimos as ${total} músicas incompletas desta pasta e não achamos nenhuma.`;
   return `${conferidas} ${NAO_E_FRACASSO}`;
+}
+
+// ---------------------------------------------------------------------------
+// QA A2 — as músicas que a etapa 2 deixou de perguntar
+// ---------------------------------------------------------------------------
+//
+// Uma falha do `fpcalc` desligava a etapa 2 pelo resto da varredura. A pessoa
+// via UMA linha vermelha, as outras 149 sem nada, e concluía que o resto tinha
+// sido conferido. O backend passou a contar quantas ficaram sem ser
+// perguntadas (`EnrichScanResult.sem_perguntar_ao_som`); se a tela não disser
+// o número, o defeito continua idêntico — silêncio lido como aprovação
+// (DECISIONS #86).
+
+/** A primeira frase dos dois desfechos: o fato, com o número. */
+function pararamNoMeio(quantas: number): string {
+  const musicas =
+    quantas === 1
+      ? "1 música não chegou a ser perguntada"
+      : `${quantas} músicas não chegaram a ser perguntadas`;
+  return `O reconhecimento pelo som parou no meio: ${musicas}.`;
+}
+
+/**
+ * O aviso que acompanha um desfecho COM propostas. `null` quando não há nada
+ * a dizer — e zero é o caso normal de toda varredura que correu bem: um
+ * "0 músicas ficaram sem ser perguntadas" em cada desfecho é o ruído que
+ * ensina a pessoa a ignorar o aviso justamente quando ele importar.
+ *
+ * O "o que fazer em seguida" NÃO chuta a causa. O número não distingue o
+ * acessório que não roda nesta máquina do AcoustID que recusou o aplicativo,
+ * e mandar procurar antivírus quando o problema é do servidor alheio é pior
+ * que não mandar nada. O passo comum aos dois é repetir quando o som voltar —
+ * e o motivo específico já está na linha de erro da música que o disparou.
+ */
+export function avisoSemPerguntarAoSom(quantas: number, modo: Modo): string | null {
+  if (quantas <= 0) return null;
+  return modo === "conferencia"
+    ? // a conferência é o trabalho caro, disparado de propósito: ela não pode
+      // passar por concluída com 37 de 40 músicas nunca perguntadas
+      `${pararamNoMeio(quantas)} Elas continuam sem conferência — repita quando ele voltar a funcionar.`
+    : `${pararamNoMeio(quantas)} Repita a busca quando ele voltar a funcionar.`;
 }
 
 /**

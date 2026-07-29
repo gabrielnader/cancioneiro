@@ -12,6 +12,7 @@ import {
   LABEL_SUA_ETIQUETA_DIZ,
   LABEL_SUBSTITUIR_LETRA,
   avisoLetraExistente,
+  avisoSemPerguntarAoSom,
   confiancaDoSom,
   rotuloAceitarSom,
   textoAplicado,
@@ -111,6 +112,9 @@ export function EnrichReview() {
   const progress = useEnrichStore((s) => s.progress);
   const proposals = useEnrichStore((s) => s.proposals);
   const scannedTotal = useEnrichStore((s) => s.scannedTotal);
+  // QA A2 — quantas músicas a etapa 2 deixou de perguntar depois de se
+  // desligar. Zero é o caso normal e não vira texto nenhum.
+  const semPerguntarAoSom = useEnrichStore((s) => s.semPerguntarAoSom);
   // V9 — o desfecho vazio fala a língua do TRABALHO que rodou: "conferimos as
   // 81 incompletas" é falso quando quem rodou foi a conferência
   const modo = useEnrichStore((s) => s.modo);
@@ -181,13 +185,20 @@ export function EnrichReview() {
       return;
     }
     const atual = useEnrichStore.getState();
-    setAnuncio(
-      atual.proposals.length === 0
-        ? `Busca concluída. ${textoSemPropostas(atual.scannedTotal, atual.modo)}`
-        : atual.proposals.length === 1
-          ? "Busca concluída. 1 proposta para revisar."
-          : `Busca concluída. ${atual.proposals.length} propostas para revisar.`,
+    // QA A2 — o aviso das músicas não perguntadas entra também aqui: quem
+    // ouve a tela em vez de vê-la recebe o mesmo desfecho, não um resumo
+    // otimista. Com zero, `avisoSemPerguntarAoSom` devolve null e nada muda.
+    const naoPerguntadas = avisoSemPerguntarAoSom(
+      atual.semPerguntarAoSom,
+      atual.modo,
     );
+    const desfecho =
+      atual.proposals.length === 0
+        ? textoSemPropostas(atual.scannedTotal, atual.modo, atual.semPerguntarAoSom)
+        : atual.proposals.length === 1
+          ? `1 proposta para revisar.${naoPerguntadas ? ` ${naoPerguntadas}` : ""}`
+          : `${atual.proposals.length} propostas para revisar.${naoPerguntadas ? ` ${naoPerguntadas}` : ""}`;
+    setAnuncio(`Busca concluída. ${desfecho}`);
   }, [visible, status]);
 
   // Esc SAI do overlay; exceto no meio de uma gravação (busy). Durante a
@@ -536,12 +547,27 @@ export function EnrichReview() {
             {/* A6: "nada a ajustar" com 81 conferidas soava como "pasta
                 completa" — o texto conta o que houve e para onde ir */}
             <p className="py-4 text-[15px] text-[#111827]">
-              {textoSemPropostas(scannedTotal, modo)}
+              {/* QA A2 — com a etapa 2 desligada no meio, este texto deixa de
+                  dizer "conferimos as N" e passa a contar quantas nunca foram
+                  perguntadas. Sem isso, o desfecho vazio de uma conferência
+                  interrompida é indistinguível do de uma que correu bem. */}
+              {textoSemPropostas(scannedTotal, modo, semPerguntarAoSom)}
             </p>
             <div className="mt-2 flex justify-end">{closeButton}</div>
           </>
         ) : (
           <>
+            {/*
+              QA A2 — o desfecho COM propostas também precisa dizer o que NÃO
+              foi feito. Fica acima do cabeçalho, e não no fim da lista, porque
+              a lista rola: um aviso sobre o alcance da varredura embaixo de 95
+              linhas é um aviso que ninguém lê. Zero não desenha nada.
+            */}
+            {avisoSemPerguntarAoSom(semPerguntarAoSom, modo) !== null && (
+              <p className="mb-2 rounded-md bg-[#FEF3C7] px-3 py-2 text-[13px] leading-relaxed text-[#854D0E]">
+                {avisoSemPerguntarAoSom(semPerguntarAoSom, modo)}
+              </p>
+            )}
             <div className="flex flex-wrap items-center gap-2 pb-3">
               <h2 className="text-[16px] font-semibold text-[#111827]">
                 {tituloDoCabecalho}

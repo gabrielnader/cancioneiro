@@ -62,7 +62,8 @@ function fakeBackend(overrides: Partial<Backend> = {}): Backend {
     onEnrichProgress: vi.fn(async () => () => {}),
     writeTags: vi.fn(async () => song(1, "Aurora")),
     enrichCount: vi.fn(async () => 0),
-    enrichFolderScan: vi.fn(async () => []),
+    // QA A2 — a varredura devolve um OBJETO, não a lista de propostas
+    enrichFolderScan: vi.fn(async () => ({ propostas: [], sem_perguntar_ao_som: 0 })),
     enrichSongScan: vi.fn(async () => null),
     enrichCancelScan: vi.fn(async () => {}),
     enrichApply: vi.fn(async () => []),
