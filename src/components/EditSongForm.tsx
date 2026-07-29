@@ -2,8 +2,11 @@ import { useRef, useState } from "react";
 import { audioController } from "../hooks/playerAudioCore";
 import { getBackend, type EnrichProposal } from "../lib/api";
 import {
+  LABEL_SOM_DIZ,
+  LABEL_SUA_ETIQUETA_DIZ,
   SEM_RESULTADO_INDIVIDUAL,
   SEM_RESULTADO_INSTRUMENTAL,
+  confiancaDoSom,
 } from "../lib/curadoria";
 import { ORIGEM_VAGALUME, type Song } from "../lib/types";
 import { novoScanId, useEnrichStore } from "../stores/enrichStore";
@@ -15,6 +18,11 @@ import { useUiStore } from "../stores/uiStore";
 
 function basename(filePath: string): string {
   return filePath.split(/[\\/]/).pop() ?? filePath;
+}
+
+/** "Título — Artista", ou só o título quando não há artista. */
+function nomeCompleto(titulo: string, artista: string | null): string {
+  return artista ? `${titulo} — ${artista}` : titulo;
 }
 
 /** Rótulo de confiança, igual ao da revisão em lote (mesma linguagem). */
@@ -201,6 +209,19 @@ export function EditSongForm({
     } catch {
       // fakes de teste sem enrichCancelScan: idem
     }
+  }
+
+  /**
+   * V9 — aceitar o que o SOM disse, quando ele contradiz a etiqueta. Só
+   * nomes: o funil PARA no conflito, sem procurar letra nenhuma sob um nome
+   * que o som acabou de contradizer. Como em toda a ficha, nada vai para o
+   * disco aqui — quem grava é o "Salvar no arquivo".
+   */
+  function aceitarOSom(p: EnrichProposal) {
+    if (!p.conflito) return;
+    setTitle(p.conflito.titulo);
+    setArtist(p.conflito.artista);
+    setResultado(null);
   }
 
   /** Traz a proposta para o formulário (ainda sem tocar no arquivo). */
@@ -424,6 +445,62 @@ export function EditSongForm({
             <p className="text-[13px] text-[#B91C1C]">{resultado.mensagem}</p>
           ) : resultado.proposta.error !== null ? (
             <p className="text-[13px] text-[#B91C1C]">{resultado.proposta.error}</p>
+          ) : resultado.proposta.conflito ? (
+            /*
+              V9 — o som contradiz a etiqueta. Aqui NÃO cabe "Título: X" com um
+              botão "Usar estes dados": a proposta repete o que já está no
+              arquivo, e a informação inteira é a DIVERGÊNCIA. Os dois lados
+              aparecem nomeados por quem os disse, e aceitar é uma escolha.
+            */
+            <>
+              <p className="flex flex-wrap items-center gap-2 text-[13px] text-[#5B6472]">
+                <span className="rounded bg-[#FEF3C7] px-1.5 py-0.5 text-[11px] font-semibold text-[#854D0E]">
+                  CONFLITO
+                </span>
+                <span>{confiancaDoSom(resultado.proposta.conflito.confianca)}</span>
+              </p>
+              <dl className="mt-2 space-y-0.5 text-[13px]">
+                <div className="flex gap-2">
+                  <dt className="shrink-0 text-[#5B6472]">
+                    {LABEL_SUA_ETIQUETA_DIZ}:
+                  </dt>
+                  <dd className="min-w-0 break-words text-[#111827]">
+                    {nomeCompleto(
+                      resultado.proposta.current_title,
+                      resultado.proposta.current_artist,
+                    )}
+                  </dd>
+                </div>
+                <div className="flex gap-2">
+                  <dt className="shrink-0 text-[#5B6472]">{LABEL_SOM_DIZ}:</dt>
+                  <dd className="min-w-0 break-words font-medium text-[#111827]">
+                    {nomeCompleto(
+                      resultado.proposta.conflito.titulo,
+                      resultado.proposta.conflito.artista,
+                    )}
+                  </dd>
+                </div>
+              </dl>
+              <p className="mt-2 text-[13px] text-[#5B6472]">
+                Nada foi gravado ainda.
+              </p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => aceitarOSom(resultado.proposta)}
+                  className="rounded-md bg-[#0F766E] px-3 py-1.5 text-[14px] font-medium text-white hover:bg-[#115E59]"
+                >
+                  Usar o que o som diz
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setResultado(null)}
+                  className="rounded-md border border-[#D1D5DB] px-3 py-1.5 text-[14px] font-medium text-[#374151] hover:bg-[#F3F4F6]"
+                >
+                  Descartar
+                </button>
+              </div>
+            </>
           ) : (
             <>
               <p className="flex flex-wrap items-center gap-2 text-[13px] text-[#5B6472]">
@@ -455,9 +532,11 @@ export function EditSongForm({
                   </div>
                 )}
               </dl>
+              {/* passe de redução V9: a instrução que vinha depois ("use os
+                  dados, confira, e só então salve") está nos botões logo
+                  abaixo — repeti-la em prosa era o parágrafo que ninguém lê */}
               <p className="mt-2 text-[13px] text-[#5B6472]">
-                Nada foi gravado ainda: use os dados, confira, e só então salve
-                no arquivo.
+                Nada foi gravado ainda.
               </p>
               <div className="mt-2 flex flex-wrap gap-2">
                 <button

@@ -549,6 +549,68 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
     confirmSpy.mockRestore();
   });
 
+  // V9 — o funil de UMA música também passa pela etapa do som, então ele
+  // também devolve conflito. Sem tratá-lo aqui, o editor mostraria "Coração
+  // Sertanejo → Coração Sertanejo" com um botão que não muda nada, e a
+  // divergência — que é a informação inteira — ficaria invisível.
+  describe("o som discorda da etiqueta (V9)", () => {
+    function comConflito() {
+      enrichSongScan.mockResolvedValueOnce({
+        song_id: 1,
+        file_path: "/acervo/1.mp3",
+        current_title: "Coração Sertanejo",
+        current_artist: "Artista Teste",
+        // a linha de conflito não propõe nada: ela repete o que já está lá
+        proposed_title: "Coração Sertanejo",
+        proposed_artist: "Artista Teste",
+        lyrics: null,
+        confidence: "baixa",
+        fonte: "reconhecimento pelo som",
+        has_lyrics: true,
+        letra_origem: null,
+        conflito: {
+          titulo: "Viver Feliz",
+          artista: "Nilson Chaves",
+          confianca: "alta",
+        },
+        substitui_nome_escrito: false,
+        error: null,
+      });
+    }
+
+    it("mostra os dois lados e não oferece 'Usar estes dados'", async () => {
+      comConflito();
+      await enterEditMode();
+      fireEvent.click(
+        screen.getByRole("button", { name: "Buscar dados na internet" }),
+      );
+      expect(await screen.findByText(/Sua etiqueta diz/)).toBeInTheDocument();
+      expect(screen.getByText(/O som diz/)).toBeInTheDocument();
+      expect(screen.getByText("Viver Feliz — Nilson Chaves")).toBeInTheDocument();
+      expect(screen.getByText("confiança alta")).toBeInTheDocument();
+      expect(
+        screen.queryByRole("button", { name: "Usar estes dados" }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("aceitar o som preenche os nomes e não encosta na letra", async () => {
+      comConflito();
+      await enterEditMode();
+      fireEvent.click(
+        screen.getByRole("button", { name: "Buscar dados na internet" }),
+      );
+      fireEvent.click(
+        await screen.findByRole("button", { name: "Usar o que o som diz" }),
+      );
+      expect(screen.getByLabelText("Título")).toHaveValue("Viver Feliz");
+      expect(screen.getByLabelText("Artista")).toHaveValue("Nilson Chaves");
+      // a letra da música certa não é esta, e o funil parou antes de procurá-la
+      expect(screen.getByLabelText("Letra")).toHaveValue(LYRICS);
+      // e continua sendo o "Salvar no arquivo" quem grava
+      expect(writeTags).not.toHaveBeenCalled();
+    });
+  });
+
   it("'Descartar' fecha o resultado sem mexer em nada", async () => {
     await enterEditMode();
     fireEvent.click(
