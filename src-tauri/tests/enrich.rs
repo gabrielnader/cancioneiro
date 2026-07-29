@@ -4263,3 +4263,365 @@ fn titulo_vindo_do_som_ainda_rende_um_palpite_so_e_teto_media() {
     );
     assert_eq!(props[0].confidence, "media", "e o teto do som vale");
 }
+
+// ===========================================================================
+// V10 — A ETAPA 5: escrever a letra ouvindo o áudio
+//
+// O motor é INJETADO: a suíte roda sem o `whisper-cli` e sem os 180 MB do
+// modelo. O que se prova aqui é o que o app FAZ com o que o motor devolve —
+// e sobretudo o que ele se recusa a fazer.
+// ===========================================================================
+
+use cancioneiro_lib::transcricao::{self, SaidaDoMotor};
+
+/// Nunca cancela, nunca reporta progresso.
+const SEM_PROGRESSO_5: fn(usize, usize, &str, u8) = |_, _, _, _| {};
+
+/// Um motor de mentira que devolve sempre o mesmo texto e a mesma duração.
+fn motor(
+    texto: &'static str,
+    duracao: f64,
+) -> impl Fn(&Path, &dyn Fn() -> bool, &dyn Fn(u8)) -> Result<Option<SaidaDoMotor>, AppError> {
+    move |_mp3, _cancelado, progresso| {
+        progresso(50);
+        Ok(Some(SaidaDoMotor {
+            texto: texto.to_string(),
+            duracao,
+        }))
+    }
+}
+
+fn transcrever(
+    conn: &Connection,
+    ids: &[i64],
+    motor: impl Fn(&Path, &dyn Fn() -> bool, &dyn Fn(u8)) -> Result<Option<SaidaDoMotor>, AppError>,
+) -> enrich::TranscricaoResultado {
+    enrich::transcricao_scan(conn, ids, motor, SEM_PROGRESSO_5, SEM_CANCELAMENTO).unwrap()
+}
+
+/// A letra escrita pela máquina chega como PROPOSTA, com a fonte visível, e
+/// **sem tocar em título e artista**. É a garantia central da etapa 5: ela não
+/// identifica música nenhuma, então não há nome para propor — e portanto não
+/// há como sobrescrever etiqueta real, em confiança nenhuma.
+#[test]
+fn a_transcricao_propoe_letra_e_nunca_encosta_na_etiqueta() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
+    let song = song_by_suffix(&conn, "sem_letra.mp3");
+    writer::write_tags(&conn, song.id, "Cantiga", Some("Dona Zica"), None, None, None).unwrap();
+    let song = song_by_suffix(&conn, "sem_letra.mp3");
+
+    let letra = "Na beira do mar sagrado\nNa beira do mar sagrado\nEu vi Iemanjá chegar";
+    let r = transcrever(&conn, &[song.id], motor(letra, 120.0));
+
+    let p = &r.propostas[0];
+    assert_eq!(p.lyrics.as_deref(), Some(letra));
+    assert_eq!(p.fonte, enrich::FONTE_TRANSCRICAO);
+    assert_eq!(p.confidence, "media", "letra de máquina nunca chega pré-marcada");
+    assert_eq!(p.proposed_title, "Cantiga", "o título é o que já estava lá");
+    assert_eq!(p.proposed_artist.as_deref(), Some("Dona Zica"));
+    assert!(!p.substitui_nome_escrito, "não há nome a substituir");
+    assert!(p.conflito.is_none(), "sem nome vindo daqui, não há conflito");
+    assert_eq!(
+        p.refrao.as_deref(),
+        Some("na beira do mar sagrado"),
+        "o trecho mais repetido, para a revisão reconhecer a música"
+    );
+    assert!(r.razao_medida.is_some(), "a máquina foi medida");
+}
+
+/// Transcrição vazia com áudio LEGÍVEL marca instrumental (V7/F16) — como
+/// PROPOSTA, porque a marca tira o arquivo da fila de letra para sempre. E a
+/// explicação vai em `aviso`, não em `error`: a linha PODE ser aplicada.
+#[test]
+fn transcricao_vazia_propoe_a_marca_de_instrumental_com_a_conta_a_vista() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
+    let song = song_by_suffix(&conn, "sem_letra.mp3");
+
+    let r = transcrever(&conn, &[song.id], motor("", 300.0));
+    let p = &r.propostas[0];
+    assert!(p.marcar_instrumental);
+    assert!(p.lyrics.is_none());
+    assert!(p.error.is_none(), "não é falha: a linha é aplicável");
+    assert!(p.aviso.is_some(), "e diz por quê");
+}
+
+/// **Sem prova de duração, ADIADA.** O cabeçalho do MP3 já mentiu por uma
+/// ordem de grandeza (DECISIONS #72), e marcar instrumental por engano tira a
+/// música da fila de letra para sempre. Nada é gravado, e a linha diz o que
+/// fazer.
+#[test]
+fn transcricao_rala_sem_duracao_provada_nao_grava_nada() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
+    let song = song_by_suffix(&conn, "sem_letra.mp3");
+    // a fixture tem 2 s; o CABEÇALHO passa a dizer 5 minutos, que é
+    // exatamente o modo de falha da DECISIONS #72 (300 s lidos como 2365 s)
+    conn.execute("UPDATE songs SET duration_seconds = 300 WHERE id = ?1", [song.id])
+        .unwrap();
+
+    // motor que devolve texto ralo e NÃO informa a duração
+    let r = transcrever(&conn, &[song.id], motor("la la la", 0.0));
+    let p = &r.propostas[0];
+    assert!(!p.marcar_instrumental, "nada é decidido sem prova");
+    assert!(p.lyrics.is_none());
+    assert!(p.error.is_some(), "a linha informa e não se aplica");
+    assert_eq!(p.fonte, enrich::FONTE_ERRO);
+}
+
+/// **Instrumental não é transcrito, e letra existente não é substituída sem
+/// consentimento** (PRD V10, DECISIONS #71 e #79). As duas travas existem
+/// mesmo com a varredura já não mandando essas músicas para cá: o caminho
+/// normal nunca chega nelas, e é por isso que a recusa precisa existir.
+#[test]
+fn a_etapa_5_recusa_o_instrumental_e_a_musica_que_ja_tem_letra() {
+    let (_dir, conn, _f) = setup_with(&[
+        ("sem_letra.mp3", "instrumental.mp3"),
+        ("com_letra.mp3", "com_letra.mp3"),
+    ]);
+    let inst = song_by_suffix(&conn, "instrumental.mp3");
+    writer::write_tags(&conn, inst.id, "Frevo", Some("Orquestra"), None, None, Some(true))
+        .unwrap();
+    let com = song_by_suffix(&conn, "com_letra.mp3");
+
+    let chamadas = RefCell::new(0);
+    let r = enrich::transcricao_scan(
+        &conn,
+        &[inst.id, com.id],
+        |_mp3: &Path, _c: &dyn Fn() -> bool, _p: &dyn Fn(u8)| {
+            *chamadas.borrow_mut() += 1;
+            Ok(Some(SaidaDoMotor {
+                texto: "letra que não deveria existir".into(),
+                duracao: 120.0,
+            }))
+        },
+        SEM_PROGRESSO_5,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+
+    assert_eq!(*chamadas.borrow(), 0, "nenhuma das duas gastou CPU");
+    assert_eq!(
+        r.propostas[0].error.as_deref(),
+        Some(enrich::AVISO_INSTRUMENTAL_NAO_TRANSCREVE)
+    );
+    assert_eq!(
+        r.propostas[1].error.as_deref(),
+        Some(enrich::AVISO_LETRA_EXISTENTE)
+    );
+    assert!(r.propostas.iter().all(|p| p.lyrics.is_none()));
+}
+
+/// Binário que não sobe é veredito sobre a MÁQUINA: reporta e desliga a etapa
+/// pelo resto da fila, em vez de repetir a mesma acusação 47 vezes (a mesma
+/// regra da etapa 2, QA A2). Falha de UM arquivo não desliga nada.
+#[test]
+fn transcritor_que_nao_executa_desliga_a_etapa_e_falha_de_arquivo_nao() {
+    let (_dir, conn, _f) = setup_with(&[
+        ("sem_letra.mp3", "a.mp3"),
+        ("sem_letra.mp3", "b.mp3"),
+        ("sem_letra.mp3", "c.mp3"),
+    ]);
+    let ids: Vec<i64> = ["a.mp3", "b.mp3", "c.mp3"]
+        .iter()
+        .map(|n| song_by_suffix(&conn, n).id)
+        .collect();
+
+    let chamadas = RefCell::new(0);
+    let r = enrich::transcricao_scan(
+        &conn,
+        &ids,
+        |_mp3: &Path, _c: &dyn Fn() -> bool, _p: &dyn Fn(u8)| {
+            *chamadas.borrow_mut() += 1;
+            Err(AppError(transcricao::ERRO_NAO_EXECUTA.into()))
+        },
+        SEM_PROGRESSO_5,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+    assert_eq!(*chamadas.borrow(), 1, "tentou uma vez e desligou");
+    assert_eq!(r.propostas.len(), 3, "mas todas as linhas explicam por quê");
+
+    // e o erro de UM arquivo não desliga a etapa das outras
+    let chamadas = RefCell::new(0);
+    enrich::transcricao_scan(
+        &conn,
+        &ids,
+        |_mp3: &Path, _c: &dyn Fn() -> bool, _p: &dyn Fn(u8)| {
+            *chamadas.borrow_mut() += 1;
+            Err(AppError(transcricao::ERRO_AUDIO.into()))
+        },
+        SEM_PROGRESSO_5,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+    assert_eq!(*chamadas.borrow(), 3, "cada arquivo teve a sua chance");
+}
+
+/// Cancelar para a fila onde está, com o que já tem. É a etapa que leva
+/// MINUTOS por música: um cancelamento que só é consultado no fim não é
+/// cancelamento.
+#[test]
+fn cancelar_para_a_fila_da_transcricao_com_o_que_ja_tem() {
+    let (_dir, conn, _f) = setup_with(&[
+        ("sem_letra.mp3", "a.mp3"),
+        ("sem_letra.mp3", "b.mp3"),
+        ("sem_letra.mp3", "c.mp3"),
+    ]);
+    let ids: Vec<i64> = ["a.mp3", "b.mp3", "c.mp3"]
+        .iter()
+        .map(|n| song_by_suffix(&conn, n).id)
+        .collect();
+
+    let feitas = RefCell::new(0);
+    let r = enrich::transcricao_scan(
+        &conn,
+        &ids,
+        |_mp3: &Path, _c: &dyn Fn() -> bool, _p: &dyn Fn(u8)| {
+            *feitas.borrow_mut() += 1;
+            Ok(Some(SaidaDoMotor {
+                texto: "uma letra qualquer bem comprida para não ser rala".into(),
+                duracao: 30.0,
+            }))
+        },
+        SEM_PROGRESSO_5,
+        || *feitas.borrow() >= 1, // cancela depois da primeira
+    )
+    .unwrap();
+    assert_eq!(r.propostas.len(), 1, "voltou com o que já tinha");
+}
+
+/// O `apply` da etapa 5 grava a letra **marcada como transcrição**
+/// (`TXXX:LETRA_ORIGEM = "transcricao"`, o mesmo valor do
+/// `tools/embed_lyrics.py`) — é a marca que o curador aprendeu a ler como
+/// "isto pode estar errado".
+#[test]
+fn aplicar_a_transcricao_grava_a_marca_de_procedencia() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
+    let song = song_by_suffix(&conn, "sem_letra.mp3");
+    let r = transcrever(&conn, &[song.id], motor("a letra que a máquina ouviu", 60.0));
+    let p = &r.propostas[0];
+
+    let res = enrich::apply(
+        &conn,
+        &[EnrichApply {
+            song_id: song.id,
+            title: p.proposed_title.clone(),
+            artist: p.proposed_artist.clone(),
+            lyrics: p.lyrics.clone(),
+            add_temas: None,
+            current_title: p.current_title.clone(),
+            current_artist: p.current_artist.clone(),
+            fonte: Some(p.fonte.clone()),
+            substituir_letra: false,
+            marcar_instrumental: false,
+        }],
+    )
+    .unwrap();
+    assert!(res[0].error.is_none(), "{:?}", res[0].error);
+    let depois = song_by_suffix(&conn, "sem_letra.mp3");
+    assert_eq!(depois.letra_origem.as_deref(), Some("transcricao"));
+    assert_eq!(
+        db::get_lyrics(&conn, song.id).unwrap().as_deref(),
+        Some("a letra que a máquina ouviu")
+    );
+}
+
+/// E o `apply` da proposta de INSTRUMENTAL grava a marca — só quando quem
+/// revisou confirmou. **Nunca desmarca**: desmarcar continua sendo
+/// exclusividade do editor (DECISIONS #71).
+#[test]
+fn aplicar_marca_o_instrumental_confirmado_e_nunca_desmarca() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
+    let song = song_by_suffix(&conn, "sem_letra.mp3");
+    let r = transcrever(&conn, &[song.id], motor("", 300.0));
+    let p = &r.propostas[0];
+    assert!(p.marcar_instrumental);
+
+    let aplicar = |marcar: bool, s: &db::Song| {
+        enrich::apply(
+            &conn,
+            &[EnrichApply {
+                song_id: s.id,
+                title: s.title.clone(),
+                artist: s.artist.clone(),
+                lyrics: None,
+                add_temas: None,
+                current_title: s.title.clone(),
+                current_artist: s.artist.clone(),
+                fonte: Some(enrich::FONTE_TRANSCRICAO.into()),
+                substituir_letra: false,
+                marcar_instrumental: marcar,
+            }],
+        )
+        .unwrap()
+    };
+
+    let res = aplicar(true, &song);
+    assert!(res[0].error.is_none(), "{:?}", res[0].error);
+    assert!(song_by_suffix(&conn, "sem_letra.mp3").instrumental);
+
+    // uma segunda aplicação SEM a marca não a desfaz
+    let agora = song_by_suffix(&conn, "sem_letra.mp3");
+    let res = aplicar(false, &agora);
+    assert!(res[0].error.is_none(), "{:?}", res[0].error);
+    assert!(
+        song_by_suffix(&conn, "sem_letra.mp3").instrumental,
+        "nenhuma rotina desmarca sozinha"
+    );
+}
+
+/// A varredura e a etapa 5 se encaixam: quem sobra da primeira é exatamente o
+/// que a segunda recebe, e o que a segunda escreve some da próxima varredura.
+#[test]
+fn o_que_sobra_da_varredura_e_o_que_a_etapa_5_recebe() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
+    let r = enrich::enrich_scan(
+        &conn,
+        "",
+        |_: &str| Ok("[]".to_string()),
+        SEM_CHAVE,
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+    assert_eq!(r.sem_letra_no_fim.len(), 1);
+
+    let t = transcrever(
+        &conn,
+        &r.sem_letra_no_fim,
+        motor("Chove lá fora\nE aqui dentro canta o coração", 60.0),
+    );
+    let p = &t.propostas[0];
+    let __res = enrich::apply(
+        &conn,
+        &[EnrichApply {
+            song_id: p.song_id,
+            title: p.proposed_title.clone(),
+            artist: p.proposed_artist.clone(),
+            lyrics: p.lyrics.clone(),
+            add_temas: None,
+            current_title: p.current_title.clone(),
+            current_artist: p.current_artist.clone(),
+            fonte: Some(p.fonte.clone()),
+            substituir_letra: false,
+            marcar_instrumental: false,
+        }],
+    )
+    .unwrap();
+    assert!(__res[0].error.is_none(), "{:?}", __res[0].error);
+
+    let depois = enrich::enrich_scan(
+        &conn,
+        "",
+        |_: &str| Ok("[]".to_string()),
+        SEM_CHAVE,
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+    assert!(
+        depois.sem_letra_no_fim.is_empty(),
+        "a música transcrita não volta para a fila da etapa 5"
+    );
+}
