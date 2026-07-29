@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { setBackendForTests, type Backend } from "../lib/api";
 import {
@@ -6,8 +7,23 @@ import {
   contrastRatio,
   corDoTexto,
 } from "../test/contrast";
-import { estimativaTexto, VAGALUME_URL } from "../lib/curadoria";
-import type { ContagemCandidatas } from "../lib/curadoria";
+import {
+  ACESSORIO_CANCELADO,
+  ACESSORIO_CORROMPIDO,
+  ACESSORIO_INDETERMINADO,
+  ACESSORIO_INDISPONIVEL,
+  ACESSORIO_PRONTO,
+  ACESSORIO_SEM_BINARIO,
+  CONFERENCIA_PRECISA_DO_SOM,
+  estimativaTexto,
+  rotuloBaixarAcessorio,
+  textoDoAcessorioAusente,
+  textoDoDownload,
+  VAGALUME_URL,
+} from "../lib/curadoria";
+import type { ContagemCandidatas, EtapasLigadas } from "../lib/curadoria";
+import type { AcessorioInfo, AcessorioProgresso } from "../lib/api";
+import type { Modo } from "../lib/types";
 import type { Song } from "../lib/types";
 import { useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
@@ -19,6 +35,35 @@ const FUNDO_CONFIGURACOES = "#F9FAFB";
 
 /** Contagem já respondida pelo backend. */
 const pronta = (total: number): ContagemCandidatas => ({ estado: "pronta", total });
+
+/**
+ * Instalação nova: o acessório do som não está aqui, e o Vagalume conta na
+ * estimativa (a chave é nossa, embutida na build — V9).
+ */
+const SEM_SOM: EtapasLigadas = { som: false, vagalume: true };
+
+/** O texto que a tela deve mostrar, montado com os mesmos parâmetros dela. */
+function estimativa(
+  contagem: ContagemCandidatas,
+  musicasNaPasta: number,
+  modo: Modo = "completar",
+  etapas: EtapasLigadas = SEM_SOM,
+): string {
+  return estimativaTexto({ contagem, musicasNaPasta, modo, etapas });
+}
+
+/** O acessório desta máquina, no estado pedido. */
+function acessorio(estado: AcessorioInfo["estado"]): AcessorioInfo {
+  return {
+    nome: "fpcalc",
+    para_que_serve: "reconhecer a música pelo som",
+    arquivo: "fpcalc-linux-x86_64",
+    tamanho_bytes: 5_538_312,
+    estado,
+    origem:
+      "https://github.com/gabrielnader/cancioneiro/releases/download/acessorios-v1/fpcalc-linux-x86_64",
+  };
+}
 
 function song(id: number, filePath: string, over: Partial<Song> = {}): Song {
   return {
@@ -39,14 +84,33 @@ function song(id: number, filePath: string, over: Partial<Song> = {}): Song {
 
 /** enrichCount da vez — cada teste pode trocá-lo antes de renderizar. */
 let enrichCount: ReturnType<typeof vi.fn>;
+let acessoriosEstado: ReturnType<typeof vi.fn>;
+let acessorioBaixar: ReturnType<typeof vi.fn>;
+let acessorioCancelar: ReturnType<typeof vi.fn>;
+/** O ouvinte de `acessorio:progresso` que a tela registrou. */
+let emitirProgressoDoAcessorio: ((p: AcessorioProgresso) => void) | null;
 
 function estadoBase() {
   // a contagem de candidatas vem do BACKEND (mesma função da varredura):
   // por padrão, as duas incompletas do acervo de teste
   enrichCount = vi.fn(async (prefix: string) => (prefix === "/acervo/1" ? 1 : 2));
+  acessoriosEstado = vi.fn(async () => [acessorio("ausente")]);
+  acessorioBaixar = vi.fn(async () => ({
+    cancelado: false,
+    acessorio: acessorio("pronto"),
+  }));
+  acessorioCancelar = vi.fn(async () => {});
+  emitirProgressoDoAcessorio = null;
   setBackendForTests({
     onScanProgress: vi.fn(async () => () => {}),
     enrichCount,
+    acessoriosEstado,
+    acessorioBaixar,
+    acessorioCancelar,
+    onAcessorioProgresso: vi.fn(async (cb: (p: AcessorioProgresso) => void) => {
+      emitirProgressoDoAcessorio = cb;
+      return () => {};
+    }),
   } as unknown as Backend);
   useUiStore.setState({ view: "settings", vagalumeApiKey: "" });
   useLibraryStore.setState({
@@ -95,13 +159,29 @@ describe("SettingsView — seção de curadoria (V8 F18)", () => {
     expect(texto).toContain("segundo plano");
   });
 
-  // A Fase 1 não faz impressão digital nem transcrição. Quem cura não tem a
-  // quem perguntar: prometer as etapas pesadas seria abandonar a pessoa.
+  // V9 — o app passou a reconhecer pelo som, e o texto que negava as duas
+  // etapas pesadas foi CONFERIDO antes de ser encurtado: hoje ele nega uma só.
   it("é honesta sobre o que ainda NÃO é feito dentro do app", () => {
     render(<SettingsView />);
     const texto = secaoCuradoria().textContent ?? "";
-    expect(texto).toContain("ainda não");
-    expect(texto).toContain("ferramentas de curadoria");
+    expect(texto).toContain("Escrever a letra ouvindo o áudio ainda não é feito");
+    // e não manda mais ninguém para uma ferramenta de terminal que ela não tem
+    expect(texto).not.toContain("ferramentas de curadoria");
+  });
+
+  // Sem o acessório baixado a etapa 2 não roda: listá-la seria prometer
+  // trabalho que não vai acontecer.
+  it("a etapa do som só é listada quando o acessório está pronto", async () => {
+    render(<SettingsView />);
+    await screen.findByText(estimativa(pronta(2), 3));
+    expect(secaoCuradoria().textContent).not.toContain("Reconhecer pelo som");
+
+    acessoriosEstado.mockResolvedValue([acessorio("pronto")]);
+    const { unmount } = render(<SettingsView />);
+    await screen.findAllByText(ACESSORIO_PRONTO);
+    expect(screen.getAllByRole("region", { name: "Curadoria do acervo" })[1]
+      .textContent).toContain("Reconhecer pelo som");
+    unmount();
   });
 
   it("começa na pasta selecionada na lateral — o contexto que o ✎ dava de graça", () => {
@@ -134,14 +214,15 @@ describe("SettingsView — seção de curadoria (V8 F18)", () => {
   // subcontava até zero e desabilitava o único ponto de entrada do produto.
   it("a estimativa vem do backend e acompanha a pasta escolhida", async () => {
     render(<SettingsView />);
-    expect(await screen.findByText(estimativaTexto(pronta(2), 3))).toBeInTheDocument();
-    expect(enrichCount).toHaveBeenCalledWith("");
+    expect(await screen.findByText(estimativa(pronta(2), 3))).toBeInTheDocument();
+    // a contagem viaja com o MODO: a conferência olha outra população
+    expect(enrichCount).toHaveBeenCalledWith("", "completar");
 
     fireEvent.change(screen.getByLabelText("Pasta a curar"), {
       target: { value: "/acervo/1" },
     });
-    expect(await screen.findByText(estimativaTexto(pronta(1), 2))).toBeInTheDocument();
-    expect(enrichCount).toHaveBeenCalledWith("/acervo/1");
+    expect(await screen.findByText(estimativa(pronta(1), 2))).toBeInTheDocument();
+    expect(enrichCount).toHaveBeenCalledWith("/acervo/1", "completar");
   });
 
   // A contagem virou uma chamada: enquanto ela não volta, a tela diz o que
@@ -150,7 +231,7 @@ describe("SettingsView — seção de curadoria (V8 F18)", () => {
     enrichCount.mockImplementation(() => new Promise(() => {}));
     render(<SettingsView />);
     expect(
-      screen.getByText(estimativaTexto({ estado: "contando" }, 3)),
+      screen.getByText(estimativa({ estado: "contando" }, 3)),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Buscar dados desta pasta" }),
@@ -161,7 +242,7 @@ describe("SettingsView — seção de curadoria (V8 F18)", () => {
     enrichCount.mockRejectedValue(new Error("sem banco"));
     render(<SettingsView />);
     expect(
-      await screen.findByText(estimativaTexto({ estado: "indisponivel" }, 3)),
+      await screen.findByText(estimativa({ estado: "indisponivel" }, 3)),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Buscar dados desta pasta" }),
@@ -176,7 +257,7 @@ describe("SettingsView — seção de curadoria (V8 F18)", () => {
       target: { value: "/acervo/2" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Buscar dados desta pasta" }));
-    expect(startScan).toHaveBeenCalledWith("/acervo/2");
+    expect(startScan).toHaveBeenCalledWith("/acervo/2", "completar");
   });
 
   it("pasta sem nenhuma música incompleta: não deixa disparar e diz por quê", async () => {
@@ -184,7 +265,7 @@ describe("SettingsView — seção de curadoria (V8 F18)", () => {
     useLibraryStore.setState({ allSongs: [song(1, "/acervo/1/completa.mp3")] });
     render(<SettingsView />);
     expect(
-      await screen.findByText(estimativaTexto(pronta(0), 1)),
+      await screen.findByText(estimativa(pronta(0), 1)),
     ).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Buscar dados desta pasta" }),
@@ -199,7 +280,9 @@ describe("SettingsView — seção de curadoria (V8 F18)", () => {
     render(<SettingsView />);
     const secao = secaoCuradoria();
     expect(secao).toHaveTextContent("Não há nenhuma música nesta pasta");
-    expect(secao).toHaveTextContent("Adicione uma pasta de música");
+    // o "aqui em Configurações" saiu no passe de redução: quem lê isto JÁ
+    // está em Configurações, com o botão "Adicionar pasta" logo acima
+    expect(secao).toHaveTextContent("Adicione uma pasta");
     await screen.findByText(/Não há nenhuma música nesta pasta/);
   });
 
@@ -256,16 +339,298 @@ describe("SettingsView — seção de curadoria (V8 F18)", () => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// V9 — o acessório do som: nada baixa sozinho, e a tela diz o que vai baixar
+// ---------------------------------------------------------------------------
+describe("SettingsView — acessório do reconhecimento pelo som (V9)", () => {
+  beforeEach(estadoBase);
+
+  function blocoDoAcessorio(): HTMLElement {
+    return screen.getByRole("region", { name: "Reconhecer música pelo som" });
+  }
+
+  it("ausente: diz para que serve, quanto ocupa e de onde vem — e só então oferece", async () => {
+    render(<SettingsView />);
+    const info = acessorio("ausente");
+    expect(
+      await screen.findByText(textoDoAcessorioAusente(info)),
+    ).toBeInTheDocument();
+    // a origem fica à vista: é a única forma de alguém conferir de onde veio
+    expect(blocoDoAcessorio()).toHaveTextContent(info.origem);
+    expect(
+      screen.getByRole("button", { name: rotuloBaixarAcessorio(info, false) }),
+    ).toBeEnabled();
+    // e NADA baixou sozinho
+    expect(acessorioBaixar).not.toHaveBeenCalled();
+  });
+
+  it("pronto: nenhum botão de download — baixou uma vez, não pergunta de novo", async () => {
+    acessoriosEstado.mockResolvedValue([acessorio("pronto")]);
+    render(<SettingsView />);
+    expect(await screen.findByText(ACESSORIO_PRONTO)).toBeInTheDocument();
+    expect(
+      within(blocoDoAcessorio()).queryByRole("button", { name: /Baixar/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  // Sem drama e sem acusação: o arquivo foi descartado, e a saída é baixar
+  // de novo — que é o que a pessoa pode fazer a respeito.
+  it("corrompido: explica e oferece baixar DE NOVO", async () => {
+    acessoriosEstado.mockResolvedValue([acessorio("corrompido")]);
+    render(<SettingsView />);
+    expect(await screen.findByText(ACESSORIO_CORROMPIDO)).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", {
+        name: rotuloBaixarAcessorio(acessorio("corrompido"), true),
+      }),
+    ).toBeEnabled();
+  });
+
+  it("lista vazia: não publicamos para este computador, e não há o que baixar", async () => {
+    acessoriosEstado.mockResolvedValue([]);
+    render(<SettingsView />);
+    expect(await screen.findByText(ACESSORIO_SEM_BINARIO)).toBeInTheDocument();
+    expect(
+      within(blocoDoAcessorio()).queryByRole("button", { name: /Baixar/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("indisponível nesta versão: também não oferece download", async () => {
+    acessoriosEstado.mockResolvedValue([acessorio("indisponivel")]);
+    render(<SettingsView />);
+    expect(await screen.findByText(ACESSORIO_INDISPONIVEL)).toBeInTheDocument();
+    expect(
+      within(blocoDoAcessorio()).queryByRole("button", { name: /Baixar/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("estado que não pôde ser conferido: admite, sem inventar ausência", async () => {
+    acessoriosEstado.mockRejectedValue(new Error("sem pasta de perfil"));
+    render(<SettingsView />);
+    expect(await screen.findByText(ACESSORIO_INDETERMINADO)).toBeInTheDocument();
+    expect(
+      within(blocoDoAcessorio()).queryByRole("button", { name: /Baixar/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("baixar mostra progresso, deixa cancelar e termina pronto", async () => {
+    let concluir!: () => void;
+    acessorioBaixar.mockImplementation(
+      () =>
+        new Promise((r) => {
+          concluir = () => r({ cancelado: false, acessorio: acessorio("pronto") });
+        }),
+    );
+    render(<SettingsView />);
+    const botao = await screen.findByRole("button", {
+      name: rotuloBaixarAcessorio(acessorio("ausente"), false),
+    });
+    await act(async () => {
+      fireEvent.click(botao);
+    });
+    expect(acessorioBaixar).toHaveBeenCalledWith("fpcalc", expect.any(String));
+
+    // o evento do backend vira barra e texto
+    await act(async () => {
+      emitirProgressoDoAcessorio?.({
+        nome: "fpcalc",
+        baixados: 1_048_576,
+        total: 5_538_312,
+        download_id: acessorioBaixar.mock.calls[0][1] as string,
+      });
+    });
+    expect(
+      screen.getByText(textoDoDownload(1_048_576, 5_538_312)),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: /download/i })).toHaveAttribute(
+      "aria-valuenow",
+      "1048576",
+    );
+    expect(screen.getByRole("button", { name: "Parar" })).toBeEnabled();
+
+    await act(async () => {
+      concluir();
+    });
+    expect(await screen.findByText(ACESSORIO_PRONTO)).toBeInTheDocument();
+  });
+
+  // O evento de OUTRO download não pode mexer nesta barra — mesma disciplina
+  // do scan_id do funil (M4).
+  it("progresso de outro download é descartado", async () => {
+    acessorioBaixar.mockImplementation(() => new Promise(() => {}));
+    render(<SettingsView />);
+    const botao = await screen.findByRole("button", {
+      name: rotuloBaixarAcessorio(acessorio("ausente"), false),
+    });
+    await act(async () => {
+      fireEvent.click(botao);
+    });
+    await act(async () => {
+      emitirProgressoDoAcessorio?.({
+        nome: "fpcalc",
+        baixados: 4_000_000,
+        total: 5_538_312,
+        download_id: "de-outra-janela",
+      });
+    });
+    expect(
+      screen.queryByText(textoDoDownload(4_000_000, 5_538_312)),
+    ).not.toBeInTheDocument();
+  });
+
+  // `total: null` = o servidor não anunciou o tamanho. Nem barra falsa nem 0%.
+  it("sem total anunciado: conta o que já veio, sem barra determinada", async () => {
+    acessorioBaixar.mockImplementation(() => new Promise(() => {}));
+    render(<SettingsView />);
+    const botao = await screen.findByRole("button", {
+      name: rotuloBaixarAcessorio(acessorio("ausente"), false),
+    });
+    await act(async () => {
+      fireEvent.click(botao);
+    });
+    await act(async () => {
+      emitirProgressoDoAcessorio?.({
+        nome: "fpcalc",
+        baixados: 1_048_576,
+        total: null,
+        download_id: acessorioBaixar.mock.calls[0][1] as string,
+      });
+    });
+    expect(screen.getByText(textoDoDownload(1_048_576, null))).toBeInTheDocument();
+    expect(screen.queryByRole("progressbar", { name: /download/i })).toBeNull();
+  });
+
+  it("parar cancela de verdade e o desfecho é dito como cancelamento", async () => {
+    acessorioBaixar.mockResolvedValue({
+      cancelado: true,
+      acessorio: acessorio("ausente"),
+    });
+    render(<SettingsView />);
+    const botao = await screen.findByRole("button", {
+      name: rotuloBaixarAcessorio(acessorio("ausente"), false),
+    });
+    await act(async () => {
+      fireEvent.click(botao);
+    });
+    expect(await screen.findByText(ACESSORIO_CANCELADO)).toBeInTheDocument();
+    // e continua oferecendo o download, sem tratar isso como falha
+    expect(
+      screen.getByRole("button", {
+        name: rotuloBaixarAcessorio(acessorio("ausente"), false),
+      }),
+    ).toBeEnabled();
+  });
+
+  // O backend manda a frase pronta em pt-BR (soma que não confere, rede que
+  // caiu). A tela a mostra COMO VEIO — reescrevê-la aqui seria inventar uma
+  // segunda versão da verdade para quem não tem a quem perguntar.
+  it("falha do backend aparece com as palavras do backend", async () => {
+    const frase =
+      "o arquivo baixado não confere com o esperado — foi descartado, e esta etapa fica desligada";
+    acessorioBaixar.mockRejectedValue(new Error(frase));
+    render(<SettingsView />);
+    const botao = await screen.findByRole("button", {
+      name: rotuloBaixarAcessorio(acessorio("ausente"), false),
+    });
+    await act(async () => {
+      fireEvent.click(botao);
+    });
+    expect(await screen.findByText(new RegExp(frase))).toBeInTheDocument();
+  });
+
+  it("o botão Parar chama o cancelamento com o id deste download", async () => {
+    acessorioBaixar.mockImplementation(() => new Promise(() => {}));
+    render(<SettingsView />);
+    const botao = await screen.findByRole("button", {
+      name: rotuloBaixarAcessorio(acessorio("ausente"), false),
+    });
+    await act(async () => {
+      fireEvent.click(botao);
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Parar" }));
+    expect(acessorioCancelar).toHaveBeenCalledWith(
+      acessorioBaixar.mock.calls[0][1],
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V9 — os dois trabalhos: completar o que falta x conferir a etiqueta
+// ---------------------------------------------------------------------------
+describe("SettingsView — o modo de conferência (V9)", () => {
+  beforeEach(estadoBase);
+
+  function opcaoConferir(): HTMLElement {
+    return screen.getByRole("radio", { name: /Conferir se a etiqueta/ });
+  }
+
+  it("o padrão é completar o que falta, e nunca a conferência", async () => {
+    acessoriosEstado.mockResolvedValue([acessorio("pronto")]);
+    render(<SettingsView />);
+    await screen.findByText(ACESSORIO_PRONTO);
+    expect(
+      screen.getByRole("radio", { name: /Completar o que falta/ }),
+    ).toBeChecked();
+    expect(opcaoConferir()).not.toBeChecked();
+  });
+
+  // Sem o acessório a conferência é impossível: o motivo é TEXTO na tela, e
+  // não `title=` num controle desabilitado (DECISIONS #87).
+  it("sem o acessório, a conferência fica indisponível com o motivo visível", async () => {
+    render(<SettingsView />);
+    await screen.findByText(estimativa(pronta(2), 3));
+    expect(opcaoConferir()).toBeDisabled();
+    const motivo = screen.getByText(CONFERENCIA_PRECISA_DO_SOM);
+    expect(motivo).toBeVisible();
+    expect(opcaoConferir()).toHaveAttribute("aria-describedby", motivo.id);
+  });
+
+  it("com o acessório, escolher a conferência troca contagem, texto e botão", async () => {
+    acessoriosEstado.mockResolvedValue([acessorio("pronto")]);
+    enrichCount.mockImplementation(async (_prefixo: string, modo?: Modo) =>
+      modo === "conferencia" ? 150 : 2,
+    );
+    render(<SettingsView />);
+    await screen.findByText(ACESSORIO_PRONTO);
+
+    fireEvent.click(opcaoConferir());
+    expect(
+      await screen.findByText(
+        estimativa(pronta(150), 3, "conferencia", { som: true, vagalume: true }),
+      ),
+    ).toBeInTheDocument();
+    expect(enrichCount).toHaveBeenCalledWith("", "conferencia");
+    // o botão diz qual dos dois trabalhos vai começar
+    expect(
+      screen.getByRole("button", { name: "Conferir esta pasta" }),
+    ).toBeEnabled();
+  });
+
+  it("disparar em conferência leva o modo à varredura", async () => {
+    const startScan = vi.fn(async () => {});
+    useEnrichStore.setState({ startScan });
+    acessoriosEstado.mockResolvedValue([acessorio("pronto")]);
+    render(<SettingsView />);
+    await screen.findByText(ACESSORIO_PRONTO);
+
+    fireEvent.click(opcaoConferir());
+    fireEvent.click(screen.getByRole("button", { name: "Conferir esta pasta" }));
+    expect(startScan).toHaveBeenCalledWith("", "conferencia");
+  });
+});
+
 describe("SettingsView — chave do Vagalume (V8 F18)", () => {
   beforeEach(estadoBase);
 
-  it("explica o que é, que é gratuita e onde pegar", () => {
+  // V9 — a chave passou a ser NOSSA, embutida em tempo de build. O campo
+  // continua existindo (tem precedência, é a saída se a nossa for bloqueada),
+  // mas deixou de ser pedágio: o texto diz que normalmente não é preciso.
+  it("diz que só é preciso preencher se o Vagalume parar, e onde pegar", () => {
     render(<SettingsView />);
     const texto = secaoCuradoria().textContent ?? "";
+    expect(texto).toContain("Só é preciso preencher");
     expect(texto).toContain("gratuita");
     expect(texto).toContain(VAGALUME_URL);
-    // ausência de chave não é erro: a etapa é só pulada
-    expect(texto).toContain("Sem a chave");
   });
 
   // MÉDIO-10 — a chave É gravada em disco (localStorage das preferências), e
@@ -275,10 +640,12 @@ describe("SettingsView — chave do Vagalume (V8 F18)", () => {
   it("diz a verdade sobre onde a chave fica guardada e para onde ela vai", () => {
     render(<SettingsView />);
     const texto = secaoCuradoria().textContent ?? "";
-    expect(texto).toContain("Ela fica guardada nas preferências do aplicativo");
-    expect(texto).toContain("neste computador");
-    expect(texto).toContain("não vai para o banco de músicas");
-    expect(texto).toContain("não vai para nenhum outro lugar além do próprio Vagalume");
+    // encurtar NÃO podia jogar fora nada disto: é o que a pessoa precisa
+    // saber sobre uma credencial dela guardada por nós (DECISIONS #84)
+    expect(texto).toContain("Ela fica guardada neste computador");
+    expect(texto).toContain("Não entra no banco de músicas");
+    expect(texto).toContain("não é escrita nos MP3");
+    expect(texto).toContain("não vai a lugar nenhum além do próprio Vagalume");
   });
 
   it("digitar guarda nas preferências; apagar volta ao estado sem chave", () => {

@@ -6,6 +6,7 @@ import {
   type EnrichProposal,
 } from "../lib/api";
 import { textoSemPropostas } from "../lib/curadoria";
+import type { Modo } from "../lib/types";
 import { useToastStore } from "./toastStore";
 import { useUiStore } from "./uiStore";
 
@@ -33,6 +34,13 @@ interface EnrichState {
   overlayOpen: boolean;
   /** Prefixo varrido ("" = biblioteca inteira). */
   folderPrefix: string;
+  /**
+   * O TRABALHO da varredura em curso (ou da última) — V9. Fica no store
+   * porque o DESFECHO depende dele: "conferimos as 81 músicas incompletas"
+   * é falso quando quem rodou foi a conferência, que olha as completas
+   * justamente por serem o caso que a outra nunca alcança.
+   */
+  modo: Modo;
   proposals: EnrichProposal[];
   /** Último evento `enrich:progress`; null = ainda não chegou nenhum. */
   progress: EnrichProgress | null;
@@ -59,7 +67,7 @@ interface EnrichState {
   scanInFlight: boolean;
 
   /** Dispara a varredura; ignora chamadas com uma varredura em andamento. */
-  startScan: (folderPrefix: string) => Promise<void>;
+  startScan: (folderPrefix: string, modo?: Modo) => Promise<void>;
   /** Esconde o overlay — a varredura CONTINUA rodando em segundo plano. */
   hideOverlay: () => void;
   /** Reabre o overlay (indicador da sidebar) sem disparar nada. */
@@ -108,8 +116,11 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
   scannedTotal: 0,
   applyErrors: {},
   scanInFlight: false,
+  modo: "completar",
 
-  startScan: async (folderPrefix) => {
+  // o padrão é o trabalho barato, aqui como no Rust: a varredura que lê o
+  // áudio de TODAS as músicas nunca acontece por omissão
+  startScan: async (folderPrefix, modo = "completar") => {
     // bloqueia disparo duplo — inclusive com a varredura anterior cancelada
     // mas ainda respondendo (M4)
     if (get().status === "scanning" || get().scanInFlight) return;
@@ -119,6 +130,7 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
       status: "scanning",
       overlayOpen: true,
       folderPrefix,
+      modo,
       proposals: [],
       progress: null,
       scanId,
@@ -158,6 +170,7 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
         folderPrefix,
         scanId,
         useUiStore.getState().vagalumeApiKey || null,
+        modo,
       );
       if (seq !== scanSeq) return; // cancelado durante a busca: descarta
       // quantas candidatas foram efetivamente conferidas (A6); null quando o
@@ -174,7 +187,9 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
           scanId: "",
           scannedTotal: conferidas,
         });
-        useToastStore.getState().push(textoSemPropostas(conferidas), "success");
+        useToastStore
+          .getState()
+          .push(textoSemPropostas(conferidas, modo), "success");
         return;
       }
       set({

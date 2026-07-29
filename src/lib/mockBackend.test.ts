@@ -1153,9 +1153,17 @@ describe("mockBackend", () => {
         null,
       );
 
+      const events: EnrichProgress[] = [];
+      await backend.onEnrichProgress((p) => events.push(p));
       const proposals = await backend.enrichFolderScan("", "s1", "chave-de-teste");
-      const proposta = proposals.find((p) => p.song_id === semTags.id)!;
-      expect(proposta.fonte).not.toBe("Vagalume");
+      // V9 — a asserção deixou de procurar a LINHA desta música: com o
+      // `campo_efetivo` do Rust dos dois lados do no-op (que o mock não
+      // tinha), "Artista Desconhecido" vale o mesmo que artista vazio e a
+      // linha não muda nada, então ela nem chega à revisão. A regra que este
+      // teste guarda é outra, e continua sendo verificável direto: o Vagalume
+      // não é consultado sem etiqueta REAL dos dois lados.
+      expect(proposals.every((p) => p.fonte !== "Vagalume")).toBe(true);
+      expect(events.some((e) => e.etapa === "procurando no Vagalume")).toBe(false);
     });
 
     // Chave recusada é veredito sobre a VARREDURA INTEIRA, não sobre uma
@@ -1750,6 +1758,227 @@ describe("mockBackend", () => {
       ]);
       expect(result.song).toBeNull();
       expect(result.error).toContain("não encontrada");
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // V9 — acessórios: nada baixa sozinho, e o que não confere não é instalado
+  // -------------------------------------------------------------------------
+  describe("acessórios (V9 — F18 fase 2)", () => {
+    it("por padrão existe um acessório para esta máquina, e ele está ausente", async () => {
+      const [fpcalc] = await backend.acessoriosEstado();
+      expect(fpcalc.nome).toBe("fpcalc");
+      expect(fpcalc.estado).toBe("ausente");
+      // a frase que a tela mostra vem do backend, pronta em pt-BR
+      expect(fpcalc.para_que_serve).toBe("reconhecer a música pelo som");
+      expect(fpcalc.tamanho_bytes).toBeGreaterThan(0);
+      expect(fpcalc.origem).toContain("acessorios-v1");
+    });
+
+    // Lista vazia significa "não publicamos binário para este computador" —
+    // é diferente de "ausente", e a tela não pode oferecer download.
+    it("máquina sem binário publicado: lista vazia", async () => {
+      backend._acessorio.publicado = false;
+      expect(await backend.acessoriosEstado()).toEqual([]);
+    });
+
+    it("baixar emite progresso com o download_id de quem pediu e termina pronto", async () => {
+      const eventos: Array<{ baixados: number; total: number | null; id: string }> = [];
+      await backend.onAcessorioProgresso((p) =>
+        eventos.push({ baixados: p.baixados, total: p.total, id: p.download_id }),
+      );
+
+      const desfecho = await backend.acessorioBaixar("fpcalc", "dl-1");
+      expect(desfecho.cancelado).toBe(false);
+      expect(desfecho.acessorio.estado).toBe("pronto");
+      expect(eventos.length).toBeGreaterThan(1);
+      expect(eventos.every((e) => e.id === "dl-1")).toBe(true);
+      // o último evento fecha no tamanho anunciado
+      expect(eventos[eventos.length - 1].baixados).toBe(
+        desfecho.acessorio.tamanho_bytes,
+      );
+      // e o estado persiste: baixou uma vez, não pergunta de novo (regra 3)
+      const [depois] = await backend.acessoriosEstado();
+      expect(depois.estado).toBe("pronto");
+    });
+
+    // `total: null` = o servidor não anunciou o tamanho. A UI precisa
+    // sobreviver a isso sem inventar 0 (DECISIONS #86).
+    it("servidor que não anuncia o tamanho: total null nos eventos", async () => {
+      backend._acessorio.anunciaTotal = false;
+      const totais: Array<number | null> = [];
+      await backend.onAcessorioProgresso((p) => totais.push(p.total));
+      await backend.acessorioBaixar("fpcalc", "dl-1");
+      expect(totais.every((t) => t === null)).toBe(true);
+    });
+
+    it("cancelar devolve cancelado=true e NÃO instala nada", async () => {
+      backend._acessorio.atrasoMs = 1;
+      const pendente = backend.acessorioBaixar("fpcalc", "dl-1");
+      await backend.acessorioCancelar("dl-1");
+      const desfecho = await pendente;
+      expect(desfecho.cancelado).toBe(true);
+      expect(desfecho.acessorio.estado).toBe("ausente");
+    });
+
+    it("cancelar um download que não existe é no-op silencioso", async () => {
+      await expect(backend.acessorioCancelar("nunca-existiu")).resolves.toBeUndefined();
+    });
+
+    // Soma que não confere: o arquivo é descartado e a frase vem PRONTA do
+    // backend — a UI a mostra como veio, sem reescrever.
+    it("soma que não confere: rejeita com a frase do backend e o cache fica vazio", async () => {
+      backend._acessorio.erro = "soma";
+      await expect(backend.acessorioBaixar("fpcalc", "dl-1")).rejects.toThrow(
+        "não confere com o esperado",
+      );
+      const [depois] = await backend.acessoriosEstado();
+      expect(depois.estado).toBe("ausente");
+    });
+
+    // "corrompido" é tratado como ausente no resto do produto: o download
+    // seguinte passa por cima.
+    it("corrompido: baixar de novo repara", async () => {
+      backend._acessorio.estado = "corrompido";
+      const [antes] = await backend.acessoriosEstado();
+      expect(antes.estado).toBe("corrompido");
+      const desfecho = await backend.acessorioBaixar("fpcalc", "dl-1");
+      expect(desfecho.acessorio.estado).toBe("pronto");
+    });
+
+    // Sem a chave do AcoustID compilada, o acessório não teria o que fazer:
+    // 5 MB baixados para nada é pior que não oferecer.
+    it("indisponível nesta build: não instala e diz por quê", async () => {
+      backend._acessorio.estado = "indisponivel";
+      await expect(backend.acessorioBaixar("fpcalc", "dl-1")).rejects.toThrow(
+        "não está disponível nesta versão",
+      );
+    });
+
+    it("acessório que não existe para esta máquina: erro próprio", async () => {
+      await expect(backend.acessorioBaixar("whisper", "dl-1")).rejects.toThrow(
+        "não há este acessório para este computador",
+      );
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // V9 — o som no funil, o modo de conferência e as linhas de conflito
+  // -------------------------------------------------------------------------
+  describe("o funil com a etapa do som (V9)", () => {
+    /** Pasta indexada com o acessório já pronto e o som ensinado. */
+    async function comSom(diz: {
+      titulo: string;
+      artista: string;
+      confianca?: "alta" | "media";
+    }): Promise<Song> {
+      await backend.addFolder("/musicas/teste");
+      backend._acessorio.estado = "pronto";
+      backend._ensinarSom("/musicas/teste/com_letra.mp3", {
+        titulo: diz.titulo,
+        artista: diz.artista,
+        confianca: diz.confianca ?? "alta",
+      });
+      const songs = await backend.listSongs();
+      return songs.find((s) => s.file_path === "/musicas/teste/com_letra.mp3")!;
+    }
+
+    it("sem o acessório pronto, a etapa do som não roda", async () => {
+      await backend.addFolder("/musicas/teste");
+      backend._ensinarSom("/musicas/teste/com_letra.mp3", {
+        titulo: "Outra Música",
+        artista: "Outro Artista",
+        confianca: "alta",
+      });
+      const propostas = await backend.enrichFolderScan("", "s1", null, "completar");
+      expect(propostas.every((p) => p.conflito === null)).toBe(true);
+    });
+
+    // O caso real que criou o modo: "Te ver feliz, te ver contente" /
+    // "Caetano Veloso" que é "Viver Feliz", do Nilson Chaves.
+    it("conferência: o som contra a etiqueta vira CONFLITO, sem propor troca", async () => {
+      const song = await comSom({ titulo: "Viver Feliz", artista: "Nilson Chaves" });
+      const propostas = await backend.enrichFolderScan("", "s1", null, "conferencia");
+      const linha = propostas.find((p) => p.song_id === song.id)!;
+
+      expect(linha.conflito).toEqual({
+        titulo: "Viver Feliz",
+        artista: "Nilson Chaves",
+        confianca: "alta",
+      });
+      // a linha informa: o proposto REPETE o atual e a confiança é sempre baixa
+      expect(linha.proposed_title).toBe(song.title);
+      expect(linha.proposed_artist).toBe(song.artist);
+      expect(linha.confidence).toBe("baixa");
+      // nenhuma etapa de letra rodou sob um nome que o som contradisse
+      expect(linha.lyrics).toBeNull();
+      expect(linha.fonte).toBe("reconhecimento pelo som");
+      // conflito e troca de nome escrito são avisos ORTOGONAIS
+      expect(linha.substitui_nome_escrito).toBe(false);
+    });
+
+    it("conferência alcança a música COMPLETA, que a outra varredura nunca vê", async () => {
+      await comSom({ titulo: "Viver Feliz", artista: "Nilson Chaves" });
+      // com_letra tem título, artista e letra: ela não é candidata de completar
+      expect(await backend.enrichCount("", "completar")).toBe(2);
+      expect(await backend.enrichCount("", "conferencia")).toBe(3);
+    });
+
+    it("conferência não procura letra nenhuma — é o outro trabalho", async () => {
+      await backend.addFolder("/musicas/teste");
+      backend._acessorio.estado = "pronto";
+      const propostas = await backend.enrichFolderScan("", "s1", null, "conferencia");
+      expect(propostas.every((p) => p.lyrics === null)).toBe(true);
+    });
+
+    it("som que CONCORDA com a etiqueta não vira linha nenhuma", async () => {
+      await comSom({ titulo: "Coração Sertanejo", artista: "Artista Teste" });
+      const propostas = await backend.enrichFolderScan("", "s1", null, "conferencia");
+      expect(propostas.some((p) => p.conflito !== null)).toBe(false);
+    });
+
+    // O modo é opcional no contrato e ausente vale "completar": esquecer o
+    // campo nunca pode disparar a varredura que lê o áudio de todas.
+    it("sem modo, é a varredura de sempre", async () => {
+      await backend.addFolder("/musicas/teste");
+      expect(await backend.enrichCount("")).toBe(await backend.enrichCount("", "completar"));
+    });
+  });
+
+  describe("substitui_nome_escrito (V9)", () => {
+    it("preencher campo vazio NÃO conta como troca", async () => {
+      await backend.addFolder("/musicas/teste");
+      const propostas = await backend.enrichFolderScan("", "s1", null, "completar");
+      // sem_letra tem artista real e título real fora do catálogo: quem muda
+      // aqui é a sem_tags, que não tem etiqueta nenhuma
+      const semTags = propostas.find((p) => p.file_path.endsWith("sem_tags.mp3"))!;
+      expect(semTags.substitui_nome_escrito).toBe(false);
+    });
+
+    it("trocar um título REAL por outro conta como troca", async () => {
+      await backend.addFolder("/musicas/teste");
+      backend._acessorio.estado = "pronto";
+      // o som identifica a mesma música com a grafia oficial, que difere da
+      // etiqueta só o bastante para não ser conflito... aqui usamos o caminho
+      // direto: a etiqueta é placeholder-free e a proposta muda o artista
+      const songs = await backend.listSongs();
+      const semLetra = songs.find((s) => s.title === "Instrumental Sem Letra")!;
+      await backend.writeTags(semLetra.id, "Coração Sertanejo", "Outro Artista", null, null);
+      const propostas = await backend.enrichFolderScan("", "s1", null, "completar");
+      const linha = propostas.find((p) => p.song_id === semLetra.id)!;
+      // o catálogo do LRCLIB devolve "Artista Teste" no lugar de "Outro Artista"
+      expect(linha.proposed_artist).toBe("Artista Teste");
+      expect(linha.substitui_nome_escrito).toBe(true);
+    });
+
+    it("proposta com artista vazio não avisa de uma troca que não vai acontecer", async () => {
+      await backend.addFolder("/musicas/teste");
+      const propostas = await backend.enrichFolderScan("", "s1", null, "completar");
+      for (const p of propostas) {
+        if ((p.proposed_artist ?? "") === "") {
+          expect(p.substitui_nome_escrito).toBe(false);
+        }
+      }
     });
   });
 

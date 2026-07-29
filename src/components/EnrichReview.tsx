@@ -7,9 +7,15 @@ import {
 import { audioController } from "../hooks/playerAudioCore";
 import { getBackend, type EnrichApply, type EnrichProposal } from "../lib/api";
 import {
+  AVISO_NOME_ESCRITO,
+  LABEL_SOM_DIZ,
+  LABEL_SUA_ETIQUETA_DIZ,
   LABEL_SUBSTITUIR_LETRA,
   avisoLetraExistente,
+  confiancaDoSom,
+  rotuloAceitarSom,
   textoAplicado,
+  textoDoCabecalho,
   textoSemPropostas,
 } from "../lib/curadoria";
 import { useEnrichStore } from "../stores/enrichStore";
@@ -21,11 +27,18 @@ import { useToastStore } from "../stores/toastStore";
 /**
  * Seleção inicial: ALTA pré-marcada; MÉDIA/BAIXA a cargo do humano.
  *
- * A pré-marcação continua (DECISIONS #49) PORQUE ela agora só aplica NOMES:
- * a letra que passaria por cima de uma letra existente depende de uma segunda
- * marcação, separada e sempre desmarcada (ver `substituiriaLetra`). Era essa
- * combinação — ALTA pré-marcada + letra embutida na mesma marcação — que
- * apagava uma transcrição corrigida à mão com um clique.
+ * A pré-marcação continua (DECISIONS #49) PORQUE ela só aplica NOMES em campo
+ * que estava vazio. Duas exclusões, e as duas pelo mesmo motivo — um clique
+ * não pode desfazer trabalho humano:
+ *
+ * - a letra que passaria por cima de uma letra existente depende de uma
+ *   segunda marcação, separada e sempre desmarcada (DECISIONS #79);
+ * - a proposta que trocaria um título ou artista ESCRITO POR GENTE não é
+ *   pré-marcada em confiança nenhuma (V9): o LRCLIB devolve a grafia oficial,
+ *   "Ponto de Oxum" volta "Ponto de Oxum (Ao Vivo)", a duração bate, sai ALTA.
+ *
+ * A linha de CONFLITO também não entra: ela nem é proposta — é uma
+ * divergência entre duas fontes, e quem escolhe é a pessoa.
  */
 function defaultSelection(
   proposals: EnrichProposal[],
@@ -37,7 +50,9 @@ function defaultSelection(
         (p) =>
           p.error === null &&
           applyErrors[p.song_id] === undefined &&
-          p.confidence === "alta",
+          p.confidence === "alta" &&
+          !p.substitui_nome_escrito &&
+          p.conflito === null,
       )
       .map((p) => p.song_id),
   );
@@ -71,6 +86,16 @@ const BADGES: Record<
   baixa: { label: "BAIXA", className: "bg-[#F3F4F6] text-[#5B6472]" },
 };
 
+/**
+ * A linha de conflito não tem confiança que sirva de rótulo: a dela é sempre
+ * "baixa" (para nunca chegar pré-marcada), e "BAIXA" descreveria um palpite
+ * fraco — que não é o caso. O que ela é está escrito no selo.
+ */
+const BADGE_CONFLITO = {
+  label: "CONFLITO",
+  className: "bg-[#FEF3C7] text-[#854D0E]",
+};
+
 function nomeCompleto(title: string, artist: string | null): string {
   return artist ? `${title} — ${artist}` : title;
 }
@@ -86,6 +111,9 @@ export function EnrichReview() {
   const progress = useEnrichStore((s) => s.progress);
   const proposals = useEnrichStore((s) => s.proposals);
   const scannedTotal = useEnrichStore((s) => s.scannedTotal);
+  // V9 — o desfecho vazio fala a língua do TRABALHO que rodou: "conferimos as
+  // 81 incompletas" é falso quando quem rodou foi a conferência
+  const modo = useEnrichStore((s) => s.modo);
   // erros devolvidos pelo apply, por música (linhas ficam como as com error)
   const applyErrors = useEnrichStore((s) => s.applyErrors);
   const close = useEnrichStore((s) => s.close);
@@ -155,7 +183,7 @@ export function EnrichReview() {
     const atual = useEnrichStore.getState();
     setAnuncio(
       atual.proposals.length === 0
-        ? `Busca concluída. ${textoSemPropostas(atual.scannedTotal)}`
+        ? `Busca concluída. ${textoSemPropostas(atual.scannedTotal, atual.modo)}`
         : atual.proposals.length === 1
           ? "Busca concluída. 1 proposta para revisar."
           : `Busca concluída. ${atual.proposals.length} propostas para revisar.`,
@@ -291,11 +319,14 @@ export function EnrichReview() {
       const trocaLetra = substituiriaLetra(p, applyErrors[p.song_id] ?? null);
       const consentida = substituir.has(p.song_id);
       const letra = trocaLetra && !consentida ? null : (p.lyrics ?? null);
+      // V9 — aceitar um conflito é aceitar o que o SOM disse: `proposed_*`
+      // repete a etiqueta atual nessas linhas (elas não propõem nada), então
+      // gravar dali seria gravar o que já está lá.
       return {
         song_id: p.song_id,
-        title: p.proposed_title,
-        artist: p.proposed_artist ?? null,
-        lyrics: letra,
+        title: p.conflito ? p.conflito.titulo : p.proposed_title,
+        artist: p.conflito ? p.conflito.artista : (p.proposed_artist ?? null),
+        lyrics: p.conflito ? null : letra,
         add_temas: null,
         current_title: p.current_title,
         current_artist: p.current_artist,
@@ -352,8 +383,11 @@ export function EnrichReview() {
               ganharamLetra++;
             }
           } else if (
-            p.proposed_title !== p.current_title ||
-            (p.proposed_artist ?? null) !== (p.current_artist ?? null)
+            // compara com o que FOI ENVIADO, não com `proposed_*`: na linha de
+            // conflito o proposto repete o atual, e contar por ele diria
+            // "gravada, sem mudança no conteúdo" sobre uma troca de nome
+            a.title !== p.current_title ||
+            (a.artist ?? null) !== (p.current_artist ?? null)
           ) {
             nomeCorrigido++;
           }
@@ -399,15 +433,14 @@ export function EnrichReview() {
   // um "Aplicar selecionadas (0)" desabilitado e sem explicação.
   const ofertas = proposals.filter((p) => rowError(p) === null);
   const comErro = proposals.length - ofertas.length;
-  const counts = { alta: 0, media: 0, baixa: 0 };
-  for (const p of ofertas) counts[p.confidence]++;
-  const quantasOfertas =
-    ofertas.length === 1 ? "1 proposta" : `${ofertas.length} propostas`;
-  const tituloDoCabecalho =
-    ofertas.length === 0
-      ? "Nenhuma proposta para aplicar."
-      : `${quantasOfertas} — ${counts.alta} alta, ${counts.media} média,` +
-        ` ${counts.baixa} baixa`;
+  const counts = { alta: 0, media: 0, baixa: 0, conflitos: 0 };
+  for (const p of ofertas) {
+    // V9 — a divergência é contada à parte: a confiança dela é sempre "baixa"
+    // e somá-la ali chamaria de palpite fraco uma linha que não é palpite
+    if (p.conflito) counts.conflitos++;
+    else counts[p.confidence]++;
+  }
+  const tituloDoCabecalho = textoDoCabecalho(counts);
 
   return (
     <div
@@ -503,7 +536,7 @@ export function EnrichReview() {
             {/* A6: "nada a ajustar" com 81 conferidas soava como "pasta
                 completa" — o texto conta o que houve e para onde ir */}
             <p className="py-4 text-[15px] text-[#111827]">
-              {textoSemPropostas(scannedTotal)}
+              {textoSemPropostas(scannedTotal, modo)}
             </p>
             <div className="mt-2 flex justify-end">{closeButton}</div>
           </>
@@ -516,13 +549,17 @@ export function EnrichReview() {
               <span className="ml-auto flex gap-2">
                 <button
                   type="button"
-                  // marca as linhas aplicáveis e SÓ isso: a substituição de
-                  // letra nunca entra num gesto de massa (CRÍTICO-1)
+                  // marca as linhas aplicáveis e SÓ isso. Duas coisas nunca
+                  // entram num gesto de massa: substituir uma letra
+                  // (CRÍTICO-1) e aceitar o que o som diz contra uma etiqueta
+                  // real (V9) — a segunda troca título E artista escritos por
+                  // gente, com base numa identificação cuja taxa de falso
+                  // positivo o projeto não mediu.
                   onClick={() =>
                     setSelected(
                       new Set(
                         proposals
-                          .filter((p) => rowError(p) === null)
+                          .filter((p) => rowError(p) === null && p.conflito === null)
                           .map((p) => p.song_id),
                       ),
                     )
@@ -560,7 +597,7 @@ export function EnrichReview() {
               {proposals.map((p) => {
                 const error = rowError(p);
                 const disabled = error !== null;
-                const badge = BADGES[p.confidence];
+                const badge = p.conflito ? BADGE_CONFLITO : BADGES[p.confidence];
                 const trocaLetra = substituiriaLetra(
                   p,
                   applyErrors[p.song_id] ?? null,
@@ -572,29 +609,63 @@ export function EnrichReview() {
                   >
                     <input
                       type="checkbox"
-                      aria-label={`Aplicar proposta: ${p.current_title}`}
+                      aria-label={
+                        p.conflito
+                          ? rotuloAceitarSom(p.current_title)
+                          : `Aplicar proposta: ${p.current_title}`
+                      }
                       disabled={disabled || busy}
                       checked={!disabled && selected.has(p.song_id)}
                       onChange={() => toggle(p.song_id)}
                       className="mt-1 h-4 w-4 shrink-0 accent-[#0F766E]"
                     />
                     <span className="min-w-0 flex-1">
-                      <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[14px]">
-                        <span className="truncate text-[#6B7280]">
-                          {nomeCompleto(p.current_title, p.current_artist)}
+                      {p.conflito ? (
+                        /*
+                          V9 — aqui NÃO cabe "atual → proposto": nada foi
+                          proposto. Duas fontes discordam, e cada uma é
+                          nomeada por quem a disse — a seta diria que o app já
+                          escolheu um lado. A etiqueta vem primeiro porque é o
+                          que a pessoa reconhece; o som vem em destaque porque
+                          é a informação nova.
+                        */
+                        <span className="flex flex-col gap-0.5 text-[14px]">
+                          <span className="min-w-0">
+                            <span className="text-[#5B6472]">
+                              {LABEL_SUA_ETIQUETA_DIZ}:
+                            </span>{" "}
+                            <span className="break-words text-[#111827]">
+                              {nomeCompleto(p.current_title, p.current_artist)}
+                            </span>
+                          </span>
+                          <span className="min-w-0">
+                            <span className="text-[#5B6472]">{LABEL_SOM_DIZ}:</span>{" "}
+                            <span className="break-words font-medium text-[#111827]">
+                              {nomeCompleto(p.conflito.titulo, p.conflito.artista)}
+                            </span>{" "}
+                            <span className="text-[13px] text-[#5B6472]">
+                              {confiancaDoSom(p.conflito.confianca)}
+                            </span>
+                          </span>
                         </span>
-                        {/* a seta é decorativa (aria-hidden), mas continua
-                            sendo tinta na tela de quem enxerga pouco: #9CA3AF
-                            dava 2,5:1 no branco. #6B7280 dá 4,8:1 e a varredura
-                            de contraste deste arquivo não precisa de exceções
-                            (DECISIONS #76). */}
-                        <span aria-hidden="true" className="text-[#6B7280]">
-                          →
+                      ) : (
+                        <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[14px]">
+                          <span className="truncate text-[#6B7280]">
+                            {nomeCompleto(p.current_title, p.current_artist)}
+                          </span>
+                          {/* a seta é decorativa (aria-hidden), mas continua
+                              sendo tinta na tela de quem enxerga pouco:
+                              #9CA3AF dava 2,5:1 no branco. #6B7280 dá 4,8:1 e
+                              a varredura de contraste deste arquivo não
+                              precisa de exceções (DECISIONS #76). */}
+                          <span aria-hidden="true" className="text-[#6B7280]">
+                            →
+                          </span>
+                          <span className="truncate font-medium text-[#111827]">
+                            {nomeCompleto(p.proposed_title, p.proposed_artist)}
+                          </span>
                         </span>
-                        <span className="truncate font-medium text-[#111827]">
-                          {nomeCompleto(p.proposed_title, p.proposed_artist)}
-                        </span>
-                      </span>
+                      )}
                       {error !== null && (
                         <span className="block text-[13px] text-[#B91C1C]">
                           {error}
@@ -621,6 +692,16 @@ export function EnrichReview() {
                         aqui que a pessoa responde — senão a mensagem manda
                         marcar algo que não existe na tela.
                       */}
+                      {/*
+                        V9 — ALTA que trocaria um nome escrito por gente chega
+                        DESMARCADA, e a linha diz por quê: sem isto o selo
+                        verde ao lado de uma caixa vazia não se explica.
+                      */}
+                      {error === null && p.substitui_nome_escrito && (
+                        <span className="mt-0.5 block text-[13px] text-[#854D0E]">
+                          {AVISO_NOME_ESCRITO}
+                        </span>
+                      )}
                       {trocaLetra && (
                         <>
                           <span className="mt-0.5 block text-[13px] text-[#854D0E]">

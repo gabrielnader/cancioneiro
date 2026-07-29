@@ -11,8 +11,12 @@ import {
   type EnrichProposal,
 } from "../lib/api";
 import {
+  AVISO_NOME_ESCRITO,
+  LABEL_SOM_DIZ,
+  LABEL_SUA_ETIQUETA_DIZ,
   LABEL_SUBSTITUIR_LETRA,
   avisoLetraExistente,
+  rotuloAceitarSom,
   textoAplicado,
   textoSemPropostas,
 } from "../lib/curadoria";
@@ -54,6 +58,9 @@ function proposal(overrides: Partial<EnrichProposal>): EnrichProposal {
     // por padrão a música NÃO tem letra: a proposta acrescenta
     has_lyrics: false,
     letra_origem: null,
+    // V9 — dois avisos novos, ORTOGONAIS entre si e desligados por padrão
+    conflito: null,
+    substitui_nome_escrito: false,
     error: null,
     ...overrides,
   };
@@ -276,7 +283,7 @@ describe("EnrichReview (V5 — F13)", () => {
 
   it("resultado vazio SEM candidatas: diz que não havia nada incompleto, com Fechar", () => {
     renderReview([], 0);
-    expect(screen.getByText(textoSemPropostas(0))).toBeInTheDocument();
+    expect(screen.getByText(textoSemPropostas(0, "completar"))).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Fechar" }));
     expect(useEnrichStore.getState().status).toBe("idle");
   });
@@ -285,13 +292,13 @@ describe("EnrichReview (V5 — F13)", () => {
   // ler "pasta completa" — o texto tem que dizer o que aconteceu de verdade.
   it("resultado vazio COM candidatas: diz quantas foram conferidas e aponta a transcrição", () => {
     renderReview([], 81);
-    expect(screen.getByText(textoSemPropostas(81))).toBeInTheDocument();
-    expect(screen.queryByText(textoSemPropostas(0))).not.toBeInTheDocument();
+    expect(screen.getByText(textoSemPropostas(81, "completar"))).toBeInTheDocument();
+    expect(screen.queryByText(textoSemPropostas(0, "completar"))).not.toBeInTheDocument();
   });
 
   it("resultado vazio com UMA candidata: texto no singular", () => {
     renderReview([], 1);
-    expect(screen.getByText(textoSemPropostas(1))).toBeInTheDocument();
+    expect(screen.getByText(textoSemPropostas(1, "completar"))).toBeInTheDocument();
   });
 
   // MÉDIO-12 — as linhas de ERRO entravam na conta por confiança: com o lote
@@ -907,12 +914,233 @@ describe("EnrichReview (V5 — F13)", () => {
     });
   });
 
+  // -------------------------------------------------------------------------
+  // V9 — o som contra a etiqueta: dois lados, nada pré-marcado
+  // -------------------------------------------------------------------------
+  describe("linha de conflito", () => {
+    /** O caso real: a etiqueta diz Caetano, o som diz Nilson Chaves. */
+    const CONFLITO = proposal({
+      song_id: 7,
+      file_path: "/acervo/7.mp3",
+      current_title: "Te ver feliz, te ver contente",
+      current_artist: "Caetano Veloso",
+      // o proposto REPETE o atual: a linha informa, não corrige
+      proposed_title: "Te ver feliz, te ver contente",
+      proposed_artist: "Caetano Veloso",
+      lyrics: null,
+      confidence: "baixa",
+      fonte: "reconhecimento pelo som",
+      conflito: {
+        titulo: "Viver Feliz",
+        artista: "Nilson Chaves",
+        confianca: "alta",
+      },
+    });
+
+    it("mostra os DOIS lados, cada um nomeado por quem o disse", () => {
+      renderReview([CONFLITO]);
+      const dialog = screen.getByRole("dialog", { name: "Completar dados" });
+      const texto = dialog.textContent ?? "";
+      // a etiqueta vem antes do som: é o que a pessoa reconhece
+      expect(texto.indexOf(LABEL_SUA_ETIQUETA_DIZ)).toBeGreaterThan(-1);
+      expect(texto.indexOf(LABEL_SUA_ETIQUETA_DIZ)).toBeLessThan(
+        texto.indexOf(LABEL_SOM_DIZ),
+      );
+      expect(
+        screen.getByText("Te ver feliz, te ver contente — Caetano Veloso"),
+      ).toBeInTheDocument();
+      expect(
+        screen.getByText("Viver Feliz — Nilson Chaves"),
+      ).toBeInTheDocument();
+      // e a confiança MOSTRADA é a do reconhecimento, não a da linha
+      expect(screen.getByText("confiança alta")).toBeInTheDocument();
+    });
+
+    // "Atual → proposto" diria que o app já escolheu um lado. Não escolheu:
+    // nada foi proposto, duas fontes discordam.
+    it("não usa a seta de proposta nem o selo de confiança da linha", () => {
+      renderReview([CONFLITO]);
+      expect(screen.queryByText("BAIXA")).not.toBeInTheDocument();
+      expect(screen.getByText("CONFLITO")).toBeInTheDocument();
+    });
+
+    it("nunca chega pré-marcada, e o rótulo diz o que se aceita", () => {
+      renderReview([CONFLITO]);
+      const caixa = screen.getByRole("checkbox", {
+        name: rotuloAceitarSom("Te ver feliz, te ver contente"),
+      });
+      expect(caixa).not.toBeChecked();
+      expect(caixa).toBeEnabled();
+    });
+
+    // Aceitar troca um título E um artista escritos por gente, com base numa
+    // identificação cuja taxa de falso positivo o projeto NÃO mediu. É a
+    // ação mais destrutiva da tela: ela não entra em gesto de massa, pela
+    // mesma razão da substituição de letra (DECISIONS #79).
+    it("'Marcar todas' NÃO aceita conflito nenhum", () => {
+      renderReview([CONFLITO, MEDIA]);
+      fireEvent.click(screen.getByRole("button", { name: "Marcar todas" }));
+      expect(
+        screen.getByRole("checkbox", {
+          name: rotuloAceitarSom("Te ver feliz, te ver contente"),
+        }),
+      ).not.toBeChecked();
+      expect(
+        screen.getByRole("button", { name: "Aplicar selecionadas (1)" }),
+      ).toBeEnabled();
+    });
+
+    it("aceitar manda o que o SOM disse, e letra nenhuma", async () => {
+      const enrichApply = vi.fn(async (aplicacoes: EnrichApply[]) =>
+        aplicacoes.map((a) => ok(song(a.song_id, a.title))),
+      );
+      setBackendForTests({ enrichApply } as unknown as Backend);
+      renderReview([CONFLITO]);
+
+      fireEvent.click(
+        screen.getByRole("checkbox", {
+          name: rotuloAceitarSom("Te ver feliz, te ver contente"),
+        }),
+      );
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Aplicar selecionadas (1)" }),
+        );
+      });
+      expect(enrichApply).toHaveBeenCalledWith([
+        {
+          song_id: 7,
+          title: "Viver Feliz",
+          artist: "Nilson Chaves",
+          lyrics: null,
+          add_temas: null,
+          current_title: "Te ver feliz, te ver contente",
+          current_artist: "Caetano Veloso",
+          fonte: "reconhecimento pelo som",
+        },
+      ]);
+    });
+
+    it("o aviso final conta a correção de nome vinda do som", async () => {
+      setBackendForTests({
+        enrichApply: vi.fn(async (aplicacoes: EnrichApply[]) =>
+          aplicacoes.map((a) => ok(song(a.song_id, a.title))),
+        ),
+      } as unknown as Backend);
+      renderReview([CONFLITO]);
+      fireEvent.click(
+        screen.getByRole("checkbox", {
+          name: rotuloAceitarSom("Te ver feliz, te ver contente"),
+        }),
+      );
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Aplicar selecionadas (1)" }),
+        );
+      });
+      // o proposto REPETE o atual nesta linha: contar pelo `proposed_*` diria
+      // "gravada, sem mudança no conteúdo" sobre uma troca de nome
+      expect(useToastStore.getState().toasts[0].message).toBe(
+        textoAplicado({
+          ganharamLetra: 0,
+          letraSubstituida: 0,
+          nomeCorrigido: 1,
+          gravadas: 1,
+        }),
+      );
+    });
+
+    it("o cabeçalho conta as divergências à parte das propostas", () => {
+      renderReview([CONFLITO, MEDIA]);
+      expect(
+        screen.getByText(
+          "1 proposta — 0 alta, 1 média, 0 baixa; e 1 em que o som discorda da etiqueta",
+        ),
+      ).toBeInTheDocument();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // V9 — ALTA que trocaria um nome escrito por gente não chega pré-marcada
+  // -------------------------------------------------------------------------
+  describe("proposta que trocaria um nome escrito por gente", () => {
+    const NOME_ESCRITO = proposal({
+      song_id: 8,
+      file_path: "/acervo/8.mp3",
+      current_title: "Ponto de Oxum",
+      current_artist: "Grupo do Terreiro",
+      proposed_title: "Ponto de Oxum (Ao Vivo)",
+      proposed_artist: "Grupo do Terreiro",
+      lyrics: null,
+      confidence: "alta",
+      substitui_nome_escrito: true,
+    });
+
+    it("ALTA sim, pré-marcada não — e a linha diz por quê", () => {
+      renderReview([NOME_ESCRITO, ALTA]);
+      // as duas são ALTA: o que difere é o padrão da marcação
+      expect(screen.getAllByText("ALTA")).toHaveLength(2);
+      expect(
+        screen.getByRole("checkbox", { name: /Ponto de Oxum/ }),
+      ).not.toBeChecked();
+      // a outra ALTA, que só preenche branco, continua pré-marcada
+      expect(screen.getByRole("checkbox", { name: /faixa 1/ })).toBeChecked();
+      expect(screen.getByText(AVISO_NOME_ESCRITO)).toBeInTheDocument();
+    });
+
+    // O que muda é só o PADRÃO: "Marcar todas" é ação explícita de quem leu a
+    // tela, e continua marcando tudo.
+    it("'Marcar todas' continua marcando esta linha", () => {
+      renderReview([NOME_ESCRITO]);
+      fireEvent.click(screen.getByRole("button", { name: "Marcar todas" }));
+      expect(
+        screen.getByRole("checkbox", { name: /Ponto de Oxum/ }),
+      ).toBeChecked();
+    });
+
+    it("preencher branco e limpar lixo de ripador continuam pré-marcáveis", () => {
+      renderReview([ALTA]);
+      expect(screen.getByRole("checkbox", { name: /faixa 1/ })).toBeChecked();
+      expect(screen.queryByText(AVISO_NOME_ESCRITO)).not.toBeInTheDocument();
+    });
+  });
+
   // O overlay é lido em notebook, em sala mal iluminada, por quem está
   // conduzindo uma reunião (DECISIONS #69/#76). O texto novo desta rodada — o
   // aviso de letra existente, o rótulo da substituição, a nota das linhas com
   // erro e o motivo do botão desabilitado — entra medido, ou não entra.
   it("todo texto do overlay passa em AA sobre o fundo em que aparece", () => {
-    renderReview([SOBRE_TRANSCRICAO, MEDIA, COM_ERRO]);
+    // as linhas NOVAS entram medidas, ou não entram (DECISIONS #69/#76): o
+    // conflito traz selo e rótulos próprios, e o aviso de nome escrito é
+    // texto secundário — que é justamente onde o contraste costuma cair
+    renderReview([
+      SOBRE_TRANSCRICAO,
+      MEDIA,
+      COM_ERRO,
+      proposal({
+        song_id: 7,
+        current_title: "Te ver feliz",
+        current_artist: "Caetano Veloso",
+        proposed_title: "Te ver feliz",
+        proposed_artist: "Caetano Veloso",
+        lyrics: null,
+        confidence: "baixa",
+        fonte: "reconhecimento pelo som",
+        conflito: {
+          titulo: "Viver Feliz",
+          artista: "Nilson Chaves",
+          confianca: "media",
+        },
+      }),
+      proposal({
+        song_id: 8,
+        current_title: "Ponto de Oxum",
+        proposed_title: "Ponto de Oxum (Ao Vivo)",
+        lyrics: null,
+        confidence: "alta",
+        substitui_nome_escrito: true,
+      }),
+    ]);
     const dialog = screen.getByRole("dialog", { name: "Completar dados" });
     const comCor = [...dialog.querySelectorAll<HTMLElement>("*")].filter((el) =>
       /text-\[#[0-9a-fA-F]{6}\]/.test(el.className),

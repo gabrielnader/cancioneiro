@@ -37,6 +37,20 @@ export const ORIGEM_TRANSCRICAO = "transcricao";
  */
 export const ORIGEM_VAGALUME = "vagalume";
 
+/**
+ * O TRABALHO que uma varredura do funil faz (PRD V9) — atravessa o IPC como
+ * texto minúsculo e sem acento, igual ao `enrich::Modo` do Rust.
+ *
+ * São dois trabalhos distintos, com custos distintos:
+ * - `completar`: só as músicas incompletas, funil inteiro. É o padrão, e o
+ *   padrão não muda — a ausência do campo no JSON também vale `completar`, de
+ *   modo que esquecer de mandá-lo nunca dispara a varredura cara por engano.
+ * - `conferencia`: TODAS as músicas disponíveis (inclusive as completas) e só
+ *   a etapa do som. É o único jeito de achar etiqueta ERRADA, que a varredura
+ *   de completude nunca alcança.
+ */
+export type Modo = "completar" | "conferencia";
+
 export interface SearchResult {
   song: Song;
   snippet: string | null;

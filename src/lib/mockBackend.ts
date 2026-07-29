@@ -1,10 +1,14 @@
 import type {
+  AcessorioDownload,
+  AcessorioInfo,
+  AcessorioProgresso,
   Backend,
   EnrichApply,
   EnrichApplyResult,
   EnrichProgress,
   EnrichProposal,
 } from "./api";
+import type { Modo } from "./types";
 import { isUnderFolder } from "./folderTree";
 import { HIGHLIGHT_END, HIGHLIGHT_START } from "./highlight";
 import type {
@@ -66,6 +70,33 @@ export interface MockBackend extends Backend {
   _vagalumeKeyRecusada: boolean;
   /** Popula a pasta /acervo com subpastas 1/ e 2/ para o E2E da árvore (V4 F11). */
   _seedFolderTree(): void;
+  /**
+   * O acessório desta "máquina" (V9). `estado` é o cache de verdade — ele
+   * persiste, como o arquivo sob o perfil do usuário: baixou uma vez, o app
+   * não pergunta de novo nem depois de reiniciar. O resto são botões de teste.
+   */
+  _acessorio: {
+    /** false = não publicamos binário para esta plataforma → lista vazia. */
+    publicado: boolean;
+    estado: AcessorioInfo["estado"];
+    /** Desfecho do próximo download; null = instala normalmente. */
+    erro: "soma" | "rede" | null;
+    /** Atraso por pedaço (0 = instantâneo). Só o E2E precisa ver a barra. */
+    atrasoMs: number;
+    /** Em quantos pedaços o download é emitido. */
+    pedacos: number;
+    /** false = servidor sem Content-Length → `total: null` nos eventos. */
+    anunciaTotal: boolean;
+  };
+  /**
+   * Ensina ao "som" o que ele responde para um arquivo (V9): é o AcoustID do
+   * mock. Sem isto o reconhecimento não devolve nada — que é o desfecho da
+   * maioria das gravações reais.
+   */
+  _ensinarSom(
+    filePath: string,
+    diz: { titulo: string; artista: string; confianca: "alta" | "media" },
+  ): void;
 }
 
 const STORAGE_KEY = "cancioneiro-mock-db";
@@ -86,6 +117,13 @@ interface PlaylistItemRecord {
   song_id: number;
 }
 
+/** O que o "som" responde sobre um arquivo (o AcoustID do mock). */
+interface SomDiz {
+  titulo: string;
+  artista: string;
+  confianca: "alta" | "media";
+}
+
 interface DbState {
   folders: Folder[];
   songs: SongRecord[];
@@ -96,6 +134,14 @@ interface DbState {
   nextSongId: number;
   nextPlaylistId: number;
   nextItemId: number;
+  /**
+   * Cache do acessório (V9). Persistido junto do resto porque é isso que ele
+   * é no produto: um arquivo sob o perfil do usuário, que sobrevive ao
+   * reinício — "baixou uma vez, não pergunta de novo".
+   */
+  acessorioEstado: AcessorioInfo["estado"];
+  /** O que o som responde, por arquivo. Permanente, como o próprio áudio. */
+  somDiz: Record<string, SomDiz>;
 }
 
 function freshState(): DbState {
@@ -109,6 +155,8 @@ function freshState(): DbState {
     nextSongId: 1,
     nextPlaylistId: 1,
     nextItemId: 1,
+    acessorioEstado: "ausente",
+    somDiz: {},
   };
 }
 
@@ -283,10 +331,48 @@ function arquivoParaBusca(song: SongRecord): string {
  */
 const ETAPA_PREPARANDO = "preparando";
 const FONTE_ARQUIVO = "nome do arquivo";
+/** Etapa 2 (V9): a identidade veio do SOM, não de etiqueta nem de base de letra. */
+const FONTE_IMPRESSAO_DIGITAL = "reconhecimento pelo som";
 const FONTE_LRCLIB = "LRCLIB";
 const FONTE_VAGALUME = "Vagalume";
 /** Fonte das linhas que existem para INFORMAR a falha (enrich::FONTE_ERRO). */
 const FONTE_ERRO = "erro";
+
+/**
+ * Teto de confiança da letra achada com um nome que veio do SOM
+ * (`enrich::TETO_COM_IDENTIDADE_DO_SOM`): o AcoustID casou por duração e o
+ * LRCLIB confirmou pela MESMA duração — é a mesma conta feita duas vezes, não
+ * duas provas. ALTA aqui chegaria pré-marcada sem prova independente.
+ */
+const TETO_COM_IDENTIDADE_DO_SOM = "media" as const;
+
+// ---------------------------------------------------------------------------
+// Acessórios (V9) — o catálogo desta "máquina" e as frases do backend
+// ---------------------------------------------------------------------------
+
+/**
+ * Uma entrada real do catálogo do Rust (`acessorios::CATALOGO`, linux-x86_64):
+ * nome, arquivo, tamanho e origem batem com o que o app publica de verdade.
+ */
+const ACESSORIO_FPCALC = {
+  nome: "fpcalc" as const,
+  para_que_serve: "reconhecer a música pelo som",
+  arquivo: "fpcalc-linux-x86_64",
+  tamanho_bytes: 5_538_312,
+  origem:
+    "https://github.com/gabrielnader/cancioneiro/releases/download/acessorios-v1/fpcalc-linux-x86_64",
+};
+
+// As frases são as do Rust, LETRA POR LETRA: elas chegam prontas na tela e a
+// UI as mostra como vieram. Mock que inventa a própria mensagem certifica um
+// contrato que não existe (DECISIONS #88).
+const ERRO_SOMA_NAO_CONFERE =
+  "o arquivo baixado não confere com o esperado — foi descartado, e esta etapa fica desligada";
+const ERRO_DOWNLOAD_INTERROMPIDO =
+  "o download foi interrompido antes do fim — nada foi instalado";
+const ERRO_ACESSORIO_INDISPONIVEL =
+  "este acessório ainda não está disponível nesta versão do aplicativo";
+const ERRO_ACESSORIO_DESCONHECIDO = "não há este acessório para este computador";
 
 /**
  * Recusa do apply quando a gravação trocaria uma letra que já existe sem o
@@ -384,26 +470,65 @@ const LRCLIB_CATALOGO: Record<
  * o último.
  */
 function etapaDaFonte(fonte: string): string {
+  if (fonte === FONTE_IMPRESSAO_DIGITAL) return "reconhecendo pelo som";
   if (fonte === FONTE_LRCLIB) return "procurando no LRCLIB";
   if (fonte === FONTE_VAGALUME) return "procurando no Vagalume";
   return "lendo etiquetas e nome do arquivo";
 }
 
+/**
+ * Valor EFETIVO de um campo (`enrich::campo_efetivo`): espaços aparados e
+ * placeholder tratado como VAZIO, dos DOIS lados da comparação. Sem isso,
+ * "AudioTrack 17" contra o palpite "Faixa" passava por mudança.
+ */
+function campoEfetivo(texto: string | null | undefined): string {
+  return tagReal(texto ?? "");
+}
+
 function propostaNoOp(p: EnrichProposal): boolean {
   return (
     p.error === null &&
+    // a linha de conflito existe JUSTAMENTE porque nada muda: nela o proposto
+    // repete o atual, e é a divergência que precisa ser vista (V9)
+    p.conflito === null &&
     p.lyrics === null &&
-    p.proposed_title === p.current_title &&
-    p.proposed_artist === p.current_artist
+    campoEfetivo(p.proposed_title) === campoEfetivo(p.current_title) &&
+    campoEfetivo(p.proposed_artist) === campoEfetivo(p.current_artist)
   );
+}
+
+/**
+ * O som CONTRADIZ esta etiqueta? Porte grosso do `fingerprint::discorda`: os
+ * dois lados não-vazios, chaves diferentes e nenhuma contida na outra
+ * ("Oxum" dentro de "Oxum (Ao Vivo)" é a mesma música). O limiar fino de
+ * grafia mora no Rust e é dele — aqui as respostas do som são ensinadas à mão
+ * pelo teste, então a decisão é sempre entre valores escolhidos de propósito.
+ */
+function discordaDoSom(atual: string, identificado: string): boolean {
+  const a = chaveDeTag(atual);
+  const b = chaveDeTag(identificado);
+  if (a === "" || b === "" || a === b) return false;
+  return !a.includes(b) && !b.includes(a);
 }
 
 export function createMockBackend(): MockBackend {
   let state = loadState();
   const progressListeners = new Set<(p: ScanProgress) => void>();
   const enrichProgressListeners = new Set<(p: EnrichProgress) => void>();
+  const acessorioProgressListeners = new Set<(p: AcessorioProgresso) => void>();
   /** Varreduras que pediram cancelamento e ainda não pararam (M4). */
   const enrichCancelled = new Set<string>();
+  /** Downloads de acessório que pediram cancelamento (mesma disciplina). */
+  const downloadsCancelados = new Set<string>();
+
+  /** O acessório desta máquina, como a tela precisa vê-lo. */
+  function infoDoAcessorio(): AcessorioInfo {
+    return { ...ACESSORIO_FPCALC, estado: state.acessorioEstado };
+  }
+
+  function emitirProgressoDoAcessorio(p: AcessorioProgresso): void {
+    acessorioProgressListeners.forEach((cb) => cb(p));
+  }
 
   function save(): void {
     try {
@@ -469,14 +594,28 @@ export function createMockBackend(): MockBackend {
    *   letra ainda pode (e deve) ter título e artista corretos" (PRD V8), e era
    *   justamente essa pasta que o app declarava completa com o botão cinza.
    */
-  function candidataDoFunil(song: SongRecord, folderPrefix: string): boolean {
+  function candidataDoFunil(
+    song: SongRecord,
+    folderPrefix: string,
+    modo: Modo,
+  ): boolean {
     if (!song.available) return false;
     // prefixo casa na FRONTEIRA de separador ("/m/1" não casa "/m/10/a.mp3"),
     // como isUnderFolder e o backend Rust
     if (folderPrefix && !isUnderFolder(song.file_path, folderPrefix)) return false;
+    // V9 — na conferência o filtro NÃO se aplica: o trabalho ali é perguntar
+    // ao som se a etiqueta está certa, e a música que mais precisa dessa
+    // pergunta é justamente a que PARECE completa e está errada. Um `if` no
+    // mesmo lugar, não uma segunda função (a regra de quem é candidata é UMA).
+    if (modo === "conferencia") return true;
     const nomesProntos = tagReal(song.title) !== "" && tagReal(song.artist) !== "";
     const completa = nomesProntos && (song.instrumental === true || song.has_lyrics);
     return !completa;
+  }
+
+  /** A etapa 2 existe nesta máquina? Só com o acessório conferido e pronto. */
+  function somAtivo(): boolean {
+    return backend._acessorio.publicado && state.acessorioEstado === "pronto";
   }
 
   /**
@@ -495,6 +634,61 @@ export function createMockBackend(): MockBackend {
     digitado?: { title?: string | null; artist?: string | null },
     /** Estado da VARREDURA (não da música): a chave já foi recusada? */
     estado: { chaveRecusada: boolean } = { chaveRecusada: false },
+    modo: Modo = "completar",
+  ): EnrichProposal {
+    const proposta = passarPeloFunil(song, vagalumeKey, digitado, estado, modo);
+    // Num lugar SÓ, na saída — como no Rust: o funil tem vários pontos de
+    // retorno, e marcar em cada um é o tipo de coisa que fica correta hoje e
+    // silenciosamente errada na próxima etapa nova. O modo de falhar aqui é
+    // pré-marcar a troca de um nome curado (V9).
+    proposta.substitui_nome_escrito = substituiNomeEscrito(song, digitado, proposta);
+    return proposta;
+  }
+
+  /**
+   * Esta proposta trocaria um título ou artista ESCRITO POR GENTE? (V9)
+   *
+   * Compara por valor EFETIVO dos dois lados: " Oxum " não é outro nome que
+   * "Oxum", placeholder de ripador vale vazio, e o título que o INDEXADOR
+   * copiou do nome do arquivo não é etiqueta de ninguém (DECISIONS #91).
+   * Proposta vazia num campo também não conta: o apply preserva o valor atual
+   * nesse caso, e avisar de uma substituição que não vai acontecer é ruído.
+   */
+  function substituiNomeEscrito(
+    song: SongRecord,
+    digitado: { title?: string | null; artist?: string | null } | undefined,
+    p: EnrichProposal,
+  ): boolean {
+    const trocaria = (escrito: string, proposto: string | null): boolean => {
+      const a = campoEfetivo(escrito);
+      const b = campoEfetivo(proposto);
+      return a !== "" && b !== "" && a !== b;
+    };
+    return (
+      trocaria(tituloEscrito(song, digitado?.title), p.proposed_title) ||
+      trocaria(tagReal(digitado?.artist ?? song.artist), p.proposed_artist)
+    );
+  }
+
+  /**
+   * O título que uma PESSOA escreveu: a etiqueta real, menos a invenção do
+   * indexador (que copia o nome do arquivo quando o MP3 não tem TIT2).
+   */
+  function tituloEscrito(
+    song: SongRecord,
+    digitado?: string | null,
+  ): string {
+    const bruto = nomeArquivo(song).replace(/\.[^.]+$/, "");
+    if (chaveDeTag(bruto) === chaveDeTag(song.title)) return "";
+    return tagReal(digitado ?? song.title);
+  }
+
+  function passarPeloFunil(
+    song: SongRecord,
+    vagalumeKey: string | null,
+    digitado: { title?: string | null; artist?: string | null } | undefined,
+    estado: { chaveRecusada: boolean },
+    modo: Modo,
   ): EnrichProposal {
     const tituloTag = tagReal(digitado?.title ?? song.title);
     const artistaTag = tagReal(digitado?.artist ?? song.artist);
@@ -522,8 +716,7 @@ export function createMockBackend(): MockBackend {
       // (mesma noção do arquivoParaBusca daqui de cima). Tratá-lo como tag
       // real faria a etapa 1 propor exatamente o que já está lá — e é só por
       // isso que uma música sem tag nenhuma tem o que receber aqui.
-      const tituloEhOArquivo = chaveDeTag(bruto) === chaveDeTag(song.title);
-      const tituloDeTag = tituloEhOArquivo ? "" : tituloTag;
+      const tituloDeTag = tituloEscrito(song, digitado?.title);
       return {
         ...base,
         proposed_title: tituloDeTag || guessTitle || song.title,
@@ -531,6 +724,8 @@ export function createMockBackend(): MockBackend {
         lyrics: null,
         confidence: "baixa",
         fonte: error !== null ? FONTE_ERRO : FONTE_ARQUIVO,
+        conflito: null,
+        substitui_nome_escrito: false,
         error,
       };
     }
@@ -540,63 +735,142 @@ export function createMockBackend(): MockBackend {
       return propostaDoArquivo(`arquivo não encontrado: ${song.file_path}`);
     }
 
-    // V8/F17 — as etapas 2 e 3 são etapas de LETRA e param aqui para música
-    // sem voz. NÃO é filtro de completude (o instrumental é candidato e pode
-    // ganhar nome): é integridade. Um instrumental com nomes certos casa com
-    // a versão CANTADA no LRCLIB, sai ALTA e chega PRÉ-MARCADA (DECISIONS
-    // #49) — um clique gravaria a letra de outra gravação no arquivo.
-    if (song.instrumental === true) {
-      return propostaDoArquivo(null);
+    let erro: string | null = null;
+    /** O que o som resolveu, já filtrado pelo conflito (V9). */
+    let identidade: SomDiz | null = null;
+
+    // --- etapa 2: IDENTIDADE pelo som (V9) --------------------------------
+    //
+    // Vem ANTES das bases de letra porque não devolve letra nenhuma: devolve
+    // identidade, que é ENTRADA das outras etapas. Roda também para
+    // instrumental — dá título e artista sem encostar em letra.
+    if (somAtivo()) {
+      const diz = state.somDiz[song.file_path];
+      if (diz) {
+        if (
+          discordaDoSom(tituloEscrito(song, digitado?.title), diz.titulo) ||
+          discordaDoSom(artistaTag, diz.artista)
+        ) {
+          // O som contradiz etiqueta REAL. A linha existe para INFORMAR, e o
+          // funil PARA aqui: procurar letra sob um nome que o som acabou de
+          // contradizer é o caminho mais curto para gravar a letra da música
+          // errada (DECISIONS #63, com multiplicador).
+          const p = propostaDoArquivo(null);
+          p.fonte = FONTE_IMPRESSAO_DIGITAL;
+          p.conflito = {
+            titulo: diz.titulo,
+            artista: diz.artista,
+            confianca: diz.confianca,
+          };
+          return p;
+        }
+        // regra da V3.1: só preenche campo VAZIO — etiqueta real é preservada
+        // em qualquer confiança (DECISIONS #53)
+        identidade = {
+          titulo: tituloEscrito(song, digitado?.title) || diz.titulo,
+          artista: artistaTag || diz.artista,
+          confianca: diz.confianca,
+        };
+      }
     }
+
+    /** O que sobrou das etapas 1 e 2, quando nenhuma etapa de letra roda. */
+    function propostaDaIdentidade(): EnrichProposal {
+      const p = propostaDoArquivo(erro);
+      // erro tem precedência: a linha de erro É a informação, e anunciar uma
+      // identificação ao lado de "não deu" confundiria as duas coisas
+      if (p.error !== null || identidade === null) return p;
+      const mudou =
+        campoEfetivo(identidade.titulo) !== campoEfetivo(p.current_title) ||
+        campoEfetivo(identidade.artista) !== campoEfetivo(p.current_artist);
+      if (mudou) {
+        p.proposed_title = identidade.titulo;
+        p.proposed_artist = identidade.artista || null;
+        // aqui a confiança do som é segura: esta proposta aplica NOMES, em
+        // campos que estavam vazios, sem tocar em letra nenhuma
+        p.confidence = identidade.confianca;
+        p.fonte = FONTE_IMPRESSAO_DIGITAL;
+      }
+      return p;
+    }
+
+    // A conferência é UM trabalho — perguntar ao som —, e termina aqui.
+    if (modo === "conferencia") return propostaDaIdentidade();
+
+    // V8/F17 — as etapas de LETRA param aqui para música sem voz. NÃO é
+    // filtro de completude (o instrumental é candidato e pode ganhar nome):
+    // é integridade. Um instrumental com nomes certos casa com a versão
+    // CANTADA no LRCLIB, sai ALTA e chega PRÉ-MARCADA (DECISIONS #49) — um
+    // clique gravaria a letra de outra gravação no arquivo.
+    if (song.instrumental === true) return propostaDaIdentidade();
 
     // sem rede: o backend real NUNCA rejeita — o erro vem POR MÚSICA
     // na proposta e a linha fica desabilitada (DECISIONS #47)
     if (backend._offline) {
-      return propostaDoArquivo("sem conexão");
+      erro = "sem conexão";
+      return propostaDaIdentidade();
     }
 
-    // --- etapa 2: LRCLIB (título + duração conferida) ----------------------
-    const hit = LRCLIB_CATALOGO[chaveDeTag(tituloTag)];
+    // Com identidade vinda do som, as etapas de letra partem DELA: um palpite
+    // verdadeiro em vez da cascata local de até sete (PRD V9 — também sai
+    // mais barato). Os NOMES propostos continuam sendo os da identidade: a
+    // autoridade sobre a identidade é a impressão digital.
+    const tituloBusca = identidade ? identidade.titulo : tituloTag;
+    const artistaBusca = identidade ? identidade.artista : artistaTag;
+
+    // --- etapa 3: LRCLIB (título + duração conferida) ----------------------
+    const hit = LRCLIB_CATALOGO[chaveDeTag(tituloBusca)];
     if (hit) {
       return {
         ...base,
-        proposed_title: hit.titulo,
-        proposed_artist: hit.artista,
+        proposed_title: identidade ? identidade.titulo : hit.titulo,
+        proposed_artist: identidade ? identidade.artista : hit.artista,
         lyrics: FIXTURE_LYRICS,
-        confidence: hit.alta ? "alta" : "media",
+        // teto de MÉDIA quando o nome veio do som: a duração conferiu duas
+        // vezes a MESMA coisa, não duas coisas independentes
+        confidence: identidade
+          ? TETO_COM_IDENTIDADE_DO_SOM
+          : hit.alta
+            ? "alta"
+            : "media",
         fonte: FONTE_LRCLIB,
+        conflito: null,
+        substitui_nome_escrito: false,
         error: null,
       };
     }
 
-    // --- etapa 3: Vagalume, só com chave E com as DUAS tags reais ----------
+    // --- etapa 4: Vagalume, só com chave E com as DUAS tags reais ----------
     //
     // A regra é a do enrich.rs: o Vagalume não tem duração, e a igualdade de
     // palavras dos dois lados é a única prova que existe — ela precisa de um
     // pedido que já signifique alguma coisa. Palpite de nome de arquivo não é
     // isso. E o caminho NUNCA propõe nome novo: a letra é a mudança inteira
     // (DECISIONS #63 — "Ponto de Ogum" dentro de "Ponto de Oxum").
-    if (vagalumeKey && tituloTag && artistaTag && !estado.chaveRecusada) {
+    if (vagalumeKey && tituloBusca && artistaBusca && !estado.chaveRecusada) {
       if (backend._vagalumeKeyRecusada) {
         // veredito sobre a varredura inteira: registra e desliga a etapa —
         // repetir o mesmo aviso em 95 linhas não informa ninguém, e insistir
         // seria bater num serviço que já disse não
         estado.chaveRecusada = true;
-        return propostaDoArquivo(ERRO_CHAVE_RECUSADA);
+        erro = ERRO_CHAVE_RECUSADA;
+        return propostaDaIdentidade();
       }
       return {
         ...base,
-        proposed_title: tituloTag,
-        proposed_artist: artistaTag,
+        proposed_title: tituloBusca,
+        proposed_artist: artistaBusca,
         lyrics: FIXTURE_LYRICS,
         confidence: "media",
         fonte: FONTE_VAGALUME,
+        conflito: null,
+        substitui_nome_escrito: false,
         error: null,
       };
     }
 
-    // resto: só o palpite da etapa 1
-    return propostaDoArquivo(null);
+    // resto: só o que as etapas 1 e 2 acharam
+    return propostaDaIdentidade();
   }
 
   function songWords(song: SongRecord): string[] {
@@ -610,6 +884,22 @@ export function createMockBackend(): MockBackend {
     _offline: false,
     _enrichDelayMs: 0,
     _vagalumeKeyRecusada: false,
+    _acessorio: {
+      publicado: true,
+      erro: null,
+      atrasoMs: 0,
+      pedacos: 4,
+      anunciaTotal: true,
+      // `estado` é o CACHE, e o cache é persistido: baixou uma vez, o app não
+      // pergunta de novo nem depois de reiniciar (regra 3 do PRD V9).
+      get estado(): AcessorioInfo["estado"] {
+        return state.acessorioEstado;
+      },
+      set estado(v: AcessorioInfo["estado"]) {
+        state.acessorioEstado = v;
+        save();
+      },
+    },
 
     async addFolder(path: string): Promise<ScanResult> {
       let folder = state.folders.find((f) => f.path === path);
@@ -891,12 +1181,15 @@ export function createMockBackend(): MockBackend {
       folderPrefix: string,
       scanId: string,
       vagalumeKey: string | null = null,
+      // ausente vale "completar", como o Modo::default do Rust: esquecer o
+      // campo nunca dispara a varredura que lê o áudio de todas as músicas
+      modo: Modo = "completar",
     ): Promise<EnrichProposal[]> {
       enrichCancelled.delete(scanId);
       // candidatas pré-contadas ANTES do trabalho (como o scan_all): o total
       // do progresso não muda no meio da varredura
       const candidatas = state.songs.filter((song) =>
-        candidataDoFunil(song, folderPrefix),
+        candidataDoFunil(song, folderPrefix, modo),
       );
 
       const total = candidatas.length;
@@ -918,7 +1211,13 @@ export function createMockBackend(): MockBackend {
           enrichCancelled.delete(scanId);
           return [];
         }
-        const proposta = propostaDoFunil(song, vagalumeKey, undefined, estado);
+        const proposta = propostaDoFunil(
+          song,
+          vagalumeKey,
+          undefined,
+          estado,
+          modo,
+        );
         proposals.push(proposta);
         // emitido DEPOIS de cada música, com o nome da que acabou de sair e a
         // etapa em que ela foi resolvida (mesmo ponto do on_progress do Rust)
@@ -935,11 +1234,16 @@ export function createMockBackend(): MockBackend {
       return proposals.filter((p) => !propostaNoOp(p));
     },
 
-    async enrichCount(folderPrefix: string): Promise<number> {
+    async enrichCount(
+      folderPrefix: string,
+      modo: Modo = "completar",
+    ): Promise<number> {
       // MESMA função que a varredura usa (ALTO-2): é o ponto inteiro deste
-      // comando existir — a contagem não pode discordar do que vai rodar.
-      return state.songs.filter((song) => candidataDoFunil(song, folderPrefix))
-        .length;
+      // comando existir — a contagem não pode discordar do que vai rodar. E
+      // isso vale por MODO: a conferência olha outra população.
+      return state.songs.filter((song) =>
+        candidataDoFunil(song, folderPrefix, modo),
+      ).length;
     },
 
     async enrichSongScan(
@@ -1083,6 +1387,77 @@ export function createMockBackend(): MockBackend {
       };
     },
 
+    // -----------------------------------------------------------------------
+    // Acessórios (V9): nada baixa sozinho, e o que não confere não é instalado
+    // -----------------------------------------------------------------------
+
+    async acessoriosEstado(): Promise<AcessorioInfo[]> {
+      // lista VAZIA = não publicamos binário para esta plataforma. É outra
+      // coisa que "ausente", e a tela não pode oferecer download.
+      if (!backend._acessorio.publicado) return [];
+      return [infoDoAcessorio()];
+    },
+
+    async acessorioBaixar(
+      nome: string,
+      downloadId: string,
+    ): Promise<AcessorioDownload> {
+      if (!backend._acessorio.publicado || nome !== ACESSORIO_FPCALC.nome) {
+        throw new Error(ERRO_ACESSORIO_DESCONHECIDO);
+      }
+      if (state.acessorioEstado === "indisponivel") {
+        // sem a chave do AcoustID compilada nesta build, o acessório não teria
+        // o que fazer: 5 MB baixados para nada é pior que não oferecer
+        throw new Error(ERRO_ACESSORIO_INDISPONIVEL);
+      }
+      downloadsCancelados.delete(downloadId);
+      const { pedacos, atrasoMs, anunciaTotal } = backend._acessorio;
+      const tamanho = ACESSORIO_FPCALC.tamanho_bytes;
+      const total = anunciaTotal ? tamanho : null;
+      for (let i = 1; i <= Math.max(1, pedacos); i++) {
+        if (atrasoMs > 0) {
+          await new Promise((r) => setTimeout(r, atrasoMs));
+        }
+        // cancelamento verificado DENTRO do download, não só entre arquivos:
+        // são 5 MB hoje e 180 MB na versão seguinte
+        if (downloadsCancelados.has(downloadId)) {
+          downloadsCancelados.delete(downloadId);
+          return { cancelado: true, acessorio: infoDoAcessorio() };
+        }
+        emitirProgressoDoAcessorio({
+          nome: ACESSORIO_FPCALC.nome,
+          baixados: Math.round((tamanho * i) / Math.max(1, pedacos)),
+          total,
+          download_id: downloadId,
+        });
+      }
+      // O cache só recebe arquivo CONFERIDO: falha nenhuma deixa binário pela
+      // metade em uso — o estado continua exatamente como estava.
+      if (backend._acessorio.erro === "soma") {
+        throw new Error(ERRO_SOMA_NAO_CONFERE);
+      }
+      if (backend._acessorio.erro === "rede") {
+        throw new Error(ERRO_DOWNLOAD_INTERROMPIDO);
+      }
+      state.acessorioEstado = "pronto";
+      save();
+      return { cancelado: false, acessorio: infoDoAcessorio() };
+    },
+
+    async acessorioCancelar(downloadId: string): Promise<void> {
+      // id desconhecido é no-op silencioso, igual ao cancelamento de varredura
+      downloadsCancelados.add(downloadId);
+    },
+
+    async onAcessorioProgresso(
+      cb: (p: AcessorioProgresso) => void,
+    ): Promise<() => void> {
+      acessorioProgressListeners.add(cb);
+      return () => {
+        acessorioProgressListeners.delete(cb);
+      };
+    },
+
     _seedSongs(count: number): void {
       let folder = state.folders.find((f) => f.path === "/musicas/seed");
       if (!folder) {
@@ -1146,6 +1521,11 @@ export function createMockBackend(): MockBackend {
       const song = state.songs.find((s) => s.file_path === filePath);
       if (!song) return;
       song.letra_origem = ORIGEM_TRANSCRICAO;
+      save();
+    },
+
+    _ensinarSom(filePath: string, diz: SomDiz): void {
+      state.somDiz[filePath] = diz;
       save();
     },
 

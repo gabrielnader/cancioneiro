@@ -25,6 +25,9 @@ function proposal(overrides: Partial<EnrichProposal> = {}): EnrichProposal {
     // has_lyrics + lyrics que diz se a aplicação DESTRUIRIA uma letra)
     has_lyrics: false,
     letra_origem: null,
+    // V9 — a proposta comum não é conflito e não troca nome escrito por gente
+    conflito: null,
+    substitui_nome_escrito: false,
     error: null,
     ...overrides,
   };
@@ -42,6 +45,7 @@ describe("enrichStore (V5 — F13)", () => {
       scannedTotal: 0,
       applyErrors: {},
       scanInFlight: false,
+      modo: "completar",
     });
     useToastStore.setState({ toasts: [] });
     setBackendForTests(null);
@@ -58,10 +62,12 @@ describe("enrichStore (V5 — F13)", () => {
     await pending;
 
     // sem chave do Vagalume configurada, o parâmetro vai como null
+    // V9 — o modo viaja com a varredura: o padrão é o trabalho barato
     expect(enrichFolderScan).toHaveBeenCalledWith(
       "/acervo/1",
       expect.any(String),
       null,
+      "completar",
     );
     expect(useEnrichStore.getState().status).toBe("review");
     expect(useEnrichStore.getState().proposals).toEqual(proposals);
@@ -80,8 +86,32 @@ describe("enrichStore (V5 — F13)", () => {
       "",
       expect.any(String),
       "chave-da-pessoa",
+      "completar",
     );
     useUiStore.getState().setVagalumeApiKey("");
+  });
+
+  // V9 — a conferência é OUTRO trabalho, disparado de propósito. O store
+  // guarda qual deles rodou: o desfecho vazio de uma conferência não pode ser
+  // narrado como o de uma busca de dados ("conferimos as N incompletas").
+  it("startScan leva o modo pedido, e o desfecho vazio fala a língua dele", async () => {
+    const enrichFolderScan = vi.fn(async () => []);
+    setBackendForTests({ enrichFolderScan } as unknown as Backend);
+
+    const pending = useEnrichStore.getState().startScan("", "conferencia");
+    expect(useEnrichStore.getState().modo).toBe("conferencia");
+    useEnrichStore.getState().hideOverlay();
+    await pending;
+
+    expect(enrichFolderScan).toHaveBeenCalledWith(
+      "",
+      expect.any(String),
+      null,
+      "conferencia",
+    );
+    expect(useToastStore.getState().toasts[0].message).toBe(
+      textoSemPropostas(null, "conferencia"),
+    );
   });
 
   it("bloqueia disparo duplo enquanto a varredura está em andamento", async () => {
@@ -410,7 +440,7 @@ describe("enrichStore (V5 — F13)", () => {
 
       expect(useEnrichStore.getState().scannedTotal).toBeNull();
       expect(useToastStore.getState().toasts[0].message).toBe(
-        textoSemPropostas(null),
+        textoSemPropostas(null, "completar"),
       );
       expect(useEnrichStore.getState().status).toBe("idle");
       expect(useEnrichStore.getState().overlayOpen).toBe(false);
@@ -446,7 +476,7 @@ describe("enrichStore (V5 — F13)", () => {
       await pending;
 
       expect(useToastStore.getState().toasts[0].message).toBe(
-        textoSemPropostas(81),
+        textoSemPropostas(81, "completar"),
       );
       expect(useEnrichStore.getState().status).toBe("idle");
     });
@@ -478,7 +508,7 @@ describe("enrichStore (V5 — F13)", () => {
       await pending;
 
       expect(useToastStore.getState().toasts[0].message).toBe(
-        textoSemPropostas(1),
+        textoSemPropostas(1, "completar"),
       );
     });
 

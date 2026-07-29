@@ -1,5 +1,6 @@
 import type {
   Folder,
+  Modo,
   Playlist,
   PlaylistItem,
   ScanProgress,
@@ -7,6 +8,18 @@ import type {
   SearchResult,
   Song,
 } from "./types";
+
+/**
+ * O outro lado de uma divergência (V9): o que o SOM diz que esta música é.
+ *
+ * `confianca` é a do RECONHECIMENTO acústico, não a da linha — a linha é
+ * sempre "baixa", justamente para nunca chegar pré-marcada.
+ */
+export interface Conflito {
+  titulo: string;
+  artista: string;
+  confianca: "alta" | "media";
+}
 
 /**
  * Proposta de enriquecimento em lote (F13 — PRD V5), espelhando o struct
@@ -42,6 +55,31 @@ export interface EnrichProposal {
    * conferida ou de um palpite de nome de arquivo.
    */
   fonte: string;
+  /**
+   * O SOM discorda de uma etiqueta REAL do arquivo (V9). Preenchido, a linha
+   * existe para INFORMAR: `proposed_*` repete o que já está lá, `confidence` é
+   * sempre "baixa" e nenhuma etapa de letra chegou a rodar. A UI mostra os
+   * DOIS lados e a pessoa decide — aceitar o som volta pelo `enrich_apply`
+   * como qualquer outra edição, com `title`/`artist` vindos daqui.
+   */
+  conflito: Conflito | null;
+  /**
+   * Aceitar esta linha trocaria um título ou artista que uma PESSOA escreveu
+   * (V9). Não é erro e não bloqueia nada — o `apply` não recusa: é informação
+   * para a pré-marcação.
+   *
+   * É a DECISIONS #79 do lado das etiquetas. O LRCLIB devolve a grafia
+   * oficial, "Ponto de Oxum" volta como "Ponto de Oxum (Ao Vivo)", a duração
+   * bate, portanto ALTA, portanto pré-marcada — e um clique em "Aplicar
+   * selecionadas" apagaria a curadoria de quem digitou aquilo à mão. Preencher
+   * campo vazio, trocar "Faixa 03" e corrigir o título que o indexador copiou
+   * do nome do arquivo (DECISIONS #91) NÃO disparam este campo: continuam
+   * pré-marcáveis, que é para isso que a varredura existe.
+   *
+   * Ortogonal ao `conflito`: a linha de conflito não propõe troca nenhuma e
+   * sai daqui com `false`.
+   */
+  substitui_nome_escrito: boolean;
   /** Erro por música (ex.: "sem conexão") — a linha fica desabilitada. */
   error: string | null;
 }
@@ -121,6 +159,63 @@ export interface EnrichApplyResult {
   error: string | null;
 }
 
+// ---------------------------------------------------------------------------
+// Acessórios (PRD V9 — F18 fase 2): binários que não cabem no instalador
+// ---------------------------------------------------------------------------
+
+/**
+ * Um acessório como a tela precisa vê-lo: tudo que a regra 1 do PRD V9 manda
+ * dizer ANTES de baixar ("o que vai baixar, quanto ocupa"), mais o estado.
+ */
+export interface AcessorioInfo {
+  /** Identidade estável, e o que `acessorioBaixar` recebe. */
+  nome: "fpcalc";
+  /**
+   * Para que serve, em pt-BR e PRONTO PARA EXIBIR. Vem do backend de propósito:
+   * quem cura não sabe o que é "impressão digital acústica", e a frase que
+   * explica isso não pode ficar duplicada em duas linguagens.
+   */
+  para_que_serve: string;
+  /** Nome do arquivo, igual no lançamento e no cache. */
+  arquivo: string;
+  tamanho_bytes: number;
+  /**
+   * - "ausente": estado normal de quem ainda não baixou;
+   * - "pronto": conferido pelo SHA-256 — só aqui a etapa do som existe;
+   * - "corrompido": está no cache e a soma não bate (oferece baixar de novo);
+   * - "indisponivel": não tem uso nesta build — NÃO oferecer download.
+   */
+  estado: "ausente" | "pronto" | "corrompido" | "indisponivel";
+  /** De onde ele vem — a "origem só para explicar na tela" do PRD V9. */
+  origem: string;
+}
+
+/**
+ * Desfecho de `acessorioBaixar`. `cancelado` é um CAMPO, e não algo a deduzir:
+ * cancelar e falhar terminam os dois com o acessório ausente, e a tela precisa
+ * saber qual dos dois aconteceu sem adivinhar.
+ */
+export interface AcessorioDownload {
+  cancelado: boolean;
+  acessorio: AcessorioInfo;
+}
+
+/** Progresso do download (evento Tauri `acessorio:progresso`). */
+export interface AcessorioProgresso {
+  nome: string;
+  baixados: number;
+  /**
+   * `null` quando o servidor não anunciou o tamanho. NÃO é 0: "não sabemos" é
+   * um estado, e o zero viraria uma barra parada em 0% (DECISIONS #86).
+   */
+  total: number | null;
+  /**
+   * Download que emitiu o evento. A UI DESCARTA o que não for o seu — mesma
+   * disciplina do `scan_id` do funil, e pelo mesmo motivo (M4).
+   */
+  download_id: string;
+}
+
 /**
  * Camada de acesso ao backend. Em produção fala com os comandos Tauri via
  * invoke; fora do Tauri (dev no navegador / E2E Playwright) usa o backend
@@ -183,6 +278,11 @@ export interface Backend {
     folderPrefix: string,
     scanId: string,
     vagalumeKey: string | null,
+    /**
+     * O TRABALHO desta varredura (V9). Ausente = "completar", o barato: o
+     * padrão nunca é a varredura que lê o áudio de todas as músicas.
+     */
+    modo?: Modo,
   ): Promise<EnrichProposal[]>;
   /**
    * Quantas músicas o `enrichFolderScan` consultaria sob `folderPrefix` — a
@@ -193,7 +293,7 @@ export interface Backend {
    * três casos e chegava a zerar a contagem, desabilitando o disparo e
    * afirmando que a pasta estava completa antes de qualquer busca.
    */
-  enrichCount(folderPrefix: string): Promise<number>;
+  enrichCount(folderPrefix: string, modo?: Modo): Promise<number>;
   /**
    * O mesmo funil, para UMA música só — o "caso pontual" do editor (V8/F18).
    * Não emite progresso (é uma música) e devolve `null` quando nenhuma etapa
@@ -235,6 +335,27 @@ export interface Backend {
    * entradas com `error`, as demais gravam normalmente.
    */
   enrichApply(aplicacoes: EnrichApply[]): Promise<EnrichApplyResult[]>;
+  /**
+   * Os acessórios que existem para ESTE computador, com o estado de cada um
+   * (V9). Lista VAZIA = não publicamos binário para esta plataforma — a tela
+   * diz isso em vez de oferecer um download que não serviria.
+   */
+  acessoriosEstado(): Promise<AcessorioInfo[]>;
+  /**
+   * Baixa, confere o SHA-256 e instala. Nada baixa sozinho: este comando só
+   * existe porque alguém clicou depois de ler o que ia baixar e quanto ocupa.
+   *
+   * `Ok` com `cancelado: true` = a pessoa parou. `Err` traz uma frase pronta
+   * em pt-BR (soma que não confere, rede que caiu) — e, nos dois casos, nada
+   * foi instalado.
+   */
+  acessorioBaixar(nome: string, downloadId: string): Promise<AcessorioDownload>;
+  /** Para o download `downloadId`; id desconhecido é no-op silencioso. */
+  acessorioCancelar(downloadId: string): Promise<void>;
+  /** Assina `acessorio:progresso` — mesmo contrato dos outros progressos. */
+  onAcessorioProgresso(
+    cb: (p: AcessorioProgresso) => void,
+  ): Promise<() => void>;
 }
 
 export function isTauri(): boolean {
@@ -334,7 +455,7 @@ function tauriBackend(): Backend {
         letraOrigem: letraOrigem ?? null,
       });
     },
-    async enrichFolderScan(folderPrefix, scanId, vagalumeKey) {
+    async enrichFolderScan(folderPrefix, scanId, vagalumeKey, modo) {
       const { invoke } = await import("@tauri-apps/api/core");
       return invoke<EnrichProposal[]>("enrich_folder_scan", {
         folderPrefix,
@@ -342,11 +463,14 @@ function tauriBackend(): Backend {
         // string vazia é "não tenho chave" tanto quanto null; o backend pula a
         // etapa. Nunca vai para log — é a chave pessoal de quem está usando.
         vagalumeKey: vagalumeKey || null,
+        // ausente vale "completar" no Rust (Modo::default): esquecer o campo
+        // nunca dispara a varredura cara por engano
+        modo: modo ?? null,
       });
     },
-    async enrichCount(folderPrefix) {
+    async enrichCount(folderPrefix, modo) {
       const { invoke } = await import("@tauri-apps/api/core");
-      return invoke<number>("enrich_count", { folderPrefix });
+      return invoke<number>("enrich_count", { folderPrefix, modo: modo ?? null });
     },
     async enrichSongScan(songId, vagalumeKey, scanId, title, artist) {
       const { invoke } = await import("@tauri-apps/api/core");
@@ -372,6 +496,24 @@ function tauriBackend(): Backend {
     async enrichApply(aplicacoes) {
       const { invoke } = await import("@tauri-apps/api/core");
       return invoke<EnrichApplyResult[]>("enrich_apply", { aplicacoes });
+    },
+    async acessoriosEstado() {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<AcessorioInfo[]>("acessorios_estado");
+    },
+    async acessorioBaixar(nome, downloadId) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<AcessorioDownload>("acessorio_baixar", { nome, downloadId });
+    },
+    async acessorioCancelar(downloadId) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("acessorio_cancelar", { downloadId });
+    },
+    async onAcessorioProgresso(cb) {
+      const { listen } = await import("@tauri-apps/api/event");
+      return listen<AcessorioProgresso>("acessorio:progresso", (e) =>
+        cb(e.payload),
+      );
     },
   };
 }

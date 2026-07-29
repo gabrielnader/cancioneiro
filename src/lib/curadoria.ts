@@ -1,15 +1,31 @@
 import type { FolderNode } from "./folderTree";
-import { ORIGEM_TRANSCRICAO } from "./types";
+import { ORIGEM_TRANSCRICAO, type Modo } from "./types";
 
 /**
- * O funil de curadoria dentro do app (PRD V8 — F18, Fase 1).
+ * O funil de curadoria dentro do app (PRD V8/F18 fase 1; PRD V9 fase 2).
  *
- * Este módulo só tem função pura: contagem de candidatas, estimativa e — o que
- * mais importa neste produto — a COPY. São ~40 pessoas curando cada uma o seu
- * acervo, em máquinas que o dono do produto não pode olhar, sem ninguém para
- * perguntar. Toda mensagem daqui precisa se explicar sozinha e dizer o que
- * fazer em seguida; por isso o texto mora em funções testadas, e não solto no
- * meio do JSX.
+ * Este módulo só tem função pura: contagem, estimativa e — o que mais importa
+ * neste produto — a COPY. São ~40 pessoas curando cada uma o seu acervo, em
+ * máquinas que o dono do produto não pode olhar, sem ninguém para perguntar.
+ * Por isso o texto mora em funções testadas, e não solto no meio do JSX.
+ *
+ * # A régua da V9
+ *
+ * O retorno de campo desta rodada foi *"achando as mensagens muito longas no
+ * sistema"*. A copy tinha sido escrita para resolver "não há suporte" e passou
+ * do ponto: **texto que ninguém lê não explica nada**. A régua aplicada aqui,
+ * texto por texto:
+ *
+ * - a PRIMEIRA frase diz o que é;
+ * - o resto só existe se responder a uma pergunta que a pessoa faria NAQUELE
+ *   momento.
+ *
+ * O que saiu foi justificativa nossa — "escrever a letra ouvindo o áudio ainda
+ * não é feito pelo aplicativo, por enquanto só pelas ferramentas de curadoria",
+ * repetida em três desfechos, apontando para uma ferramenta de terminal que
+ * essas pessoas não têm (DECISIONS #78). O que FICOU foi tudo que muda uma
+ * decisão: quantas músicas foram conferidas, que a pasta não está completa, o
+ * que a marcação faz, e onde a chave do Vagalume é guardada (DECISIONS #84).
  */
 
 /** Endereço oficial da chave gratuita do Vagalume (mostrado, nunca aberto). */
@@ -22,46 +38,58 @@ export interface EtapaDoFunil {
 }
 
 /**
- * As três etapas que a Fase 1 executa dentro do app, na ordem de custo
- * crescente (DECISIONS #61). A ordem é conteúdo: quem lê precisa entender que
- * a rede só é usada depois que o que já está no arquivo não bastou.
+ * As etapas que ESTA máquina vai executar, na ordem em que rodam (PRD V9).
+ *
+ * A lista é montada a partir do que existe aqui, e não do que o produto sabe
+ * fazer em tese: sem o acessório baixado, a etapa do som simplesmente não
+ * roda, e listá-la seria prometer trabalho que não vai acontecer. Quem ainda
+ * não a tem descobre que ela existe no bloco de acessórios logo abaixo, que é
+ * onde ele pode fazer alguma coisa a respeito.
+ *
+ * A ordem é conteúdo (PRD V9): primeiro "que música é esta?" (arquivo, som),
+ * depois "qual é a letra dela?" (LRCLIB, Vagalume). O som vem antes das bases
+ * de letra porque ele não devolve letra nenhuma — devolve identidade, que é
+ * ENTRADA das outras etapas.
  */
-export const ETAPAS_DENTRO_DO_APP: EtapaDoFunil[] = [
-  {
-    nome: "O que já está no arquivo",
-    explicacao: "as tags e o nome do arquivo, sem sair do computador.",
-  },
-  {
-    nome: "LRCLIB",
-    explicacao: "um banco de letras aberto e gratuito, na internet.",
-  },
-  {
-    nome: "Vagalume",
-    explicacao:
-      "outro site de letras, só se você preencher a chave gratuita mais abaixo.",
-  },
-];
+export function etapasDoFunil(som: boolean): EtapaDoFunil[] {
+  const etapas: EtapaDoFunil[] = [
+    {
+      nome: "O que já está no arquivo",
+      explicacao: "etiquetas e nome do arquivo, sem sair do computador.",
+    },
+  ];
+  if (som) {
+    etapas.push({
+      nome: "Reconhecer pelo som",
+      // "nada do acervo sai da máquina" é invariável do produto, e esta é a
+      // única etapa que poderia parecer contrariá-lo: o que viaja é um resumo
+      // acústico de alguns bytes, nunca o áudio.
+      explicacao: "manda um resumo do áudio ao AcoustID; o áudio não sai daqui.",
+    });
+  }
+  etapas.push(
+    { nome: "LRCLIB", explicacao: "banco de letras aberto e gratuito." },
+    { nome: "Vagalume", explicacao: "site brasileiro de letras." },
+  );
+  return etapas;
+}
 
 /**
- * O que a Fase 1 NÃO faz. Prometer as etapas pesadas seria mentir para quem
- * não tem a quem perguntar — e é justamente quem mais precisaria delas, já
- * que a cobertura dos sites de letra no acervo real é de ~3%.
+ * O que o app ainda NÃO faz.
+ *
+ * Antes ele negava duas coisas: reconhecer pela impressão digital e escrever a
+ * letra ouvindo o áudio. A primeira passou a existir nesta versão — continuar
+ * negando-a seria mentir sobre o próprio produto, e é por isso que este texto
+ * foi CONFERIDO antes de ser encurtado, não só aparado.
  */
 export const ETAPAS_FORA_DO_APP =
-  "Reconhecer a música pelo som e escrever a letra ouvindo o áudio ainda não" +
-  " são feitos aqui dentro: continuam só nas ferramentas de curadoria, fora" +
-  " do aplicativo.";
+  "Escrever a letra ouvindo o áudio ainda não é feito aqui dentro.";
 
 /**
- * Quantas músicas o funil vai consultar nesta pasta.
- *
- * A regra de quem é candidata NÃO mora mais aqui: ela é UMA, no backend
+ * A regra de quem é candidata NÃO mora aqui: ela é UMA, no backend
  * (`enrich_count`, a mesma função que a varredura usa). A cópia em TypeScript
- * que existia neste arquivo divergia em três casos — instrumental sem artista,
- * título placeholder ("Faixa 03"), artista placeholder ("Artista Desconhecido")
- * — e subcontava até zero, desabilitando o único ponto de entrada do produto e
- * afirmando que a pasta estava completa ANTES de qualquer varredura. Regra
- * duplicada foi a causa; a correção é não duplicar.
+ * que existia neste arquivo divergia em três casos e subcontava até zero,
+ * desabilitando o único ponto de entrada do produto (QA ALTO-2).
  *
  * Como a contagem virou uma ida ao backend, ela tem três estados, e os três
  * são ditos na tela: nenhum deles pode virar "0" por omissão.
@@ -71,26 +99,67 @@ export type ContagemCandidatas =
   | { estado: "pronta"; total: number }
   | { estado: "indisponivel" };
 
+/** Quais etapas vão de fato rodar nesta máquina, nesta busca (V9). */
+export interface EtapasLigadas {
+  /** Etapa 2 — o acessório `fpcalc` está pronto E a etapa existe nesta build. */
+  som: boolean;
+  /** Etapa 4 — o Vagalume vai ser consultado. */
+  vagalume: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// O custo de cada etapa, por música — DERIVADO, não chutado (DECISIONS #85)
+// ---------------------------------------------------------------------------
+//
+// A estimativa era um número fixo de 7 s/música, e ele ACERTOU na medição de
+// campo: 16 músicas em ~2 min (7,5 s/música) com as etapas 1 e 3 apenas. O que
+// mudou na V9 é que "as etapas 1 e 3 apenas" deixou de ser o único cenário.
+
 /**
- * Segundos por música na estimativa. NÃO é chute — é derivado do que o
- * backend faz por arquivo:
- *
- * - LRCLIB: `gerar_palpites` produz de 1 a ~8 palpites e a busca só para cedo
- *   quando algum deles rende ALTA. No acervo real (cobertura ~3%) a esmagadora
- *   maioria NÃO rende nada, ou seja, gasta todos os palpites: ~4 consultas na
- *   média das músicas incompletas, que são justamente as de tag ruim.
- * - cada consulta carrega a pausa de cortesia de 300 ms (`PAUSA_CORTESIA`)
- *   mais a resposta do servidor (~0,3 s a 1,5 s) ≈ 1,5 s.
- * - com título e artista reais ainda entra 1 consulta ao Vagalume.
- *
- * 4 × 1,5 s ≈ 6 s, mais a folga do Vagalume ≈ 7 s. O valor anterior (2 s)
- * errava por 3-4× no caminho normal e dizia "3 minutos" para uma busca de
- * ~10 minutos. E o pior caso nem é este: cada consulta tem timeout de 10 s no
- * ureq, então rede fora do ar leva UMA música a 40-80 s. Nenhuma margem de
- * segurança cobre erro de ordem de grandeza — por isso o texto abaixo diz "por
- * volta de" e avisa, com todas as letras, que internet lenta muda tudo.
+ * Etapa 2 (som). O `fpcalc` lê só os primeiros ~120 s do áudio: ~0,3 s (PRD
+ * V9). Mais UMA consulta ao AcoustID, com o piso de cortesia de 340 ms
+ * (`fingerprint::PAUSA_ACOUSTID`) e a resposta do servidor (~0,3 a 1,5 s).
+ * 0,3 + 0,34 + ~1,2 ≈ 1,9 → 2 s, arredondado para cima.
  */
-const SEGUNDOS_POR_MUSICA = 7;
+const CUSTO_SOM = 2;
+
+/**
+ * Etapa 3 (LRCLIB). MEDIDO em campo: 16 músicas em ~2 min com as etapas 1 e 3,
+ * ou seja 7,5 s/música. Bate com a derivação: sem nome conhecido o
+ * `gerar_palpites` produz até 7 palpites, e no acervo real (cobertura ~3%) a
+ * maioria gasta todos — ~4 consultas de ~1,5 s cada (300 ms de cortesia mais a
+ * resposta).
+ */
+const CUSTO_LRCLIB = 7;
+
+/**
+ * Etapa 4 (Vagalume). UMA consulta: 300 ms de cortesia (`PAUSA_CORTESIA`) mais
+ * a resposta (~1,2 s) ≈ 1,5 s, arredondado para cima. Ela não roda para todo
+ * mundo (exige título E artista reais), então este é um teto, não uma média —
+ * e teto é o lado certo de errar numa estimativa.
+ */
+const CUSTO_VAGALUME = 2;
+
+/**
+ * Segundos por música, dado o trabalho e as etapas ligadas.
+ *
+ * O que NÃO é descontado, de propósito: o PRD observa que a etapa 2 barateia a
+ * etapa 3 (com o nome verdadeiro, o LRCLIB recebe 1 palpite em vez de até 7).
+ * É verdade, mas só quando o AcoustID reconhece a gravação — minoria neste
+ * repertório —, e o desconto empurraria a previsão para BAIXO do tempo real.
+ * Estimativa que promete menos do que leva é exatamente o defeito da
+ * DECISIONS #85; estimativa folgada, não.
+ */
+export function segundosPorMusica(modo: Modo, etapas: EtapasLigadas): number {
+  // A conferência é UM trabalho: perguntar ao som. As etapas de letra são o
+  // outro, e não rodam aqui (enrich.rs para depois da etapa 2).
+  if (modo === "conferencia") return CUSTO_SOM;
+  return (
+    (etapas.som ? CUSTO_SOM : 0) +
+    CUSTO_LRCLIB +
+    (etapas.vagalume ? CUSTO_VAGALUME : 0)
+  );
+}
 
 /** "menos de 1 minuto" / "por volta de 11 minutos" / "por volta de 2 horas". */
 function duracaoAproximada(segundos: number): string {
@@ -107,51 +176,71 @@ function duracaoAproximada(segundos: number): string {
  * não ter letra a ter (V8/F17). Quem lê precisa reconhecer o próprio acervo na
  * frase — senão a única explicação disponível está errada.
  */
+// A ordem das palavras é deliberada: "título e artista, e letra ou a marca"
+// diz que a alternativa substitui a LETRA, e não o conjunto. "Todas já têm
+// título, artista e letra" seguido de uma ressalva solta era justamente o que
+// o QA reprovou, e há teste proibindo essa formulação.
 const REGRA_COMPLETA =
-  "todas já têm título e artista, e letra — ou a marca de instrumental," +
-  " que dispensa a letra.";
+  "todas já têm título e artista, e letra ou a marca de instrumental.";
+
+/** O trabalho a estimar: quantas músicas, em que modo, com que etapas. */
+export interface Estimativa {
+  contagem: ContagemCandidatas;
+  /**
+   * Quantas músicas há na pasta, ponto — fato local e barato. Existe para
+   * separar "está tudo completo" de "não há nada aqui": a contagem sozinha
+   * devolve 0 nos dois casos, e afirmar completude de uma pasta vazia é a
+   * mentira que o QA pegou rodando o app sem nenhuma pasta adicionada.
+   */
+  musicasNaPasta: number;
+  modo: Modo;
+  etapas: EtapasLigadas;
+}
 
 /**
  * O que aparece embaixo do seletor de pasta, antes de qualquer clique.
  * "O custo por pessoa importa mais" (PRD V8): saber quantas músicas e quanto
  * tempo deixa de ser conveniência e vira parte do fluxo.
- *
- * `musicasNaPasta` é um fato local e barato (a pasta tem arquivo?), e existe
- * para separar "está tudo completo" de "não há nada aqui" — a contagem sozinha
- * devolve 0 nos dois casos, e afirmar completude de uma pasta vazia é a mentira
- * que o QA pegou rodando o app sem nenhuma pasta adicionada.
  */
-export function estimativaTexto(
-  contagem: ContagemCandidatas,
-  musicasNaPasta: number,
-): string {
+export function estimativaTexto({
+  contagem,
+  musicasNaPasta,
+  modo,
+  etapas,
+}: Estimativa): string {
   if (musicasNaPasta <= 0) {
-    return (
-      "Não há nenhuma música nesta pasta. Adicione uma pasta de música aqui" +
-      " em Configurações, ou escolha outra pasta na lista acima."
-    );
+    return "Não há nenhuma música nesta pasta. Adicione uma pasta ou escolha outra na lista acima.";
   }
   if (contagem.estado === "contando") {
-    return "Contando quantas músicas desta pasta precisam de busca…";
+    return "Contando as músicas desta pasta…";
   }
   if (contagem.estado === "indisponivel") {
     return (
-      "Não foi possível contar quantas músicas desta pasta precisam de busca." +
-      " A busca funciona mesmo assim: o total aparece assim que ela começar."
+      "Não foi possível contar as músicas desta pasta. A busca funciona mesmo" +
+      " assim: o total aparece quando ela começar."
     );
   }
   if (contagem.total <= 0) {
-    return `Nada a procurar nesta pasta: ${REGRA_COMPLETA}`;
+    return modo === "conferencia"
+      ? "Nenhuma música desta pasta pode ser conferida."
+      : `Nada a procurar nesta pasta: ${REGRA_COMPLETA}`;
   }
-  const tempo = duracaoAproximada(contagem.total * SEGUNDOS_POR_MUSICA);
+  const tempo = duracaoAproximada(
+    contagem.total * segundosPorMusica(modo, etapas),
+  );
+  const fecho = `, mais se a internet estiver lenta.`;
+  if (modo === "conferencia") {
+    const quantas =
+      contagem.total === 1 ? "1 música nesta pasta" : `${contagem.total} músicas nesta pasta`;
+    // o custo do modo caro está na frase que anuncia o custo, não num aviso
+    // à parte: ler o áudio de TODAS é o que o torna outro trabalho
+    return `${quantas}. A conferência lê o áudio de todas: ${tempo}${fecho}`;
+  }
   const quantas =
     contagem.total === 1
-      ? "1 música desta pasta está incompleta"
-      : `${contagem.total} músicas desta pasta estão incompletas`;
-  return (
-    `${quantas}. A busca leva ${tempo}, e bem mais se a internet estiver` +
-    " lenta ou fora do ar."
-  );
+      ? "1 música incompleta nesta pasta"
+      : `${contagem.total} músicas incompletas nesta pasta`;
+  return `${quantas}. A busca leva ${tempo}${fecho}`;
 }
 
 /** Uma linha do seletor de pasta da seção de curadoria. */
@@ -182,92 +271,304 @@ export function opcoesDePasta(tree: FolderNode[]): OpcaoDePasta[] {
   return opcoes;
 }
 
+// ---------------------------------------------------------------------------
+// Os dois trabalhos (PRD V9) — completar o que falta x conferir a etiqueta
+// ---------------------------------------------------------------------------
+
+/**
+ * Os dois modos, na ordem em que aparecem. O padrão é o primeiro, e isso não
+ * muda: a conferência lê o áudio de TODAS as músicas e é disparada de
+ * propósito.
+ *
+ * O caso que a criou é real: um arquivo etiquetado "Te ver feliz, te ver
+ * contente" / "Caetano Veloso" que é "Viver Feliz", do Nilson Chaves. Nada ali
+ * é placeholder, então o funil considera a música completa e o erro fica
+ * invisível para sempre.
+ */
+export const MODOS: Array<{ modo: Modo; rotulo: string; explicacao: string }> = [
+  {
+    modo: "completar",
+    rotulo: "Completar o que falta",
+    explicacao: "procura título, artista e letra das músicas incompletas.",
+  },
+  {
+    modo: "conferencia",
+    rotulo: "Conferir se a etiqueta está certa",
+    explicacao: "lê o áudio de todas as músicas e pergunta ao som que música é.",
+  },
+];
+
+/** Por que a conferência não está disponível — texto na tela (DECISIONS #87). */
+export const CONFERENCIA_PRECISA_DO_SOM =
+  "Precisa do reconhecimento pelo som — baixe o acessório abaixo.";
+
+/** O botão diz qual dos dois trabalhos vai começar. */
+export function rotuloDoDisparo(modo: Modo): string {
+  return modo === "conferencia" ? "Conferir esta pasta" : "Buscar dados desta pasta";
+}
+
 /**
  * Fim de varredura sem NENHUMA proposta (DECISIONS #60).
  *
  * Com ~3% de cobertura no acervo real, este é o desfecho MAIS COMUM — não uma
- * exceção. O texto precisa fazer três coisas ao mesmo tempo: contar o que foi
- * feito, negar que seja fracasso e negar que a pasta esteja completa. E dizer
- * qual seria o passo seguinte, admitindo que ele ainda não existe aqui.
+ * exceção. Ele precisa contar o que foi feito e negar a completude, e é só
+ * isso: a terceira frase, que apontava para as ferramentas de fora, saiu no
+ * passe de redução (ninguém aqui abre terminal).
  */
-export function textoSemPropostas(total: number | null): string {
+export function textoSemPropostas(total: number | null, modo: Modo): string {
+  if (modo === "conferencia") return semDivergencias(total);
   // `null` = a varredura terminou mas o acompanhamento do progresso não
   // chegou (a assinatura é best-effort e o catch é silencioso). Antes isso
   // virava `0`, e o texto do zero afirmava completude — falha silenciosa com
   // cara de sucesso. Sem o número, o texto simplesmente não conta ninguém.
   if (total === null) {
-    return (
-      "A busca terminou e não trouxe nenhuma proposta." +
-      " Isso é comum e não quer dizer que a pasta esteja completa: a maior" +
-      " parte do repertório cantado em casa nunca foi publicada na internet." +
-      " Escrever a letra ouvindo o áudio ainda não é feito pelo aplicativo —" +
-      " por enquanto, só pelas ferramentas de curadoria."
-    );
+    return `A busca terminou sem nenhuma proposta. ${NAO_E_FRACASSO}`;
   }
   if (total <= 0) {
     return `Nenhuma música desta pasta entrou na busca: ${REGRA_COMPLETA}`;
   }
   const conferidas =
     total === 1
-      ? "Conferimos a única música incompleta desta pasta e não a achamos" +
-        " nos sites de letra."
-      : `Conferimos as ${total} músicas incompletas desta pasta e não` +
-        " achamos nenhuma delas nos sites de letra.";
-  return (
-    `${conferidas}` +
-    " Isso é comum e não quer dizer que a pasta esteja completa: a maior" +
-    " parte do repertório cantado em casa nunca foi publicada na internet." +
-    " Escrever a letra ouvindo o áudio ainda não é feito pelo aplicativo —" +
-    " por enquanto, só pelas ferramentas de curadoria."
-  );
+      ? "Conferimos a única música incompleta desta pasta e não achamos nada."
+      : `Conferimos as ${total} músicas incompletas desta pasta e não achamos nenhuma.`;
+  return `${conferidas} ${NAO_E_FRACASSO}`;
 }
 
 /**
- * O mesmo desfecho, para UMA música (o caso pontual do editor). Vale a mesma
- * regra do lote: "não achamos" não pode soar como fracasso da pessoa nem como
- * "não há nada a fazer aqui".
+ * A segunda frase de todo desfecho vazio: nem fracasso, nem pasta completa.
+ * É a única parte da copy antiga que sobreviveu inteira ao passe — porque
+ * responde à pergunta que a pessoa faz naquele segundo ("então está pronto?"),
+ * e responder errado é o defeito da DECISIONS #60.
  */
-export const SEM_RESULTADO_INDIVIDUAL =
-  "Procuramos e não achamos nada novo para esta música nos sites de letra." +
-  " Isso é comum e não quer dizer que haja algo errado: a maior parte do" +
-  " repertório cantado em casa nunca foi publicada na internet. Escrever a" +
-  " letra ouvindo o áudio ainda não é feito pelo aplicativo — por enquanto," +
-  " só pelas ferramentas de curadoria.";
+const NAO_E_FRACASSO =
+  "Isso é comum e não significa pasta completa: a maior parte do repertório" +
+  " cantado em casa nunca foi publicada.";
 
 /**
- * O mesmo desfecho para uma música marcada como INSTRUMENTAL. Ela para na
- * etapa 1: nenhuma etapa de LETRA roda para música sem voz (V8/F17), nem no
- * lote nem aqui. Repetir "não achamos nos sites de letra" contaria uma busca
- * que não aconteceu — e é justamente esse tipo de frase que faz a pessoa
- * concluir "a internet não tem a minha música" e parar de procurar.
+ * O desfecho da CONFERÊNCIA sem divergência.
+ *
+ * Ele NÃO pode dizer "suas etiquetas estão certas": o AcoustID não reconhece
+ * toda gravação, e a música que ele não reconheceu sai daqui exatamente igual
+ * à que ele confirmou. Afirmar o que o programa não sabe é a DECISIONS #86,
+ * e aqui ela custaria a confiança inteira no modo novo.
+ */
+function semDivergencias(total: number | null): string {
+  const ressalva =
+    "O som não reconhece toda gravação: as que ele não reconheceu ficam sem" +
+    " resposta.";
+  if (total === null) {
+    return `A conferência terminou sem nenhuma divergência. ${ressalva}`;
+  }
+  if (total <= 0) return "Nenhuma música desta pasta pôde ser conferida.";
+  const conferidas =
+    total === 1
+      ? "Conferimos a única música desta pasta e o som não contradisse a etiqueta."
+      : `Conferimos ${total} músicas e o som não contradisse nenhuma etiqueta.`;
+  return `${conferidas} ${ressalva}`;
+}
+
+/**
+ * O mesmo desfecho, para UMA música (o caso pontual do editor). "Não achamos"
+ * não pode soar como fracasso da pessoa nem como "não há nada a fazer aqui".
+ */
+export const SEM_RESULTADO_INDIVIDUAL =
+  "Procuramos e não achamos nada novo para esta música. Isso é comum: a maior" +
+  " parte do repertório cantado em casa nunca foi publicada.";
+
+/**
+ * O mesmo desfecho para uma música marcada como INSTRUMENTAL. Nenhuma etapa de
+ * LETRA roda para música sem voz (V8/F17): repetir "não achamos nos sites de
+ * letra" contaria uma busca que não aconteceu. A segunda frase fica porque é
+ * ação, não justificativa — é o caminho de volta.
  */
 export const SEM_RESULTADO_INSTRUMENTAL =
-  "Esta música está marcada como instrumental, então a busca não procurou" +
-  " letra para ela — só conferiu o título e o artista, e não achou nada novo." +
-  " Para procurar letra, desmarque “Esta música é instrumental” e busque de" +
-  " novo.";
+  "Esta música está marcada como instrumental: procuramos só título e artista," +
+  " e não achamos nada novo. Para procurar letra, desmarque “Esta música é" +
+  " instrumental”.";
 
 /** Rótulo da segunda marcação da revisão — o mesmo texto que o backend cita. */
 export const LABEL_SUBSTITUIR_LETRA = "Substituir a letra atual";
 
 /**
- * O aviso da linha de revisão cuja proposta passaria por cima de uma letra
- * que JÁ EXISTE no arquivo (CRÍTICO-1).
+ * O aviso da linha de revisão cuja proposta passaria por cima de uma letra que
+ * JÁ EXISTE no arquivo (CRÍTICO-1).
  *
- * A linha dizia só "letra encontrada", chegava pré-marcada quando ALTA e um
- * clique em "Aplicar selecionadas" apagava uma transcrição corrigida à mão.
- * Duas coisas precisam estar escritas, visíveis: que existe letra ali, e o
- * que acontece se ninguém marcar nada (aplica só os nomes — que é o valor
- * real dessas linhas).
+ * Duas coisas precisam estar escritas: que existe letra ali, e o que acontece
+ * se ninguém marcar nada (aplica só os nomes — que é o valor real dessas
+ * linhas). O sujeito ("Esta música") saiu: a linha inteira já é sobre ela.
  */
 export function avisoLetraExistente(letraOrigem: string | null): string {
   const oQueTem =
     letraOrigem === ORIGEM_TRANSCRICAO
-      ? "Esta música já tem letra, escrita ouvindo o áudio — e ela pode ter" +
-        " sido corrigida à mão depois."
-      : "Esta música já tem letra.";
-  return `${oQueTem} Sem marcar abaixo, esta linha aplica só o título e o artista.`;
+      ? "Já tem letra, escrita ouvindo o áudio e talvez corrigida à mão."
+      : "Já tem letra.";
+  return `${oQueTem} Sem marcar, aplica só título e artista.`;
 }
+
+/**
+ * O aviso da linha que trocaria um título ou artista ESCRITO POR GENTE (V9).
+ *
+ * É a DECISIONS #79 do lado das etiquetas: o LRCLIB devolve a grafia oficial,
+ * "Ponto de Oxum" volta como "Ponto de Oxum (Ao Vivo)", a duração bate,
+ * portanto ALTA, portanto pré-marcada — e um clique em "Aplicar selecionadas"
+ * leva embora o que alguém digitou à mão. Aqui não há consentimento separado
+ * como na letra (a revisão já mostra os dois lados, então a troca não é
+ * invisível): o que muda é só a pré-marcação.
+ */
+export const AVISO_NOME_ESCRITO =
+  "Isto troca um título ou artista que já existe — confira antes de marcar.";
+
+// ---------------------------------------------------------------------------
+// Conflito: o som contra a etiqueta (V9)
+// ---------------------------------------------------------------------------
+//
+// O vocabulário da revisão é "atual → proposto", e conflito não é isso: nada
+// foi proposto. A linha existe para INFORMAR que duas fontes discordam, e as
+// duas precisam ser nomeadas por quem as disse — senão a pessoa não tem como
+// escolher. "Atual/proposto" sugeriria que o app já escolheu um lado.
+
+/** O lado do arquivo, na linha de conflito. */
+export const LABEL_SUA_ETIQUETA_DIZ = "Sua etiqueta diz";
+/** O lado do reconhecimento acústico, na linha de conflito. */
+export const LABEL_SOM_DIZ = "O som diz";
+
+/** Rótulo acessível da marcação: aceitar é escolha POR LINHA, nunca em massa. */
+export function rotuloAceitarSom(tituloAtual: string): string {
+  return `Aceitar o que o som diz: ${tituloAtual}`;
+}
+
+/**
+ * A confiança que aparece na linha de conflito é a do RECONHECIMENTO, não a
+ * da linha (que é sempre "baixa", para nunca chegar pré-marcada). Sem ela a
+ * pessoa não tem como pesar quanto crédito dar ao som.
+ */
+export function confiancaDoSom(confianca: "alta" | "media"): string {
+  return confianca === "alta" ? "confiança alta" : "confiança média";
+}
+
+/**
+ * O cabeçalho da revisão.
+ *
+ * As divergências são contadas À PARTE: a linha de conflito tem
+ * `confidence: "baixa"` sempre, e somá-la ali diria "1 baixa" sobre algo que
+ * não é palpite fraco nenhum. (MÉDIO-12 já tinha mostrado o estrago de contar
+ * na confiança linhas que não são propostas.)
+ */
+export function textoDoCabecalho({
+  alta,
+  media,
+  baixa,
+  conflitos,
+}: {
+  alta: number;
+  media: number;
+  baixa: number;
+  conflitos: number;
+}): string {
+  const propostas = alta + media + baixa;
+  const contagem = `${alta} alta, ${media} média, ${baixa} baixa`;
+  const quantasPropostas =
+    propostas === 1 ? "1 proposta" : `${propostas} propostas`;
+  const divergencias =
+    conflitos === 1
+      ? "1 música em que o som discorda da etiqueta"
+      : `${conflitos} músicas em que o som discorda da etiqueta`;
+
+  if (propostas === 0 && conflitos === 0) return "Nenhuma proposta para aplicar.";
+  if (conflitos === 0) return `${quantasPropostas} — ${contagem}`;
+  if (propostas === 0) return divergencias;
+  return `${quantasPropostas} — ${contagem}; e ${conflitos} em que o som discorda da etiqueta`;
+}
+
+// ---------------------------------------------------------------------------
+// Acessórios (PRD V9) — nada baixa sozinho
+// ---------------------------------------------------------------------------
+
+/**
+ * "Quanto ocupa", em pt-BR. Uma casa decimal e vírgula: é um número para
+ * decidir se vale a pena, não para conferir byte a byte.
+ */
+export function formatarTamanho(bytes: number): string {
+  const mb = bytes / (1024 * 1024);
+  if (mb >= 1) return `${mb.toFixed(1).replace(".", ",")} MB`;
+  return `${Math.round(bytes / 1024)} kB`;
+}
+
+/** O mínimo que a tela precisa saber de um acessório para falar dele. */
+export interface AcessorioParaTexto {
+  /** Frase pronta vinda do backend ("reconhecer a música pelo som"). */
+  para_que_serve: string;
+  tamanho_bytes: number;
+}
+
+/**
+ * Regra 1 do PRD V9: a tela diz ANTES o que vai baixar e quanto ocupa. O "para
+ * que serve" vem do backend em pt-BR — a pessoa não sabe (e não precisa saber)
+ * o que é "impressão digital acústica".
+ *
+ * "Uma vez só" responde à pergunta seguinte, que é a regra 3: baixou uma vez,
+ * o app não pergunta de novo.
+ */
+export function textoDoAcessorioAusente(a: AcessorioParaTexto): string {
+  return `Para ${a.para_que_serve}, é preciso baixar um arquivo de ${formatarTamanho(a.tamanho_bytes)}. Uma vez só.`;
+}
+
+/** O tamanho vai no BOTÃO: é a última coisa lida antes do clique. */
+export function rotuloBaixarAcessorio(
+  a: AcessorioParaTexto,
+  deNovo: boolean,
+): string {
+  const tamanho = formatarTamanho(a.tamanho_bytes);
+  return deNovo ? `Baixar de novo (${tamanho})` : `Baixar (${tamanho})`;
+}
+
+/**
+ * Progresso do download. `total: null` = o servidor não anunciou o tamanho —
+ * e "não sabemos" é um estado: um zero no lugar viraria uma barra parada em 0%
+ * de um arquivo vazio (DECISIONS #86).
+ */
+export function textoDoDownload(baixados: number, total: number | null): string {
+  const feito = formatarTamanho(baixados);
+  return total === null
+    ? `Baixando… ${feito}`
+    : `Baixando… ${feito} de ${formatarTamanho(total)}`;
+}
+
+/**
+ * O estado do acessório não pôde ser conferido (o comando falhou). "Não
+ * sabemos" é um estado próprio: virar "não existe" mandaria a pessoa desistir
+ * de um recurso que ela tem, e virar "pronto" prometeria uma etapa que não vai
+ * rodar (DECISIONS #86).
+ */
+export const ACESSORIO_INDETERMINADO =
+  "Não foi possível conferir este recurso agora.";
+
+/** `acessorios_estado` devolveu []: não publicamos binário para esta máquina. */
+export const ACESSORIO_SEM_BINARIO =
+  "Não publicamos este recurso para este computador.";
+
+/** `estado: "indisponivel"`: o acessório não tem uso nesta build. */
+export const ACESSORIO_INDISPONIVEL =
+  "Este recurso não funciona nesta versão do aplicativo.";
+
+/** `estado: "pronto"`: nada a fazer, e nenhum pedido de ação. */
+export const ACESSORIO_PRONTO = "Pronto — a busca já reconhece música pelo som.";
+
+/**
+ * `estado: "corrompido"`: o arquivo do cache não bate com a soma compilada.
+ * Sem drama e sem acusação: o arquivo foi descartado e a saída é baixar de
+ * novo — que é o que a pessoa pode fazer a respeito.
+ */
+export const ACESSORIO_CORROMPIDO =
+  "O arquivo que está aqui não confere e foi descartado. Baixe de novo.";
+
+/**
+ * Desfecho de quem clicou em "Parar". Cancelar e falhar terminam os dois com o
+ * acessório ausente, e a tela precisa dizer QUAL dos dois aconteceu — por isso
+ * o backend devolve `cancelado` como campo, e por isso este texto não fala em
+ * erro nenhum.
+ */
+export const ACESSORIO_CANCELADO = "Download cancelado. Nada foi instalado.";
 
 /**
  * O aviso do fim da aplicação. O PRD é explícito: "o aviso diz o que mudou

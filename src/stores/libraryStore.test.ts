@@ -66,6 +66,16 @@ function fakeBackend(overrides: Partial<Backend> = {}): Backend {
     enrichSongScan: vi.fn(async () => null),
     enrichCancelScan: vi.fn(async () => {}),
     enrichApply: vi.fn(async () => []),
+    // V9 — o contrato ganhou os acessórios; este fake implementa o Backend
+    // inteiro de propósito: um fake parcial deixa de acusar quando a interface
+    // cresce, que é como o mock e o Rust acabaram certificando contratos
+    // diferentes (DECISIONS #88).
+    acessoriosEstado: vi.fn(async () => []),
+    acessorioBaixar: vi.fn(async () => {
+      throw new Error("não há este acessório para este computador");
+    }),
+    acessorioCancelar: vi.fn(async () => {}),
+    onAcessorioProgresso: vi.fn(async () => () => {}),
     ...overrides,
   };
 }
