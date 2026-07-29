@@ -1,18 +1,16 @@
-//! F13 (PRD V5) + F18 fases 1 e 2 (PRD V8 e V9) — o funil de curadoria
+//! F13 (PRD V5) + F18 fases 1 a 3 (PRD V8, V9 e V10) — o funil de curadoria
 //! dentro do app.
 //!
-//! `enrich_scan` escolhe as músicas de uma pasta (prefixo de file_path) e
-//! passa cada uma pelas etapas do funil, cada etapa recebendo só o que a
-//! anterior não resolveu:
+//! `enrich_scan` percorre TODAS as músicas disponíveis de uma pasta (prefixo
+//! de file_path) e passa cada uma pelas etapas do funil:
 //!
-//! | etapa | `fonte`                  | custo       | o que faz            |
-//! |-------|--------------------------|-------------|----------------------|
-//! | 1     | "nome do arquivo"        | instantâneo | palpite local a partir das etiquetas e do nome do arquivo (porte do tools/curadoria.py) |
-//! | 2     | "reconhecimento pelo som"| ~1 s        | IDENTIDADE: título e artista pelo AcoustID |
-//! | 3     | "LRCLIB"                 | ~0,5 s      | letra, conferida pela DURAÇÃO |
-//! | 4     | "Vagalume"               | ~0,5 s      | letra, casamento estrito de texto |
-//!
-//! A etapa 5 (transcrição) é a v0.10.0 e não existe aqui.
+//! | etapa | `fonte`                  | custo medido | roda em            |
+//! |-------|--------------------------|--------------|--------------------|
+//! | 1     | "nome do arquivo"        | instantâneo  | todas              |
+//! | 2     | "reconhecimento pelo som"| **2 s**      | todas              |
+//! | 3     | "LRCLIB"                 | ~7 s         | quem não tem letra |
+//! | 4     | "Vagalume"               | ~2 s         | quem não tem letra |
+//! | 5     | "transcrição do áudio"   | MINUTOS      | comando à parte    |
 //!
 //! # Por que a impressão digital vem ANTES das fontes de letra
 //!
@@ -48,12 +46,26 @@
 //! 3. **letra achada por nome vindo do SOM tem teto de confiança MÉDIA** —
 //!    ver `TETO_COM_IDENTIDADE_DO_SOM`.
 //!
-//! # Os dois modos de varredura
+//! # O caminho único (V10): os modos sumiram
 //!
-//! `Modo::Completar` é a varredura de sempre: só as músicas incompletas.
-//! `Modo::Conferencia` é outro trabalho — perguntar ao som se a etiqueta
-//! está certa — e por isso inclui as músicas COMPLETAS, que a outra nunca
-//! alcança. Ver `Modo`.
+//! Não há mais escolha entre "completar o que falta" e "conferir se está
+//! certo". Modo é escolha, e escolha é pedágio para quem não tem a quem
+//! perguntar — e a conferência era **a única coisa que achava etiqueta
+//! errada**, o que fazia dela um recurso que dependia de o usuário adivinhar
+//! que existia. Uma varredura só, que faz tudo, em todas as músicas da pasta.
+//!
+//! O que substituiu o portão de completude está em dois lugares, e cada um
+//! guarda uma coisa diferente:
+//!
+//! - `candidata` não filtra mais nada além de "o arquivo existe" — é assim que
+//!   a música que PARECE completa chega à etapa 2 e o som a desmente;
+//! - `etapas_de_letra_valem_a_pena` guarda as etapas 3 e 4: não faz sentido
+//!   procurar letra para quem já tem, e a economia que o portão antigo
+//!   comprava continua comprada.
+//!
+//! A etapa 5 não roda junto: ela custa minutos por música e é perguntada no
+//! FIM, com o número de músicas que sobraram e a estimativa de tempo — ver
+//! `EnrichScanResult::sem_letra_no_fim` e `transcricao_scan`.
 //!
 //! Todo o acesso à rede entra por `Fontes`, injetável — os testes rodam sem
 //! rede; no comando real é o `ureq`, e continua sendo ponto de rede
