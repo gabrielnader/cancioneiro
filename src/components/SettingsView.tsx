@@ -7,16 +7,18 @@ import {
   ACESSORIO_INDISPONIVEL,
   ACESSORIO_PRONTO,
   ACESSORIO_SEM_BINARIO,
-  CONFERENCIA_PRECISA_DO_SOM,
   ETAPAS_FORA_DO_APP,
   MODOS,
   VAGALUME_URL,
+  estadoDoSom,
   estimativaTexto,
   etapasDoFunil,
   formatarTamanho,
+  motivoDaConferencia,
   opcoesDePasta,
   rotuloBaixarAcessorio,
   rotuloDoDisparo,
+  textoDaChaveDoVagalume,
   textoDoAcessorioAusente,
   textoDoDownload,
   type ContagemCandidatas,
@@ -274,10 +276,42 @@ function CuradoriaSection() {
   }, []);
 
   const fpcalc = acessorios?.find((a) => a.nome === "fpcalc") ?? null;
+  /**
+   * O estado do som, lido num lugar só (`estadoDoSom`). É ele que decide se a
+   * etapa 2 é listada, se a conferência é possível, o que o motivo do bloqueio
+   * diz e quanto tempo a estimativa promete — quatro respostas que precisam
+   * vir do mesmo fato, ou voltam a discordar entre si na mesma tela (MÉDIO-1).
+   */
+  const estadoSom = estadoDoSom(acessorios);
   /** A etapa 2 vai rodar? Só com o acessório conferido e pronto. */
-  const som = fpcalc?.estado === "pronto";
+  const som = estadoSom === "pronto";
+
+  /**
+   * Esta build embute a chave do Vagalume? (PRD V9, item 2)
+   *
+   * A chave é decidida em tempo de COMPILAÇÃO, a partir do segredo
+   * `VAGALUME_API_KEY` do repositório — o frontend não tem como descobrir
+   * sozinho. Hoje a resposta é NÃO em toda build que existe: o segredo nunca
+   * foi criado, e a etapa 4 é pulada em silêncio em qualquer instalação sem
+   * chave pessoal.
+   *
+   * PONTO DE EXTENSÃO: quando o backend expuser `tem_chave` para o Vagalume —
+   * ele já expõe o mesmo para o AcoustID —, esta constante vira aquela
+   * resposta (uma consulta, como a dos acessórios) e nada mais nesta tela
+   * muda: a lista de etapas, a estimativa e o texto do campo já derivam daqui.
+   *
+   * Enquanto isso, afirmar `true` prometeria em toda tela uma etapa que não
+   * roda em nenhuma máquina — que é exatamente o defeito da DECISIONS #86.
+   */
+  const CHAVE_DO_VAGALUME_EMBUTIDA = false;
+  /** A etapa 4 vai rodar NESTA máquina? Chave pessoal tem precedência (V9). */
+  const vagalume = CHAVE_DO_VAGALUME_EMBUTIDA || vagalumeApiKey.trim() !== "";
+
   /** As etapas que ESTA máquina vai executar — não as que o produto sabe. */
-  const etapas = useMemo(() => etapasDoFunil(som), [som]);
+  const etapas = useMemo(
+    () => etapasDoFunil({ som, vagalume }),
+    [som, vagalume],
+  );
 
   /**
    * O TRABALHO escolhido (V9). O padrão é o barato, sempre; e se o acessório
@@ -436,10 +470,16 @@ function CuradoriaSection() {
             </label>
           );
         })}
-        {/* motivo do bloqueio é CONTEÚDO, não `title=` (DECISIONS #87) */}
-        {!som && (
+        {/*
+          Motivo do bloqueio é CONTEÚDO, não `title=` (DECISIONS #87) — e ele
+          DERIVA do estado do acessório. Antes era uma frase fixa: em três dos
+          cinco estados ela mandava "baixe o acessório abaixo" enquanto o bloco
+          três centímetros acima dizia que não havia nada para baixar, e não
+          desenhava botão nenhum (MÉDIO-1).
+        */}
+        {motivoDaConferencia(estadoSom) !== null && (
           <p id="curadoria-modo-motivo" className="mt-0.5 pl-6 text-[13px] text-[#5B6472]">
-            {CONFERENCIA_PRECISA_DO_SOM}
+            {motivoDaConferencia(estadoSom)}
           </p>
         )}
       </fieldset>
@@ -449,12 +489,12 @@ function CuradoriaSection() {
           contagem,
           musicasNaPasta,
           modo,
-          // A chave do Vagalume passou a ser NOSSA, embutida em tempo de build
-          // (PRD V9): a etapa 4 roda em toda instalação distribuída, e o
-          // frontend não tem como perguntar se esta build tem a chave. Contá-la
-          // sempre é o lado certo de errar — estimativa que promete MENOS do
-          // que leva é o defeito da DECISIONS #85.
-          etapas: { som, vagalume: true },
+          // MÉDIO-2 — a conta pergunta o que ESTA máquina faz. Contar a etapa
+          // 4 sempre não era "errar folgado" (o lado certo de errar, da
+          // DECISIONS #85): era somar 2 s/música de um trabalho que não
+          // acontece em instalação nenhuma, porque a chave embutida que o PRD
+          // previu nunca existiu.
+          etapas: { som, vagalume },
         })}
       </p>
 
@@ -539,16 +579,17 @@ function CuradoriaSection() {
           className="w-full rounded-md border border-[#D1D5DB] bg-white px-3 py-2 text-[15px] text-[#111827] outline-none focus:border-[#0F766E]"
         />
         {/*
-          V9 — a chave passou a ser NOSSA, embutida em tempo de build. O campo
-          fica (tem precedência, e é a saída se a nossa for bloqueada), mas
-          deixou de ser pedágio: pedir chave de API a quem não abre terminal
-          era um pedágio absurdo. O texto NÃO afirma que esta build tem a nossa
-          chave — uma build sem o segredo (fork, desenvolvimento) não tem, e
-          afirmar seria mentir sobre credencial (DECISIONS #84).
+          MÉDIO-2 — o PRD V9 previu uma chave NOSSA, embutida em tempo de
+          build, e o texto foi escrito como se ela existisse ("só é preciso
+          preencher se a busca do Vagalume parar de funcionar"). Ela não
+          existe: o segredo nunca foi criado. Afirmar que a busca funciona sem
+          a chave é mentir sobre credencial, que é defeito mesmo quando o
+          comportamento é o certo (DECISIONS #84) — e aqui nem o comportamento
+          é: sem chave a etapa 4 é pulada em silêncio.
         */}
         <p className="mt-1 text-[13px] leading-relaxed text-[#5B6472]">
-          Só é preciso preencher se a busca do Vagalume parar de funcionar. A
-          chave é gratuita: crie a sua em{" "}
+          {textoDaChaveDoVagalume(CHAVE_DO_VAGALUME_EMBUTIDA)} A chave é
+          gratuita: crie a sua em{" "}
           <span className="select-text break-all text-[#0F766E]">
             {VAGALUME_URL}
           </span>{" "}
@@ -588,6 +629,24 @@ function CuradoriaSection() {
  *    verificação de segurança (a soma SHA-256) para quem não tem a quem
  *    perguntar.
  */
+/**
+ * O total do download em que dá para CONFIAR — `null` quando não há um.
+ *
+ * `Content-Length` que mente para menos existe de verdade (proxy que
+ * recomprime, CDN mal configurado, servidor que anuncia o tamanho do pedaço), e
+ * um total já ultrapassado não é um total: é um número velho. Grampear em 100%
+ * seria a outra mentira — barra cheia com o download em curso. "Não sabemos" é
+ * um estado (DECISIONS #86), e daqui ele vale para a barra E para o texto, que
+ * senão diria "de 5,3 MB" sobre um arquivo que já passou disso.
+ *
+ * Zero entra na mesma regra: `0 / 0` vira `NaN`, e `width: NaN%` é uma barra
+ * que o navegador ignora em silêncio.
+ */
+function totalConfiavel(p: { baixados: number; total: number | null }): number | null {
+  if (p.total === null || p.total <= 0 || p.total < p.baixados) return null;
+  return p.total;
+}
+
 function AcessorioDoSom({
   info,
   lista,
@@ -709,22 +768,28 @@ function AcessorioDoSom({
       {baixando !== null && (
         <div className="mt-2">
           <p className="text-[13px] text-[#374151]">
-            {textoDoDownload(baixando.baixados, baixando.total)}
+            {textoDoDownload(baixando.baixados, totalConfiavel(baixando))}
           </p>
-          {/* barra determinada SÓ quando o servidor anunciou o tamanho */}
-          {baixando.total !== null && (
+          {/*
+            Barra determinada SÓ com um total em que dá para confiar — ver
+            `totalConfiavel`. Sem isso, um `Content-Length` mentindo para menos
+            fazia a largura passar de 100% (a barra vazava do trilho) e o
+            `aria-valuenow` ficar MAIOR que o `aria-valuemax`, o que é um
+            progressbar inválido (BAIXO-3).
+          */}
+          {totalConfiavel(baixando) !== null && (
             <div
               role="progressbar"
               aria-label="Progresso do download"
               aria-valuemin={0}
-              aria-valuemax={baixando.total}
+              aria-valuemax={baixando.total!}
               aria-valuenow={baixando.baixados}
-              aria-valuetext={`${formatarTamanho(baixando.baixados)} de ${formatarTamanho(baixando.total)}`}
+              aria-valuetext={`${formatarTamanho(baixando.baixados)} de ${formatarTamanho(baixando.total!)}`}
               className="mt-1 h-1.5 w-full overflow-hidden rounded bg-[#E5E7EB]"
             >
               <div
                 className="h-full bg-[#0F766E] transition-[width]"
-                style={{ width: `${(baixando.baixados / baixando.total) * 100}%` }}
+                style={{ width: `${(baixando.baixados / baixando.total!) * 100}%` }}
               />
             </div>
           )}

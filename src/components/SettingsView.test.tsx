@@ -14,8 +14,8 @@ import {
   ACESSORIO_INDISPONIVEL,
   ACESSORIO_PRONTO,
   ACESSORIO_SEM_BINARIO,
-  CONFERENCIA_PRECISA_DO_SOM,
   estimativaTexto,
+  motivoDaConferencia,
   rotuloBaixarAcessorio,
   textoDoAcessorioAusente,
   textoDoDownload,
@@ -37,10 +37,14 @@ const FUNDO_CONFIGURACOES = "#F9FAFB";
 const pronta = (total: number): ContagemCandidatas => ({ estado: "pronta", total });
 
 /**
- * Instalação nova: o acessório do som não está aqui, e o Vagalume conta na
- * estimativa (a chave é nossa, embutida na build — V9).
+ * Instalação nova: o acessório do som não está aqui e o campo da chave do
+ * Vagalume está vazio — então nenhuma das duas etapas condicionais roda, e
+ * nenhuma das duas entra na conta (MÉDIO-2).
  */
-const SEM_SOM: EtapasLigadas = { som: false, vagalume: true };
+const SEM_SOM: EtapasLigadas = { som: false, vagalume: false };
+
+/** A mesma máquina depois de colar uma chave pessoal do Vagalume. */
+const CHAVE_PESSOAL = "minha-chave-do-vagalume";
 
 /** O texto que a tela deve mostrar, montado com os mesmos parâmetros dela. */
 function estimativa(
@@ -500,6 +504,87 @@ describe("SettingsView — acessório do reconhecimento pelo som (V9)", () => {
     expect(screen.queryByRole("progressbar", { name: /download/i })).toBeNull();
   });
 
+  // BAIXO-3 — `Content-Length` que mente PARA MENOS existe: proxy que
+  // recomprime, CDN mal configurado, servidor que anuncia o tamanho do
+  // pedaço. Com ele, a largura passava de 100% (a barra vazava do trilho) e o
+  // `aria-valuenow` ficava MAIOR que o `aria-valuemax` — um progressbar
+  // inválido, que leitor de tela anuncia como bem entender.
+  //
+  // A saída não é grampear em 100%: uma barra cheia enquanto o download
+  // continua também mente. Total que o download já passou é total em que não
+  // dá para confiar, e "não sabemos" é um estado (DECISIONS #86).
+  it("Content-Length mentindo para menos: cai para indeterminado, sem barra inválida", async () => {
+    acessorioBaixar.mockImplementation(() => new Promise(() => {}));
+    render(<SettingsView />);
+    const botao = await screen.findByRole("button", {
+      name: rotuloBaixarAcessorio(acessorio("ausente"), false),
+    });
+    await act(async () => {
+      fireEvent.click(botao);
+    });
+    await act(async () => {
+      emitirProgressoDoAcessorio?.({
+        nome: "fpcalc",
+        baixados: 6_000_000,
+        total: 5_538_312,
+        download_id: acessorioBaixar.mock.calls[0][1] as string,
+      });
+    });
+    // nenhuma barra determinada: nem >100%, nem 100% mentiroso
+    expect(screen.queryByRole("progressbar", { name: /download/i })).toBeNull();
+    // e o que já veio continua sendo contado — é o fato de que dispomos
+    expect(screen.getByText(textoDoDownload(6_000_000, null))).toBeInTheDocument();
+  });
+
+  // Enquanto o total é confiável, a barra é barra: valores dentro da faixa e
+  // largura dentro do trilho.
+  it("com total confiável, a barra fica dentro da faixa que ela declara", async () => {
+    acessorioBaixar.mockImplementation(() => new Promise(() => {}));
+    render(<SettingsView />);
+    const botao = await screen.findByRole("button", {
+      name: rotuloBaixarAcessorio(acessorio("ausente"), false),
+    });
+    await act(async () => {
+      fireEvent.click(botao);
+    });
+    await act(async () => {
+      emitirProgressoDoAcessorio?.({
+        nome: "fpcalc",
+        baixados: 2_000_000,
+        total: 5_538_312,
+        download_id: acessorioBaixar.mock.calls[0][1] as string,
+      });
+    });
+    const barra = screen.getByRole("progressbar", { name: /download/i });
+    const agora = Number(barra.getAttribute("aria-valuenow"));
+    const maximo = Number(barra.getAttribute("aria-valuemax"));
+    expect(agora).toBeLessThanOrEqual(maximo);
+    const largura = (barra.firstElementChild as HTMLElement).style.width;
+    expect(Number.parseFloat(largura)).toBeLessThanOrEqual(100);
+  });
+
+  // Total zero é o mesmo problema por outro caminho: 0/0 vira NaN e a largura
+  // sai como "NaN%", que o navegador simplesmente ignora.
+  it("total anunciado como zero não desenha barra nenhuma", async () => {
+    acessorioBaixar.mockImplementation(() => new Promise(() => {}));
+    render(<SettingsView />);
+    const botao = await screen.findByRole("button", {
+      name: rotuloBaixarAcessorio(acessorio("ausente"), false),
+    });
+    await act(async () => {
+      fireEvent.click(botao);
+    });
+    await act(async () => {
+      emitirProgressoDoAcessorio?.({
+        nome: "fpcalc",
+        baixados: 0,
+        total: 0,
+        download_id: acessorioBaixar.mock.calls[0][1] as string,
+      });
+    });
+    expect(screen.queryByRole("progressbar", { name: /download/i })).toBeNull();
+  });
+
   it("parar cancela de verdade e o desfecho é dito como cancelamento", async () => {
     acessorioBaixar.mockResolvedValue({
       cancelado: true,
@@ -580,9 +665,102 @@ describe("SettingsView — o modo de conferência (V9)", () => {
     render(<SettingsView />);
     await screen.findByText(estimativa(pronta(2), 3));
     expect(opcaoConferir()).toBeDisabled();
-    const motivo = screen.getByText(CONFERENCIA_PRECISA_DO_SOM);
+    const motivo = screen.getByText(motivoDaConferencia("ausente")!);
     expect(motivo).toBeVisible();
     expect(opcaoConferir()).toHaveAttribute("aria-describedby", motivo.id);
+  });
+
+  // MÉDIO-1 — os quatro estados eram VISITADOS pelos testes de contraste, e
+  // nenhum deles LIA o texto: a decisão 87 tinha sido cumprida pela metade
+  // (visitou-se o pixel, não a frase). Em três deles a tela mandava "baixe o
+  // acessório abaixo" e o bloco de baixo dizia que não havia nada para baixar.
+  describe("o motivo do bloqueio bate com o estado do acessório (MÉDIO-1)", () => {
+    const casos: Array<[string, () => void, "indisponivel" | "sem-binario" | "indeterminado" | "ausente" | "corrompido"]> = [
+      [
+        "indisponível nesta versão",
+        () => acessoriosEstado.mockResolvedValue([acessorio("indisponivel")]),
+        "indisponivel",
+      ],
+      [
+        "sem binário para este computador",
+        () => acessoriosEstado.mockResolvedValue([]),
+        "sem-binario",
+      ],
+      [
+        "consulta falhou",
+        () => acessoriosEstado.mockRejectedValue(new Error("sem perfil")),
+        "indeterminado",
+      ],
+      [
+        "ausente (dá para baixar)",
+        () => acessoriosEstado.mockResolvedValue([acessorio("ausente")]),
+        "ausente",
+      ],
+      [
+        "corrompido (dá para baixar de novo)",
+        () => acessoriosEstado.mockResolvedValue([acessorio("corrompido")]),
+        "corrompido",
+      ],
+    ];
+
+    for (const [nome, preparar, estado] of casos) {
+      it(`${nome}: o motivo é o do estado, e a conferência fica bloqueada`, async () => {
+        preparar();
+        render(<SettingsView />);
+        await act(async () => {});
+        const esperado = motivoDaConferencia(estado)!;
+        const motivo = screen.getByText(esperado);
+        expect(motivo).toBeVisible();
+        expect(opcaoConferir()).toBeDisabled();
+        expect(opcaoConferir()).toHaveAttribute("aria-describedby", motivo.id);
+      });
+    }
+
+    // O defeito em uma frase: mandar procurar um botão que não está lá. Este
+    // teste varre a seção inteira, e não só o parágrafo do motivo — a
+    // contradição vale entre quaisquer dois textos da mesma tela.
+    it("onde não há botão de baixar, nada na seção manda baixar", async () => {
+      for (const preparar of [
+        () => acessoriosEstado.mockResolvedValue([acessorio("indisponivel")]),
+        () => acessoriosEstado.mockResolvedValue([]),
+        () => acessoriosEstado.mockRejectedValue(new Error("sem perfil")),
+      ]) {
+        estadoBase();
+        preparar();
+        const { unmount } = render(<SettingsView />);
+        await act(async () => {});
+        const secao = secaoCuradoria();
+        expect(
+          within(secao).queryByRole("button", { name: /Baixar/ }),
+        ).not.toBeInTheDocument();
+        expect(secao.textContent ?? "").not.toMatch(/baixe o acessório/i);
+        unmount();
+      }
+    });
+
+    // Enquanto a resposta não chega nada é afirmado — nem que dá, nem que não
+    // dá. O rádio já está desabilitado, e o motivo precisa existir mesmo aí
+    // (DECISIONS #86/#87).
+    it("com a pergunta ainda em curso, o motivo diz que estamos conferindo", () => {
+      acessoriosEstado.mockImplementation(() => new Promise(() => {}));
+      render(<SettingsView />);
+      expect(
+        screen.getByText(motivoDaConferencia("perguntando")!),
+      ).toBeVisible();
+      expect(opcaoConferir()).toBeDisabled();
+    });
+
+    it("com o som pronto, não sobra motivo nenhum na tela", async () => {
+      acessoriosEstado.mockResolvedValue([acessorio("pronto")]);
+      render(<SettingsView />);
+      await screen.findByText(ACESSORIO_PRONTO);
+      for (const estado of ["ausente", "sem-binario", "indisponivel", "indeterminado"] as const) {
+        expect(
+          screen.queryByText(motivoDaConferencia(estado)!),
+        ).not.toBeInTheDocument();
+      }
+      expect(opcaoConferir()).toBeEnabled();
+    });
   });
 
   it("com o acessório, escolher a conferência troca contagem, texto e botão", async () => {
@@ -642,15 +820,56 @@ describe("SettingsView — o modo de conferência (V9)", () => {
 describe("SettingsView — chave do Vagalume (V8 F18)", () => {
   beforeEach(estadoBase);
 
-  // V9 — a chave passou a ser NOSSA, embutida em tempo de build. O campo
-  // continua existindo (tem precedência, é a saída se a nossa for bloqueada),
-  // mas deixou de ser pedágio: o texto diz que normalmente não é preciso.
-  it("diz que só é preciso preencher se o Vagalume parar, e onde pegar", () => {
+  // MÉDIO-2 — o PRD V9 previu uma chave NOSSA, embutida em tempo de build, e
+  // ela nunca existiu: o segredo `VAGALUME_API_KEY` não foi criado. Enquanto
+  // for assim, "só é preciso preencher se o Vagalume parar de funcionar"
+  // afirma que ele funciona sem a chave — e não funciona em build nenhuma.
+  it("sem chave embutida, diz que sem ela o Vagalume não é consultado", () => {
     render(<SettingsView />);
     const texto = secaoCuradoria().textContent ?? "";
-    expect(texto).toContain("Só é preciso preencher");
+    expect(texto).toContain("Sem ela, a busca não consulta o Vagalume");
+    expect(texto).not.toContain("Só é preciso preencher");
+    // e continua dizendo que é grátis e onde pegar: o passo seguinte
     expect(texto).toContain("gratuita");
     expect(texto).toContain(VAGALUME_URL);
+  });
+
+  // MÉDIO-2 — o componente já tinha a chave em mãos e não a usava: o funil
+  // enumerava 4 etapas e entregava 2, e a estimativa somava 2 s/música de um
+  // trabalho que não acontece. O princípio "só liste o que ESTA máquina faz"
+  // vale para o Vagalume como vale para o som.
+  describe("a etapa 4 pergunta se ESTA máquina tem a chave (MÉDIO-2)", () => {
+    it("campo vazio: a etapa é listada com a condição, e não pesa na conta", async () => {
+      render(<SettingsView />);
+      await screen.findByText(estimativa(pronta(2), 3));
+      const texto = secaoCuradoria().textContent ?? "";
+      // listada — é onde alguém descobre para que serve o campo lá embaixo
+      expect(texto).toContain("Vagalume");
+      // ...mas com a condição escrita, e não como promessa
+      expect(texto).toContain("só com a chave gratuita");
+    });
+
+    it("chave pessoal colada: a etapa deixa de pedir, e passa a pesar na conta", async () => {
+      useUiStore.setState({ vagalumeApiKey: CHAVE_PESSOAL });
+      render(<SettingsView />);
+      await screen.findByText(
+        estimativa(pronta(2), 3, "completar", { som: false, vagalume: true }),
+      );
+      expect(secaoCuradoria().textContent ?? "").not.toContain(
+        "só com a chave gratuita",
+      );
+    });
+
+    // Chave só de espaços não é chave: contá-la prometeria uma etapa que o
+    // backend vai pular em silêncio.
+    it("espaços em branco não valem por chave", async () => {
+      useUiStore.setState({ vagalumeApiKey: "   " });
+      render(<SettingsView />);
+      await screen.findByText(estimativa(pronta(2), 3));
+      expect(secaoCuradoria().textContent ?? "").toContain(
+        "só com a chave gratuita",
+      );
+    });
   });
 
   // MÉDIO-10 — a chave É gravada em disco (localStorage das preferências), e

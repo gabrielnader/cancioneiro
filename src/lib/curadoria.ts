@@ -41,17 +41,29 @@ export interface EtapaDoFunil {
  * As etapas que ESTA máquina vai executar, na ordem em que rodam (PRD V9).
  *
  * A lista é montada a partir do que existe aqui, e não do que o produto sabe
- * fazer em tese: sem o acessório baixado, a etapa do som simplesmente não
- * roda, e listá-la seria prometer trabalho que não vai acontecer. Quem ainda
- * não a tem descobre que ela existe no bloco de acessórios logo abaixo, que é
- * onde ele pode fazer alguma coisa a respeito.
+ * fazer em tese. As duas etapas condicionais são tratadas de jeitos
+ * diferentes, e a diferença é deliberada:
+ *
+ * - **o som some da lista** quando o acessório não está aqui. Ligá-lo custa um
+ *   download de 5 MB, e a lista tem, logo abaixo, um bloco inteiro dedicado a
+ *   explicá-lo — a etapa é descoberta lá, que é onde dá para fazer algo a
+ *   respeito;
+ * - **o Vagalume FICA na lista** e a explicação dele diz a condição. Ligá-lo
+ *   custa colar uma chave num campo desta mesma tela, e esconder a etapa
+ *   esconderia a única frase que diz para que aquele campo serve. Não há
+ *   suporte a quem perguntar depois (DECISIONS #78).
+ *
+ * O que não é aceitável é o que a v0.9.0 fazia: PROMETER a etapa 4 ("site
+ * brasileiro de letras.") em toda instalação. Ela não roda em nenhuma — o
+ * segredo `VAGALUME_API_KEY` nunca existiu, então não há chave embutida em
+ * build alguma —, e o texto que dizia como ligá-la tinha sido apagado.
  *
  * A ordem é conteúdo (PRD V9): primeiro "que música é esta?" (arquivo, som),
  * depois "qual é a letra dela?" (LRCLIB, Vagalume). O som vem antes das bases
  * de letra porque ele não devolve letra nenhuma — devolve identidade, que é
  * ENTRADA das outras etapas.
  */
-export function etapasDoFunil(som: boolean): EtapaDoFunil[] {
+export function etapasDoFunil({ som, vagalume }: EtapasLigadas): EtapaDoFunil[] {
   const etapas: EtapaDoFunil[] = [
     {
       nome: "O que já está no arquivo",
@@ -68,10 +80,35 @@ export function etapasDoFunil(som: boolean): EtapaDoFunil[] {
     });
   }
   etapas.push(
-    { nome: "LRCLIB", explicacao: "banco de letras aberto e gratuito." },
-    { nome: "Vagalume", explicacao: "site brasileiro de letras." },
+    {
+      nome: "LRCLIB",
+      // "na internet" faz par com "sem sair do computador" da etapa 1: num app
+      // que se vende como offline, saber quais etapas saem daqui é a pergunta.
+      explicacao: "banco de letras aberto e gratuito, na internet.",
+    },
+    {
+      nome: "Vagalume",
+      explicacao: vagalume
+        ? "site brasileiro de letras."
+        : "site brasileiro de letras — só com a chave gratuita, mais abaixo.",
+    },
   );
   return etapas;
+}
+
+/**
+ * O parágrafo embaixo do campo da chave do Vagalume.
+ *
+ * `temChaveEmbutida` é o que ESTA build tem, não o que o PRD previu. Enquanto
+ * a resposta for `false`, dizer "só é preciso preencher se a busca do Vagalume
+ * parar de funcionar" afirma que ela funciona sem a chave — e não funciona.
+ * Copy que mente sobre credencial é defeito mesmo quando o comportamento é o
+ * certo (DECISIONS #84).
+ */
+export function textoDaChaveDoVagalume(temChaveEmbutida: boolean): string {
+  return temChaveEmbutida
+    ? "Só é preciso preencher se a busca do Vagalume parar de funcionar."
+    : "Sem ela, a busca não consulta o Vagalume.";
 }
 
 /**
@@ -176,12 +213,18 @@ function duracaoAproximada(segundos: number): string {
  * não ter letra a ter (V8/F17). Quem lê precisa reconhecer o próprio acervo na
  * frase — senão a única explicação disponível está errada.
  */
-// A ordem das palavras é deliberada: "título e artista, e letra ou a marca"
+// A ordem das palavras é deliberada: "título e artista, e letra — ou a marca"
 // diz que a alternativa substitui a LETRA, e não o conjunto. "Todas já têm
 // título, artista e letra" seguido de uma ressalva solta era justamente o que
 // o QA reprovou, e há teste proibindo essa formulação.
+//
+// BAIXO-4: o passe de redução tirou o travessão e o "que dispensa a letra", e
+// a frase virou uma lista ambígua de três itens ("letra ou a marca de
+// instrumental"). O que a marca dispensa é a LETRA, e é essa a informação que
+// faz alguém reconhecer o próprio acervo na frase.
 const REGRA_COMPLETA =
-  "todas já têm título e artista, e letra ou a marca de instrumental.";
+  "todas já têm título e artista, e letra — ou a marca de instrumental," +
+  " que dispensa a letra.";
 
 /** O trabalho a estimar: quantas músicas, em que modo, com que etapas. */
 export interface Estimativa {
@@ -228,7 +271,12 @@ export function estimativaTexto({
   const tempo = duracaoAproximada(
     contagem.total * segundosPorMusica(modo, etapas),
   );
-  const fecho = `, mais se a internet estiver lenta.`;
+  // BAIXO-4 — a mitigação da DECISIONS #85 são estas duas metades, e o passe
+  // de redução levou as duas: "BEM mais" (a estimativa erra por fator, não por
+  // margem) e a rede FORA DO AR, que é justamente o caso em que a busca
+  // demora um múltiplo do previsto. "mais se a internet estiver lenta" soa
+  // como uns minutos a mais.
+  const fecho = `, e bem mais se a internet estiver lenta ou fora do ar.`;
   if (modo === "conferencia") {
     const quantas =
       contagem.total === 1 ? "1 música nesta pasta" : `${contagem.total} músicas nesta pasta`;
@@ -298,9 +346,85 @@ export const MODOS: Array<{ modo: Modo; rotulo: string; explicacao: string }> = 
   },
 ];
 
-/** Por que a conferência não está disponível — texto na tela (DECISIONS #87). */
-export const CONFERENCIA_PRECISA_DO_SOM =
-  "Precisa do reconhecimento pelo som — baixe o acessório abaixo.";
+/**
+ * O acessório do som, como a COPY precisa vê-lo — cinco maneiras de não ter a
+ * etapa 2, e cada uma pede uma frase diferente.
+ *
+ * "Não sabemos" (`perguntando`, `indeterminado`) é estado próprio: virar
+ * "não existe" mandaria a pessoa desistir de um recurso que ela tem, e virar
+ * "pronto" prometeria uma etapa que não vai rodar (DECISIONS #86).
+ */
+export type EstadoDoSom =
+  | "perguntando"
+  | "indeterminado"
+  | "sem-binario"
+  | "indisponivel"
+  | "ausente"
+  | "corrompido"
+  | "pronto";
+
+/**
+ * Lê o que `acessorios_estado` devolveu. Ponto ÚNICO dessa leitura: ela decide
+ * se a etapa 2 é listada, se a conferência é possível, quanto tempo a
+ * estimativa promete e o que o motivo do bloqueio diz — e essas quatro
+ * respostas precisam vir do mesmo lugar, ou voltam a discordar entre si.
+ *
+ * `undefined` = a pergunta ainda não voltou; `null` = ela falhou; `[]` = não
+ * publicamos binário para este computador.
+ */
+export function estadoDoSom(
+  lista: readonly { nome: string; estado: string }[] | null | undefined,
+): EstadoDoSom {
+  if (lista === undefined) return "perguntando";
+  if (lista === null) return "indeterminado";
+  const fpcalc = lista.find((a) => a.nome === "fpcalc");
+  // lista sem o fpcalc é o mesmo fato de lista vazia, do ponto de vista de
+  // quem quer conferir etiqueta: o som não existe nesta máquina
+  if (!fpcalc) return "sem-binario";
+  switch (fpcalc.estado) {
+    case "pronto":
+    case "ausente":
+    case "corrompido":
+    case "indisponivel":
+      return fpcalc.estado;
+    default:
+      // estado que esta versão do app não conhece (backend mais novo):
+      // "não sabemos" é a única resposta honesta — nunca "pronto"
+      return "indeterminado";
+  }
+}
+
+/**
+ * Por que a conferência não está disponível — texto na tela, e não `title=`
+ * (DECISIONS #87). `null` quando ela ESTÁ disponível.
+ *
+ * O motivo DERIVA do estado do acessório. Antes era uma string fixa, mostrada
+ * sempre que faltava o som, e em três dos cinco estados ela mandava "baixar o
+ * acessório abaixo" enquanto o bloco logo abaixo dizia que não havia nada para
+ * baixar e não desenhava botão nenhum. A tela se contradizia a três
+ * centímetros de distância, para quem não tem a quem perguntar.
+ *
+ * A régua: só manda baixar onde EXISTE botão de baixar; nos outros casos diz
+ * o fato, na mesma língua do bloco do acessório, e não pede nada.
+ */
+export function motivoDaConferencia(estado: EstadoDoSom): string | null {
+  switch (estado) {
+    case "pronto":
+      return null;
+    case "perguntando":
+      return "Conferindo se este computador reconhece música pelo som…";
+    case "indeterminado":
+      return "Precisa do reconhecimento pelo som, e não deu para conferir se ele está aqui.";
+    case "sem-binario":
+      return "Precisa do reconhecimento pelo som, que não publicamos para este computador.";
+    case "indisponivel":
+      return "Precisa do reconhecimento pelo som, que não funciona nesta versão do aplicativo.";
+    case "ausente":
+      return "Precisa do reconhecimento pelo som — baixe o acessório abaixo.";
+    case "corrompido":
+      return "Precisa do reconhecimento pelo som — baixe o acessório abaixo de novo.";
+  }
+}
 
 /** O botão diz qual dos dois trabalhos vai começar. */
 export function rotuloDoDisparo(modo: Modo): string {
@@ -396,13 +520,17 @@ export const LABEL_SUBSTITUIR_LETRA = "Substituir a letra atual";
  * Duas coisas precisam estar escritas: que existe letra ali, e o que acontece
  * se ninguém marcar nada (aplica só os nomes — que é o valor real dessas
  * linhas). O sujeito ("Esta música") saiu: a linha inteira já é sobre ela.
+ *
+ * BAIXO-4: o "abaixo" voltou. Ele aponta a marcação que fica na linha logo
+ * embaixo deste texto, numa lista que pode ter dezenas de linhas com caixas
+ * parecidas — "marcar" sem dizer onde não é instrução, é adivinhação.
  */
 export function avisoLetraExistente(letraOrigem: string | null): string {
   const oQueTem =
     letraOrigem === ORIGEM_TRANSCRICAO
       ? "Já tem letra, escrita ouvindo o áudio e talvez corrigida à mão."
       : "Já tem letra.";
-  return `${oQueTem} Sem marcar, aplica só título e artista.`;
+  return `${oQueTem} Sem marcar abaixo, aplica só título e artista.`;
 }
 
 /**

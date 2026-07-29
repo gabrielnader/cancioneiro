@@ -8,7 +8,6 @@ import {
   ACESSORIO_PRONTO,
   ACESSORIO_SEM_BINARIO,
   AVISO_NOME_ESCRITO,
-  CONFERENCIA_PRECISA_DO_SOM,
   ETAPAS_FORA_DO_APP,
   LABEL_SOM_DIZ,
   LABEL_SUBSTITUIR_LETRA,
@@ -20,8 +19,10 @@ import {
   avisoLetraExistente,
   confiancaDoSom,
   estimativaTexto,
+  estadoDoSom,
   etapasDoFunil,
   formatarTamanho,
+  motivoDaConferencia,
   opcoesDePasta,
   rotuloAceitarSom,
   rotuloBaixarAcessorio,
@@ -30,9 +31,11 @@ import {
   textoAplicado,
   textoDoCabecalho,
   textoDoDownload,
+  textoDaChaveDoVagalume,
   textoDoAcessorioAusente,
   textoSemPropostas,
   type ContagemCandidatas,
+  type EstadoDoSom,
   type EtapasLigadas,
 } from "./curadoria";
 import type { Folder, Song } from "./types";
@@ -151,8 +154,8 @@ describe("estimativaTexto — o que a pessoa lê ANTES de disparar", () => {
 
   it("uma candidata: singular", () => {
     expect(completar(pronta(1), 12)).toBe(
-      "1 música incompleta nesta pasta. A busca leva menos de 1 minuto, mais se" +
-        " a internet estiver lenta.",
+      "1 música incompleta nesta pasta. A busca leva menos de 1 minuto, e bem" +
+        " mais se a internet estiver lenta ou fora do ar.",
     );
   });
 
@@ -250,9 +253,106 @@ describe("o modo de conferência (V9) — outro trabalho, outro custo", () => {
     );
   });
 
-  it("sem o acessório, a conferência é impossível e a tela diz por quê", () => {
-    expect(CONFERENCIA_PRECISA_DO_SOM.toLowerCase()).toContain("som");
-    expect(CONFERENCIA_PRECISA_DO_SOM.length).toBeLessThanOrEqual(90);
+  // MÉDIO-1 — o motivo era uma string FIXA, mostrada sempre que faltava o
+  // som: em três dos cinco estados ela mandava "baixar o acessório abaixo"
+  // enquanto o bloco logo abaixo dizia que não havia nada para baixar (e não
+  // desenhava botão nenhum). Uma tela contradizendo a si mesma, para quem não
+  // tem a quem perguntar. O motivo passa a DERIVAR do estado do acessório.
+  describe("o motivo da conferência bloqueada (MÉDIO-1, DECISIONS #87)", () => {
+    const SEM_SOM_AINDA: EstadoDoSom[] = [
+      "perguntando",
+      "indeterminado",
+      "sem-binario",
+      "indisponivel",
+      "ausente",
+      "corrompido",
+    ];
+
+    it("com o som pronto não há motivo nenhum a dar", () => {
+      expect(motivoDaConferencia("pronto")).toBeNull();
+    });
+
+    it("todo estado sem som tem um motivo próprio, e nenhum se repete", () => {
+      const motivos = SEM_SOM_AINDA.map((e) => motivoDaConferencia(e));
+      expect(motivos.every((m) => m !== null && m.length > 0)).toBe(true);
+      expect(new Set(motivos).size).toBe(SEM_SOM_AINDA.length);
+    });
+
+    // A regra que o QA reprovou por não existir: mandar baixar só onde HÁ
+    // botão de baixar. Nos outros três estados o bloco do acessório não
+    // desenha botão nenhum, e apontar para ele é mandar procurar o que não
+    // está lá.
+    it("só manda baixar nos dois estados em que existe botão de baixar", () => {
+      const manda = (e: EstadoDoSom) =>
+        (motivoDaConferencia(e) ?? "").toLowerCase().includes("baix");
+      expect(manda("ausente")).toBe(true);
+      expect(manda("corrompido")).toBe(true);
+      for (const e of ["perguntando", "indeterminado", "sem-binario", "indisponivel"] as const) {
+        expect(manda(e), `${e} manda baixar sem ter o que baixar`).toBe(false);
+      }
+    });
+
+    // Cada motivo é lido sozinho, por alguém que não sabe o que é "fpcalc":
+    // ele precisa nomear o recurso que falta e caber numa linha.
+    it("cada motivo nomeia o recurso e cabe numa linha", () => {
+      for (const e of SEM_SOM_AINDA) {
+        const m = motivoDaConferencia(e)!;
+        expect(m.toLowerCase(), m).toContain("som");
+        expect(m.length, m).toBeLessThanOrEqual(90);
+      }
+    });
+
+    // O motivo não pode contradizer o bloco do acessório: os dois textos ficam
+    // a três centímetros um do outro na mesma tela.
+    it("o motivo concorda com o que o bloco do acessório diz", () => {
+      expect(motivoDaConferencia("indisponivel")!.toLowerCase()).toContain(
+        "nesta versão",
+      );
+      expect(motivoDaConferencia("sem-binario")!.toLowerCase()).toContain(
+        "este computador",
+      );
+      expect(motivoDaConferencia("indeterminado")!.toLowerCase()).toContain(
+        "conferir",
+      );
+    });
+  });
+
+  // A leitura do que o backend devolveu mora num lugar só, e é ela que decide
+  // se a etapa 2 roda, se a conferência é possível e o que o motivo diz.
+  describe("estadoDoSom — a leitura do que o backend devolveu", () => {
+    const fpcalc = (estado: string) => [{ nome: "fpcalc", estado }];
+
+    it("undefined = a pergunta ainda não voltou", () => {
+      expect(estadoDoSom(undefined)).toBe("perguntando");
+    });
+
+    it("null = a pergunta falhou, que NÃO é 'não existe' nem 'pronto'", () => {
+      expect(estadoDoSom(null)).toBe("indeterminado");
+    });
+
+    it("lista vazia = não publicamos binário para este computador", () => {
+      expect(estadoDoSom([])).toBe("sem-binario");
+    });
+
+    // Lista com outros acessórios e sem o fpcalc é o mesmo fato, do ponto de
+    // vista de quem quer conferir etiqueta: o som não existe nesta máquina.
+    it("lista sem o fpcalc vale o mesmo que lista vazia", () => {
+      expect(estadoDoSom([{ nome: "whisper", estado: "pronto" }])).toBe(
+        "sem-binario",
+      );
+    });
+
+    it("cada estado do fpcalc passa direto", () => {
+      for (const e of ["pronto", "ausente", "corrompido", "indisponivel"]) {
+        expect(estadoDoSom(fpcalc(e))).toBe(e);
+      }
+    });
+
+    // Estado que esta versão do app não conhece (backend mais novo): "não
+    // sabemos" é a única resposta honesta — nunca "pronto" (DECISIONS #86).
+    it("estado desconhecido não vira 'pronto' por otimismo", () => {
+      expect(estadoDoSom(fpcalc("coisa-nova"))).toBe("indeterminado");
+    });
   });
 
   // DECISIONS #86 — nenhum texto pode afirmar o que o programa não sabe. O
@@ -547,7 +647,7 @@ describe("textoAplicado — o aviso final diz o que MUDOU, nunca uma tarefa", ()
 
 describe("o que a seção de curadoria promete", () => {
   it("sem o acessório, a etapa do som NÃO é listada — ela não vai rodar", () => {
-    expect(etapasDoFunil(false).map((e) => e.nome)).toEqual([
+    expect(etapasDoFunil(SEM_SOM).map((e) => e.nome)).toEqual([
       "O que já está no arquivo",
       "LRCLIB",
       "Vagalume",
@@ -558,7 +658,7 @@ describe("o que a seção de curadoria promete", () => {
   // impressão digital não devolve letra, devolve identidade, que é entrada
   // das outras etapas.
   it("com o acessório, o som entra em segundo — antes das bases de letra", () => {
-    expect(etapasDoFunil(true).map((e) => e.nome)).toEqual([
+    expect(etapasDoFunil(COM_SOM).map((e) => e.nome)).toEqual([
       "O que já está no arquivo",
       "Reconhecer pelo som",
       "LRCLIB",
@@ -570,15 +670,82 @@ describe("o que a seção de curadoria promete", () => {
   // o que viaja é um resumo acústico. É invariável do produto e a única
   // explicação que essas pessoas vão receber.
   it("a etapa do som diz o que sai do computador", () => {
-    const som = etapasDoFunil(true)[1];
+    const som = etapasDoFunil(COM_SOM)[1];
     expect(som.explicacao).toContain("resumo");
     expect(som.explicacao.toLowerCase()).not.toContain("envia o áudio");
   });
 
   it("cada explicação de etapa cabe numa linha", () => {
-    for (const e of etapasDoFunil(true)) {
-      expect(e.explicacao.length, e.explicacao).toBeLessThanOrEqual(80);
+    for (const etapas of [SEM_SOM, COM_SOM, { som: true, vagalume: false }]) {
+      for (const e of etapasDoFunil(etapas)) {
+        expect(e.explicacao.length, e.explicacao).toBeLessThanOrEqual(80);
+      }
     }
+  });
+
+  // MÉDIO-2 — a etapa 4 era prometida em toda instalação ("site brasileiro de
+  // letras.") e não roda em NENHUMA: o segredo `VAGALUME_API_KEY` não existe,
+  // então não há chave embutida em build nenhuma. O funil enumerava 4 etapas
+  // e entregava 2, e o único texto que dizia COMO ligar a etapa tinha sido
+  // apagado no passe de copy.
+  describe("a etapa do Vagalume diz quando ela roda (MÉDIO-2)", () => {
+    const vagalumeDe = (etapas: EtapasLigadas) =>
+      etapasDoFunil(etapas).find((e) => e.nome === "Vagalume")!;
+
+    it("sem chave, a explicação diz a condição — e aponta o campo", () => {
+      const e = vagalumeDe({ som: false, vagalume: false });
+      expect(e.explicacao.toLowerCase()).toContain("chave");
+      expect(e.explicacao.toLowerCase()).toContain("abaixo");
+    });
+
+    // Com a chave em mãos a condição já foi cumprida: repeti-la é o ruído que
+    // o passe de redução da V9 existe para tirar.
+    it("com chave, a explicação não pede nada", () => {
+      const e = vagalumeDe({ som: false, vagalume: true });
+      expect(e.explicacao.toLowerCase()).not.toContain("chave");
+    });
+
+    // Continuar LISTANDO a etapa sem chave é deliberado, e é o contrário do
+    // que se faz com o som: o som exige um download de 5 MB e tem um bloco
+    // próprio logo abaixo da lista para explicá-lo; o Vagalume exige um campo,
+    // e esconder a etapa esconderia a única frase que diz para que o campo
+    // serve. Não há suporte a quem perguntar depois.
+    it("a etapa continua listada sem chave — mas não promete nada", () => {
+      const nomes = etapasDoFunil({ som: false, vagalume: false }).map((e) => e.nome);
+      expect(nomes).toContain("Vagalume");
+    });
+  });
+
+  // MÉDIO-2, o outro lado: a estimativa somava 2 s/música de um trabalho que
+  // não acontece. Estimativa folgada é o lado certo de errar (DECISIONS #85),
+  // mas isto não é folga — é uma etapa inexistente na conta.
+  it("a estimativa só cobra o Vagalume de quem vai consultá-lo", () => {
+    expect(segundosPorMusica("completar", { som: false, vagalume: false })).toBeLessThan(
+      segundosPorMusica("completar", { som: false, vagalume: true }),
+    );
+  });
+
+  // O texto do campo da chave também deriva do mesmo fato. "Só é preciso
+  // preencher se a busca do Vagalume parar de funcionar" afirma que ela
+  // funciona sem a chave — e não funciona em nenhuma build distribuída.
+  describe("o texto do campo da chave (MÉDIO-2)", () => {
+    it("sem chave embutida, diz que sem ela o Vagalume não é consultado", () => {
+      const t = textoDaChaveDoVagalume(false);
+      expect(t.toLowerCase()).toContain("sem ela");
+      expect(t.toLowerCase()).not.toContain("parar de funcionar");
+    });
+
+    it("com chave embutida, o campo volta a ser a saída de emergência", () => {
+      expect(textoDaChaveDoVagalume(true).toLowerCase()).toContain(
+        "parar de funcionar",
+      );
+    });
+
+    it("nenhuma das duas versões passa de duas frases", () => {
+      for (const t of [textoDaChaveDoVagalume(false), textoDaChaveDoVagalume(true)]) {
+        expect(frases(t), t).toBeLessThanOrEqual(2);
+      }
+    });
   });
 
   // O texto antigo negava DUAS coisas: reconhecer pelo som e escrever a letra
@@ -593,6 +760,68 @@ describe("o que a seção de curadoria promete", () => {
 
   it("o endereço da chave gratuita do Vagalume é o oficial", () => {
     expect(VAGALUME_URL).toBe("https://auth.vagalume.com.br/settings/api/");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BAIXO-4 — o que o passe de redução levou junto sem ganhar nada em troca
+// ---------------------------------------------------------------------------
+//
+// Encurtar é bom; encurtar tirando o fato é outra coisa. Estes quatro textos
+// perderam informação que respondia a uma pergunta real, e a régua da V9 é
+// justamente essa: o que fica é o que responde a uma pergunta que a pessoa
+// faria naquele momento. Repostos SEM desfazer o passe.
+
+describe("o que o passe de redução levou junto (BAIXO-4)", () => {
+  // A etapa 1 diz "sem sair do computador". Sem "na internet" na etapa 3, o
+  // contraste entre local e remoto — que é a coisa que a pessoa quer saber
+  // sobre um app offline — some da lista inteira.
+  it("o LRCLIB volta a dizer que é na internet, em contraste com a etapa 1", () => {
+    const etapas = etapasDoFunil({ som: false, vagalume: true });
+    const local = etapas.find((e) => e.nome === "O que já está no arquivo")!;
+    const lrclib = etapas.find((e) => e.nome === "LRCLIB")!;
+    expect(local.explicacao).toContain("sem sair do computador");
+    expect(lrclib.explicacao).toContain("na internet");
+  });
+
+  // DECISIONS #85: a mitigação da estimativa é admitir que a ordem de grandeza
+  // depende de uma rede que ninguém controla. "mais se a internet estiver
+  // lenta" perdeu as duas metades que faziam isso — o "bem mais" e a rede
+  // FORA DO AR, que é o caso em que a busca demora de verdade.
+  it("a estimativa volta a admitir 'bem mais' e a rede fora do ar", () => {
+    const texto = completar(pronta(95), 200);
+    expect(texto).toContain("bem mais se a internet estiver lenta");
+    expect(texto).toContain("fora do ar");
+  });
+
+  // O aviso fica logo ACIMA da marcação que ele descreve. Sem o "abaixo", ele
+  // manda marcar sem dizer onde, numa lista que pode ter dezenas de linhas com
+  // caixas parecidas.
+  it("o aviso de letra existente volta a apontar onde fica a marcação", () => {
+    for (const origem of [null, "transcricao"]) {
+      expect(avisoLetraExistente(origem)).toContain("abaixo");
+    }
+  });
+
+  // "letra ou a marca de instrumental" lê-se como se a marca substituísse o
+  // conjunto todo. O que ela dispensa é a LETRA, e é isso que faz a frase
+  // descrever o acervo de quem está lendo (DECISIONS #86).
+  it("a regra de completude volta a dizer o que a marca de instrumental dispensa", () => {
+    const texto = completar(pronta(0), 12);
+    expect(texto).toContain("marca de instrumental");
+    expect(texto).toContain("dispensa a letra");
+  });
+
+  // ...e nada disso pode desfazer o passe: os textos continuam curtos.
+  it("os textos repostos continuam dentro do teto da V9", () => {
+    for (const t of [
+      completar(pronta(95), 200),
+      avisoLetraExistente("transcricao"),
+      textoSemPropostas(0, "completar"),
+    ]) {
+      expect(t.length, t).toBeLessThanOrEqual(210);
+      expect(frases(t), t).toBeLessThanOrEqual(2);
+    }
   });
 });
 
