@@ -788,8 +788,23 @@ pub struct AcessorioInfo {
     pub arquivo: String,
     /// Quanto ocupa, em bytes.
     pub tamanho_bytes: u64,
+    /// Quanto tempo o download deve levar, em segundos, numa conexão de
+    /// referência (V10). A dispensa do tempo valia para 5 MB; para os 180 MB
+    /// do modelo, não vale — sem isto a tela oferece um download sem dizer se
+    /// ele leva três minutos ou três horas.
+    ///
+    /// É estimativa DECLARADA, não medida (`acessorios::BANDA_REFERENCIA_BYTES_S`,
+    /// 1 MB/s): a copy tem de dizer "cerca de". Durante o download o número
+    /// honesto passa a ser o `segundos_restantes` do progresso, que vem da
+    /// velocidade real desta conexão.
+    pub segundos_estimados: u64,
     /// "ausente" | "pronto" | "corrompido" | "indisponivel".
     pub estado: String,
+    /// É um PROGRAMA que o aplicativo executa (`true`) ou um DADO que ele só
+    /// lê (`false`)? O modelo de transcrição é dado — 180 MB que ninguém
+    /// executa —, e a tela precisa poder dizer isso: "um programa de 2 MB e um
+    /// arquivo de 180 MB" é uma conversa diferente de "dois programas".
+    pub executavel: bool,
     /// De onde ele vem — a "origem só para explicar na tela" do PRD V9.
     pub origem: String,
 }
@@ -804,6 +819,12 @@ pub struct AcessorioProgresso {
     pub nome: String,
     pub baixados: u64,
     pub total: Option<u64>,
+    /// Quanto ainda falta, em segundos, pela velocidade MEDIDA desta conexão
+    /// (V10). `null` enquanto a amostra é curta demais para render número
+    /// honesto, e quando o servidor não anuncia o tamanho — "não sabemos" é um
+    /// estado (DECISIONS #86), e num download de 180 MB um "faltam 0 segundos"
+    /// que dura dez minutos é pior que nenhum número.
+    pub segundos_restantes: Option<u64>,
     pub download_id: String,
 }
 
@@ -821,6 +842,12 @@ pub struct AcessorioDownload {
 fn para_que_serve(nome: &str) -> &'static str {
     match nome {
         crate::acessorios::FPCALC => "reconhecer a música pelo som",
+        crate::acessorios::WHISPER_CLI => "escrever a letra ouvindo o áudio",
+        // Duas entradas para uma etapa só, e a frase precisa explicar por quê:
+        // são 2 MB de programa e 180 MB de dado, e a pessoa vai ver os dois.
+        crate::acessorios::MODELO_WHISPER => {
+            "entender o que é cantado — é o que o transcritor consulta"
+        }
         _ => "",
     }
 }
@@ -835,6 +862,9 @@ fn info_de(
     // que fazer. Oferecer um download de 5 MB que não pode servir para nada
     // seria pior que não oferecer nada — e "indisponível nesta versão" é
     // exatamente o que está acontecendo.
+    //
+    // A etapa 5 não depende de chave nenhuma: ela roda LOCAL, que é o que
+    // torna aceitável transcrever acervos que o dono do produto não pode ver.
     if !tem_chave && acessorio.nome == crate::acessorios::FPCALC {
         estado = crate::acessorios::Estado::Indisponivel;
     }
@@ -843,7 +873,9 @@ fn info_de(
         para_que_serve: para_que_serve(acessorio.nome).to_string(),
         arquivo: acessorio.arquivo.to_string(),
         tamanho_bytes: acessorio.tamanho_bytes,
+        segundos_estimados: crate::acessorios::segundos_estimados(acessorio.tamanho_bytes),
         estado: estado.como_texto().to_string(),
+        executavel: acessorio.executavel,
         origem: acessorio.url(),
     }
 }
@@ -898,6 +930,9 @@ pub fn acessorio_baixar(
     let cancel = state.scan_begin(&download_id)?;
     let nome_evento = acessorio.nome.to_string();
     let id_evento = download_id.clone();
+    // O relógio começa aqui, e não no primeiro byte: o que a pessoa espera
+    // inclui o tempo de abrir a conexão.
+    let inicio = std::time::Instant::now();
     let resultado = crate::acessorios::baixar(
         acessorio,
         &cache,
@@ -909,6 +944,11 @@ pub fn acessorio_baixar(
                     nome: nome_evento.clone(),
                     baixados,
                     total,
+                    segundos_restantes: crate::acessorios::segundos_restantes(
+                        baixados,
+                        total,
+                        inicio.elapsed(),
+                    ),
                     download_id: id_evento.clone(),
                 },
             );

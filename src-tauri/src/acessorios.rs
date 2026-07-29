@@ -29,6 +29,7 @@ use crate::error::{AppError, Result};
 use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 // ===========================================================================
 //  ██  CATÁLOGO DOS ACESSÓRIOS — É AQUI QUE OS SHA-256 SÃO PREENCHIDOS  ██
@@ -51,8 +52,22 @@ use std::path::{Path, PathBuf};
 // SOMA PENDENTE (64 zeros) deixa o acessório `Indisponivel`: o aplicativo diz
 // isso ANTES de gastar o download de alguém, em vez de baixar 2 MB para então
 // acusar o arquivo de estar corrompido — acusação falsa é pior que ausência
-// de recurso quando a mensagem é a explicação inteira. Nenhuma entrada está
-// pendente hoje, e há teste fixando isso.
+// de recurso quando a mensagem é a explicação inteira.
+//
+// V10 — AS ENTRADAS DA ETAPA 5 ESTÃO PENDENTES DE PROPÓSITO. Os quatro
+// `whisper-cli` e o modelo `ggml-small-q5_1.bin` são publicados pelo fluxo
+// `.github/workflows/acessorio-transcritor.yml`, no MESMO lançamento
+// `acessorios-v1` (acrescentar arquivo a um lançamento não muda o hash dos
+// que já estão lá — quem baixou o `fpcalc` não é afetado). Enquanto as somas
+// não vêm do resumo daquele fluxo, a etapa 5 aparece como indisponível, que é
+// o que ela é. Nenhum teste desta suíte depende dos valores reais.
+//
+// AO PREENCHER UMA SOMA, PREENCHA O TAMANHO JUNTO: os tamanhos das entradas
+// pendentes são APROXIMAÇÕES para a tela ter o que dizer, e saem do mesmo
+// `ls -l`/resumo do fluxo que dá a soma. Tamanho errado não impede download
+// nenhum (a barra usa o `Content-Length`), mas mente na estimativa de tempo —
+// e estimativa errada por ordem de grandeza é pior que estimativa ausente
+// (DECISIONS #85).
 
 /// Soma ainda não preenchida (64 zeros). Ver o bloco acima.
 pub const SHA256_PENDENTE: &str =
@@ -76,6 +91,7 @@ pub const CATALOGO: &[Acessorio] = &[
         arquivo: "fpcalc-windows-x86_64.exe",
         sha256: "659ea2dba1a12d7df4fe2b6f23f60fd9414ae61aca1b014ee8fa37c5e09b930b",
         tamanho_bytes: 3_418_112,
+        executavel: true,
     },
     Acessorio {
         nome: FPCALC,
@@ -83,6 +99,7 @@ pub const CATALOGO: &[Acessorio] = &[
         arquivo: "fpcalc-linux-x86_64",
         sha256: "085a1adf67b4a71a2e57b7b05bc425c1ea21b371b2b43049fc8ba37b53cb472b",
         tamanho_bytes: 5_538_312,
+        executavel: true,
     },
     Acessorio {
         nome: FPCALC,
@@ -90,6 +107,55 @@ pub const CATALOGO: &[Acessorio] = &[
         arquivo: ARQUIVO_MACOS,
         sha256: "ede0f92ac30807799872f8700d5e334e9ddef738a6b1b9d154097954619d68f8",
         tamanho_bytes: 4_739_368,
+        executavel: true,
+    },
+    // --- etapa 5 (V10): SOMAS E TAMANHOS PENDENTES -------------------------
+    //
+    // O whisper.cpp é CONSTRUÍDO por nós (`BUILD_SHARED_LIBS=OFF`, para o
+    // acessório ser UM arquivo conferível por UM SHA-256), e não sai
+    // universal como o Chromaprint: são DOIS arquivos de macOS, um por
+    // processador.
+    Acessorio {
+        nome: WHISPER_CLI,
+        plataforma: "windows-x86_64",
+        arquivo: "whisper-cli-windows-x86_64.exe",
+        sha256: SHA256_PENDENTE,
+        tamanho_bytes: 2_000_000, // aproximado — preencher com a soma
+        executavel: true,
+    },
+    Acessorio {
+        nome: WHISPER_CLI,
+        plataforma: "linux-x86_64",
+        arquivo: "whisper-cli-linux-x86_64",
+        sha256: SHA256_PENDENTE,
+        tamanho_bytes: 2_000_000, // aproximado — preencher com a soma
+        executavel: true,
+    },
+    Acessorio {
+        nome: WHISPER_CLI,
+        plataforma: "macos-arm64",
+        arquivo: "whisper-cli-macos-arm64",
+        sha256: SHA256_PENDENTE,
+        tamanho_bytes: 2_000_000, // aproximado — preencher com a soma
+        executavel: true,
+    },
+    Acessorio {
+        nome: WHISPER_CLI,
+        plataforma: "macos-x86_64",
+        arquivo: "whisper-cli-macos-x86_64",
+        sha256: SHA256_PENDENTE,
+        tamanho_bytes: 2_000_000, // aproximado — preencher com a soma
+        executavel: true,
+    },
+    Acessorio {
+        nome: MODELO_WHISPER,
+        // DADO, não programa: o mesmo arquivo serve as quatro máquinas, e ele
+        // não recebe o bit de execução.
+        plataforma: QUALQUER_PLATAFORMA,
+        arquivo: "ggml-small-q5_1.bin",
+        sha256: SHA256_PENDENTE,
+        tamanho_bytes: 181_000_000, // aproximado — preencher com a soma
+        executavel: false,
     },
 ];
 
@@ -100,6 +166,69 @@ pub const CATALOGO: &[Acessorio] = &[
 /// Nome do acessório da etapa 2. É o que o frontend manda em
 /// `acessorio_baixar(nome)` e o que aparece nas mensagens.
 pub const FPCALC: &str = "fpcalc";
+
+/// Nome do PROGRAMA da etapa 5 (whisper.cpp).
+pub const WHISPER_CLI: &str = "whisper-cli";
+
+/// Nome do MODELO da etapa 5 — dado, não programa. São duas entradas
+/// separadas de propósito: 2 MB e 180 MB têm conversas diferentes com quem
+/// vai clicar, e um pode estar pronto sem o outro.
+pub const MODELO_WHISPER: &str = "modelo-de-transcricao";
+
+/// Plataforma dos acessórios que são DADO: um arquivo só serve as quatro
+/// máquinas. É sempre o ÚLTIMO recurso na busca, para nunca ganhar de um
+/// arquivo específico do processador.
+pub const QUALQUER_PLATAFORMA: &str = "qualquer";
+
+// ---------------------------------------------------------------------------
+// O tempo do download (PRD V10) — a regra que muda para 180 MB
+// ---------------------------------------------------------------------------
+//
+// "Download só com aceite explícito, com tamanho **e tempo** — a dispensa do
+// tempo valia para 5 MB, não vale para 180 MB."
+//
+// Antes do primeiro byte não há velocidade medida, e não medir não pode virar
+// não dizer nada: a tela precisa de um número para a pessoa decidir se começa
+// agora ou à noite. O número de referência abaixo é DECLARADO, não medido, e a
+// copy tem de dizer "cerca de".
+
+/// Velocidade de referência: 1 MB/s (~8 Mbit/s), uma conexão doméstica
+/// modesta. Deliberadamente conservadora — pela DECISIONS #85, estimativa que
+/// promete MENOS do que leva é o defeito; folga não é.
+pub const BANDA_REFERENCIA_BYTES_S: u64 = 1_000_000;
+
+/// Amostra mínima antes de trocar a referência pela velocidade MEDIDA. No
+/// primeiro pedaço a velocidade aparente é absurda (64 KiB em microssegundos),
+/// e um "faltam 0 segundos" que dura um minuto é pior que nenhum número.
+const AMOSTRA_MINIMA: Duration = Duration::from_millis(500);
+const BYTES_MINIMOS_DA_AMOSTRA: u64 = 256 * 1024;
+
+/// Quanto tempo se espera para baixar `tamanho_bytes`, ANTES de começar.
+/// Arredonda para CIMA.
+pub fn segundos_estimados(tamanho_bytes: u64) -> u64 {
+    tamanho_bytes.div_ceil(BANDA_REFERENCIA_BYTES_S)
+}
+
+/// Quanto ainda falta, a partir do que ESTA conexão já mostrou. `None` quando
+/// não dá para saber — servidor que não anuncia o tamanho, ou amostra curta
+/// demais para render número honesto. "Não sabemos" é um estado
+/// (DECISIONS #86); um zero no lugar seria mentira.
+pub fn segundos_restantes(
+    baixados: u64,
+    total: Option<u64>,
+    decorridos: Duration,
+) -> Option<u64> {
+    let total = total?;
+    let faltam = total.saturating_sub(baixados);
+    if faltam == 0 {
+        return Some(0);
+    }
+    if decorridos < AMOSTRA_MINIMA || baixados < BYTES_MINIMOS_DA_AMOSTRA {
+        return None;
+    }
+    let por_segundo = baixados as f64 / decorridos.as_secs_f64();
+    (por_segundo > 0.0).then(|| (faltam as f64 / por_segundo).ceil() as u64)
+}
 
 /// Mensagens (pt-BR, curtas) — TEXTO FIXO, sem interpolação: a primeira frase
 /// diz o que é; o resto só existe se responder a uma pergunta que a pessoa
@@ -189,8 +318,17 @@ pub struct Acessorio {
     /// SHA-256 esperado, em hexadecimal minúsculo. Ver o bloco do catálogo.
     pub sha256: &'static str,
     /// Tamanho anunciado na tela ANTES de baixar ("quanto ocupa", PRD V9
-    /// regra 1). Não é critério de aceitação: quem decide é a soma.
+    /// regra 1). Não é critério de aceitação: quem decide é a soma. É dele
+    /// que sai o tempo estimado (PRD V10).
     pub tamanho_bytes: u64,
+    /// Este acessório é um PROGRAMA que vamos executar?
+    ///
+    /// V10 — o catálogo presumia que todo acessório era binário e ligava o bit
+    /// de execução em todos. O modelo de transcrição é DADO: 180 MB que nunca
+    /// serão executados, e marcá-los como executáveis é convite para o
+    /// antivírus sem ganho nenhum. O `estado` não muda: quem decide se o
+    /// arquivo serve continua sendo a soma.
+    pub executavel: bool,
 }
 
 impl Acessorio {
@@ -261,32 +399,49 @@ pub fn diretorio_de_cache(base: &Path) -> PathBuf {
     base.join("acessorios")
 }
 
-/// O acessório `nome` desta máquina, ou `None` quando não publicamos binário
+/// Os rótulos de plataforma que servem esta máquina, **do mais específico
+/// para o mais genérico**.
+///
+/// A ordem é o ponto (V10). O `fpcalc` do macOS é UNIVERSAL e mora sob
+/// `"macos"`; o `whisper-cli`, construído por nós, sai um por processador e
+/// mora sob `"macos-arm64"`/`"macos-x86_64"`; o modelo é dado e mora sob
+/// `"qualquer"`. Procurar na ordem certa é o que deixa os três conviverem no
+/// mesmo catálogo sem uma tabela por acessório.
+///
+/// Lista vazia = não publicamos binário para esta máquina, e a tela diz isso
+/// em vez de oferecer um download que não serviria (DECISIONS #101).
+pub fn plataformas_desta_maquina() -> &'static [&'static str] {
+    if cfg!(target_os = "windows") && cfg!(target_arch = "x86_64") {
+        &["windows-x86_64", QUALQUER_PLATAFORMA]
+    } else if cfg!(target_os = "linux") && cfg!(target_arch = "x86_64") {
+        &["linux-x86_64", QUALQUER_PLATAFORMA]
+    } else if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
+        &["macos-arm64", "macos", QUALQUER_PLATAFORMA]
+    } else if cfg!(target_os = "macos") && cfg!(target_arch = "x86_64") {
+        &["macos-x86_64", "macos", QUALQUER_PLATAFORMA]
+    } else {
+        &[]
+    }
+}
+
+/// O acessório `nome` desta máquina, ou `None` quando não publicamos arquivo
 /// para esta plataforma (aí a etapa que depende dele simplesmente não existe
 /// aqui, e a tela diz isso em vez de oferecer um download que não serve).
 pub fn desta_maquina(nome: &str) -> Option<&'static Acessorio> {
-    let plataforma = if cfg!(target_os = "windows") && cfg!(target_arch = "x86_64") {
-        "windows-x86_64"
-    } else if cfg!(target_os = "linux") && cfg!(target_arch = "x86_64") {
-        "linux-x86_64"
-    } else if cfg!(target_os = "macos") {
-        // um arquivo só serve os dois processadores do Mac: o universal
-        // roda nativo nos dois, e o x86_64 roda no Apple Silicon por Rosetta
-        "macos"
-    } else {
-        return None;
-    };
-    CATALOGO
-        .iter()
-        .find(|a| a.nome == nome && a.plataforma == plataforma)
+    plataformas_desta_maquina().iter().find_map(|plataforma| {
+        CATALOGO
+            .iter()
+            .find(|a| a.nome == nome && a.plataforma == *plataforma)
+    })
 }
 
-/// Todos os acessórios que existem para esta máquina (hoje, só o `fpcalc`).
+/// Todos os acessórios que existem para esta máquina, sem repetir nome e na
+/// ordem do catálogo — o som, o transcritor e o modelo.
 pub fn catalogo_desta_maquina() -> Vec<&'static Acessorio> {
-    let mut vistos = Vec::new();
+    let mut vistos: Vec<&'static Acessorio> = Vec::new();
     for a in CATALOGO {
         if let Some(meu) = desta_maquina(a.nome) {
-            if !vistos.iter().any(|v: &&Acessorio| v.nome == meu.nome) {
+            if !vistos.iter().any(|v| v.nome == meu.nome) {
                 vistos.push(meu);
             }
         }
@@ -443,8 +598,12 @@ where
     // O bit de execução vai ANTES da troca de nome: assim o arquivo que
     // aparece no cache já nasce executável, sem uma janela em que ele existe
     // e não roda.
+    //
+    // V10 — e SÓ para quem é programa. O modelo de transcrição são 180 MB de
+    // dado que ninguém executa; marcá-los como executáveis é convite para o
+    // antivírus, e não compra nada.
     #[cfg(unix)]
-    {
+    if acessorio.executavel {
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&parcial.0, std::fs::Permissions::from_mode(0o755))
             .map_err(|e| erro_de_escrita(Passo::Instalacao, &e))?;
@@ -475,6 +634,7 @@ mod tests {
             arquivo: "fpcalc-teste",
             sha256: String::leak(sha256.to_string()),
             tamanho_bytes: CONTEUDO.len() as u64,
+            executavel: true,
         }
     }
 
@@ -533,8 +693,9 @@ mod tests {
         }
     }
 
-    /// Os nomes de arquivo são os que o `.github/workflows/acessorios.yml`
-    /// publica. Divergência aqui é 404 na cara de quem clicou.
+    /// Os nomes de arquivo são os que os fluxos `acessorios.yml` (etapa 2) e
+    /// `acessorio-transcritor.yml` (etapa 5) publicam. Divergência aqui é 404
+    /// na cara de quem clicou.
     #[test]
     fn os_nomes_de_arquivo_sao_os_que_o_workflow_publica() {
         let arquivos: Vec<&str> = CATALOGO.iter().map(|a| a.arquivo).collect();
@@ -543,19 +704,174 @@ mod tests {
         // o Chromaprint v1.5.1 publica binário UNIVERSAL para macOS: um
         // arquivo só, nativo nos dois processadores, sem Rosetta
         assert!(arquivos.contains(&"fpcalc-macos-universal"));
-        assert_eq!(arquivos.len(), 3, "três plataformas, não quatro");
+        // V10 — o whisper.cpp é construído por nós, e NÃO sai universal: são
+        // dois arquivos de macOS, um por processador
+        assert!(arquivos.contains(&"whisper-cli-macos-arm64"));
+        assert!(arquivos.contains(&"whisper-cli-macos-x86_64"));
+        assert!(arquivos.contains(&"whisper-cli-linux-x86_64"));
+        assert!(arquivos.contains(&"whisper-cli-windows-x86_64.exe"));
+        assert!(arquivos.contains(&"ggml-small-q5_1.bin"));
     }
 
-    /// Guarda de regressão: o catálogo publicado NÃO pode voltar a ter soma
+    /// Guarda de regressão: o que JÁ FOI PUBLICADO não pode voltar a ter soma
     /// pendente nem tamanho zero. Uma soma zerada por um merge desligaria a
     /// etapa 2 de todo mundo, e um tamanho zerado faria a tela prometer um
     /// download de 0 byte antes de baixar 5 MB.
+    ///
+    /// A etapa 5 ainda não está publicada: o fluxo
+    /// `acessorio-transcritor.yml` é que produz as somas dela. Enquanto isso,
+    /// as entradas ficam `SHA256_PENDENTE` e o produto as trata como
+    /// `Indisponivel` — que é exatamente o que elas são (DECISIONS #97).
+    /// **Nenhum teste desta suíte depende dos valores reais.**
     #[test]
-    fn o_catalogo_publicado_nao_tem_nada_pendente() {
-        for a in CATALOGO {
+    fn o_que_ja_foi_publicado_nao_tem_nada_pendente() {
+        for a in CATALOGO.iter().filter(|a| a.nome == FPCALC) {
             assert_ne!(a.sha256, SHA256_PENDENTE, "{}: soma pendente", a.arquivo);
             assert!(a.tamanho_bytes > 0, "{}: tamanho pendente", a.arquivo);
         }
+    }
+
+    /// Toda entrada, publicada ou não, anuncia um tamanho — é ele que a tela
+    /// mostra ANTES de baixar, e é dele que sai o tempo estimado. Zero faria a
+    /// tela prometer um download instantâneo de 180 MB.
+    #[test]
+    fn toda_entrada_do_catalogo_anuncia_um_tamanho() {
+        for a in CATALOGO {
+            assert!(a.tamanho_bytes > 0, "{}: sem tamanho", a.arquivo);
+        }
+    }
+
+    /// V10 — o modelo é DADO, não executável, e não recebe (nem deve receber)
+    /// o bit de execução. O catálogo presumia que todo acessório era binário.
+    #[test]
+    fn o_modelo_e_dado_e_o_transcritor_e_executavel() {
+        let modelo = CATALOGO
+            .iter()
+            .find(|a| a.nome == MODELO_WHISPER)
+            .expect("o modelo está no catálogo");
+        assert!(!modelo.executavel, "o modelo não é programa");
+        assert_eq!(
+            modelo.plataforma, QUALQUER_PLATAFORMA,
+            "dado não tem processador: um arquivo serve as quatro máquinas"
+        );
+        for a in CATALOGO.iter().filter(|a| a.nome != MODELO_WHISPER) {
+            assert!(a.executavel, "{}: é programa", a.arquivo);
+        }
+    }
+
+    /// No Unix, arquivo de DADO instalado não ganha o bit de execução: um
+    /// arquivo de 180 MB marcado como executável é convite para o antivírus e
+    /// não serve para nada — ninguém o executa.
+    #[cfg(unix)]
+    #[test]
+    fn no_unix_o_dado_instalado_nao_e_executavel() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let a = Acessorio {
+            executavel: false,
+            ..acessorio_de_teste(&sha256_dos_bytes(CONTEUDO))
+        };
+        let chamadas = Cell::new(0);
+        let caminho = baixar(
+            &a,
+            dir.path(),
+            fetcher(CONTEUDO, &chamadas),
+            sem_progresso,
+            sem_cancelamento,
+        )
+        .unwrap()
+        .unwrap();
+        let modo = std::fs::metadata(&caminho).unwrap().permissions().mode();
+        assert_eq!(modo & 0o111, 0, "dado não recebe bit de execução");
+        // e continua PRONTO: o que decide é a soma, não a permissão
+        assert_eq!(estado(&a, dir.path()), Estado::Pronto);
+    }
+
+    /// A máquina escolhe o arquivo mais específico que existir, e o genérico
+    /// só entra depois. Sem a ordem, o `fpcalc` universal ("macos") poderia
+    /// ser escolhido no lugar do `whisper-cli` do processador certo — ou o
+    /// contrário.
+    #[test]
+    fn a_plataforma_especifica_vem_antes_da_generica() {
+        let plataformas = plataformas_desta_maquina();
+        if plataformas.is_empty() {
+            return; // plataforma sem binário publicado: nada a ordenar
+        }
+        assert_eq!(
+            plataformas.last(),
+            Some(&QUALQUER_PLATAFORMA),
+            "o genérico é o ÚLTIMO recurso"
+        );
+        assert!(
+            !plataformas[..plataformas.len() - 1].contains(&QUALQUER_PLATAFORMA),
+            "o genérico aparece uma vez só"
+        );
+    }
+
+    /// Nesta máquina existem os três acessórios: o do som, o transcritor e o
+    /// modelo. Um catálogo que esquecesse a plataforma faria a etapa sumir da
+    /// tela sem ninguém perceber (DECISIONS #101).
+    #[test]
+    fn esta_maquina_tem_o_som_o_transcritor_e_o_modelo() {
+        for nome in [FPCALC, WHISPER_CLI, MODELO_WHISPER] {
+            assert!(
+                desta_maquina(nome).is_some(),
+                "{nome} não tem arquivo para esta máquina"
+            );
+        }
+        let nomes: Vec<&str> = catalogo_desta_maquina().iter().map(|a| a.nome).collect();
+        assert_eq!(nomes.len(), 3, "três acessórios, sem repetição: {nomes:?}");
+    }
+
+    // -----------------------------------------------------------------------
+    // O tempo do download — a regra que MUDA para 180 MB (PRD V10)
+    // -----------------------------------------------------------------------
+
+    /// "A dispensa do tempo valia para 5 MB, não vale para 180 MB." O tempo
+    /// sai de um número de referência declarado, e a conta é ARREDONDADA PARA
+    /// CIMA: prometer menos do que leva é o defeito da DECISIONS #85.
+    #[test]
+    fn o_tempo_estimado_sai_do_tamanho_e_arredonda_para_cima() {
+        assert_eq!(segundos_estimados(0), 0);
+        assert_eq!(segundos_estimados(BANDA_REFERENCIA_BYTES_S), 1);
+        assert_eq!(segundos_estimados(BANDA_REFERENCIA_BYTES_S + 1), 2);
+        // 180 MB não podem sair como "menos de um minuto"
+        let modelo = desta_maquina(MODELO_WHISPER).expect("o modelo existe aqui");
+        assert!(modelo.tamanho_bytes > 100_000_000, "o modelo é grande");
+        assert!(
+            segundos_estimados(modelo.tamanho_bytes) >= 60,
+            "180 MB precisam de tempo na tela"
+        );
+    }
+
+    /// O tempo que RESTA vem de medição, não da referência: a referência
+    /// serve para a tela dizer algo antes do primeiro byte; depois disso,
+    /// quem manda é a velocidade real desta conexão.
+    #[test]
+    fn o_tempo_restante_vem_da_velocidade_medida() {
+        use std::time::Duration;
+        // 1 MB em 2 s = 500 KB/s; faltam 4 MB → 8 s
+        assert_eq!(
+            segundos_restantes(1_000_000, Some(5_000_000), Duration::from_secs(2)),
+            Some(8)
+        );
+        // sem total anunciado não há restante a calcular (DECISIONS #86)
+        assert_eq!(
+            segundos_restantes(1_000_000, None, Duration::from_secs(2)),
+            None
+        );
+        // amostra curta demais não vira estimativa: no primeiro pedaço a
+        // velocidade aparente é absurda, e um "faltam 0 segundos" que dura um
+        // minuto é pior que nenhum número
+        assert_eq!(
+            segundos_restantes(64_000, Some(180_000_000), Duration::from_millis(50)),
+            None
+        );
+        // e o fim do download não promete tempo nenhum
+        assert_eq!(
+            segundos_restantes(5_000_000, Some(5_000_000), Duration::from_secs(10)),
+            Some(0)
+        );
     }
 
     /// Soma tem 64 dígitos hexadecimais minúsculos — ou é a pendente. Um
