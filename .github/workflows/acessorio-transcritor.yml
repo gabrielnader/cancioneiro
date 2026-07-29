@@ -37,14 +37,26 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # UM trabalho de macOS, produzindo binário UNIVERSAL — não dois.
+          #
+          # O `macos-13` (Intel) fica eternamente na fila: três execuções deste
+          # fluxo esperaram horas sem começar, e no teste de fumaça do `fpcalc`
+          # ele foi o único dos quatro que nunca foi atendido. Runner que não
+          # existe não é matriz, é impasse — e a fila dele travava os outros.
+          #
+          # `CMAKE_OSX_ARCHITECTURES` resolve no runner que existe, e o
+          # resultado é um arquivo só para os dois processadores, igual ao
+          # `fpcalc-macos-universal` que já publicamos. Menos arquivo, menos
+          # hash, menos plataforma para explicar na tela.
           - so: macos-latest
-            nome: whisper-cli-macos-arm64
-          - so: macos-13
-            nome: whisper-cli-macos-x86_64
+            nome: whisper-cli-macos-universal
+            arquiteturas: "arm64;x86_64"
           - so: ubuntu-24.04
             nome: whisper-cli-linux-x86_64
+            arquiteturas: ""
           - so: windows-latest
             nome: whisper-cli-windows-x86_64.exe
+            arquiteturas: ""
     runs-on: ${{ matrix.so }}
     steps:
       - name: Buscar o whisper.cpp
@@ -59,12 +71,35 @@ jobs:
         run: |
           set -euo pipefail
           cd whisper
+          extra=""
+          if [ -n "${{ matrix.arquiteturas }}" ]; then
+            # universal exige desligar a aceleração específica de processador:
+            # o Accelerate/Metal do Apple Silicon não compila para x86_64 no
+            # mesmo binário. Transcrição fica mais lenta e FUNCIONA nos dois —
+            # e um binário que não roda em metade das máquinas é pior que um
+            # binário lento (decisão 96).
+            extra="-DCMAKE_OSX_ARCHITECTURES=${{ matrix.arquiteturas }}
+                   -DGGML_METAL=OFF -DGGML_ACCELERATE=OFF -DGGML_NATIVE=OFF"
+          fi
           cmake -B build -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=OFF \
             -DWHISPER_BUILD_TESTS=OFF \
             -DWHISPER_BUILD_SERVER=OFF \
-            -DWHISPER_BUILD_EXAMPLES=ON
+            -DWHISPER_BUILD_EXAMPLES=ON $extra
           cmake --build build --config Release -j 4
+
+      - name: Conferir que o binário do macOS serve aos DOIS processadores
+        if: startsWith(matrix.so, 'macos')
+        shell: bash
+        run: |
+          set -euo pipefail
+          alvo=$(find whisper/build -type f -name whisper-cli | sort | head -1)
+          file "$alvo"
+          for arq in arm64 x86_64; do
+            lipo -archs "$alvo" | tr ' ' '\n' | grep -qx "$arq" || {
+              echo "::error::o binário não tem $arq — Macs $arq ficariam sem a etapa"
+              exit 1; }
+          done
 
       - name: Achar o executável (na ORDEM certa, que não é a do find)
         # O whisper.cpp deixa um `main` obsoleto ao lado do `whisper-cli`: ele

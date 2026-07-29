@@ -40,9 +40,6 @@ jobs:
           - so: macos-latest      # Apple Silicon
             arquivo: fpcalc-macos-universal
             sha: ede0f92ac30807799872f8700d5e334e9ddef738a6b1b9d154097954619d68f8
-          - so: macos-13          # Intel
-            arquivo: fpcalc-macos-universal
-            sha: ede0f92ac30807799872f8700d5e334e9ddef738a6b1b9d154097954619d68f8
           - so: windows-latest
             arquivo: fpcalc-windows-x86_64.exe
             sha: 659ea2dba1a12d7df4fe2b6f23f60fd9414ae61aca1b014ee8fa37c5e09b930b
@@ -122,10 +119,10 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # macos-13 (Intel) fica eternamente na fila e travava os outros —
+          # o binário universal cobre os dois processadores num arquivo só.
           - so: macos-latest
-            arquivo: whisper-cli-macos-arm64
-          - so: macos-13
-            arquivo: whisper-cli-macos-x86_64
+            arquivo: whisper-cli-macos-universal
           - so: ubuntu-24.04
             arquivo: whisper-cli-linux-x86_64
           - so: windows-latest

@@ -133,16 +133,14 @@ pub const CATALOGO: &[Acessorio] = &[
     },
     Acessorio {
         nome: WHISPER_CLI,
-        plataforma: "macos-arm64",
-        arquivo: "whisper-cli-macos-arm64",
-        sha256: SHA256_PENDENTE,
-        tamanho_bytes: 2_000_000, // aproximado — preencher com a soma
-        executavel: true,
-    },
-    Acessorio {
-        nome: WHISPER_CLI,
-        plataforma: "macos-x86_64",
-        arquivo: "whisper-cli-macos-x86_64",
+        // UNIVERSAL, como o fpcalc: um arquivo nativo nos dois processadores.
+        // Eram duas entradas, uma por processador, até o runner Intel do CI
+        // se revelar inatendível — três execuções ficaram horas na fila sem
+        // começar. Runner que não existe não é plataforma a mais, é impasse;
+        // e um arquivo a menos é um hash a menos e uma plataforma a menos
+        // para explicar na tela.
+        plataforma: "macos",
+        arquivo: "whisper-cli-macos-universal",
         sha256: SHA256_PENDENTE,
         tamanho_bytes: 2_000_000, // aproximado — preencher com a soma
         executavel: true,
@@ -402,11 +400,20 @@ pub fn diretorio_de_cache(base: &Path) -> PathBuf {
 /// Os rótulos de plataforma que servem esta máquina, **do mais específico
 /// para o mais genérico**.
 ///
-/// A ordem é o ponto (V10). O `fpcalc` do macOS é UNIVERSAL e mora sob
-/// `"macos"`; o `whisper-cli`, construído por nós, sai um por processador e
-/// mora sob `"macos-arm64"`/`"macos-x86_64"`; o modelo é dado e mora sob
-/// `"qualquer"`. Procurar na ordem certa é o que deixa os três conviverem no
-/// mesmo catálogo sem uma tabela por acessório.
+/// A ordem é o ponto (V10). Hoje o `fpcalc` e o `whisper-cli` do macOS são os
+/// dois UNIVERSAIS e moram sob `"macos"`, e o modelo é dado e mora sob
+/// `"qualquer"` — então a cadeia inteira poderia ser mais curta.
+///
+/// Ela fica assim de propósito: o degrau por processador (`"macos-arm64"`,
+/// `"macos-x86_64"`) é o que permite publicar um acessório específico depois
+/// sem tocar nesta função. O `whisper-cli` já foi por processador nesta mesma
+/// versão, e voltou a ser universal só porque o runner Intel do CI se revelou
+/// inatendível — se um dia houver motivo para separá-los de novo (aceleração
+/// por hardware, por exemplo), basta a entrada no catálogo.
+///
+/// Procurar do específico para o genérico é o que deixa acessórios de
+/// granularidade diferente conviverem no mesmo catálogo sem uma tabela por
+/// acessório.
 ///
 /// Lista vazia = não publicamos binário para esta máquina, e a tela diz isso
 /// em vez de oferecer um download que não serviria (DECISIONS #101).
@@ -704,10 +711,15 @@ mod tests {
         // o Chromaprint v1.5.1 publica binário UNIVERSAL para macOS: um
         // arquivo só, nativo nos dois processadores, sem Rosetta
         assert!(arquivos.contains(&"fpcalc-macos-universal"));
-        // V10 — o whisper.cpp é construído por nós, e NÃO sai universal: são
-        // dois arquivos de macOS, um por processador
-        assert!(arquivos.contains(&"whisper-cli-macos-arm64"));
-        assert!(arquivos.contains(&"whisper-cli-macos-x86_64"));
+        // V10 — o whisper.cpp é construído por nós, e sai UNIVERSAL: o runner
+        // Intel do CI é inatendível, então o binário cobre os dois
+        // processadores num arquivo só
+        assert!(arquivos.contains(&"whisper-cli-macos-universal"));
+        assert!(
+            !arquivos.contains(&"whisper-cli-macos-x86_64"),
+            "o arquivo por processador não existe mais — o app procuraria \
+             um nome que o fluxo nunca publica"
+        );
         assert!(arquivos.contains(&"whisper-cli-linux-x86_64"));
         assert!(arquivos.contains(&"whisper-cli-windows-x86_64.exe"));
         assert!(arquivos.contains(&"ggml-small-q5_1.bin"));
