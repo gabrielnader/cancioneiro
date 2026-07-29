@@ -1611,7 +1611,17 @@ where
                     conflito: None,
                     marcar_instrumental: false,
                     refrao: None,
-                    aviso: None,
+                    // A RESSALVA. Esta fonte não devolve nome nenhum, então o
+                    // programa não tem como saber se a letra é mesmo desta
+                    // música — e o que ele SABE tem de chegar à tela. O teto
+                    // MÉDIA tira a pré-marcação, mas só protege quem saiba por
+                    // quê: numa revisão de 53 músicas o dono do produto não
+                    // leu as linhas de baixa confiança ("não deu vontade de
+                    // ler mesmo"), e uma linha dizendo só "letra encontrada"
+                    // convida ao clique que grava letra no arquivo dele.
+                    // Silenciar incerteza conhecida é a DECISIONS #86 pelo
+                    // avesso.
+                    aviso: Some(lyrics_ovh::AVISO_SEM_CONFERENCIA.into()),
                     error: None,
                 })
             }

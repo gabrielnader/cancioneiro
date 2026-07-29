@@ -2924,14 +2924,14 @@ fn roteador<'a>(
     urls: &'a RefCell<Vec<String>>,
     acoustid_body: &'a str,
     lrclib_body: &'a str,
-    vagalume_body: &'a str,
+    ovh_body: &'a str,
 ) -> impl Fn(&str) -> Result<String, AppError> + 'a {
     move |url: &str| {
         urls.borrow_mut().push(url.to_string());
         if url.starts_with(cancioneiro_lib::fingerprint::LOOKUP_URL) {
             Ok(acoustid_body.to_string())
         } else if url.starts_with(lyrics_ovh::SEARCH_URL) {
-            Ok(vagalume_body.to_string())
+            Ok(ovh_body.to_string())
         } else {
             Ok(lrclib_body.to_string())
         }
@@ -4566,4 +4566,100 @@ fn quem_ganhou_letra_no_ovh_nao_sobra_para_a_transcricao() {
     .unwrap();
     assert!(r.propostas[0].lyrics.is_some());
     assert!(r.sem_letra_no_fim.is_empty());
+}
+
+/// **A ressalva da etapa 4 chega à TELA, e nunca sai vazia.**
+///
+/// O módulo documenta que esta fonte não devolve título nem artista — não há
+/// segundo lado a conferir, e o programa não tem como saber se a letra é mesmo
+/// desta música. Escrever isso no cabeçalho e não dizer a quem vai clicar não
+/// protege ninguém: o teto MÉDIA tira a pré-marcação, mas só protege alguém
+/// que saiba POR QUÊ. Numa revisão de 53 músicas o dono do produto disse que
+/// não leu as linhas de baixa confiança — "não deu vontade de ler mesmo".
+///
+/// Este teste é a guarda contra a próxima refatoração apagar a ressalva sem
+/// ninguém notar: **toda** proposta desta fonte carrega o aviso, nos dois
+/// caminhos por onde o nome consultado pode chegar (a etiqueta e o som).
+#[test]
+fn toda_proposta_da_etapa_4_carrega_a_ressalva_de_que_nada_foi_conferido() {
+    // caminho 1: o nome vem da ETIQUETA
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
+    com_tags(&conn, "sem_letra.mp3", "Asa Branca", "Luiz Gonzaga");
+    let urls = RefCell::new(Vec::new());
+    let props = enrich::enrich_scan(
+        &conn,
+        "",
+        fontes_de_letra(&urls, "[]".into(), corpo_ovh("a letra sem cadastro")),
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap()
+    .propostas;
+
+    // caminho 2: o nome vem do SOM
+    let (_dir2, conn2, _f2) = setup_with(&[("sem_tags.mp3", "Falamansa - Oh! Chuva.mp3")]);
+    let song2 = song_by_suffix(&conn2, "Oh! Chuva.mp3");
+    let dur = song2.duration_seconds.unwrap() as f64;
+    let urls2 = RefCell::new(Vec::new());
+    let props2 = scan_com(
+        &conn2,
+        ComSom::nova(
+            roteador(
+                &urls2,
+                &acoustid(0.95, "Oh! Chuva", "Falamansa", dur),
+                "[]",
+                &corpo_ovh("a letra sem cadastro"),
+            ),
+            dur,
+        ),
+    );
+
+    let mut vistas = 0;
+    for p in props.iter().chain(props2.iter()) {
+        if p.fonte != enrich::FONTE_LYRICS_OVH {
+            continue;
+        }
+        vistas += 1;
+        let aviso = p.aviso.as_deref().unwrap_or_default();
+        assert!(!aviso.trim().is_empty(), "proposta sem ressalva: {p:?}");
+        assert_eq!(aviso, lyrics_ovh::AVISO_SEM_CONFERENCIA);
+        // e ela vive no `aviso`, não no `error`: a linha PODE ser aplicada
+        assert!(p.error.is_none(), "a ressalva não desabilita a linha");
+        assert_eq!(p.confidence, "media", "e continua sem pré-marcação");
+    }
+    assert_eq!(vistas, 2, "os dois caminhos produziram proposta da etapa 4");
+}
+
+/// ...e a ressalva **não polui as outras linhas**. O LRCLIB confere pela
+/// DURAÇÃO e o som tem a régua do AcoustID: pôr a mesma ressalva neles
+/// ensinaria a ignorá-la em todos.
+#[test]
+fn a_ressalva_da_etapa_4_nao_aparece_nas_outras_fontes() {
+    let (_dir, conn, _f) = setup_with(&[("sem_tags.mp3", "Falamansa - Oh! Chuva.mp3")]);
+    let song = song_by_suffix(&conn, "Oh! Chuva.mp3");
+    let dur = song.duration_seconds.unwrap() as f64;
+
+    // LRCLIB acha (confere pela duração): sem ressalva
+    let corpo = format!(
+        r#"[{{"trackName":"Oh! Chuva","artistName":"Falamansa",
+             "duration":{dur},"plainLyrics":"Chove lá fora"}}]"#
+    );
+    let props = scan_props(&conn, "", move |_url: &str| Ok(corpo.clone()));
+    let p = &props[0];
+    assert_eq!(p.fonte, enrich::FONTE_LRCLIB);
+    assert_eq!(p.aviso, None, "o LRCLIB confere pela duração");
+
+    // o SOM identifica (régua do AcoustID): sem ressalva
+    let urls = RefCell::new(Vec::new());
+    let props = scan_com(
+        &conn,
+        ComSom::nova(
+            roteador(&urls, &acoustid(0.95, "Oh! Chuva", "Falamansa", dur), "[]", "{}"),
+            dur,
+        ),
+    );
+    let p = props.iter().find(|p| p.song_id == song.id).expect("proposta");
+    assert_eq!(p.fonte, enrich::FONTE_IMPRESSAO_DIGITAL);
+    assert_eq!(p.aviso, None, "o som tem a régua do AcoustID");
 }

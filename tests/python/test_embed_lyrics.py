@@ -275,3 +275,41 @@ class TestGravacaoAtomica:
             el.write_title_artist(mp3_file, title="X", artist="Y")
         assert sha256(mp3_file) == antes
         assert [p.name for p in mp3_file.parent.iterdir()] == [mp3_file.name]
+
+
+class TestOrigemLyricsOvh:
+    """V10 — o vocabulário de procedência ganhou `lyrics.ovh`.
+
+    O aplicativo passou a gravar essa marca (a etapa 4 do funil, que
+    substituiu o Vagalume), e o dado viaja no MP3: sem o valor aqui, o
+    `--check` e o relatório do `curadoria.py` mostrariam o rótulo genérico
+    para uma letra cuja procedência o arquivo declara. É perda pequena, mas
+    é perda gratuita — as duas pilhas precisam falar a mesma língua
+    (decisão 82).
+    """
+
+    def test_o_valor_e_o_mesmo_das_duas_pilhas(self):
+        # o mesmo literal que o `writer::ORIGEM_LYRICS_OVH` do Rust grava
+        assert el.ORIGEM_LYRICS_OVH == "lyrics.ovh"
+
+    def test_a_marca_faz_round_trip_pelo_arquivo(self, mp3_file):
+        el.embed_lyrics(mp3_file, "uma letra sem cadastro",
+                        origem=el.ORIGEM_LYRICS_OVH)
+        assert el.read_letra_origem(ID3(str(mp3_file))) == "lyrics.ovh"
+
+    def test_o_check_mostra_o_rotulo_e_nao_o_valor_cru(self, mp3_file):
+        el.embed_lyrics(mp3_file, "uma letra sem cadastro",
+                        origem=el.ORIGEM_LYRICS_OVH)
+        r = run_embed(str(mp3_file), "--check")
+        assert r.returncode == 0, r.stderr
+        assert "Origem da letra: lyrics.ovh" in r.stdout
+
+    def test_a_marca_nao_e_confundida_com_transcricao(self, mp3_file):
+        """A comparação do player é por igualdade estrita com "transcricao"
+        (src/lib/types.ts): letra de site não pode herdar o aviso de "isto
+        pode conter erros", que é o rótulo que o curador aprendeu a ler."""
+        el.embed_lyrics(mp3_file, "uma letra sem cadastro",
+                        origem=el.ORIGEM_LYRICS_OVH)
+        assert el.read_letra_origem(ID3(str(mp3_file))) != el.ORIGEM_TRANSCRICAO
+        assert el.ORIGEM_LYRICS_OVH not in (el.ORIGEM_TRANSCRICAO,
+                                            el.ORIGEM_VAGALUME)

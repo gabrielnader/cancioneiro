@@ -100,6 +100,28 @@ pub const SEARCH_URL: &str = "https://api.lyrics.ovh/v1/";
 /// perguntar, e "502" não explica nada.
 pub const ERRO_FORA_DO_AR: &str = "o site de letras sem cadastro está fora do ar agora";
 
+/// **A ressalva que TEM de chegar à tela.**
+///
+/// Esta fonte não devolve título nem artista: não há segundo lado para
+/// conferir, e o programa não tem como saber se a letra que veio é mesmo desta
+/// música (ver "A fraqueza desta fonte", acima). O teto MÉDIA garante que a
+/// linha não chegue pré-marcada — mas isso só protege alguém que saiba **por
+/// quê**.
+///
+/// O uso real: numa revisão de 53 músicas o dono do produto disse *"nem li as
+/// sugestões em baixa, não deu vontade de ler mesmo"*. Uma linha MÉDIA dizendo
+/// só "letra encontrada" convida ao clique, e o clique grava letra dentro do
+/// arquivo de alguém. Silenciar uma incerteza que o programa CONHECE é a
+/// DECISIONS #86 pelo avesso.
+///
+/// Vai no campo `aviso` da proposta — o que explica uma linha que a pessoa
+/// PODE aplicar —, nunca no `error`, que desabilita a linha. E vale só para
+/// esta etapa: o LRCLIB confere pela duração e o som tem a régua do AcoustID,
+/// e poluir aquelas linhas com uma ressalva que não se aplica a elas ensinaria
+/// a ignorar todas.
+pub const AVISO_SEM_CONFERENCIA: &str = "este site não diz a que música a letra \
+     pertence, então não deu para conferir se ela é desta — vale ler antes de aplicar";
+
 /// Letra aprovada pela régua estrita, com os nomes que foram PEDIDOS.
 ///
 /// O `lyrics.ovh` não devolve título nem artista — devolve só a letra —, então
@@ -450,6 +472,36 @@ mod tests {
             assert!(!m.to_lowercase().contains(suspeito), "{m} tem {suspeito}");
         }
         assert!(m.chars().next().is_some_and(char::is_lowercase));
+    }
+
+    /// A ressalva obedece à régua de copy da DECISIONS #100: cabe em duas
+    /// frases e 210 caracteres, começa dizendo o que é, e **não tem jargão
+    /// nosso** — ela aparece crua na tela de quem não sabe o que é uma API.
+    #[test]
+    fn a_ressalva_obedece_a_regua_da_copy() {
+        let a = AVISO_SEM_CONFERENCIA;
+        assert!(
+            a.chars().count() <= 210,
+            "{} caracteres, o teto é 210",
+            a.chars().count()
+        );
+        assert!(a.chars().next().is_some_and(char::is_lowercase));
+        assert!(!a.contains('\n') && !a.contains("  "), "texto corrido: {a:?}");
+        for jargao in [
+            "api", "endpoint", "json", "fonte", "casamento", "lyrics.ovh",
+            "http", "campo", "régua", "duração",
+        ] {
+            assert!(
+                !a.to_lowercase().contains(jargao),
+                "{a:?} tem jargão: {jargao}"
+            );
+        }
+        // e ela DIZ as três coisas que a pessoa precisa naquele segundo: que o
+        // site não identifica a música, que por isso não foi conferida, e o
+        // que fazer a respeito
+        assert!(a.contains("não diz a que música"));
+        assert!(a.contains("não deu para conferir"));
+        assert!(a.contains("ler antes de aplicar"));
     }
 
     /// **Título COMPOSTO não vira consulta.** Uma tag "Adventício - Lampejo"

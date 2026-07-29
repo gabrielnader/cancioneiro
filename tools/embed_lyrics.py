@@ -48,8 +48,16 @@ LETRA_ORIGEM_DESC = "LETRA_ORIGEM"
 LETRA_ORIGEM_KEY = f"TXXX:{LETRA_ORIGEM_DESC}"
 ORIGEM_TRANSCRICAO = "transcricao"
 ORIGEM_VAGALUME = "vagalume"
+# V10: e "lyrics.ovh", pelo MESMO motivo que o vagalume entrou — é fonte de
+# letra oficial que NÃO pode ser confirmada pela duração (a resposta dela é só
+# a letra: nem título, nem artista, nem duração), e quem conferir o acervo
+# depois precisa saber que aquele casamento nunca foi verificado. Quem grava é
+# o aplicativo (etapa 4 do funil, que substituiu o Vagalume); o valor está aqui
+# para o `--check` e o relatório rotularem a marca em vez de mostrá-la crua.
+ORIGEM_LYRICS_OVH = "lyrics.ovh"
 ORIGEM_ROTULOS = {ORIGEM_TRANSCRICAO: "transcrição automática",
-                  ORIGEM_VAGALUME: "Vagalume"}
+                  ORIGEM_VAGALUME: "Vagalume",
+                  ORIGEM_LYRICS_OVH: "lyrics.ovh"}
 # V8/F17: marca de música sem voz. Mesma filosofia dos temas e da
 # procedência da letra — o dado viaja com o arquivo, não num banco à parte.
 # O valor é literalmente "1" (nada de "sim"/"true"): é o que o PRD
