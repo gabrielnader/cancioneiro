@@ -1,0 +1,149 @@
+name: acessorio-transcritor
+
+# Constrói o `whisper-cli` (whisper.cpp) para as quatro plataformas e o
+# publica, junto do modelo, no MESMO lançamento `acessorios-v1`.
+#
+# Acrescentar arquivo a um lançamento existente NÃO muda o hash dos que já
+# estão lá — quem já baixou o `fpcalc` não é afetado. É por isso que a tag é
+# um espaço de nomes estável e não uma versão de cada arquivo (PRD V9).
+#
+# Por que construir em vez de rehospedar: o whisper.cpp não publica binário
+# para as quatro plataformas. E `BUILD_SHARED_LIBS=OFF` é deliberado — com
+# bibliotecas dinâmicas o Windows sairia com DLLs ao lado, e o acessório
+# deixaria de ser UM arquivo conferível por UM SHA-256.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Lançamento de acessórios onde publicar"
+        required: true
+        default: "acessorios-v1"
+      whisper:
+        description: "Tag do whisper.cpp a construir"
+        required: true
+        default: "v1.7.4"
+      modelo:
+        description: "Modelo a rehospedar (small quantizado — PRD V10)"
+        required: true
+        default: "ggml-small-q5_1.bin"
+
+permissions:
+  contents: write
+
+jobs:
+  construir:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - so: macos-latest
+            nome: whisper-cli-macos-arm64
+          - so: macos-13
+            nome: whisper-cli-macos-x86_64
+          - so: ubuntu-24.04
+            nome: whisper-cli-linux-x86_64
+          - so: windows-latest
+            nome: whisper-cli-windows-x86_64.exe
+    runs-on: ${{ matrix.so }}
+    steps:
+      - name: Buscar o whisper.cpp
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "${{ github.event.inputs.whisper }}" \
+            https://github.com/ggml-org/whisper.cpp whisper
+
+      - name: Construir
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd whisper
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DWHISPER_BUILD_TESTS=OFF \
+            -DWHISPER_BUILD_SERVER=OFF \
+            -DWHISPER_BUILD_EXAMPLES=ON
+          cmake --build build --config Release -j 4
+
+      - name: Achar o executável (o caminho muda entre plataformas e versões)
+        shell: bash
+        run: |
+          set -euo pipefail
+          encontrado=$(find whisper/build -type f \
+            \( -name 'whisper-cli' -o -name 'whisper-cli.exe' \
+               -o -name 'main' -o -name 'main.exe' \) \
+            -not -path '*/CMakeFiles/*' | head -1)
+          if [ -z "$encontrado" ]; then
+            echo "::error::não achei o executável do whisper.cpp"
+            find whisper/build -type f -perm -u+x | head -40
+            exit 1
+          fi
+          echo "encontrado: $encontrado"
+          cp "$encontrado" "${{ matrix.nome }}"
+          chmod +x "${{ matrix.nome }}" || true
+
+      - name: Provar que EXECUTA aqui mesmo (decisão 96)
+        shell: bash
+        run: ./${{ matrix.nome }} --help > /dev/null
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.nome }}
+          path: ${{ matrix.nome }}
+          retention-days: 1
+
+  publicar:
+    needs: construir
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: baixados
+
+      - name: Reunir os executáveis
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p saida
+          find baixados -type f -name 'whisper-cli-*' -exec cp {} saida/ \;
+          ls -l saida
+
+      - name: Rehospedar o modelo
+        # Rehospedado, e não apontado: URL que não muda e hash sob nosso
+        # controle valem mais que 180 MB de tráfego quando não existe suporte.
+        shell: bash
+        env:
+          MODELO: ${{ github.event.inputs.modelo }}
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "saida/$MODELO" \
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$MODELO"
+          ls -l "saida/$MODELO"
+
+      - name: Somas de verificação
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd saida && sha256sum * | tee ../SHA256SUMS-transcritor.txt
+
+      - name: Publicar no lançamento de acessórios
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            saida/* SHA256SUMS-transcritor.txt
+
+      - name: Resumo (é daqui que os hashes vão para o código)
+        run: |
+          {
+            echo "## Transcritor publicado em \`${{ github.event.inputs.tag }}\`"
+            echo
+            echo "whisper.cpp \`${{ github.event.inputs.whisper }}\`, modelo \`${{ github.event.inputs.modelo }}\`"
+            echo
+            echo '```'
+            cat SHA256SUMS-transcritor.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
