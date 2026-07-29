@@ -101,3 +101,82 @@ jobs:
         run: |
           set -euo pipefail
           ./${{ matrix.arquivo }} -json fixtures/com_letra.mp3
+
+  # ---------------------------------------------------------------------------
+  # O transcritor aceita MP3, ou só WAV?
+  # ---------------------------------------------------------------------------
+  #
+  # O whisper.cpp lê WAV PCM 16 kHz mono; outros formatos só quando compilado
+  # com ffmpeg, que é opção de Linux e não sobrevive ao `BUILD_SHARED_LIBS=OFF`
+  # que usamos para o acessório ser UM arquivo conferível.
+  #
+  # O aplicativo NÃO depende disso: ele decodifica o MP3 em Rust e entrega WAV
+  # pronto. Este trabalho existe para o repositório REGISTRAR o que o binário
+  # aceita de fato, em cada sistema, em vez de deixar a suposição viva — foi
+  # suposição sobre comportamento de binário que produziu a decisão 96.
+  #
+  # `continue-on-error` no passo do MP3 é deliberado: a resposta "não aceita" é
+  # um RESULTADO desta prova, não uma falha dela.
+  transcritor:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - so: macos-latest
+            arquivo: whisper-cli-macos-arm64
+          - so: macos-13
+            arquivo: whisper-cli-macos-x86_64
+          - so: ubuntu-24.04
+            arquivo: whisper-cli-linux-x86_64
+          - so: windows-latest
+            arquivo: whisper-cli-windows-x86_64.exe
+    runs-on: ${{ matrix.so }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Baixar o transcritor (pode ainda não estar publicado)
+        id: baixar
+        continue-on-error: true
+        shell: bash
+        env:
+          TAG: ${{ github.event.inputs.tag || 'acessorios-v1' }}
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "${{ matrix.arquivo }}" \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${{ matrix.arquivo }}"
+          chmod +x "${{ matrix.arquivo }}" || true
+
+      - name: Sobe?
+        if: steps.baixar.outcome == 'success'
+        shell: bash
+        run: ./${{ matrix.arquivo }} --help > /dev/null
+
+      - name: Aceita MP3? (a resposta "não" é resultado, não falha)
+        if: steps.baixar.outcome == 'success'
+        continue-on-error: true
+        id: mp3
+        shell: bash
+        run: ./${{ matrix.arquivo }} -f fixtures/com_letra.mp3 -nt 2>&1 | tail -5
+
+      - name: Aceita WAV 16 kHz mono? (é o que o aplicativo entrega)
+        if: steps.baixar.outcome == 'success'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import math, struct, wave
+          with wave.open("prova.wav", "w") as w:
+              w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000)
+              w.writeframes(b"".join(
+                  struct.pack("<h", int(3000 * math.sin(2 * math.pi * 220 * t / 16000)))
+                  for t in range(16000)))
+          PY
+          ./${{ matrix.arquivo }} -f prova.wav -nt
+
+      - name: Registrar o veredito
+        if: steps.baixar.outcome == 'success'
+        shell: bash
+        run: |
+          echo "### ${{ matrix.arquivo }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "- MP3 direto: \`${{ steps.mp3.outcome }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- WAV 16 kHz mono: aceito (o passo falharia se não)" >> "$GITHUB_STEP_SUMMARY"
