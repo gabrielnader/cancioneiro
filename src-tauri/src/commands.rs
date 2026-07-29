@@ -434,6 +434,16 @@ fn mensagem_de_status(status: u16, destino: Destino) -> &'static str {
 // Acessórios (F18 fase 2 — PRD V9)
 // ---------------------------------------------------------------------------
 
+/// O endereço é do lançamento de acessórios?
+///
+/// Função à parte, e não um `if` dentro do fetcher, para a suíte poder
+/// exercitar a trava sem abrir conexão nenhuma: um teste que "confirma" o
+/// endereço legítimo chamando o fetcher baixaria 13 MB de binário a cada
+/// rodada de CI.
+fn destino_de_acessorio_permitido(url: &str) -> bool {
+    url.starts_with(crate::acessorios::URL_BASE)
+}
+
 /// Fetcher real dos acessórios. Ponto de rede SEPARADO do funil, e com a
 /// mesma disciplina: só o lançamento de acessórios passa.
 ///
@@ -450,7 +460,7 @@ fn mensagem_de_status(status: u16, destino: Destino) -> &'static str {
 /// existe é timeout de CONEXÃO, e o cancelamento da pessoa, que é verificado
 /// a cada pedaço.
 fn acessorio_fetcher(url: &str) -> Result<crate::acessorios::Corpo> {
-    if !url.starts_with(crate::acessorios::URL_BASE) {
+    if !destino_de_acessorio_permitido(url) {
         return Err(AppError("endereço de rede não permitido".into()));
     }
     let agent = ureq::AgentBuilder::new()
@@ -1190,6 +1200,10 @@ mod tests {
             "file:///etc/passwd",
             "https://lrclib.net.exemplo.invalido/api/search?q=x",
             "https://api.vagalume.com.br.exemplo.invalido/search.php",
+            "https://api.acoustid.org.exemplo.invalido/v2/lookup",
+            // o lançamento de acessórios NÃO é destino do funil: cada
+            // fetcher tem a sua lista, e nenhuma empresta para a outra
+            crate::acessorios::URL_BASE,
             "",
         ] {
             let err = funil_fetcher(url).expect_err("destino {url} deveria ser recusado");
@@ -1197,13 +1211,14 @@ mod tests {
         }
     }
 
-    /// ...e os dois destinos legítimos passam pela trava (o erro que sobra é
+    /// ...e os três destinos legítimos passam pela trava (o erro que sobra é
     /// de rede, não de permissão — a suíte roda sem internet).
     #[test]
-    fn the_two_legitimate_destinations_pass_the_guard() {
+    fn the_three_legitimate_destinations_pass_the_guard() {
         for url in [
             crate::lyrics_fetch::SEARCH_URL,
             crate::vagalume::SEARCH_URL,
+            crate::fingerprint::LOOKUP_URL,
         ] {
             if let Err(e) = funil_fetcher(url) {
                 assert_ne!(
@@ -1213,6 +1228,64 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// V9 — a MESMA disciplina no fetcher dos acessórios, e ela importa mais
+    /// aqui do que em qualquer outro lugar: o que este fetcher traz vira
+    /// arquivo EXECUTÁVEL na máquina de quem clicou. Só o lançamento de
+    /// acessórios passa, e nenhum endereço parecido passa junto. Roda
+    /// offline: nenhuma das URLs abaixo chega a virar requisição.
+    #[test]
+    fn o_fetcher_de_acessorios_so_aceita_o_lancamento_de_acessorios() {
+        for url in [
+            "https://exemplo.invalido/fpcalc",
+            "http://localhost:9/fpcalc",
+            "file:///bin/sh",
+            // domínio PARECIDO com o do GitHub
+            "https://github.com.exemplo.invalido/gabrielnader/cancioneiro/releases/download/acessorios-v1/fpcalc-linux-x86_64",
+            // GitHub de verdade, outro repositório
+            "https://github.com/outra/pessoa/releases/download/acessorios-v1/fpcalc-linux-x86_64",
+            // o repositório certo, mas outro lançamento (a tag é FIXA: é
+            // dela que vêm as somas compiladas)
+            "https://github.com/gabrielnader/cancioneiro/releases/download/acessorios-v2/fpcalc-linux-x86_64",
+            // destinos do funil não valem aqui
+            crate::lyrics_fetch::SEARCH_URL,
+            crate::vagalume::SEARCH_URL,
+            crate::fingerprint::LOOKUP_URL,
+            "",
+        ] {
+            assert!(
+                !destino_de_acessorio_permitido(url),
+                "destino {url} deveria ser recusado"
+            );
+        }
+    }
+
+    /// ...e todo endereço do catálogo passa pela trava. Sem o par, a trava
+    /// poderia estar recusando tudo e os dois testes continuariam verdes.
+    #[test]
+    fn os_enderecos_do_catalogo_passam_pela_trava_dos_acessorios() {
+        for acessorio in crate::acessorios::CATALOGO {
+            assert!(
+                destino_de_acessorio_permitido(&acessorio.url()),
+                "{} é destino legítimo",
+                acessorio.arquivo
+            );
+        }
+    }
+
+    /// O download é registrado no MESMO mapa de trabalhos longos vivos das
+    /// varreduras, então ele ganha o cancelamento de graça — e um id
+    /// desconhecido continua sendo no-op inofensivo.
+    #[test]
+    fn o_download_de_acessorio_e_cancelavel_pelo_mesmo_registro() {
+        let state = estado();
+        let flag = state.scan_begin("download-1").unwrap();
+        assert!(!flag.load(Ordering::SeqCst));
+        state.cancel_scan("download-1").unwrap();
+        assert!(flag.load(Ordering::SeqCst));
+        state.scan_end("download-1");
+        assert_eq!(state.scans_vivas(), 0);
     }
 
     // -----------------------------------------------------------------------
