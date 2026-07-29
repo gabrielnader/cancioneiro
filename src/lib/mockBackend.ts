@@ -405,21 +405,155 @@ const PLACEHOLDERS_EXATOS = new Set([
   "no title", "sem titulo", "untitled", "unknown title", "titulo desconhecido",
 ]);
 
-/** Chave normalizada: sem acento, minúscula, só alfanumérico e espaço. */
+/**
+ * Expressões que, em QUALQUER posição, denunciam tag de ripador — nenhum
+ * artista ou título real as contém, então a busca por trecho é segura.
+ * "artista desconheci" sem o final cobre o truncamento de campo do ID3 visto
+ * no acervo real ("04 Faixa 4 Artista Desconheci").
+ *
+ * Metade do porte que faltava aqui (DECISIONS #89): sem ela, aquela etiqueta
+ * passava por REAL, a música ficava "completa" e sumia da curadoria para
+ * sempre.
+ */
+const PLACEHOLDERS_TRECHO = [
+  "artista desconheci",
+  "artista desconhecida",
+  "unknown artist",
+  "no artist",
+  "titulo desconheci",
+  "unknown title",
+];
+
+/**
+ * Palavras de maquinário: NÃO identificam a música, mas várias delas são
+ * título de verdade quando aparecem sozinhas ("Pista", "Gravação", "Nome",
+ * "Sem Nome" existem no repertório). Por isso esta lista sozinha NUNCA
+ * condena um texto — ver `MARCA_DE_RIPADOR`.
+ */
+const RUIDO_DE_ARQUIVO = new Set([
+  "audiotrack", "audio", "track", "faixa", "pista", "converted", "convertido",
+  "copia", "copy", "mp3", "wav", "untitled", "new", "recording", "gravacao",
+  "sem", "titulo", "nome",
+]);
+
+/**
+ * Marca de ripador: só ELA habilita a regra do `RUIDO_DE_ARQUIVO`. Vale um
+ * número solto ("04", "2010"), uma corrida com cara de horário/data
+ * ("22-17-23") ou uma palavra que nenhuma canção usa como título.
+ *
+ * A exigência conserta a regressão inversa: sem ela, "Gravação", "Nome" e
+ * "Sem Nome" viravam placeholder — ou seja, campo VAZIO — e o título REAL do
+ * curador era sobrescrito em silêncio.
+ */
+const MARCA_DE_RIPADOR = new Set([
+  "audiotrack", "converted", "convertido", "mp3", "wav", "untitled",
+]);
+
+/**
+ * Chave normalizada: sem acento, minúscula, só alfanumérico e espaço — porte
+ * do `lyrics_fetch::norm`. (Diferença conhecida e inofensiva neste
+ * repertório: o Rust preserva alfanumérico Unicode e este descarta o que não
+ * couber em a-z0-9 depois de tirar o acento.)
+ */
 function chaveDeTag(texto: string): string {
   return normalize(texto)
     .replace(/[^a-z0-9]+/g, " ")
     .trim();
 }
 
-/** "AudioTrack 02", "02 Faixa 3", "track", "Pista 3"… */
-const PLACEHOLDER_FAIXA = /^(?:\d+ )?(?:audio ?track|faixa|track|pista)(?: ?\d+)?$/;
+/** Sequência não vazia de no máximo `max` dígitos ASCII. */
+function soDigitos(s: string, max = Infinity): boolean {
+  return s.length > 0 && s.length <= max && /^[0-9]+$/.test(s);
+}
 
-function isPlaceholder(texto: string): boolean {
+/**
+ * `^\d{1,4}(?:[-:.]\d{1,2}){1,}$` — "22-17-23", "2010.05.03", "12:30".
+ * Conferido sobre o texto ORIGINAL, porque a pontuação some no `chaveDeTag`.
+ */
+function caraDeHorario(palavra: string): boolean {
+  const campos = palavra.split(/[-:.]/);
+  if (campos.length < 2 || !soDigitos(campos[0], 4)) return false;
+  return campos.slice(1).every((c) => soDigitos(c, 2));
+}
+
+/** True quando o texto traz prova de que saiu de uma máquina. */
+function temMarcaDeRipador(partes: string[], bruto: string): boolean {
+  if (partes.some((p) => soDigitos(p) || MARCA_DE_RIPADOR.has(p))) return true;
+  return bruto.split(/\s+/).filter(Boolean).some(caraDeHorario);
+}
+
+/**
+ * `^(?:\d+\s+)?(?:(?:audio\s?track|faixa|track)(?:\s?\d+)?|pista\s?\d+)$`
+ * sobre a chave normalizada — "AudioTrack 02", "02 Faixa 3", "track",
+ * "Pista 3"…
+ *
+ * "pista" SOZINHA fica de fora (e é a única das cinco que exige o número): é
+ * palavra que existe como título de verdade no repertório, e tratá-la como
+ * campo vazio apagaria o título de quem curou (DECISIONS #89).
+ */
+function placeholderFaixa(chave: string): boolean {
+  // prefixo numérico opcional ("02 audiotrack 02")
+  const corte = chave.indexOf(" ");
+  const s =
+    corte > 0 && soDigitos(chave.slice(0, corte))
+      ? chave.slice(corte + 1)
+      : chave;
+  const PALAVRAS: Array<[string, boolean]> = [
+    ["audio track", false],
+    ["audiotrack", false],
+    ["faixa", false],
+    ["track", false],
+    ["pista", true],
+  ];
+  for (const [kw, exigeNumero] of PALAVRAS) {
+    if (!s.startsWith(kw)) continue;
+    let resto = s.slice(kw.length);
+    if (resto.startsWith(" ")) resto = resto.slice(1);
+    if (soDigitos(resto) || (!exigeNumero && resto === "")) return true;
+  }
+  return false;
+}
+
+/**
+ * Porte COMPLETO do `enrich::is_placeholder` (que por sua vez porta o
+ * `eh_placeholder` do `tools/curadoria.py`). Exportado porque quatro regras
+ * da V9 dependem dele e porque o contrato com o Rust é testado caso a caso
+ * em `mockBackend.contrato.test.ts` (DECISIONS #88).
+ */
+export function isPlaceholder(texto: string): boolean {
   const chave = chaveDeTag(texto);
-  if (chave === "" || /^\d+$/.test(chave)) return true;
+  if (chave === "" || soDigitos(chave)) return true;
   if (PLACEHOLDERS_EXATOS.has(chave)) return true;
-  return PLACEHOLDER_FAIXA.test(chave);
+  if (placeholderFaixa(chave)) return true;
+  if (PLACEHOLDERS_TRECHO.some((m) => chave.includes(m))) return true;
+  // Só números e palavras de maquinário E com marca de ripador junto: não
+  // sobra nada que identifique a música. Uma palavra sozinha é TÍTULO,
+  // sempre — "Convertido", "Gravação", "Nome", "Pista" viram lixo só
+  // acompanhadas da marca da máquina.
+  const partes = chave.split(" ").filter(Boolean);
+  if (partes.length < 2 || !temMarcaDeRipador(partes, texto)) return false;
+  return partes.every((p) => soDigitos(p) || RUIDO_DE_ARQUIVO.has(p));
+}
+
+/**
+ * Este título foi ESCRITO por alguém, ou o indexador o inventou a partir do
+ * nome do arquivo por falta de TIT2 (DECISIONS #91)?
+ *
+ * Porte do `enrich::titulo_e_o_nome_do_arquivo`, e a comparação é EXATA —
+ * só as pontas são aparadas. O mock comparava normalizado, e a diferença
+ * decide coisas de verdade: `Oh! Chuva.mp3` com TIT2 `Oh Chuva` é etiqueta de
+ * gente (pode virar conflito, ganha o aviso de nome escrito) e virava
+ * invenção do indexador (som podia sobrescrever, sem aviso nenhum).
+ *
+ * A resposta não é perfeita — um arquivo bem nomeado pode ter etiqueta
+ * idêntica ao nome — e não precisa ser: nesse caso o palpite limpo dá o mesmo
+ * valor e a proposta cai por no-op de qualquer jeito.
+ */
+export function tituloEhDoIndexador(titulo: string, nomeDoArquivo: string): boolean {
+  const base = nomeDoArquivo.split(/[\\/]/).pop() ?? "";
+  // `Path::file_stem`: tira a ÚLTIMA extensão, e só quando existe uma
+  const stem = base.includes(".") ? base.replace(/\.[^.]*$/, "") : base;
+  return titulo.trim() === stem.trim();
 }
 
 /** A tag como o funil a enxerga: placeholder vira string vazia. */
@@ -498,17 +632,73 @@ function propostaNoOp(p: EnrichProposal): boolean {
 }
 
 /**
- * O som CONTRADIZ esta etiqueta? Porte grosso do `fingerprint::discorda`: os
- * dois lados não-vazios, chaves diferentes e nenhuma contida na outra
- * ("Oxum" dentro de "Oxum (Ao Vivo)" é a mesma música). O limiar fino de
- * grafia mora no Rust e é dele — aqui as respostas do som são ensinadas à mão
- * pelo teste, então a decisão é sempre entre valores escolhidos de propósito.
+ * Acima disto, duas grafias são o MESMO nome ("Milionário & José Rico" x
+ * "Milionário y José Rico"). Calibrado no acervo real de 94 arquivos, onde
+ * 6 dos 8 conflitos eram a mesma música escrita de outro jeito.
+ *
+ * Espelha `fingerprint::LIMIAR_MESMA_GRAFIA` — o valor mora lá, aqui é cópia.
  */
-function discordaDoSom(atual: string, identificado: string): boolean {
+const LIMIAR_MESMA_GRAFIA = 0.85;
+
+/**
+ * Comprimento mínimo para o teste de contenção não absolver coincidência
+ * ("Sol" dentro de "Sol Nascente" são músicas diferentes). Espelha
+ * `fingerprint::MIN_CONTENCAO`.
+ */
+const MIN_CONTENCAO = 5;
+
+/** Bigramas de caracteres COM multiplicidade (`lyrics_fetch::bigrams`). */
+function bigramas(s: string): Map<string, number> {
+  const mapa = new Map<string, number>();
+  const chars = [...s];
+  for (let i = 0; i + 1 < chars.length; i++) {
+    const par = chars[i] + chars[i + 1];
+    mapa.set(par, (mapa.get(par) ?? 0) + 1);
+  }
+  return mapa;
+}
+
+/**
+ * Similaridade textual em [0, 1]: coeficiente de Dice sobre bigramas de
+ * caracteres das chaves normalizadas. Porte do `lyrics_fetch::similarity`.
+ */
+function similaridade(bruto1: string, bruto2: string): number {
+  const a = chaveDeTag(bruto1);
+  const b = chaveDeTag(bruto2);
+  if (a === b) return a === "" ? 0 : 1;
+  const [ba, bb] = [bigramas(a), bigramas(b)];
+  const soma = (m: Map<string, number>) => [...m.values()].reduce((x, y) => x + y, 0);
+  const [na, nb] = [soma(ba), soma(bb)];
+  if (na === 0 || nb === 0) return 0; // uma das chaves tem < 2 chars e diferem
+  let inter = 0;
+  for (const [par, n] of ba) inter += Math.min(n, bb.get(par) ?? 0);
+  return (2 * inter) / (na + nb);
+}
+
+/**
+ * O som CONTRADIZ esta etiqueta? Porte do `fingerprint::discorda`.
+ *
+ * Campo vazio ou placeholder não contradiz nada — só espera ser preenchido.
+ * Variação de grafia também não: são a mesma coisa quando as chaves são muito
+ * parecidas OU quando uma CONTÉM a outra ("Lampejo" dentro de "Adventício -
+ * Lampejo"). Diferença de verdade continua conflito.
+ *
+ * As duas peças abaixo nasceram na V9 e faltavam aqui, cada uma errando para
+ * um lado: sem o piso de contenção o mock ABSOLVIA "Sol" dentro de "Sol
+ * Nascente" (conflito real engolido), e sem a tolerância de grafia ele
+ * CONDENAVA "Milionário & José Rico" contra "Milionário y José Rico" (alarme
+ * falso — e 6 dos 8 conflitos do acervo real eram exatamente isso).
+ *
+ * Exportado para o teste de contrato com o Rust (DECISIONS #88).
+ */
+export function discordaDoSom(atual: string, identificado: string): boolean {
+  if (isPlaceholder(atual) || isPlaceholder(identificado)) return false;
   const a = chaveDeTag(atual);
   const b = chaveDeTag(identificado);
-  if (a === "" || b === "" || a === b) return false;
-  return !a.includes(b) && !b.includes(a);
+  if (a === b) return false;
+  const [curta, longa] = a.length <= b.length ? [a, b] : [b, a];
+  if ([...curta].length >= MIN_CONTENCAO && longa.includes(curta)) return false;
+  return similaridade(a, b) < LIMIAR_MESMA_GRAFIA;
 }
 
 export function createMockBackend(): MockBackend {
@@ -678,8 +868,7 @@ export function createMockBackend(): MockBackend {
     song: SongRecord,
     digitado?: string | null,
   ): string {
-    const bruto = nomeArquivo(song).replace(/\.[^.]+$/, "");
-    if (chaveDeTag(bruto) === chaveDeTag(song.title)) return "";
+    if (tituloEhDoIndexador(song.title, nomeArquivo(song))) return "";
     return tagReal(digitado ?? song.title);
   }
 
