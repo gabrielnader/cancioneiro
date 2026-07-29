@@ -41,6 +41,7 @@ fn scan_props(
     enrich::enrich_scan(
         conn,
         prefixo,
+        enrich::Modo::Completar,
         fetch,
         SEM_CHAVE,
         ZERO,
@@ -107,6 +108,7 @@ fn enrich_scan_proposes_and_apply_writes_full_flow() {
     let props = enrich::enrich_scan(
         &conn,
         "",
+        enrich::Modo::Completar,
         |url: &str| {
             urls.borrow_mut().push(url.to_string());
             Ok(body.clone())
@@ -286,6 +288,7 @@ fn placeholder_tags_are_treated_as_empty_and_never_queried() {
     let props = enrich::enrich_scan(
         &conn,
         "",
+        enrich::Modo::Completar,
         |url: &str| {
             urls.borrow_mut().push(url.to_string());
             Ok("[]".into())
@@ -405,6 +408,7 @@ fn error_proposal_survives_even_when_it_changes_nothing() {
     let props = enrich::enrich_scan(
         &conn,
         "",
+        enrich::Modo::Completar,
         |_: &str| -> Result<String, AppError> { Err(AppError("sem conexão".into())) },
         SEM_CHAVE,
         ZERO,
@@ -481,6 +485,7 @@ fn enrich_scan_reports_progress_per_candidate_song() {
     enrich::enrich_scan(
         &conn,
         "",
+        enrich::Modo::Completar,
         |_: &str| Ok("[]".into()),
         SEM_CHAVE,
         ZERO,
@@ -546,6 +551,7 @@ fn progress_advances_for_dropped_failed_and_missing_songs() {
     let props = enrich::enrich_scan(
         &conn,
         "",
+        enrich::Modo::Completar,
         |url: &str| {
             if url.contains("Instrumental") {
                 Ok("[]".into()) // acha nada ⇒ palpite igual às tags ⇒ no-op
@@ -742,6 +748,7 @@ fn scan_skips_instrumental_songs_without_network_or_proposal() {
     let props = enrich::enrich_scan(
         &conn,
         "",
+        enrich::Modo::Completar,
         |url: &str| {
             urls.borrow_mut().push(url.to_string());
             Ok(body.clone())
@@ -802,6 +809,7 @@ fn scan_progress_total_excludes_instrumental_songs() {
     enrich::enrich_scan(
         &conn,
         "",
+        enrich::Modo::Completar,
         |_: &str| Ok("[]".into()),
         SEM_CHAVE,
         ZERO,
@@ -829,6 +837,7 @@ fn missing_file_becomes_proposal_with_error_without_network() {
     let props = enrich::enrich_scan(
         &conn,
         "",
+        enrich::Modo::Completar,
         |_: &str| {
             *calls.borrow_mut() += 1;
             Ok("[]".into())
@@ -973,6 +982,7 @@ fn network_error_yields_baixa_proposal_and_never_aborts_batch() {
     let props = enrich::enrich_scan(
         &conn,
         "",
+        enrich::Modo::Completar,
         |_: &str| -> Result<String, AppError> { Err(AppError("sem conexão".into())) },
         SEM_CHAVE,
         ZERO,
@@ -1011,6 +1021,7 @@ fn network_error_keeps_candidate_found_by_earlier_guess() {
     let props = enrich::enrich_scan(
         &conn,
         "",
+        enrich::Modo::Completar,
         |_: &str| {
             *calls.borrow_mut() += 1;
             if *calls.borrow() == 1 {
@@ -1328,6 +1339,7 @@ fn a_rejected_key_switches_the_vagalume_stage_off_for_the_rest_of_the_scan() {
     let props = enrich::enrich_scan(
         &conn,
         "",
+        enrich::Modo::Completar,
         |url: &str| {
             urls.borrow_mut().push(url.to_string());
             if url.contains("vagalume") {
@@ -1379,6 +1391,7 @@ fn a_passing_vagalume_failure_does_not_switch_the_stage_off() {
     enrich::enrich_scan(
         &conn,
         "",
+        enrich::Modo::Completar,
         |url: &str| {
             urls.borrow_mut().push(url.to_string());
             if url.contains("vagalume") {
@@ -1419,6 +1432,7 @@ fn count_candidatas_is_the_same_rule_the_scan_uses() {
     enrich::enrich_scan(
         &conn,
         &pasta,
+        enrich::Modo::Completar,
         |_: &str| Ok("[]".to_string()),
         SEM_CHAVE,
         ZERO,
@@ -1428,17 +1442,17 @@ fn count_candidatas_is_the_same_rule_the_scan_uses() {
     .unwrap();
     let total_da_varredura = eventos.borrow()[0];
 
-    assert_eq!(enrich::count_candidatas(&conn, &pasta).unwrap(), 2);
+    assert_eq!(enrich::count_candidatas(&conn, &pasta, enrich::Modo::Completar).unwrap(), 2);
     assert_eq!(
-        enrich::count_candidatas(&conn, &pasta).unwrap(),
+        enrich::count_candidatas(&conn, &pasta, enrich::Modo::Completar).unwrap(),
         total_da_varredura,
         "a contagem prometida na tela é a mesma que a barra vai anunciar"
     );
     // prefixo vazio = biblioteca inteira
-    assert_eq!(enrich::count_candidatas(&conn, "").unwrap(), 3);
+    assert_eq!(enrich::count_candidatas(&conn, "", enrich::Modo::Completar).unwrap(), 3);
     // pasta sem nada a completar
     assert_eq!(
-        enrich::count_candidatas(&conn, "/lugar/nenhum").unwrap(),
+        enrich::count_candidatas(&conn, "/lugar/nenhum", enrich::Modo::Completar).unwrap(),
         0
     );
 }
@@ -1448,7 +1462,7 @@ fn count_candidatas_is_the_same_rule_the_scan_uses() {
 #[test]
 fn count_candidatas_never_touches_the_network() {
     let (_dir, conn, _folder_id) = setup_with(&[("sem_tags.mp3", "a - Um.mp3")]);
-    assert_eq!(enrich::count_candidatas(&conn, "").unwrap(), 1);
+    assert_eq!(enrich::count_candidatas(&conn, "", enrich::Modo::Completar).unwrap(), 1);
 }
 
 /// O instrumental com título E artista não tem o que completar (a letra não
@@ -1458,7 +1472,7 @@ fn count_candidatas_never_touches_the_network() {
 fn count_candidatas_excludes_instrumentals_with_both_names() {
     let (_dir, conn, _folder_id) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
     let song = song_by_suffix(&conn, "sem_letra.mp3");
-    assert_eq!(enrich::count_candidatas(&conn, "").unwrap(), 1);
+    assert_eq!(enrich::count_candidatas(&conn, "", enrich::Modo::Completar).unwrap(), 1);
 
     writer::write_tags(
         &conn,
@@ -1470,7 +1484,7 @@ fn count_candidatas_excludes_instrumentals_with_both_names() {
         Some(true),
     )
     .unwrap();
-    assert_eq!(enrich::count_candidatas(&conn, "").unwrap(), 0);
+    assert_eq!(enrich::count_candidatas(&conn, "", enrich::Modo::Completar).unwrap(), 0);
 }
 
 // ===========================================================================
@@ -1722,6 +1736,7 @@ fn enrich_scan_stops_early_when_cancelled_between_songs() {
     let props = enrich::enrich_scan(
         &conn,
         "",
+        enrich::Modo::Completar,
         |url: &str| {
             musicas_consultadas.borrow_mut().push(url.to_string());
             Ok("[]".into())
@@ -1777,6 +1792,7 @@ fn enrich_scan_cancelled_before_starting_does_nothing() {
     let props = enrich::enrich_scan(
         &conn,
         "",
+        enrich::Modo::Completar,
         |_: &str| {
             *chamadas.borrow_mut() += 1;
             Ok("[]".into())
@@ -1865,6 +1881,7 @@ fn vagalume_answers_only_where_lrclib_came_up_empty() {
     let props = enrich::enrich_scan(
         &conn,
         "",
+        enrich::Modo::Completar,
         duas_fontes(
             &urls,
             "[]".into(), // o LRCLIB não tem este repertório
@@ -1911,6 +1928,7 @@ fn vagalume_is_not_asked_when_lrclib_already_answered() {
     let props = enrich::enrich_scan(
         &conn,
         "",
+        enrich::Modo::Completar,
         duas_fontes(&urls, lrclib, corpo_vagalume("x", "y", "z")),
         CHAVE_VG,
         ZERO,
@@ -1945,6 +1963,7 @@ fn without_a_key_the_vagalume_stage_is_silently_skipped() {
         let props = enrich::enrich_scan(
             &conn,
             "",
+            enrich::Modo::Completar,
             duas_fontes(
                 &urls,
                 "[]".into(),
@@ -1986,6 +2005,7 @@ fn vagalume_is_never_asked_from_a_filename_guess() {
     let props = enrich::enrich_scan(
         &conn,
         "",
+        enrich::Modo::Completar,
         duas_fontes(
             &urls,
             "[]".into(),
@@ -2029,6 +2049,7 @@ fn every_proposal_declares_the_stage_that_produced_it() {
     let props = enrich::enrich_scan(
         &conn,
         "",
+        enrich::Modo::Completar,
         |url: &str| {
             urls.borrow_mut().push(url.to_string());
             if url.contains("vagalume") {
@@ -2089,6 +2110,7 @@ fn the_scan_announces_every_funnel_stage_it_enters() {
     enrich::enrich_scan(
         &conn,
         "",
+        enrich::Modo::Completar,
         duas_fontes(
             &urls,
             "[]".into(),
@@ -2147,6 +2169,7 @@ fn the_courtesy_pause_applies_to_both_sources() {
     enrich::enrich_scan(
         &conn,
         "",
+        enrich::Modo::Completar,
         duas_fontes(
             &urls,
             "[]".into(),
@@ -2181,6 +2204,7 @@ fn cancelling_stops_before_the_vagalume_query() {
     let props = enrich::enrich_scan(
         &conn,
         "",
+        enrich::Modo::Completar,
         |url: &str| {
             urls.borrow_mut().push(url.to_string());
             cancelada.set(true); // usuário cancela durante a 1ª consulta
@@ -2212,6 +2236,7 @@ fn a_vagalume_network_error_never_aborts_the_batch() {
     let props = enrich::enrich_scan(
         &conn,
         "",
+        enrich::Modo::Completar,
         |url: &str| {
             if url.contains("vagalume") {
                 Err(AppError("sem conexão".into()))
@@ -2249,6 +2274,7 @@ fn the_api_key_never_leaves_the_query_string() {
     let props = enrich::enrich_scan(
         &conn,
         "",
+        enrich::Modo::Completar,
         |url: &str| {
             if url.contains("vagalume") {
                 consultas_vg.set(consultas_vg.get() + 1);
@@ -2311,6 +2337,7 @@ fn none_of_the_new_network_messages_leak_the_key() {
         let props = enrich::enrich_scan(
             &conn,
             "",
+            enrich::Modo::Completar,
             |url: &str| {
                 if url.contains("vagalume") {
                     Err(AppError(mensagem.into()))
@@ -2348,6 +2375,7 @@ fn applying_a_vagalume_lyric_records_its_provenance() {
     let props = enrich::enrich_scan(
         &conn,
         "",
+        enrich::Modo::Completar,
         duas_fontes(
             &urls,
             "[]".into(),
@@ -2536,6 +2564,7 @@ fn an_instrumental_skips_the_lyric_stages_but_still_gets_title_and_artist() {
     let props = enrich::enrich_scan(
         &conn,
         "",
+        enrich::Modo::Completar,
         duas_fontes(
             &urls,
             // stub que casaria PERFEITAMENTE, se fosse consultado
@@ -2601,6 +2630,7 @@ fn an_instrumental_with_both_names_is_not_even_a_candidate() {
     let props = enrich::enrich_scan(
         &conn,
         "",
+        enrich::Modo::Completar,
         duas_fontes(
             &urls,
             "[]".into(),
@@ -2979,4 +3009,590 @@ fn a_well_named_file_whose_title_matches_it_proposes_nothing() {
         props.iter().all(|p| !p.file_path.ends_with("Asa Branca.mp3")),
         "nada a propor: o título já é o nome certo"
     );
+}
+
+// ===========================================================================
+// V9/F18 fase 2 — a etapa 2 (impressão digital) e o modo de CONFERÊNCIA
+// ===========================================================================
+//
+// O funil foi reordenado: a impressão digital não é fonte de LETRA, é fonte
+// de IDENTIDADE, e identidade é ENTRADA das etapas de letra. Ela passou a
+// vir logo depois das etiquetas:
+//
+//   1 etiquetas/nome → 2 impressão digital → 3 LRCLIB → 4 Vagalume
+//
+// Duas consequências que estes testes fixam:
+//
+// - com nome verdadeiro em mãos, as etapas de letra recebem UM palpite, e
+//   não a cascata de até sete do `gerar_palpites` (até seis idas à rede a
+//   menos por música);
+// - um nome que o AcoustID devolveu mas a régua RECUSOU não pode vazar para
+//   as etapas seguintes: elas voltam aos palpites locais. Nome errado
+//   propagado viraria letra errada com cara de certa, porque LRCLIB e
+//   AcoustID conferem pela MESMA duração e erram juntos.
+
+use cancioneiro_lib::fingerprint::Impressao;
+
+/// Impressão digital de mentira — os testes nunca executam o `fpcalc`.
+fn impressao(duracao: f64) -> Impressao {
+    Impressao {
+        duracao,
+        fingerprint: "AQAADEMENTIRA".into(),
+    }
+}
+
+/// Fontes do funil com a etapa 2 LIGADA: um `fpcalc` de mentira e a chave do
+/// AcoustID. `impressao: None` faz o "binário" falhar, que é como se
+/// comporta um acessório quebrado.
+struct ComSom<F> {
+    fetch: F,
+    impressao: Option<Impressao>,
+    chave: String,
+}
+
+impl<F> ComSom<F> {
+    fn nova(fetch: F, duracao: f64) -> Self {
+        ComSom {
+            fetch,
+            impressao: Some(impressao(duracao)),
+            chave: "chave-acoustid-de-teste".into(),
+        }
+    }
+}
+
+impl<F> enrich::Fontes for ComSom<F>
+where
+    F: Fn(&str) -> Result<String, AppError>,
+{
+    fn buscar(&self, url: &str) -> Result<String, AppError> {
+        (self.fetch)(url)
+    }
+    fn reconhece_pelo_som(&self) -> bool {
+        true
+    }
+    fn impressao_digital(&self, _mp3: &Path) -> Option<Result<Impressao, AppError>> {
+        Some(match &self.impressao {
+            Some(i) => Ok(i.clone()),
+            None => Err(AppError(
+                cancioneiro_lib::fingerprint::ERRO_FPCALC.into(),
+            )),
+        })
+    }
+    fn chave_acoustid(&self) -> &str {
+        &self.chave
+    }
+}
+
+/// Resposta do AcoustID com UMA gravação.
+fn acoustid(score: f64, titulo: &str, artista: &str, duracao: f64) -> String {
+    format!(
+        r#"{{"status": "ok", "results": [{{"score": {score},
+             "recordings": [{{"title": "{titulo}", "duration": {duracao},
+                              "artists": [{{"name": "{artista}"}}]}}]}}]}}"#
+    )
+}
+
+/// Fetcher que distribui por destino e guarda as URLs vistas.
+fn roteador<'a>(
+    urls: &'a RefCell<Vec<String>>,
+    acoustid_body: &'a str,
+    lrclib_body: &'a str,
+    vagalume_body: &'a str,
+) -> impl Fn(&str) -> Result<String, AppError> + 'a {
+    move |url: &str| {
+        urls.borrow_mut().push(url.to_string());
+        if url.starts_with(cancioneiro_lib::fingerprint::LOOKUP_URL) {
+            Ok(acoustid_body.to_string())
+        } else if url.starts_with(vagalume::SEARCH_URL) {
+            Ok(vagalume_body.to_string())
+        } else {
+            Ok(lrclib_body.to_string())
+        }
+    }
+}
+
+fn urls_para(urls: &RefCell<Vec<String>>, prefixo: &str) -> Vec<String> {
+    urls.borrow()
+        .iter()
+        .filter(|u| u.starts_with(prefixo))
+        .cloned()
+        .collect()
+}
+
+fn scan_com<S: enrich::Fontes>(
+    conn: &Connection,
+    modo: enrich::Modo,
+    fontes: S,
+    chave_vagalume: &str,
+) -> Vec<enrich::EnrichProposal> {
+    enrich::enrich_scan(
+        conn,
+        "",
+        modo,
+        fontes,
+        chave_vagalume,
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap()
+}
+
+// ---------------------------------------------------------------------------
+// A etapa 2 dá o nome, e as etapas de letra procuram POR ELE
+// ---------------------------------------------------------------------------
+#[test]
+fn com_o_nome_do_som_o_lrclib_recebe_um_palpite_so() {
+    let (_dir, conn, _f) = setup_with(&[("sem_tags.mp3", "Falamansa - Oh! Chuva.mp3")]);
+    let song = song_by_suffix(&conn, "Oh! Chuva.mp3");
+    let dur = song.duration_seconds.unwrap() as f64;
+
+    let urls = RefCell::new(Vec::new());
+    let letra = format!(
+        r#"[{{"trackName": "Viver Feliz", "artistName": "Nilson Chaves",
+             "duration": {dur}, "plainLyrics": "a letra certa"}}]"#
+    );
+    let props = scan_com(
+        &conn,
+        enrich::Modo::Completar,
+        ComSom::nova(
+            roteador(
+                &urls,
+                &acoustid(0.95, "Viver Feliz", "Nilson Chaves", dur),
+                &letra,
+                "{}",
+            ),
+            dur,
+        ),
+        SEM_CHAVE,
+    );
+
+    // UMA consulta ao LRCLIB — não a cascata de palpites do nome do arquivo
+    let lrclib = urls_para(&urls, cancioneiro_lib::lyrics_fetch::SEARCH_URL);
+    assert_eq!(lrclib.len(), 1, "um palpite só: {lrclib:?}");
+    assert!(
+        lrclib[0].contains("Viver") && lrclib[0].contains("Nilson"),
+        "a consulta usa o nome que o SOM deu: {}",
+        lrclib[0]
+    );
+    // e a impressão digital foi consultada antes de tudo
+    assert_eq!(
+        urls_para(&urls, cancioneiro_lib::fingerprint::LOOKUP_URL).len(),
+        1
+    );
+
+    let p = &props[0];
+    assert_eq!(p.proposed_title, "Viver Feliz");
+    assert_eq!(p.proposed_artist.as_deref(), Some("Nilson Chaves"));
+    assert_eq!(p.lyrics.as_deref(), Some("a letra certa"));
+    assert!(p.conflito.is_none(), "etiqueta inventada pelo indexador não conflita");
+}
+
+/// Nome que veio do SOM nunca chega PRÉ-MARCADO com letra junto: a régua do
+/// LRCLIB confirma pela duração, e o AcoustID confirmou pela MESMA duração —
+/// as duas erram juntas. O teto é MÉDIA, e quem cura dá o clique.
+#[test]
+fn letra_achada_por_nome_do_som_nunca_chega_pre_marcada() {
+    let (_dir, conn, _f) = setup_with(&[("sem_tags.mp3", "Falamansa - Oh! Chuva.mp3")]);
+    let song = song_by_suffix(&conn, "Oh! Chuva.mp3");
+    let dur = song.duration_seconds.unwrap() as f64;
+    let urls = RefCell::new(Vec::new());
+    let letra = format!(
+        r#"[{{"trackName": "Viver Feliz", "artistName": "Nilson Chaves",
+             "duration": {dur}, "plainLyrics": "a letra certa"}}]"#
+    );
+    let props = scan_com(
+        &conn,
+        enrich::Modo::Completar,
+        ComSom::nova(
+            roteador(
+                &urls,
+                &acoustid(0.95, "Viver Feliz", "Nilson Chaves", dur),
+                &letra,
+                "{}",
+            ),
+            dur,
+        ),
+        SEM_CHAVE,
+    );
+    assert_eq!(props[0].confidence, "media");
+    assert_eq!(props[0].fonte, enrich::FONTE_LRCLIB);
+}
+
+// ---------------------------------------------------------------------------
+// O nome RECUSADO pela régua não vaza para a frente
+// ---------------------------------------------------------------------------
+#[test]
+fn nome_recusado_pela_regua_nao_vaza_para_as_etapas_de_letra() {
+    let (_dir, conn, _f) = setup_with(&[("sem_tags.mp3", "Falamansa - Oh! Chuva.mp3")]);
+    let song = song_by_suffix(&conn, "Oh! Chuva.mp3");
+    let dur = song.duration_seconds.unwrap() as f64;
+
+    // três formas de o casamento ser recusado — nenhuma pode vazar o nome
+    for (rotulo, corpo) in [
+        ("pontuação abaixo de 0,7", acoustid(0.4, "Nome Recusado", "Artista Recusado", dur)),
+        (
+            "duração fora do teto de 15 s",
+            acoustid(0.99, "Nome Recusado", "Artista Recusado", dur + 60.0),
+        ),
+        (
+            "metadado de ripador",
+            acoustid(0.99, "AudioTrack 03", "Unknown Artist", dur),
+        ),
+    ] {
+        let urls = RefCell::new(Vec::new());
+        scan_com(
+            &conn,
+            enrich::Modo::Completar,
+            ComSom::nova(roteador(&urls, &corpo, "[]", "{}"), dur),
+            SEM_CHAVE,
+        );
+        let lrclib = urls_para(&urls, cancioneiro_lib::lyrics_fetch::SEARCH_URL);
+        assert!(
+            lrclib.len() > 1,
+            "{rotulo}: sem identidade, valem os palpites locais ({lrclib:?})"
+        );
+        assert!(
+            lrclib.iter().all(|u| !u.contains("Recusado")),
+            "{rotulo}: nome recusado vazou para a etapa de letra: {lrclib:?}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Divergência entre o som e a etiqueta REAL: CONFLITO, nunca correção
+// ---------------------------------------------------------------------------
+//
+// O caso real: um arquivo etiquetado "Te ver feliz, te ver contente" /
+// "Caetano Veloso" que é, de verdade, "Viver Feliz" do Nilson Chaves.
+// "Caetano Veloso" não é placeholder por regra nenhuma — só o som denuncia.
+#[test]
+fn divergencia_entre_o_som_e_a_etiqueta_real_e_conflito() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "musica.mp3")]);
+    let song = song_by_suffix(&conn, "musica.mp3");
+    writer::write_tags(
+        &conn,
+        song.id,
+        "Te ver feliz, te ver contente",
+        Some("Caetano Veloso"),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    let dur = song.duration_seconds.unwrap() as f64;
+
+    let urls = RefCell::new(Vec::new());
+    let props = scan_com(
+        &conn,
+        enrich::Modo::Completar,
+        ComSom::nova(
+            roteador(
+                &urls,
+                &acoustid(0.95, "Viver Feliz", "Nilson Chaves", dur),
+                "[]",
+                "{}",
+            ),
+            dur,
+        ),
+        CHAVE_VG,
+    );
+
+    let p = props
+        .iter()
+        .find(|p| p.song_id == song.id)
+        .expect("o conflito é INFORMAÇÃO: a linha existe");
+    let c = p.conflito.as_ref().expect("a divergência é declarada");
+    assert_eq!(c.titulo, "Viver Feliz");
+    assert_eq!(c.artista, "Nilson Chaves");
+    assert_eq!(c.confianca, "alta", "a confiança é a da identificação");
+
+    // a etiqueta NÃO é corrigida sozinha, e a linha nunca chega pré-marcada
+    assert_eq!(p.proposed_title, "Te ver feliz, te ver contente");
+    assert_eq!(p.proposed_artist.as_deref(), Some("Caetano Veloso"));
+    assert_eq!(p.confidence, "baixa", "conflito nunca é pré-marcado");
+    assert_eq!(p.fonte, enrich::FONTE_IMPRESSAO_DIGITAL);
+    assert!(p.lyrics.is_none());
+
+    // e o funil PARA: procurar letra sob um nome que o som acabou de
+    // contradizer é o caminho para gravar a letra da música errada
+    assert!(
+        urls_para(&urls, cancioneiro_lib::lyrics_fetch::SEARCH_URL).is_empty(),
+        "conflito não consulta letra"
+    );
+    assert!(urls_para(&urls, vagalume::SEARCH_URL).is_empty());
+}
+
+/// Variação de grafia NÃO é conflito (o `_discorda` do Python): tratá-la
+/// como contradição desperdiçaria identificação boa.
+#[test]
+fn variacao_de_grafia_nao_vira_conflito() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "musica.mp3")]);
+    let song = song_by_suffix(&conn, "musica.mp3");
+    writer::write_tags(
+        &conn,
+        song.id,
+        "Cantiga do Sabiá",
+        Some("Milionário & José Rico"),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    let dur = song.duration_seconds.unwrap() as f64;
+    let urls = RefCell::new(Vec::new());
+    let props = scan_com(
+        &conn,
+        enrich::Modo::Completar,
+        ComSom::nova(
+            roteador(
+                &urls,
+                &acoustid(0.95, "Cantiga do Sabia", "Milionario y Jose Rico", dur),
+                "[]",
+                "{}",
+            ),
+            dur,
+        ),
+        SEM_CHAVE,
+    );
+    assert!(
+        props.iter().all(|p| p.conflito.is_none()),
+        "mesma música escrita de outro jeito não é contradição"
+    );
+    // a etiqueta REAL é preservada: a identificação só preenche o que falta
+    assert!(props
+        .iter()
+        .all(|p| p.proposed_title != "Cantiga do Sabia"));
+}
+
+// ---------------------------------------------------------------------------
+// Modo CONFERÊNCIA — inclui as músicas completas, e só pergunta ao som
+// ---------------------------------------------------------------------------
+#[test]
+fn a_conferencia_alcanca_a_musica_completa_que_a_varredura_normal_nao_ve() {
+    let (_dir, conn, _f) = setup_with(&[("com_letra.mp3", "com_letra.mp3")]);
+    let song = song_by_suffix(&conn, "com_letra.mp3");
+    let dur = song.duration_seconds.unwrap() as f64;
+    assert!(song.has_lyrics && song.artist.is_some(), "a fixture é completa");
+
+    // varredura de COMPLETAR: a música completa não entra, nem gasta rede
+    let urls = RefCell::new(Vec::new());
+    let props = scan_com(
+        &conn,
+        enrich::Modo::Completar,
+        ComSom::nova(
+            roteador(&urls, &acoustid(0.95, "Outra Coisa", "Outro Artista", dur), "[]", "{}"),
+            dur,
+        ),
+        SEM_CHAVE,
+    );
+    assert!(props.is_empty(), "completar não olha música completa");
+    assert!(urls.borrow().is_empty(), "e não gasta rede com ela");
+
+    // CONFERÊNCIA: entra, e o som denuncia a etiqueta
+    let urls = RefCell::new(Vec::new());
+    let props = scan_com(
+        &conn,
+        enrich::Modo::Conferencia,
+        ComSom::nova(
+            roteador(&urls, &acoustid(0.95, "Outra Coisa", "Outro Artista", dur), "[]", "{}"),
+            dur,
+        ),
+        CHAVE_VG,
+    );
+    let p = props
+        .iter()
+        .find(|p| p.song_id == song.id)
+        .expect("a conferência alcança a música completa");
+    assert!(p.conflito.is_some());
+
+    // a conferência é UM trabalho: perguntar ao som. Nenhuma etapa de letra.
+    assert_eq!(
+        urls_para(&urls, cancioneiro_lib::fingerprint::LOOKUP_URL).len(),
+        1
+    );
+    assert!(urls_para(&urls, cancioneiro_lib::lyrics_fetch::SEARCH_URL).is_empty());
+    assert!(urls_para(&urls, vagalume::SEARCH_URL).is_empty());
+}
+
+/// A contagem prévia é a MESMA regra da varredura, nos dois modos (o defeito
+/// ALTO-2 foi uma segunda cópia da regra divergindo em silêncio).
+#[test]
+fn a_contagem_previa_acompanha_o_modo() {
+    let (_dir, conn, _f) = setup_with(&[
+        ("com_letra.mp3", "com_letra.mp3"),
+        ("sem_tags.mp3", "Falamansa - Oh! Chuva.mp3"),
+    ]);
+    assert_eq!(
+        enrich::count_candidatas(&conn, "", enrich::Modo::Completar).unwrap(),
+        1,
+        "completar só olha a incompleta"
+    );
+    assert_eq!(
+        enrich::count_candidatas(&conn, "", enrich::Modo::Conferencia).unwrap(),
+        2,
+        "a conferência olha todas as disponíveis"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Instrumental, acessório ausente e binário quebrado
+// ---------------------------------------------------------------------------
+
+/// A etapa 2 dá título e artista SEM tocar em letra — é o oposto das etapas
+/// de letra, e por isso o instrumental entra nela. As etapas 3 e 4 continuam
+/// pulando o arquivo (DECISIONS #81).
+#[test]
+fn instrumental_entra_na_etapa_2_e_continua_fora_das_etapas_de_letra() {
+    let (_dir, conn, _f) = setup_with(&[("sem_tags.mp3", "instrumental.mp3")]);
+    let song = song_by_suffix(&conn, "instrumental.mp3");
+    writer::write_tags(&conn, song.id, "Faixa 03", None, None, None, Some(true)).unwrap();
+    let dur = song.duration_seconds.unwrap() as f64;
+
+    let urls = RefCell::new(Vec::new());
+    let props = scan_com(
+        &conn,
+        enrich::Modo::Completar,
+        ComSom::nova(
+            roteador(
+                &urls,
+                &acoustid(0.95, "Frevo Nº 1", "Orquestra Popular", dur),
+                r#"[{"trackName":"x","artistName":"y","duration":1,"plainLyrics":"letra alheia"}]"#,
+                "{}",
+            ),
+            dur,
+        ),
+        CHAVE_VG,
+    );
+
+    let p = &props[0];
+    assert_eq!(p.proposed_title, "Frevo Nº 1", "o som deu o título");
+    assert_eq!(p.proposed_artist.as_deref(), Some("Orquestra Popular"));
+    assert_eq!(p.fonte, enrich::FONTE_IMPRESSAO_DIGITAL);
+    assert!(p.lyrics.is_none(), "instrumental nunca recebe letra");
+    assert_eq!(
+        urls_para(&urls, cancioneiro_lib::fingerprint::LOOKUP_URL).len(),
+        1
+    );
+    assert!(urls_para(&urls, cancioneiro_lib::lyrics_fetch::SEARCH_URL).is_empty());
+}
+
+/// Sem o acessório no cache, a etapa 2 não existe — em SILÊNCIO. É o estado
+/// normal de quem ainda não baixou, e o funil se comporta exatamente como na
+/// v0.8.1.
+#[test]
+fn sem_o_acessorio_o_funil_fica_exatamente_como_era() {
+    let (_dir, conn, _f) = setup_with(&[("sem_tags.mp3", "Falamansa - Oh! Chuva.mp3")]);
+    let urls = RefCell::new(Vec::new());
+    let props = scan_com(
+        &conn,
+        enrich::Modo::Completar,
+        // um simples fetcher: sem etapa 2 (é o padrão do `Fontes`)
+        |url: &str| {
+            urls.borrow_mut().push(url.to_string());
+            Ok("[]".to_string())
+        },
+        SEM_CHAVE,
+    );
+    assert!(
+        urls_para(&urls, cancioneiro_lib::fingerprint::LOOKUP_URL).is_empty(),
+        "nenhuma consulta de reconhecimento"
+    );
+    assert!(urls_para(&urls, cancioneiro_lib::lyrics_fetch::SEARCH_URL).len() > 1);
+    assert_eq!(props.len(), 1);
+    assert!(props[0].error.is_none(), "ausência de acessório não é erro");
+    assert!(props[0].conflito.is_none());
+}
+
+/// Binário quebrado falha em TODOS os arquivos. Reportar uma vez e desligar
+/// a etapa é o que evita 95 linhas com a mesma acusação (DECISIONS #83).
+#[test]
+fn fpcalc_quebrado_reporta_uma_vez_e_desliga_a_etapa() {
+    let (_dir, conn, _f) = setup_with(&[
+        ("sem_tags.mp3", "a - um.mp3"),
+        ("sem_tags.mp3", "b - dois.mp3"),
+        ("sem_tags.mp3", "c - tres.mp3"),
+    ]);
+    let urls = RefCell::new(Vec::new());
+    let fontes = ComSom {
+        fetch: roteador(&urls, "{}", "[]", "{}"),
+        impressao: None, // o "binário" falha sempre
+        chave: "chave-acoustid-de-teste".into(),
+    };
+    let props = scan_com(&conn, enrich::Modo::Completar, fontes, SEM_CHAVE);
+
+    let com_erro = props.iter().filter(|p| p.error.is_some()).count();
+    assert_eq!(com_erro, 1, "a primeira reporta; as demais pulam em silêncio");
+    assert_eq!(props.len(), 3, "e todas continuam sendo propostas");
+}
+
+/// A duração que o `fpcalc` mediu é PROVA (decodificou o áudio); a do
+/// cabeçalho já mentiu por uma ordem de grandeza (DECISIONS #72). Quando o
+/// som foi lido, é ela que confere o candidato do LRCLIB.
+#[test]
+fn a_duracao_medida_pelo_fpcalc_manda_no_lrclib() {
+    let (_dir, conn, _f) = setup_with(&[("sem_tags.mp3", "Falamansa - Oh! Chuva.mp3")]);
+    let song = song_by_suffix(&conn, "Oh! Chuva.mp3");
+    let dur_real = song.duration_seconds.unwrap() as f64;
+
+    // o AcoustID não reconhece (etapa 2 sem resultado), mas o fpcalc mediu a
+    // duração — e o candidato do LRCLIB só bate com a duração MEDIDA
+    let letra = format!(
+        r#"[{{"trackName": "Oh! Chuva", "artistName": "Falamansa",
+             "duration": {dur_real}, "plainLyrics": "chove"}}]"#
+    );
+    let urls = RefCell::new(Vec::new());
+    let fontes = ComSom {
+        fetch: roteador(&urls, r#"{"status":"ok","results":[]}"#, &letra, "{}"),
+        impressao: Some(impressao(dur_real)),
+        chave: "chave-acoustid-de-teste".into(),
+    };
+    let props = scan_com(&conn, enrich::Modo::Completar, fontes, SEM_CHAVE);
+    assert_eq!(props[0].lyrics.as_deref(), Some("chove"));
+    assert_eq!(props[0].confidence, "alta", "sem identidade do som, a régua é a de sempre");
+}
+
+/// Vale nas DUAS entradas: a música avulsa do editor também passa pela
+/// etapa 2.
+#[test]
+fn a_musica_avulsa_do_editor_tambem_pergunta_ao_som() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "musica.mp3")]);
+    let song = song_by_suffix(&conn, "musica.mp3");
+    writer::write_tags(
+        &conn,
+        song.id,
+        "Te ver feliz, te ver contente",
+        Some("Caetano Veloso"),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    let dur = song.duration_seconds.unwrap() as f64;
+    let urls = RefCell::new(Vec::new());
+
+    let p = enrich::enrich_scan_song(
+        &conn,
+        song.id,
+        None,
+        None,
+        ComSom::nova(
+            roteador(
+                &urls,
+                &acoustid(0.95, "Viver Feliz", "Nilson Chaves", dur),
+                "[]",
+                "{}",
+            ),
+            dur,
+        ),
+        SEM_CHAVE,
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap()
+    .expect("o conflito é resultado, não vazio");
+    let c = p.conflito.as_ref().unwrap();
+    assert_eq!(c.titulo, "Viver Feliz");
+    assert_eq!(c.artista, "Nilson Chaves");
 }

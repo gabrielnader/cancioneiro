@@ -8,7 +8,7 @@ use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 // ---------------------------------------------------------------------------
 // Por que alguns comandos são `#[tauri::command(async)]`
@@ -337,15 +337,37 @@ pub fn write_tags(
     )
 }
 
+/// Para onde uma requisição do funil pode ir. A lista é FECHADA, e é o que
+/// torna o inviolável "nada do acervo sai da máquina" uma garantia
+/// executável em vez de uma promessa: um endereço montado errado (ou vindo
+/// de dado do próprio acervo) não consegue virar requisição para outro
+/// servidor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Destino {
+    Lrclib,
+    Vagalume,
+    /// AcoustID (V9) — recebe um resumo acústico, nunca o áudio.
+    Acoustid,
+}
+
+fn destino_de(url: &str) -> Option<Destino> {
+    if url.starts_with(crate::vagalume::SEARCH_URL) {
+        Some(Destino::Vagalume)
+    } else if url.starts_with(crate::lyrics_fetch::SEARCH_URL) {
+        Some(Destino::Lrclib)
+    } else if url.starts_with(crate::fingerprint::LOOKUP_URL) {
+        Some(Destino::Acoustid)
+    } else {
+        None
+    }
+}
+
 /// Fetcher real (ureq) do funil, compartilhado por `enrich_folder_scan` e
-/// `enrich_song_scan` — os ÚNICOS pontos de rede de todo o app, ambos
-/// acionados por cliques explícitos do usuário. GET com timeout de 10 s e
-/// User-Agent "Cancioneiro/0.7".
+/// `enrich_song_scan`. GET com timeout de 10 s e User-Agent
+/// "Cancioneiro/0.9".
 ///
-/// A primeira coisa que ele faz é conferir o DESTINO: só LRCLIB e Vagalume
-/// passam. A trava é barata e vale como garantia executável do inviolável
-/// "nada do acervo sai da máquina" — um endereço montado errado (ou vindo de
-/// dado do próprio acervo) não consegue virar requisição para outro servidor.
+/// A primeira coisa que ele faz é conferir o DESTINO: só LRCLIB, Vagalume e
+/// AcoustID passam (ver `Destino`).
 ///
 /// 404 no Vagalume é resposta legítima ("não conheço esta música") e vira
 /// corpo vazio, que o módulo lê como "sem resultado". Chamar isso de falha de
@@ -353,21 +375,20 @@ pub fn write_tags(
 ///
 /// As demais falhas viram mensagens DISTINTAS (ver `mensagem_de_status`).
 pub(crate) fn funil_fetcher(url: &str) -> Result<String> {
-    let vagalume = url.starts_with(crate::vagalume::SEARCH_URL);
-    if !vagalume && !url.starts_with(crate::lyrics_fetch::SEARCH_URL) {
+    let Some(destino) = destino_de(url) else {
         return Err(AppError("endereço de rede não permitido".into()));
-    }
+    };
     let agent = ureq::AgentBuilder::new()
         .timeout(std::time::Duration::from_secs(10))
-        .user_agent("Cancioneiro/0.7")
+        .user_agent("Cancioneiro/0.9")
         .build();
     match agent.get(url).call() {
         Ok(resp) => resp
             .into_string()
             .map_err(|_| AppError("sem conexão".into())),
-        Err(ureq::Error::Status(404, _)) if vagalume => Ok(String::new()),
+        Err(ureq::Error::Status(404, _)) if destino == Destino::Vagalume => Ok(String::new()),
         Err(ureq::Error::Status(status, _)) => {
-            Err(AppError(mensagem_de_status(status, vagalume).into()))
+            Err(AppError(mensagem_de_status(status, destino).into()))
         }
         // transporte: DNS que não resolve, tempo esgotado, conexão recusada.
         // Aqui "sem conexão" é a verdade, e continua sendo o texto.
@@ -376,7 +397,7 @@ pub(crate) fn funil_fetcher(url: &str) -> Result<String> {
 }
 
 /// O que dizer a quem está olhando a tela quando o servidor RESPONDEU, mas
-/// não com a letra.
+/// não com o que se pediu.
 ///
 /// Dizer "sem conexão" para tudo (o que este fetcher fazia) manda a pessoa
 /// investigar a própria internet, que está ótima, e repete a acusação errada
@@ -384,18 +405,75 @@ pub(crate) fn funil_fetcher(url: &str) -> Result<String> {
 /// sem número de código solto — quem cura são ~40 pessoas que não abrem
 /// terminal e não têm a quem perguntar; esta frase é a explicação inteira.
 ///
-/// São TEXTO FIXO, sem interpolação: é o que garante que a chave do usuário
-/// nunca possa aparecer numa mensagem de erro.
-fn mensagem_de_status(status: u16, vagalume: bool) -> &'static str {
-    match status {
-        // só a consulta ao Vagalume leva chave; 401/403 no LRCLIB é outra
-        // coisa qualquer, e mandar conferir uma chave que não existe naquela
-        // consulta seria mandar a pessoa procurar defeito onde não há
-        401 | 403 if vagalume => crate::vagalume::ERRO_CHAVE_RECUSADA,
-        429 => "o site de letras pediu para esperar um pouco",
-        500..=599 => "o site de letras está fora do ar agora",
-        _ => "o site de letras respondeu com erro",
+/// Cada destino fala de si: chamar o AcoustID de "site de letras" seria
+/// mandar a pessoa procurar defeito no lugar errado — ele não devolve letra
+/// nenhuma.
+///
+/// São TEXTO FIXO, sem interpolação: é o que garante que nenhuma chave (a do
+/// usuário, no Vagalume, ou a nossa, no AcoustID) possa aparecer numa
+/// mensagem de erro.
+fn mensagem_de_status(status: u16, destino: Destino) -> &'static str {
+    match (status, destino) {
+        // a chave do Vagalume é do USUÁRIO: dá para conferir se copiou certo
+        (401 | 403, Destino::Vagalume) => crate::vagalume::ERRO_CHAVE_RECUSADA,
+        // a do AcoustID é NOSSA e vem compilada: não há nada que a pessoa
+        // possa fazer, e mandá-la conferir uma chave que ela nunca digitou
+        // seria mandá-la procurar defeito onde não há
+        (401 | 403, Destino::Acoustid) => crate::fingerprint::ERRO_CHAVE_RECUSADA,
+        // o LRCLIB não tem chave nenhuma: 401/403 lá é outra coisa
+        (429, Destino::Acoustid) => "o reconhecimento pelo som pediu para esperar um pouco",
+        (500..=599, Destino::Acoustid) => "o reconhecimento pelo som está fora do ar agora",
+        (_, Destino::Acoustid) => crate::fingerprint::ERRO_RESPOSTA,
+        (429, _) => "o site de letras pediu para esperar um pouco",
+        (500..=599, _) => "o site de letras está fora do ar agora",
+        (_, _) => "o site de letras respondeu com erro",
     }
+}
+
+// ---------------------------------------------------------------------------
+// Acessórios (F18 fase 2 — PRD V9)
+// ---------------------------------------------------------------------------
+
+/// Fetcher real dos acessórios. Ponto de rede SEPARADO do funil, e com a
+/// mesma disciplina: só o lançamento de acessórios passa.
+///
+/// A trava vale para o endereço que NÓS montamos. O GitHub responde a esse
+/// endereço com um redirecionamento para o próprio armazenamento dele, e o
+/// `ureq` o segue — é assim que um download do GitHub funciona. Isso não
+/// abre porta nenhuma: quem escolhe o destino inicial é o catálogo compilado,
+/// nada do acervo é enviado, e o que chega é conferido byte a byte pelo
+/// SHA-256 antes de virar arquivo executável. **A soma é a autoridade, não a
+/// origem** — é ela que torna o redirecionamento inofensivo.
+///
+/// Sem timeout total: são 5 MB numa conexão que pode ser ruim, e derrubar o
+/// download aos 10 s seria transformar internet lenta em defeito. O que
+/// existe é timeout de CONEXÃO, e o cancelamento da pessoa, que é verificado
+/// a cada pedaço.
+fn acessorio_fetcher(url: &str) -> Result<crate::acessorios::Corpo> {
+    if !url.starts_with(crate::acessorios::URL_BASE) {
+        return Err(AppError("endereço de rede não permitido".into()));
+    }
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(15))
+        .user_agent("Cancioneiro/0.9")
+        .build();
+    let resp = agent.get(url).call().map_err(|e| match e {
+        ureq::Error::Status(404, _) => AppError(
+            "o arquivo não está mais disponível para download nesta versão do aplicativo".into(),
+        ),
+        ureq::Error::Status(status, _) if (500..=599).contains(&status) => {
+            AppError("o servidor de downloads está fora do ar agora".into())
+        }
+        ureq::Error::Status(_, _) => AppError("o servidor de downloads respondeu com erro".into()),
+        _ => AppError("sem conexão".into()),
+    })?;
+    let total = resp
+        .header("Content-Length")
+        .and_then(|v| v.parse::<u64>().ok());
+    Ok(crate::acessorios::Corpo {
+        total,
+        bytes: Box::new(resp.into_reader()),
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -424,15 +502,36 @@ fn emissor_de_progresso(
     }
 }
 
-/// A chave do Vagalume como o funil a espera: `None`/vazia = etapa pulada.
+/// A chave do Vagalume que o funil vai usar. Duas podem existir, e a ordem
+/// entre elas é o ponto (PRD V9):
 ///
-/// Ela vem do frontend a cada chamada (é preferência dele, não dado do
-/// acervo) e NUNCA entra no banco de músicas, em log ou em mensagem de erro,
-/// nem é enviada a lugar nenhum além do próprio Vagalume. Fica guardada nas
-/// preferências locais do aplicativo, na máquina da própria pessoa. Sem chave
-/// nada falha: a etapa simplesmente não acontece.
+/// 1. **a do usuário**, se ele digitou uma. Ela vem do frontend a cada
+///    chamada (é preferência dele, não dado do acervo) e fica guardada nas
+///    preferências locais, na máquina da própria pessoa;
+/// 2. **a nossa**, embutida em tempo de build a partir de um segredo do
+///    repositório. Ela existe para ninguém precisar de chave nenhuma: pedir
+///    uma chave de API a quem não sabe o que é terminal era um pedágio
+///    absurdo, e o campo por pessoa existia só porque a alternativa não
+///    tinha sido pensada.
+///
+/// A do usuário vem PRIMEIRO de propósito: é a saída se a nossa for
+/// bloqueada algum dia. Build sem o segredo (desenvolvimento, fork)
+/// simplesmente não tem chave embutida, e aí vale a regra de sempre — sem
+/// nenhuma das duas, a etapa é pulada em silêncio e nada falha.
+///
+/// Assumido conscientemente: chave dentro de programa distribuído não é
+/// segredo — qualquer pessoa a extrai do binário. Aceito porque o estrago é
+/// recuperável (chave nova numa atualização, em uma hora) e o ganho é ~40
+/// pessoas que nunca veem uma tela de configuração.
+///
+/// Nenhuma das duas entra no banco de músicas, em log ou em mensagem de
+/// erro, nem vai a lugar nenhum além do próprio Vagalume.
 fn chave(vagalume_key: Option<String>) -> String {
-    vagalume_key.unwrap_or_default().trim().to_string()
+    let do_usuario = vagalume_key.unwrap_or_default().trim().to_string();
+    if !do_usuario.is_empty() {
+        return do_usuario;
+    }
+    option_env!("VAGALUME_API_KEY").unwrap_or("").trim().to_string()
 }
 
 /// Passa as músicas incompletas sob `folder_prefix` (vazio = biblioteca
@@ -462,15 +561,19 @@ pub fn enrich_folder_scan(
     folder_prefix: String,
     scan_id: String,
     vagalume_key: Option<String>,
+    modo: Option<crate::enrich::Modo>,
 ) -> Result<Vec<crate::enrich::EnrichProposal>> {
+    let modo = modo.unwrap_or_default();
     let cancel = state.scan_begin(&scan_id)?;
+    let fontes = fontes_do_funil(&app);
     let progresso = emissor_de_progresso(app, scan_id.clone());
     let resultado = (|| {
         let conn = state.scan_conn()?;
         crate::enrich::enrich_scan(
             &conn,
             &folder_prefix,
-            funil_fetcher,
+            modo,
+            fontes,
             &chave(vagalume_key),
             PAUSA_CORTESIA,
             progresso,
@@ -487,9 +590,13 @@ pub fn enrich_folder_scan(
 /// `enrich::candidata` da varredura, contada (QA ALTO-2 — havia uma segunda
 /// cópia da regra em TypeScript, já divergente).
 #[tauri::command]
-pub fn enrich_count(state: State<'_, Db>, folder_prefix: String) -> Result<usize> {
+pub fn enrich_count(
+    state: State<'_, Db>,
+    folder_prefix: String,
+    modo: Option<crate::enrich::Modo>,
+) -> Result<usize> {
     let conn = state.lock()?;
-    crate::enrich::count_candidatas(&conn, &folder_prefix)
+    crate::enrich::count_candidatas(&conn, &folder_prefix, modo.unwrap_or_default())
 }
 
 /// O MESMO funil, numa música só: o "completar dados desta música" do editor
@@ -521,6 +628,7 @@ pub fn enrich_song_scan(
 ) -> Result<Option<crate::enrich::EnrichProposal>> {
     let scan_id = scan_id.unwrap_or_default();
     let cancel = state.scan_begin(&scan_id)?;
+    let fontes = fontes_do_funil(&app);
     let progresso = emissor_de_progresso(app, scan_id.clone());
     let resultado = (|| {
         let conn = state.scan_conn()?;
@@ -529,7 +637,7 @@ pub fn enrich_song_scan(
             song_id,
             title.as_deref(),
             artist.as_deref(),
-            funil_fetcher,
+            fontes,
             &chave(vagalume_key),
             PAUSA_CORTESIA,
             progresso,
@@ -560,6 +668,233 @@ pub fn enrich_apply(
 ) -> Result<Vec<crate::enrich::EnrichApplyResult>> {
     let conn = state.lock()?;
     crate::enrich::apply(&conn, &aplicacoes)
+}
+
+// ---------------------------------------------------------------------------
+// As fontes do funil (rede + acessório) montadas para uma varredura
+// ---------------------------------------------------------------------------
+
+/// Implementação real de `enrich::Fontes`: a rede pelo `funil_fetcher` e a
+/// impressão digital pelo `fpcalc` do cache, quando ele está lá.
+struct FontesDoFunil {
+    /// `None` = o acessório não está pronto → etapa do som pulada em
+    /// SILÊNCIO. É o estado normal de quem ainda não baixou, não um erro.
+    fpcalc: Option<PathBuf>,
+    chave_acoustid: &'static str,
+}
+
+impl crate::enrich::Fontes for FontesDoFunil {
+    fn buscar(&self, url: &str) -> Result<String> {
+        funil_fetcher(url)
+    }
+    fn reconhece_pelo_som(&self) -> bool {
+        self.fpcalc.is_some()
+    }
+    fn impressao_digital(
+        &self,
+        mp3: &Path,
+    ) -> Option<Result<crate::fingerprint::Impressao>> {
+        self.fpcalc
+            .as_ref()
+            .map(|fpcalc| crate::fingerprint::impressao_digital(fpcalc, mp3))
+    }
+    fn chave_acoustid(&self) -> &str {
+        self.chave_acoustid
+    }
+}
+
+/// Monta as fontes para UMA varredura. A soma do acessório é conferida aqui,
+/// uma vez por varredura e não uma vez por música: são milissegundos, e
+/// protege contra o arquivo ter sido trocado no disco depois de instalado —
+/// o que é conferido antes de executar precisa continuar sendo o que se
+/// executa.
+fn fontes_do_funil(app: &AppHandle) -> FontesDoFunil {
+    FontesDoFunil {
+        fpcalc: fpcalc_pronto(app),
+        chave_acoustid: crate::fingerprint::chave_acoustid(),
+    }
+}
+
+/// Caminho do `fpcalc` quando ele está no cache E a soma confere. Qualquer
+/// outra situação (sem pasta de perfil, acessório ausente, arquivo trocado)
+/// devolve `None`, e a etapa some sem dizer nada.
+fn fpcalc_pronto(app: &AppHandle) -> Option<PathBuf> {
+    let cache = diretorio_de_cache(app).ok()?;
+    let acessorio = crate::acessorios::desta_maquina(crate::acessorios::FPCALC)?;
+    (crate::acessorios::estado(acessorio, &cache) == crate::acessorios::Estado::Pronto)
+        .then(|| acessorio.caminho(&cache))
+}
+
+/// Pasta de cache dos acessórios, sob o perfil do usuário — a mesma pasta de
+/// dados onde vive o banco.
+fn diretorio_de_cache(app: &AppHandle) -> Result<PathBuf> {
+    let base = app
+        .path()
+        .app_data_dir()
+        .map_err(|_| AppError("não foi possível achar a pasta do aplicativo".into()))?;
+    Ok(crate::acessorios::diretorio_de_cache(&base))
+}
+
+// ---------------------------------------------------------------------------
+// Comandos dos acessórios (F18 fase 2 — PRD V9)
+// ---------------------------------------------------------------------------
+
+/// Um acessório como a tela precisa vê-lo. Tudo que a regra 1 do PRD V9 pede
+/// para dizer ANTES de baixar ("o que vai baixar, quanto ocupa") mais o
+/// estado atual.
+#[derive(Debug, Clone, Serialize)]
+pub struct AcessorioInfo {
+    /// Identidade estável, e o que `acessorio_baixar` recebe: "fpcalc".
+    pub nome: String,
+    /// Para que serve, em pt-BR e pronto para exibir.
+    pub para_que_serve: String,
+    /// Nome do arquivo, igual no lançamento e no cache.
+    pub arquivo: String,
+    /// Quanto ocupa, em bytes.
+    pub tamanho_bytes: u64,
+    /// "ausente" | "pronto" | "corrompido" | "indisponivel".
+    pub estado: String,
+    /// De onde ele vem — a "origem só para explicar na tela" do PRD V9.
+    pub origem: String,
+}
+
+/// Progresso do download (evento `acessorio:progresso`).
+///
+/// `total` é `null` quando o servidor não anuncia o tamanho: "não sabemos" é
+/// um estado, e um zero no lugar seria lido pela barra como 0% de um arquivo
+/// vazio (DECISIONS #86).
+#[derive(Debug, Clone, Serialize)]
+pub struct AcessorioProgresso {
+    pub nome: String,
+    pub baixados: u64,
+    pub total: Option<u64>,
+    pub download_id: String,
+}
+
+/// Desfecho de `acessorio_baixar`. `cancelado` é um CAMPO, e não algo a
+/// deduzir do estado: cancelar e falhar em silêncio terminam os dois com o
+/// acessório ausente, e a tela precisa saber qual dos dois aconteceu sem
+/// adivinhar.
+#[derive(Debug, Clone, Serialize)]
+pub struct AcessorioDownload {
+    pub cancelado: bool,
+    pub acessorio: AcessorioInfo,
+}
+
+/// Para que serve cada acessório, em pt-BR — aparece cru na tela.
+fn para_que_serve(nome: &str) -> &'static str {
+    match nome {
+        crate::acessorios::FPCALC => "reconhecer a música pelo som",
+        _ => "",
+    }
+}
+
+fn info_de(
+    acessorio: &crate::acessorios::Acessorio,
+    cache: &Path,
+    tem_chave: bool,
+) -> AcessorioInfo {
+    let mut estado = crate::acessorios::estado(acessorio, cache);
+    // Sem a chave do AcoustID compilada nesta build, o `fpcalc` não teria o
+    // que fazer. Oferecer um download de 5 MB que não pode servir para nada
+    // seria pior que não oferecer nada — e "indisponível nesta versão" é
+    // exatamente o que está acontecendo.
+    if !tem_chave && acessorio.nome == crate::acessorios::FPCALC {
+        estado = crate::acessorios::Estado::Indisponivel;
+    }
+    AcessorioInfo {
+        nome: acessorio.nome.to_string(),
+        para_que_serve: para_que_serve(acessorio.nome).to_string(),
+        arquivo: acessorio.arquivo.to_string(),
+        tamanho_bytes: acessorio.tamanho_bytes,
+        estado: estado.como_texto().to_string(),
+        origem: acessorio.url(),
+    }
+}
+
+/// Os acessórios que existem para ESTE computador, com o estado de cada um.
+///
+/// Lista vazia significa que não publicamos binário para esta plataforma — e
+/// a tela deve dizer isso, em vez de oferecer um download que não serviria.
+///
+/// É `(async)` porque confere a soma dos arquivos do cache: lê alguns MB de
+/// disco, e comando síncrono roda na thread que desenha a janela
+/// (DECISIONS #92).
+#[tauri::command(async)]
+pub fn acessorios_estado(app: AppHandle) -> Result<Vec<AcessorioInfo>> {
+    let cache = diretorio_de_cache(&app)?;
+    let tem_chave = !crate::fingerprint::chave_acoustid().is_empty();
+    Ok(crate::acessorios::catalogo_desta_maquina()
+        .into_iter()
+        .map(|a| info_de(a, &cache, tem_chave))
+        .collect())
+}
+
+/// Baixa o acessório `nome`, confere a soma e o instala. Nada baixa sozinho:
+/// este comando só existe porque alguém clicou depois de ler o que ia
+/// baixar e quanto ocupava.
+///
+/// Emite `acessorio:progresso` a cada pedaço, com o `download_id` que o
+/// frontend gerou — a mesma disciplina do `scan_id` do funil, e pelo mesmo
+/// motivo: um download antigo não pode embaralhar a barra do novo.
+///
+/// Cancelável por `acessorio_cancelar(download_id)`, verificado DENTRO do
+/// download e não só entre arquivos.
+///
+/// Devolve o desfecho: `cancelado` diz se a pessoa parou, e `acessorio` traz
+/// o estado final. Falha de rede ou soma que não confere viram `Err` com uma
+/// frase em pt-BR — e, nos dois casos, nada foi instalado.
+#[tauri::command(async)]
+pub fn acessorio_baixar(
+    app: AppHandle,
+    state: State<'_, Db>,
+    nome: String,
+    download_id: String,
+) -> Result<AcessorioDownload> {
+    let cache = diretorio_de_cache(&app)?;
+    let tem_chave = !crate::fingerprint::chave_acoustid().is_empty();
+    let acessorio = crate::acessorios::desta_maquina(&nome)
+        .ok_or_else(|| AppError(crate::acessorios::ERRO_ACESSORIO_DESCONHECIDO.into()))?;
+    if !tem_chave && acessorio.nome == crate::acessorios::FPCALC {
+        return Err(AppError(crate::acessorios::ERRO_INDISPONIVEL.into()));
+    }
+
+    let cancel = state.scan_begin(&download_id)?;
+    let nome_evento = acessorio.nome.to_string();
+    let id_evento = download_id.clone();
+    let resultado = crate::acessorios::baixar(
+        acessorio,
+        &cache,
+        acessorio_fetcher,
+        |baixados, total| {
+            let _ = app.emit(
+                "acessorio:progresso",
+                AcessorioProgresso {
+                    nome: nome_evento.clone(),
+                    baixados,
+                    total,
+                    download_id: id_evento.clone(),
+                },
+            );
+        },
+        || cancel.load(Ordering::SeqCst),
+    );
+    state.scan_end(&download_id);
+
+    let cancelado = matches!(resultado, Ok(None));
+    resultado?;
+    Ok(AcessorioDownload {
+        cancelado,
+        acessorio: info_de(acessorio, &cache, tem_chave),
+    })
+}
+
+/// Cancela o download `download_id`. Id desconhecido (download já encerrado)
+/// é no-op silencioso, igual ao cancelamento de varredura — os dois usam o
+/// mesmo registro de trabalhos longos vivos.
+#[tauri::command]
+pub fn acessorio_cancelar(state: State<'_, Db>, download_id: String) -> Result<()> {
+    state.cancel_scan(&download_id)
 }
 
 #[cfg(test)]
@@ -668,10 +1003,14 @@ mod tests {
     #[test]
     fn the_stage_vocabulary_is_closed_and_stable() {
         use crate::enrich::*;
+        // na ORDEM em que a pessoa as lê durante uma varredura (V9: a
+        // impressão digital passou a vir ANTES das fontes de letra, porque
+        // é o nome dela que as alimenta)
         assert_eq!(
             [
                 ETAPA_PREPARANDO,
                 ETAPA_NOME_ARQUIVO,
+                ETAPA_IMPRESSAO_DIGITAL,
                 ETAPA_LRCLIB,
                 ETAPA_VAGALUME,
                 ETAPA_CONCLUIDA
@@ -679,6 +1018,7 @@ mod tests {
             [
                 "preparando",
                 "lendo etiquetas e nome do arquivo",
+                "reconhecendo pelo som",
                 "procurando no LRCLIB",
                 "procurando no Vagalume",
                 "concluída"
@@ -687,11 +1027,18 @@ mod tests {
         assert_eq!(
             [
                 FONTE_NOME_ARQUIVO,
+                FONTE_IMPRESSAO_DIGITAL,
                 FONTE_LRCLIB,
                 FONTE_VAGALUME,
                 FONTE_ERRO
             ],
-            ["nome do arquivo", "LRCLIB", "Vagalume", "erro"]
+            [
+                "nome do arquivo",
+                "reconhecimento pelo som",
+                "LRCLIB",
+                "Vagalume",
+                "erro"
+            ]
         );
     }
 
@@ -713,6 +1060,7 @@ mod tests {
             fonte: crate::enrich::FONTE_VAGALUME.into(),
             has_lyrics: true,
             letra_origem: Some("transcricao".into()),
+            conflito: None,
             error: None,
         })
         .unwrap();
@@ -728,6 +1076,7 @@ mod tests {
             campos,
             [
                 "confidence",
+                "conflito",
                 "current_artist",
                 "current_title",
                 "error",
@@ -741,6 +1090,66 @@ mod tests {
                 "song_id",
             ]
         );
+    }
+
+    /// V9 — o outro lado da divergência atravessa o IPC inteiro: sem os dois
+    /// valores, a tela não tem como mostrar os dois lados, e mostrar um lado
+    /// só de uma contradição é pior que não mostrar nada.
+    #[test]
+    fn a_proposta_de_conflito_leva_os_dois_lados_para_a_tela() {
+        let json = serde_json::to_value(crate::enrich::EnrichProposal {
+            song_id: 7,
+            file_path: "/m/a.mp3".into(),
+            current_title: "Te ver feliz, te ver contente".into(),
+            current_artist: Some("Caetano Veloso".into()),
+            proposed_title: "Te ver feliz, te ver contente".into(),
+            proposed_artist: Some("Caetano Veloso".into()),
+            lyrics: None,
+            confidence: "baixa".into(),
+            fonte: crate::enrich::FONTE_IMPRESSAO_DIGITAL.into(),
+            has_lyrics: true,
+            letra_origem: None,
+            conflito: Some(crate::enrich::Conflito {
+                titulo: "Viver Feliz".into(),
+                artista: "Nilson Chaves".into(),
+                confianca: "alta".into(),
+            }),
+            error: None,
+        })
+        .unwrap();
+
+        assert_eq!(json["conflito"]["titulo"], "Viver Feliz");
+        assert_eq!(json["conflito"]["artista"], "Nilson Chaves");
+        assert_eq!(json["conflito"]["confianca"], "alta");
+        assert_eq!(json["fonte"], "reconhecimento pelo som");
+        // a etiqueta atual NÃO é corrigida sozinha, e a linha nunca chega
+        // pré-marcada (só "alta" é pré-marcada — DECISIONS #49)
+        assert_eq!(json["proposed_title"], "Te ver feliz, te ver contente");
+        assert_eq!(json["confidence"], "baixa");
+        let campos: Vec<&String> = json["conflito"].as_object().unwrap().keys().collect();
+        assert_eq!(campos, ["artista", "confianca", "titulo"]);
+    }
+
+    /// O modo da varredura chega do frontend como texto minúsculo e sem
+    /// acento, e ausente vale a varredura BARATA — nunca a cara por engano.
+    #[test]
+    fn o_modo_da_varredura_atravessa_o_ipc_como_texto() {
+        use crate::enrich::Modo;
+        assert_eq!(
+            serde_json::from_str::<Modo>("\"completar\"").unwrap(),
+            Modo::Completar
+        );
+        assert_eq!(
+            serde_json::from_str::<Modo>("\"conferencia\"").unwrap(),
+            Modo::Conferencia
+        );
+        assert_eq!(
+            serde_json::from_str::<Option<Modo>>("null")
+                .unwrap()
+                .unwrap_or_default(),
+            Modo::Completar
+        );
+        assert!(serde_json::from_str::<Modo>("\"CONFERENCIA\"").is_err());
     }
 
     /// O eco de `fonte` é OPCIONAL: um payload sem ele continua válido e vale
@@ -847,62 +1256,90 @@ mod tests {
     fn each_http_failure_says_what_actually_happened() {
         use crate::vagalume::ERRO_CHAVE_RECUSADA;
 
-        // chave recusada: só faz sentido numa consulta ao Vagalume, que é a
-        // única que leva chave
-        assert_eq!(mensagem_de_status(401, true), ERRO_CHAVE_RECUSADA);
-        assert_eq!(mensagem_de_status(403, true), ERRO_CHAVE_RECUSADA);
+        // chave recusada: as duas fontes que levam chave têm mensagens
+        // DIFERENTES, porque as chaves são de donos diferentes — a do
+        // Vagalume é do usuário (dá para conferir se copiou certo), a do
+        // AcoustID é nossa e vem compilada (não há nada que ele possa fazer)
+        assert_eq!(mensagem_de_status(401, Destino::Vagalume), ERRO_CHAVE_RECUSADA);
+        assert_eq!(mensagem_de_status(403, Destino::Vagalume), ERRO_CHAVE_RECUSADA);
+        assert_eq!(
+            mensagem_de_status(401, Destino::Acoustid),
+            crate::fingerprint::ERRO_CHAVE_RECUSADA
+        );
         // o LRCLIB não tem chave nenhuma: 401/403 lá é outra coisa
         assert_eq!(
-            mensagem_de_status(401, false),
+            mensagem_de_status(401, Destino::Lrclib),
             "o site de letras respondeu com erro"
         );
 
         assert_eq!(
-            mensagem_de_status(429, true),
+            mensagem_de_status(429, Destino::Vagalume),
             "o site de letras pediu para esperar um pouco"
         );
         assert_eq!(
-            mensagem_de_status(429, false),
+            mensagem_de_status(429, Destino::Lrclib),
             "o site de letras pediu para esperar um pouco"
         );
         for fora_do_ar in [500, 502, 503, 504] {
             assert_eq!(
-                mensagem_de_status(fora_do_ar, false),
+                mensagem_de_status(fora_do_ar, Destino::Lrclib),
                 "o site de letras está fora do ar agora",
                 "status {fora_do_ar}"
             );
         }
         for outro in [400, 404, 410, 418] {
             assert_eq!(
-                mensagem_de_status(outro, false),
+                mensagem_de_status(outro, Destino::Lrclib),
                 "o site de letras respondeu com erro",
                 "status {outro}"
             );
         }
     }
 
-    /// Nenhuma dessas frases pode carregar a chave: elas são texto FIXO, sem
-    /// interpolação, e é assim que a garantia se sustenta.
+    /// O AcoustID fala de SI, e nunca se chama "site de letras": ele não
+    /// devolve letra nenhuma, e mandar a pessoa procurar defeito num site de
+    /// letras quando o que falhou foi o reconhecimento é mandá-la procurar
+    /// no lugar errado.
+    #[test]
+    fn o_reconhecimento_pelo_som_nunca_se_chama_site_de_letras() {
+        for status in [400, 401, 403, 404, 429, 500, 502, 503] {
+            let msg = mensagem_de_status(status, Destino::Acoustid);
+            assert!(!msg.contains("letras"), "status {status}: {msg}");
+            assert!(msg.contains("som"), "status {status}: {msg}");
+        }
+    }
+
+    /// Nenhuma dessas frases pode carregar chave nenhuma: elas são texto
+    /// FIXO, sem interpolação, e é assim que a garantia se sustenta.
     #[test]
     fn no_network_message_can_ever_carry_the_key() {
-        let chave = "minha-chave-secreta-do-vagalume";
-        for status in [400, 401, 403, 404, 429, 500, 502, 503] {
-            for vagalume in [true, false] {
-                assert!(
-                    !mensagem_de_status(status, vagalume).contains(chave),
-                    "status {status}"
-                );
+        for chave in [
+            "minha-chave-secreta-do-vagalume",
+            "minha-chave-secreta-do-acoustid",
+        ] {
+            for status in [400, 401, 403, 404, 429, 500, 502, 503] {
+                for destino in [Destino::Lrclib, Destino::Vagalume, Destino::Acoustid] {
+                    assert!(
+                        !mensagem_de_status(status, destino).contains(chave),
+                        "status {status}, destino {destino:?}"
+                    );
+                }
             }
         }
     }
 
-    /// A chave do Vagalume é normalizada num lugar só, e ausente/vazia
-    /// significa "pule a etapa" — nunca erro.
+    /// A chave do Vagalume é resolvida num lugar só. A do USUÁRIO tem
+    /// precedência sobre a nossa — é a saída se a nossa for bloqueada algum
+    /// dia —, e sem nenhuma das duas a etapa é pulada, nunca um erro.
     #[test]
-    fn a_missing_or_blank_key_becomes_the_empty_key() {
-        assert_eq!(chave(None), "");
-        assert_eq!(chave(Some("   ".into())), "");
+    fn a_chave_do_usuario_tem_precedencia_sobre_a_nossa() {
+        let nossa = option_env!("VAGALUME_API_KEY").unwrap_or("").trim();
+        // digitada pela pessoa: vence sempre, e chega aparada
         assert_eq!(chave(Some("  minha-chave \n".into())), "minha-chave");
+        // ausente ou em branco: cai para a nossa (vazia nesta build, e aí a
+        // etapa é pulada em silêncio)
+        assert_eq!(chave(None), nossa);
+        assert_eq!(chave(Some("   ".into())), nossa);
     }
 
     // -----------------------------------------------------------------------

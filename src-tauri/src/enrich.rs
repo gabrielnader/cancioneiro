@@ -1,22 +1,63 @@
-//! F13 (PRD V5) + F18 fase 1 (PRD V8) — o funil de curadoria dentro do app.
+//! F13 (PRD V5) + F18 fases 1 e 2 (PRD V8 e V9) — o funil de curadoria
+//! dentro do app.
 //!
-//! `enrich_scan` seleciona as músicas INCOMPLETAS (sem letra OU com
-//! título/artista placeholder) de uma pasta (prefixo de file_path) e passa
-//! cada uma pelas etapas do funil, por CUSTO CRESCENTE, cada etapa recebendo
-//! só o que a anterior não resolveu (PRD V6):
+//! `enrich_scan` escolhe as músicas de uma pasta (prefixo de file_path) e
+//! passa cada uma pelas etapas do funil, cada etapa recebendo só o que a
+//! anterior não resolveu:
 //!
-//! | etapa | `fonte`           | custo       | o que faz                   |
-//! |-------|-------------------|-------------|-----------------------------|
-//! | 1     | "nome do arquivo" | instantâneo | tags não-placeholder > nome de arquivo limpo (porte do tools/curadoria.py) |
-//! | 2     | "LRCLIB"          | ~0,5 s      | LRCLIB por título/artista + DURAÇÃO |
-//! | 3     | "Vagalume"        | ~0,5 s      | Vagalume, só onde o LRCLIB veio vazio |
+//! | etapa | `fonte`                  | custo       | o que faz            |
+//! |-------|--------------------------|-------------|----------------------|
+//! | 1     | "nome do arquivo"        | instantâneo | palpite local a partir das etiquetas e do nome do arquivo (porte do tools/curadoria.py) |
+//! | 2     | "reconhecimento pelo som"| ~1 s        | IDENTIDADE: título e artista pelo AcoustID |
+//! | 3     | "LRCLIB"                 | ~0,5 s      | letra, conferida pela DURAÇÃO |
+//! | 4     | "Vagalume"               | ~0,5 s      | letra, casamento estrito de texto |
 //!
-//! As etapas 4 (impressão digital) e 5 (transcrição) são a fase 2 da F18 e
-//! não existem aqui.
+//! A etapa 5 (transcrição) é a v0.10.0 e não existe aqui.
 //!
-//! Todo o acesso à rede entra por um `fetch` injetável — os testes rodam sem
+//! # Por que a impressão digital vem ANTES das fontes de letra
+//!
+//! Ela não é fonte de letra — não devolve letra nenhuma. Ela devolve
+//! **identidade**, que é *entrada* de todas as outras. São duas fases
+//! distintas: descobrir que música é esta (1 e 2), e conseguir a letra dela
+//! (3, 4, 5). Ordená-la por custo, no meio das fontes de letra, foi erro de
+//! categoria.
+//!
+//! A consequência prática está em `palpites_de_letra`: **com nome verdadeiro
+//! em mãos, as etapas 3 e 4 recebem UM palpite**, em vez da cascata de até
+//! sete do `gerar_palpites`, cada um com sua pausa de cortesia. Décimos de
+//! segundo de CPU local compram até seis idas à rede a menos por música. O
+//! `gerar_palpites` continua sendo o caminho de quem o AcoustID não
+//! reconheceu — que é a maioria.
+//!
+//! # O risco que essa ordem cria, e o que o segura
+//!
+//! Antes, um erro do AcoustID estragaria uma consulta. Agora ele
+//! **contamina tudo o que vem depois**: com título e artista errados, o
+//! LRCLIB acha a letra da música errada e devolve ALTA, porque a duração vai
+//! bater — o AcoustID também casa por duração, então os dois erram juntos e
+//! de forma consistente. Seria letra errada com toda a aparência de certa.
+//! É a família do incidente "Ponto de Ogum" dentro de "Ponto de Oxum"
+//! (DECISIONS #63), agora com multiplicador. Três travas:
+//!
+//! 1. **as regras de aceitação do AcoustID não se afrouxam**, em hipótese
+//!    nenhuma — nem "só um pouco" para aumentar a taxa de acerto. Afrouxá-las
+//!    agora não custa uma proposta ruim: propaga o erro para as etapas de
+//!    letra. Elas moram no `fingerprint`, calibradas contra erro medido;
+//! 2. **nome recusado pela régua não vaza**: as etapas de letra voltam aos
+//!    palpites locais, e há teste fixando isso;
+//! 3. **letra achada por nome vindo do SOM tem teto de confiança MÉDIA** —
+//!    ver `TETO_COM_IDENTIDADE_DO_SOM`.
+//!
+//! # Os dois modos de varredura
+//!
+//! `Modo::Completar` é a varredura de sempre: só as músicas incompletas.
+//! `Modo::Conferencia` é outro trabalho — perguntar ao som se a etiqueta
+//! está certa — e por isso inclui as músicas COMPLETAS, que a outra nunca
+//! alcança. Ver `Modo`.
+//!
+//! Todo o acesso à rede entra por `Fontes`, injetável — os testes rodam sem
 //! rede; no comando real é o `ureq`, e continua sendo ponto de rede
-//! EXPLÍCITO, acionado pelo usuário, limitado a LRCLIB e Vagalume.
+//! EXPLÍCITO, acionado pelo usuário, limitado a LRCLIB, Vagalume e AcoustID.
 //!
 //! `apply` grava as propostas aceitas via writer::write_tags. Regra do lote
 //! (V3.1): NUNCA apaga dados existentes — campo ausente/vazio na aplicação
@@ -24,6 +65,7 @@
 
 use crate::db::{self, Song};
 use crate::error::Result;
+use crate::fingerprint::{self, Identificacao};
 use crate::lyrics_fetch::{self, ScoredCandidate};
 use crate::vagalume;
 use crate::writer;
@@ -32,6 +74,77 @@ use serde::{Deserialize, Serialize};
 use std::cell::Cell;
 use std::path::Path;
 use std::time::Duration;
+
+/// O que o funil precisa do mundo de fora.
+///
+/// Um simples `Fn(&str) -> Result<String>` já é `Fontes`: traz a rede e mais
+/// nada, com a etapa 2 desligada. Isso NÃO é uma conveniência de teste — é o
+/// estado real de quem ainda não baixou o acessório `fpcalc`, que é o estado
+/// de toda instalação nova. O comando de verdade passa uma implementação
+/// completa; a suíte exercita as duas.
+pub trait Fontes {
+    /// GET da URL. Só LRCLIB, Vagalume e AcoustID passam pelo fetcher real.
+    fn buscar(&self, url: &str) -> Result<String>;
+
+    /// O acessório `fpcalc` está pronto nesta máquina? Consultado ANTES de
+    /// anunciar a etapa na tela — anunciar "reconhecendo pelo som" para
+    /// depois não reconhecer nada seria descrever trabalho que não houve.
+    fn reconhece_pelo_som(&self) -> bool {
+        false
+    }
+
+    /// Roda o `fpcalc` sobre o arquivo. `None` = o acessório não está pronto
+    /// (etapa pulada em silêncio); `Some(Err)` = ele rodou e falhou.
+    fn impressao_digital(&self, _mp3: &Path) -> Option<Result<fingerprint::Impressao>> {
+        None
+    }
+
+    /// Chave do AcoustID compilada nesta build. Vazia = etapa 2 pulada em
+    /// silêncio, como o Vagalume sem chave.
+    fn chave_acoustid(&self) -> &str {
+        ""
+    }
+}
+
+impl<F> Fontes for F
+where
+    F: Fn(&str) -> Result<String>,
+{
+    fn buscar(&self, url: &str) -> Result<String> {
+        self(url)
+    }
+}
+
+/// O que a varredura está fazendo. São dois TRABALHOS distintos, com custos
+/// distintos, e o padrão não muda.
+///
+/// A separação existe por um caso real: um arquivo etiquetado "Te ver feliz,
+/// te ver contente" / "Caetano Veloso" que é, de verdade, "Viver Feliz" do
+/// Nilson Chaves. O funil inteiro supunha duas categorias — campo faltando =
+/// completar, campo com texto real = confiável —, e "Caetano Veloso" não é
+/// placeholder por regra nenhuma. Com letra no arquivo, essa música é
+/// "completa" e **nunca entra em varredura**: o erro fica invisível para
+/// sempre. São duas populações diferentes, e só a etapa 2 alcança a segunda,
+/// porque é a única que ignora a etiqueta e pergunta ao som.
+///
+/// Atravessa o IPC como texto minúsculo e sem acento — `"completar"` ou
+/// `"conferencia"` —, no mesmo estilo do resto do contrato. Ausente no JSON
+/// vale `Completar`: se um dia o frontend esquecer o campo, o que acontece é
+/// a varredura barata de sempre, nunca a cara por engano.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Modo {
+    /// Completar o que falta — a varredura de sempre, só nas músicas
+    /// incompletas, com o funil inteiro.
+    #[default]
+    Completar,
+    /// Conferir se a etiqueta bate com o som. Alcança TODAS as músicas
+    /// disponíveis, inclusive as completas, e roda **só a etapa 2**: as
+    /// etapas de letra são o outro trabalho. O custo é outro também — o
+    /// `fpcalc` lê o áudio de cada arquivo, então isto são minutos para um
+    /// acervo, não segundos —, e por isso é disparada de propósito.
+    Conferencia,
+}
 
 // ---------------------------------------------------------------------------
 // Vocabulário do funil (contrato com o frontend — valores ESTÁVEIS)
@@ -46,9 +159,14 @@ use std::time::Duration;
 /// `fonte` — etapa 1: montada aqui mesmo, sem rede, a partir das etiquetas
 /// existentes e do nome do arquivo.
 pub const FONTE_NOME_ARQUIVO: &str = "nome do arquivo";
-/// `fonte` — etapa 2: LRCLIB, com a duração conferida.
+/// `fonte` — etapa 2: a identidade veio do SOM (impressão digital acústica
+/// confirmada pelo AcoustID). Aparece crua na tela, então diz o que é em
+/// palavras de gente: quem revisa precisa entender, de relance, que esta
+/// linha não saiu de uma etiqueta nem de uma base de letras.
+pub const FONTE_IMPRESSAO_DIGITAL: &str = "reconhecimento pelo som";
+/// `fonte` — etapa 3: LRCLIB, com a duração conferida.
 pub const FONTE_LRCLIB: &str = "LRCLIB";
-/// `fonte` — etapa 3: Vagalume, por casamento estrito de texto (não há
+/// `fonte` — etapa 4: Vagalume, por casamento estrito de texto (não há
 /// duração para conferir).
 pub const FONTE_VAGALUME: &str = "Vagalume";
 /// `fonte` — a música foi tentada e falhou; `error` traz a explicação em
@@ -60,12 +178,32 @@ pub const FONTE_ERRO: &str = "erro";
 pub const ETAPA_PREPARANDO: &str = "preparando";
 /// `etapa` — lendo etiquetas e nome do arquivo (sem rede).
 pub const ETAPA_NOME_ARQUIVO: &str = "lendo etiquetas e nome do arquivo";
+/// `etapa` — lendo o áudio e perguntando que música é esta.
+pub const ETAPA_IMPRESSAO_DIGITAL: &str = "reconhecendo pelo som";
 /// `etapa` — consultando o LRCLIB.
 pub const ETAPA_LRCLIB: &str = "procurando no LRCLIB";
 /// `etapa` — consultando o Vagalume.
 pub const ETAPA_VAGALUME: &str = "procurando no Vagalume";
 /// `etapa` — esta música terminou; é o ÚNICO evento que faz `done` crescer.
 pub const ETAPA_CONCLUIDA: &str = "concluída";
+
+/// Teto de confiança da letra achada com um nome que veio do SOM.
+///
+/// ALTA chega PRÉ-MARCADA na revisão (DECISIONS #49), e ALTA no resto do
+/// produto significa "a duração confirmou um nome que o ARQUIVO já
+/// afirmava". Aqui não é isso: o nome veio do AcoustID, que casou por
+/// duração, e o LRCLIB o confirmou pela MESMA duração — a segunda conta não
+/// é independente da primeira, é a mesma conta feita duas vezes. Se o
+/// AcoustID errar a gravação, os dois erram juntos e o resultado tem toda a
+/// aparência de certo.
+///
+/// Não temos medição da taxa de erro do AcoustID neste repertório (o número
+/// que temos, 16%, é taxa de acerto, não de falso positivo). Sem medição, o
+/// produto não pré-marca: o teto é MÉDIA, e quem cura dá o clique. Custa uma
+/// marcação — "Marcar todas" continua existindo — e fecha o único caminho em
+/// que um clique escreveria a letra da música errada num arquivo que estava
+/// bom.
+const TETO_COM_IDENTIDADE_DO_SOM: &str = "media";
 
 /// Proposta de enriquecimento para uma música incompleta. A letra achada vem
 /// na própria proposta (evita segunda rodada de rede no apply).
@@ -96,9 +234,33 @@ pub struct EnrichProposal {
     /// dizer se o que seria sobrescrito é transcrição de máquina ou letra
     /// oficial.
     pub letra_origem: Option<String>,
+    /// O SOM discorda da etiqueta REAL que já está no arquivo (V9).
+    ///
+    /// Quando isto vem preenchido, a linha existe para INFORMAR, não para
+    /// corrigir: `proposed_title`/`proposed_artist` continuam sendo o que já
+    /// está lá, `confidence` é sempre "baixa" (nunca pré-marcada, em
+    /// nenhuma confiança) e nenhuma etapa de letra chegou a rodar. A regra
+    /// inviolável é "tag real nunca é sobrescrita sem confirmação", e este é
+    /// literalmente o caso que ela descreve — o `tools/curadoria.py` chama
+    /// isso de CONFLITO e também não grava nada.
+    ///
+    /// A UI mostra os DOIS lados e a pessoa decide. Aceitar o que o som diz
+    /// é uma escolha humana explícita, que volta pelo `apply` como qualquer
+    /// outra edição.
+    pub conflito: Option<Conflito>,
     /// Erro por música (ex.: "sem conexão", arquivo sumido) — nunca aborta
     /// o lote.
     pub error: Option<String>,
+}
+
+/// O outro lado de uma divergência: o que o SOM diz que esta música é.
+#[derive(Debug, Clone, Serialize)]
+pub struct Conflito {
+    pub titulo: String,
+    pub artista: String,
+    /// "alta" | "media" — a confiança da IDENTIFICAÇÃO acústica, não a da
+    /// linha (que é sempre "baixa", para nunca chegar pré-marcada).
+    pub confianca: String,
 }
 
 /// Resultado por música do `apply`: `song` Some = gravada e reindexada;
@@ -363,9 +525,11 @@ fn campo_efetivo(texto: &str) -> &str {
 /// → "Abrição de portas — Antônio Nóbrega", BAIXA, sem letra — só faziam o
 /// usuário perder tempo procurando qual era a sugestão.
 ///
-/// Duas exceções, nesta ordem:
+/// Três exceções, nesta ordem:
 /// - `error` presente: a linha (desabilitada na UI) É a informação — o usuário
 ///   precisa saber que a música foi tentada e falhou (decisão 47);
+/// - `conflito` presente: idem, e com mais razão — a linha existe justamente
+///   porque nada muda e alguém precisa saber por quê (V9);
 /// - `lyrics` presente: a letra é a mudança, mesmo com título/artista iguais.
 ///
 /// A comparação usa `current_title`/`current_artist` da própria proposta — os
@@ -373,6 +537,7 @@ fn campo_efetivo(texto: &str) -> &str {
 /// `campo_efetivo`.
 fn e_no_op(p: &EnrichProposal) -> bool {
     p.error.is_none()
+        && p.conflito.is_none()
         && p.lyrics.is_none()
         && campo_efetivo(&p.proposed_title) == campo_efetivo(&p.current_title)
         && campo_efetivo(p.proposed_artist.as_deref().unwrap_or(""))
@@ -580,6 +745,7 @@ fn proposta_baixa(
         fonte: fonte.into(),
         has_lyrics: song.has_lyrics,
         letra_origem: song.letra_origem.clone(),
+        conflito: None,
         error,
     }
 }
@@ -625,8 +791,20 @@ impl Cortesia {
     }
 
     fn esperar(&self) {
-        if !self.primeira.replace(false) && !self.pausa.is_zero() {
-            std::thread::sleep(self.pausa);
+        self.esperar_ao_menos(Duration::ZERO);
+    }
+
+    /// Cortesia com um piso PRÓPRIO desta consulta: o AcoustID pede no
+    /// máximo ~3 por segundo (0,34 s), mais que os 300 ms das fontes de
+    /// letra. Pausa configurada em zero é o desligamento explícito dos
+    /// testes e continua valendo zero — piso nenhum a ressuscita.
+    fn esperar_ao_menos(&self, minimo: Duration) {
+        if self.pausa.is_zero() {
+            self.primeira.set(false);
+            return;
+        }
+        if !self.primeira.replace(false) {
+            std::thread::sleep(self.pausa.max(minimo));
         }
     }
 }
@@ -638,6 +816,33 @@ struct Candidata {
     titulo_tag: String,
     artista_tag: String,
     nome: String,
+}
+
+impl Candidata {
+    /// O título que alguém realmente ESCREVEU — vazio quando não há.
+    ///
+    /// `indexer.rs` copia o nome do arquivo para o `title` quando o MP3 não
+    /// tem TIT2 (DECISIONS #91), e isso não é etiqueta: é o indexador
+    /// falando. A distinção é crítica na etapa 2, e nas duas pontas:
+    ///
+    /// - tratar a invenção como etiqueta REAL faria o som CONTRADIZER o nome
+    ///   do arquivo em todo arquivo sem tag, e "Falamansa - Oh! Chuva.mp3"
+    ///   identificado como "Oh! Chuva" viraria CONFLITO. Seria a etapa 2
+    ///   falhando exatamente na metade pior etiquetada do acervo — a
+    ///   população que ela existe para resolver;
+    /// - e faria a identificação nunca preencher o título, porque o campo
+    ///   "já estaria ocupado".
+    ///
+    /// A resposta não é perfeita (um arquivo bem nomeado pode ter etiqueta
+    /// idêntica ao nome) e não precisa ser: nesse caso o som confirma o que
+    /// já está lá, e a proposta cai por no-op.
+    fn titulo_escrito(&self) -> &str {
+        if titulo_e_o_nome_do_arquivo(&self.titulo_tag, &self.nome) {
+            ""
+        } else {
+            &self.titulo_tag
+        }
+    }
 }
 
 /// Monta a `Candidata`: etiquetas EFETIVAS (placeholder já tratado como
@@ -686,11 +891,21 @@ fn montar_candidata(song: Song, titulo: Option<&str>, artista: Option<&str>) -> 
 /// O filtro é do LOTE, e só dele: ele existe para 95 músicas não virarem 95
 /// consultas inúteis. A música avulsa do editor entra por `candidata_pedida`,
 /// sem este portão.
-fn candidata(song: Song) -> Option<Candidata> {
+///
+/// No `Modo::Conferencia` o filtro NÃO se aplica: o trabalho ali é perguntar
+/// ao som se a etiqueta está certa, e a música que mais precisa dessa
+/// pergunta é justamente a que parece completa — título real, artista real,
+/// letra — e está errada. Um `if` no mesmo lugar, e não uma segunda função:
+/// a regra de quem é candidata é UMA (a cópia divergente foi o defeito
+/// ALTO-2 da rodada passada).
+fn candidata(song: Song, modo: Modo) -> Option<Candidata> {
     if !song.available {
         return None;
     }
     let cand = montar_candidata(song, None, None);
+    if modo == Modo::Conferencia {
+        return Some(cand);
+    }
     let nomes_prontos = !cand.titulo_tag.is_empty() && !cand.artista_tag.is_empty();
     let completa = nomes_prontos && (cand.song.instrumental || cand.song.has_lyrics);
     (!completa).then_some(cand)
@@ -718,11 +933,11 @@ fn candidata_pedida(song: Song, titulo: Option<&str>, artista: Option<&str>) -> 
 /// candidata é UMA, a `candidata`. A cópia que existia em TypeScript já havia
 /// divergido, e uma contagem que não bate com a barra de progresso não tem
 /// como ser explicada a quem não abre terminal.
-pub fn count_candidatas(conn: &Connection, folder_prefix: &str) -> Result<usize> {
+pub fn count_candidatas(conn: &Connection, folder_prefix: &str, modo: Modo) -> Result<usize> {
     Ok(db::list_songs(conn)?
         .into_iter()
         .filter(|s| under_prefix(&s.file_path, folder_prefix))
-        .filter_map(candidata)
+        .filter_map(|s| candidata(s, modo))
         .count())
 }
 
@@ -732,17 +947,20 @@ pub fn count_candidatas(conn: &Connection, folder_prefix: &str) -> Result<usize>
 ///
 /// `etapa(nome)` é chamada ao ENTRAR em cada etapa, para a UI dizer o que
 /// está acontecendo agora; nenhuma delas faz `done` crescer.
-fn processar_musica<F, C, E>(
+#[allow(clippy::too_many_arguments)]
+fn processar_musica<S, C, E>(
     cand: &Candidata,
-    fetch: &F,
+    fontes: &S,
+    modo: Modo,
     chave_vagalume: &str,
     chave_recusada: &Cell<bool>,
+    som_desligado: &Cell<bool>,
     cortesia: &Cortesia,
     cancelled: &C,
     etapa: E,
 ) -> Option<EnrichProposal>
 where
-    F: Fn(&str) -> Result<String>,
+    S: Fontes,
     C: Fn() -> bool,
     E: Fn(&str),
 {
@@ -757,35 +975,117 @@ where
         ));
     }
 
-    // V8/F17 — as etapas 2 e 3 são etapas de LETRA, e "todas as etapas de
-    // letra pulam o arquivo [...] e a varredura em lote do app". A música
-    // marcada como instrumental para aqui, com o que a etapa 1 achou.
+    let mut erro: Option<String> = None;
+
+    // --- etapa 2: IDENTIDADE pelo som (AcoustID) --------------------------
     //
-    // Não é só economia de rede, e NÃO é filtro de completude: é regra de
-    // INTEGRIDADE, e por isso ela sobreviveu à remoção do portão da varredura
-    // de uma música só (QA ALTO-3b). Um instrumental com título e artista
-    // corretos casa com a versão CANTADA da mesma peça no LRCLIB e sai
-    // ALTA — e ALTA chega pré-marcada na revisão (DECISIONS #49). Um
-    // clique gravaria a letra de outra gravação dentro do arquivo. Vale
-    // igual nos dois caminhos: nem "quem clicou sabe o que quer" autoriza
-    // pôr letra de terceiro dentro de uma peça sem voz.
-    if cand.song.instrumental {
-        return Some(proposta_baixa(cand, None));
+    // Roda também para INSTRUMENTAL: ela dá título e artista sem encostar em
+    // letra — é o oposto das etapas de letra, e "instrumental sem letra ainda
+    // pode (e deve) ter título e artista corretos" (PRD V8).
+    let mut identidade: Option<(String, String, &'static str)> = None;
+    let mut duracao_provada: Option<f64> = None;
+
+    if fontes.reconhece_pelo_som()
+        && !fontes.chave_acoustid().trim().is_empty()
+        && !som_desligado.get()
+    {
+        if cancelled() {
+            return None;
+        }
+        etapa(ETAPA_IMPRESSAO_DIGITAL);
+        match fontes.impressao_digital(Path::new(&cand.song.file_path)) {
+            // o acessório sumiu entre o começo da varredura e agora: silêncio
+            None => {}
+            Some(Err(e)) => {
+                // binário quebrado falha em TODOS os arquivos: reporta uma
+                // vez e desliga a etapa, em vez de repetir a mesma acusação
+                // 95 vezes (DECISIONS #83)
+                som_desligado.set(true);
+                erro = Some(e.to_string());
+            }
+            Some(Ok(impressao)) => {
+                // A duração que o fpcalc mediu DECODIFICANDO o áudio é a
+                // melhor prova de duração que o produto tem; o cabeçalho já
+                // mentiu por uma ordem de grandeza (DECISIONS #72). Daqui
+                // para a frente é ela que confere os candidatos.
+                duracao_provada = Some(impressao.duracao);
+                if cancelled() {
+                    return None;
+                }
+                cortesia.esperar_ao_menos(fingerprint::PAUSA_ACOUSTID);
+                match fingerprint::identificar(&impressao, fontes.chave_acoustid(), &|url| {
+                    fontes.buscar(url)
+                }) {
+                    Ok(Some(id)) => {
+                        if let Some(conflito) = conflito_com_a_etiqueta(cand, &id) {
+                            // O som contradiz etiqueta REAL. A linha existe
+                            // para informar, e o funil PARA aqui: procurar
+                            // letra sob um nome que o som acabou de
+                            // contradizer é o caminho mais curto para gravar
+                            // a letra da música errada.
+                            let mut p = proposta_baixa(cand, None);
+                            p.fonte = FONTE_IMPRESSAO_DIGITAL.into();
+                            p.conflito = Some(conflito);
+                            return Some(p);
+                        }
+                        identidade = Some(identidade_util(cand, &id));
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        let msg = e.to_string();
+                        // chave recusada é veredito sobre a varredura
+                        // INTEIRA, não sobre esta música
+                        if msg == fingerprint::ERRO_CHAVE_RECUSADA {
+                            som_desligado.set(true);
+                        }
+                        erro = Some(msg);
+                    }
+                }
+            }
+        }
     }
 
-    // --- etapa 2: LRCLIB (título/artista + duração) -----------------------
+    // A conferência é UM trabalho — perguntar ao som —, e termina aqui.
+    if modo == Modo::Conferencia {
+        return Some(proposta_da_identidade(cand, identidade, erro));
+    }
+
+    // V8/F17 — as etapas 3 e 4 são etapas de LETRA, e a música marcada como
+    // instrumental para aqui, com o que as etapas 1 e 2 acharam.
+    //
+    // Não é economia de rede, e NÃO é filtro de completude: é regra de
+    // INTEGRIDADE, e por isso ela sobreviveu à remoção do portão da varredura
+    // de uma música só (QA ALTO-3b). Um instrumental com título e artista
+    // corretos casa com a versão CANTADA da mesma peça no LRCLIB e sai ALTA —
+    // e ALTA chega pré-marcada na revisão (DECISIONS #49). Um clique gravaria
+    // a letra de outra gravação dentro do arquivo. Nem "quem clicou sabe o
+    // que quer" autoriza pôr letra de terceiro dentro de uma peça sem voz.
+    if cand.song.instrumental {
+        return Some(proposta_da_identidade(cand, identidade, erro));
+    }
+
+    // Rede caída derruba TODAS as fontes: insistir só gastaria o tempo de
+    // quem está esperando.
+    if erro.is_some() {
+        return Some(proposta_da_identidade(cand, identidade, erro));
+    }
+
+    // --- etapa 3: LRCLIB (título/artista + duração) -----------------------
     etapa(ETAPA_LRCLIB);
-    let duracao = cand.song.duration_seconds.unwrap_or(0) as f64;
+    // a duração PROVADA quando o som foi lido; senão, a do cabeçalho, como
+    // sempre foi (e um cabeçalho absurdo simplesmente não casa nada)
+    let duracao =
+        duracao_provada.unwrap_or_else(|| cand.song.duration_seconds.unwrap_or(0) as f64);
+    let palpites = palpites_de_letra(cand, &identidade);
     let mut best: Option<ScoredCandidate> = None;
-    let mut erro: Option<String> = None;
-    for (titulo, artista) in gerar_palpites(&cand.nome, &cand.titulo_tag, &cand.artista_tag) {
+    for (titulo, artista) in palpites {
         // cancelar precisa parar a REDE, não só a fila de músicas: um único
         // arquivo chega a render quatro palpites, cada um com sua pausa.
         if cancelled() {
             return None;
         }
         cortesia.esperar();
-        match lyrics_fetch::query_best(&titulo, &artista, duracao, fetch, |t, a| {
+        match lyrics_fetch::query_best(&titulo, &artista, duracao, &|url| fontes.buscar(url), |t, a| {
             !is_placeholder(t) && !is_placeholder(a)
         }) {
             Ok(Some(cand_lrclib)) => {
@@ -822,23 +1122,36 @@ where
         .as_ref()
         .and_then(|b| lyrics_fetch::classify(b.sim, b.dif));
     if let (None, Some(b), Some(conf)) = (&erro, &best, confianca) {
+        // Com identidade vinda do SOM, os NOMES propostos são os dela (já
+        // filtrados pelo conflito e preenchendo só campo vazio), não os que o
+        // LRCLIB devolveu: a autoridade sobre a identidade é a impressão
+        // digital, e uma segunda fonte de nome só criaria divergência.
+        let (titulo_prop, artista_prop) = match &identidade {
+            Some((t, a, _)) => (t.clone(), a.clone()),
+            None => (b.matched_title.clone(), b.matched_artist.clone()),
+        };
         return Some(EnrichProposal {
             song_id: cand.song.id,
             file_path: cand.song.file_path.clone(),
             current_title: cand.song.title.clone(),
             current_artist: cand.song.artist.clone(),
-            proposed_title: b.matched_title.clone(),
-            proposed_artist: (!b.matched_artist.is_empty()).then(|| b.matched_artist.clone()),
+            proposed_title: titulo_prop,
+            proposed_artist: (!artista_prop.is_empty()).then_some(artista_prop),
             lyrics: Some(b.lyrics.clone()),
-            confidence: conf.to_string(),
+            confidence: if identidade.is_some() {
+                TETO_COM_IDENTIDADE_DO_SOM.to_string()
+            } else {
+                conf.to_string()
+            },
             fonte: FONTE_LRCLIB.into(),
             has_lyrics: cand.song.has_lyrics,
             letra_origem: cand.song.letra_origem.clone(),
+            conflito: None,
             error: None,
         });
     }
 
-    // --- etapa 3: Vagalume, SÓ onde o LRCLIB veio vazio --------------------
+    // --- etapa 4: Vagalume, SÓ onde o LRCLIB veio vazio --------------------
     //
     // Quatro condições, as três primeiras herdadas do tools/curadoria.py:
     // - o LRCLIB não trouxe letra confiável (o funil só passa adiante o que a
@@ -848,15 +1161,20 @@ where
     // - há título E artista REAIS para conferir. O Vagalume não tem duração:
     //   a igualdade de palavras dos dois lados é a única prova que existe, e
     //   ela precisa de um pedido que já signifique alguma coisa. Palpite de
-    //   nome de arquivo não é isso — identificar quem ainda não tem tag é
-    //   trabalho da impressão digital (fase 2 da F18);
+    //   nome de arquivo não é isso — mas identidade vinda do SOM é, e é
+    //   justamente por isso que ela vem antes: o que a etapa 2 conquista
+    //   habilita esta aqui;
     // - a chave ainda não foi recusada nesta varredura (QA MÉDIO-6): chave
     //   errada não melhora entre uma música e a seguinte, e insistir custa
     //   meio segundo por arquivo para reescrever a mesma linha de erro 95
     //   vezes. A primeira reporta; as demais pulam em silêncio, igual ao que
     //   já acontece quando não há chave nenhuma.
+    let (titulo_consulta, artista_consulta) = match &identidade {
+        Some((t, a, _)) => (t.clone(), a.clone()),
+        None => (cand.titulo_tag.clone(), cand.artista_tag.clone()),
+    };
     let sem_letra_do_lrclib = erro.is_none() && confianca.is_none();
-    let tem_o_que_conferir = !cand.titulo_tag.is_empty() && !cand.artista_tag.is_empty();
+    let tem_o_que_conferir = !titulo_consulta.is_empty() && !artista_consulta.is_empty();
     if sem_letra_do_lrclib
         && !chave_vagalume.trim().is_empty()
         && tem_o_que_conferir
@@ -868,15 +1186,15 @@ where
         etapa(ETAPA_VAGALUME);
         cortesia.esperar();
         match vagalume::fetch_lyrics_vagalume(
-            &cand.titulo_tag,
-            &cand.artista_tag,
+            &titulo_consulta,
+            &artista_consulta,
             chave_vagalume,
-            fetch,
+            &|url| fontes.buscar(url),
             |t, a| !is_placeholder(t) && !is_placeholder(a),
         ) {
             // A régua estrita garante que o título/artista devolvidos são as
-            // MESMAS palavras das tags atuais; então a etapa não propõe trocar
-            // nome nenhum — a letra é a mudança inteira.
+            // MESMAS palavras do que foi pedido; então a etapa não propõe
+            // trocar nome nenhum — a letra é a mudança inteira.
             //
             // Confiança MÉDIA, nunca ALTA, e isso é deliberado: ALTA chega
             // PRÉ-MARCADA na revisão (DECISIONS #49), e ALTA no resto do
@@ -891,13 +1209,14 @@ where
                     file_path: cand.song.file_path.clone(),
                     current_title: cand.song.title.clone(),
                     current_artist: cand.song.artist.clone(),
-                    proposed_title: cand.titulo_tag.clone(),
-                    proposed_artist: Some(cand.artista_tag.clone()),
+                    proposed_title: titulo_consulta,
+                    proposed_artist: Some(artista_consulta),
                     lyrics: Some(m.lyrics),
                     confidence: "media".into(),
                     fonte: FONTE_VAGALUME.into(),
                     has_lyrics: cand.song.has_lyrics,
                     letra_origem: cand.song.letra_origem.clone(),
+                    conflito: None,
                     error: None,
                 })
             }
@@ -916,20 +1235,109 @@ where
         }
     }
 
-    Some(proposta_baixa(cand, erro))
+    Some(proposta_da_identidade(cand, identidade, erro))
+}
+
+/// True quando o que o SOM identificou CONTRADIZ uma etiqueta real do
+/// arquivo — e então nada do que ele disse é aproveitado, nem para o campo
+/// que estava vazio: quem erra o título pode ter errado a gravação inteira.
+///
+/// Porte da noção de CONFLITO do subcomando `identificar` do
+/// `tools/curadoria.py`, inclusive no que ele decide NÃO aplicar.
+fn conflito_com_a_etiqueta(cand: &Candidata, id: &Identificacao) -> Option<Conflito> {
+    let discorda = fingerprint::discorda(cand.titulo_escrito(), &id.titulo)
+        || fingerprint::discorda(&cand.artista_tag, &id.artista);
+    discorda.then(|| Conflito {
+        titulo: id.titulo.clone(),
+        artista: id.artista.clone(),
+        confianca: id.confianca.to_string(),
+    })
+}
+
+/// A identidade APROVEITÁVEL de uma identificação sem conflito: regra da
+/// V3.1, só preenche campo vazio ou placeholder. Etiqueta REAL é preservada
+/// em qualquer confiança — palpite vindo do áudio não encosta em trabalho de
+/// curador (DECISIONS #53), e o `identificar` do Python faz o mesmo.
+fn identidade_util(cand: &Candidata, id: &Identificacao) -> (String, String, &'static str) {
+    let titulo = if cand.titulo_escrito().is_empty() {
+        id.titulo.clone()
+    } else {
+        cand.titulo_escrito().to_string()
+    };
+    let artista = if cand.artista_tag.is_empty() {
+        id.artista.clone()
+    } else {
+        cand.artista_tag.clone()
+    };
+    (titulo, artista, id.confianca)
+}
+
+/// Os palpites que as etapas de letra recebem.
+///
+/// Com identidade vinda do som: UM palpite, o verdadeiro. Sem ela: a cascata
+/// local de até sete do `gerar_palpites`, que continua sendo o caminho de
+/// quem o AcoustID não reconheceu — a maioria.
+fn palpites_de_letra(
+    cand: &Candidata,
+    identidade: &Option<(String, String, &'static str)>,
+) -> Vec<(String, String)> {
+    match identidade {
+        Some((titulo, artista, _)) => vec![(titulo.clone(), artista.clone())],
+        None => gerar_palpites(&cand.nome, &cand.titulo_tag, &cand.artista_tag),
+    }
+}
+
+/// A proposta de quem chegou ao fim sem letra: o que a etapa 2 descobriu, se
+/// descobriu alguma coisa, ou o palpite local de sempre.
+fn proposta_da_identidade(
+    cand: &Candidata,
+    identidade: Option<(String, String, &'static str)>,
+    erro: Option<String>,
+) -> EnrichProposal {
+    let mut p = proposta_baixa(cand, erro);
+    // erro tem precedência: a linha de erro É a informação, e anunciar uma
+    // identificação ao lado de "não deu" confundiria as duas coisas
+    if p.error.is_some() {
+        return p;
+    }
+    if let Some((titulo, artista, confianca)) = identidade {
+        // Só vira proposta se MUDA alguma coisa, pela mesma noção de campo
+        // efetivo que o resto do módulo usa; senão o `e_no_op` a derruba de
+        // qualquer jeito e a confiança alta só faria a linha aparecer
+        // pré-marcada sem ter o que aplicar.
+        let mudou = campo_efetivo(&titulo) != campo_efetivo(&p.current_title)
+            || campo_efetivo(&artista) != campo_efetivo(p.current_artist.as_deref().unwrap_or(""));
+        if mudou {
+            p.proposed_title = titulo;
+            p.proposed_artist = (!artista.is_empty()).then_some(artista);
+            // Aqui ALTA é segura e continua valendo: esta proposta aplica
+            // NOMES e só nomes, em campos que estavam vazios (etiqueta real
+            // foi preservada acima), sem tocar em letra nenhuma. É
+            // exatamente o caso que a DECISIONS #79 descreve como o que
+            // devolve segurança à pré-marcação.
+            p.confidence = confianca.to_string();
+            p.fonte = FONTE_IMPRESSAO_DIGITAL.into();
+        }
+    }
+    p
 }
 
 /// Varre as músicas available sob `folder_prefix` (vazio = todas), passa as
-/// incompletas pelo funil (etiquetas/nome → LRCLIB → Vagalume) e devolve as
-/// propostas.
+/// escolhidas pelo funil (etiquetas/nome → som → LRCLIB → Vagalume) e
+/// devolve as propostas.
 ///
-/// `chave_vagalume` é a chave gratuita do usuário, guardada pelo frontend e
-/// passada por PARÂMETRO: o Cancioneiro nunca a grava no banco nem em log.
-/// Vazia, a etapa 3 é pulada em silêncio e todo o resto funciona igual.
+/// `modo` escolhe o TRABALHO: `Completar` olha só as incompletas e roda o
+/// funil inteiro; `Conferencia` olha TODAS as disponíveis e roda só a etapa
+/// do som (ver `Modo`).
 ///
-/// `pausa` é a cortesia entre consultas, das DUAS fontes (300 ms no comando
-/// real; zero nos testes). Erro de rede por música vira proposta com `error`
-/// — nunca aborta o lote.
+/// `chave_vagalume` é a chave do Vagalume já resolvida pelo comando (a
+/// pessoal do usuário tem precedência sobre a nossa, compilada). Vazia, a
+/// etapa 4 é pulada em silêncio e todo o resto funciona igual.
+///
+/// `pausa` é a cortesia entre consultas, de TODAS as fontes (300 ms no
+/// comando real, com piso próprio de 340 ms para o AcoustID; zero nos
+/// testes). Erro de rede por música vira proposta com `error` — nunca aborta
+/// o lote.
 ///
 /// `on_progress(done, total, nome_do_arquivo, etapa)` espelha o `|done,
 /// total|` do indexer (evento `scan:progress`) com duas informações a mais
@@ -955,17 +1363,19 @@ where
 /// mais rede nem emitir mais progresso: o "Cancelar" da UI só descarta o
 /// resultado, e a varredura zumbi ficava consultando por minutos e
 /// embaralhando a barra da varredura seguinte.
-pub fn enrich_scan<F, P, C>(
+#[allow(clippy::too_many_arguments)]
+pub fn enrich_scan<S, P, C>(
     conn: &Connection,
     folder_prefix: &str,
-    fetch: F,
+    modo: Modo,
+    fontes: S,
     chave_vagalume: &str,
     pausa: Duration,
     on_progress: P,
     cancelled: C,
 ) -> Result<Vec<EnrichProposal>>
 where
-    F: Fn(&str) -> Result<String>,
+    S: Fontes,
     P: Fn(usize, usize, &str, &str),
     C: Fn() -> bool,
 {
@@ -978,7 +1388,7 @@ where
     let candidatas: Vec<Candidata> = db::list_songs(conn)?
         .into_iter()
         .filter(|s| under_prefix(&s.file_path, folder_prefix))
-        .filter_map(candidata)
+        .filter_map(|s| candidata(s, modo))
         .collect();
 
     let total = candidatas.len();
@@ -989,6 +1399,9 @@ where
     // que a API recusa a chave, a etapa 3 se desliga para as músicas
     // seguintes.
     let chave_recusada = Cell::new(false);
+    // ...e a mesma ideia para o som: acessório quebrado ou aplicativo
+    // recusado pelo AcoustID falham em TODOS os arquivos.
+    let som_desligado = Cell::new(false);
     let mut propostas = Vec::new();
     for (feitas, cand) in candidatas.iter().enumerate() {
         // cancelamento entre músicas: volta com o que já tem (QA M4)
@@ -997,9 +1410,11 @@ where
         }
         let Some(proposta) = processar_musica(
             cand,
-            &fetch,
+            &fontes,
+            modo,
             chave_vagalume,
             &chave_recusada,
+            &som_desligado,
             &cortesia,
             &cancelled,
             |etapa| on_progress(feitas, total, &cand.nome, etapa),
@@ -1035,19 +1450,19 @@ where
 /// mesmo formato da varredura em lote (com `total` 0 ou 1), para a UI
 /// reaproveitar o mesmo indicador.
 #[allow(clippy::too_many_arguments)]
-pub fn enrich_scan_song<F, P, C>(
+pub fn enrich_scan_song<S, P, C>(
     conn: &Connection,
     song_id: i64,
     titulo: Option<&str>,
     artista: Option<&str>,
-    fetch: F,
+    fontes: S,
     chave_vagalume: &str,
     pausa: Duration,
     on_progress: P,
     cancelled: C,
 ) -> Result<Option<EnrichProposal>>
 where
-    F: Fn(&str) -> Result<String>,
+    S: Fontes,
     P: Fn(usize, usize, &str, &str),
     C: Fn() -> bool,
 {
@@ -1067,11 +1482,17 @@ where
     // uma música só: não há "resto da varredura" para desligar, mas a recusa
     // da chave precisa chegar à proposta como o erro que é
     let chave_recusada = Cell::new(false);
+    let som_desligado = Cell::new(false);
     let Some(proposta) = processar_musica(
         &cand,
-        &fetch,
+        &fontes,
+        // a música avulsa é sempre o funil INTEIRO: quem clicou quer tudo
+        // que o produto sabe fazer por aquele arquivo, e o portão de
+        // completude já não vale aqui (QA ALTO-3b)
+        Modo::Completar,
         chave_vagalume,
         &chave_recusada,
+        &som_desligado,
         &cortesia,
         &cancelled,
         |etapa| on_progress(0, 1, &cand.nome, etapa),
@@ -1381,6 +1802,7 @@ mod tests {
             fonte: FONTE_NOME_ARQUIVO.into(),
             has_lyrics: false,
             letra_origem: None,
+            conflito: None,
             error: None,
         }
     }

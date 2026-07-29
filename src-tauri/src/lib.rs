@@ -3,6 +3,7 @@ pub mod commands;
 pub mod db;
 pub mod enrich;
 pub mod error;
+pub mod fingerprint;
 pub mod indexer;
 pub mod lyrics_fetch;
 pub mod search;
@@ -58,6 +59,9 @@ pub fn run() {
             commands::enrich_song_scan,
             commands::enrich_cancel_scan,
             commands::enrich_apply,
+            commands::acessorios_estado,
+            commands::acessorio_baixar,
+            commands::acessorio_cancelar,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
