@@ -83,18 +83,23 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # V9/PRD §2 — as chaves das etapas de rede entram no BINÁRIO em
-          # tempo de compilação, via `option_env!`. Segredo de repositório não
-          # vira variável de ambiente sozinho: sem estas duas linhas o
-          # `option_env!` devolve None e a etapa some — a v0.9.0 inteira
-          # (máquina de acessórios + etapa do som) nasceria inerte, e nenhuma
-          # suíte veria, porque todas injetam a chave nos testes.
+          # V9/PRD §2 — a chave do AcoustID entra no BINÁRIO em tempo de
+          # compilação, via `option_env!`. Segredo de repositório não vira
+          # variável de ambiente sozinho: sem esta linha o `option_env!`
+          # devolve None e a etapa do som some — a v0.9.0 inteira (máquina de
+          # acessórios + reconhecimento) nasceria inerte, e nenhuma suíte
+          # veria, porque todas injetam a chave nos testes.
+          #
+          # É a ÚNICA credencial do produto, e ela é NOSSA: a chave do AcoustID
+          # é por-aplicativo por design deles. Nenhuma etapa do funil pede
+          # credencial de quem usa — o `VAGALUME_API_KEY` que vivia aqui saiu
+          # junto com a etapa dele (V10: API descontinuada, e código que nunca
+          # rodou contra a realidade custa tela, texto e confiança falsa).
           #
           # Ausente = etapa pulada em silêncio, que é o comportamento correto
           # para build de desenvolvimento e para fork. O que NÃO pode é a tela
           # prometer uma etapa que esta build não tem.
           ACOUSTID_API_KEY: ${{ secrets.ACOUSTID_API_KEY }}
-          VAGALUME_API_KEY: ${{ secrets.VAGALUME_API_KEY }}
           # V7/F16 — assinatura minisign do pacote de atualização. Sem estes
           # segredos o build FALHA (createUpdaterArtifacts está ligado): é de
           # propósito, uma release sem assinatura seria recusada pelo updater
