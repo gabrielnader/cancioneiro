@@ -404,6 +404,69 @@ class TestRuidoDeArquivoNaoEngoleTituloReal:
             curadoria._sem_placeholder("Gravação"), "Timoneiro") is True
 
 
+class TestVariousArtistsNaoEArtista:
+    """V10 — `Various Artists` é o rótulo que o ripador põe no lugar do
+    artista numa coletânea, e não estava em lista nenhuma. Ele passava por
+    artista REAL: a música era dada como completa, sumia da curadoria para
+    sempre e ainda virava CONFLITO contra o artista verdadeiro que o som
+    identificasse."""
+
+    @pytest.mark.parametrize("texto", [
+        "Various Artists", "various artists", "VARIOUS ARTISTS",
+        "Various Artist", "Various", "[Various Artists]",
+        "Vários Artistas", "varios artistas", "Vários Intérpretes",
+        "Artistas Variados", "Artistas Diversos", "Diversos",
+        "Vários", "varios",
+        "V.A.", "V. A.", "V/A", "VA", "va",
+        "Compilation", "Compilação", "compilacao",
+        "Coletânea", "coletanea", "Coletâneas",
+    ])
+    def test_rotulo_de_coletanea_e_placeholder(self, texto):
+        assert curadoria.eh_placeholder(texto) is True
+
+    def test_a_licao_da_decisao_89_o_titulo_de_uma_palavra(self):
+        """Ao completar a lista de lixo, o Rust passou a marcar "Pista"
+        sozinha como placeholder — e "Pista" é título real. A regra nova
+        não pode repetir isso: nenhuma palavra que exista como título no
+        repertório entra na lista de coletânea."""
+        for titulo in [
+            "Vá", "Vai", "Vamos", "Vaca", "Valsa", "Vale", "Vá Com Deus",
+            "Variações", "Variação", "Diverso", "Coletivo", "Vários Caminhos",
+            "Artista", "Artistas", "Compilado",
+        ]:
+            assert curadoria.eh_placeholder(titulo) is False, titulo
+
+    def test_va_sem_acento_e_rotulo_va_com_acento_e_titulo(self):
+        """A abreviação "VA" se escreve sem acento; "Vá" é o verbo. Como o
+        `_norm_comparacao` tira o acento, as duas chegariam à mesma chave —
+        e apagar o título "Vá" de alguém é exatamente o dano da decisão 65
+        (placeholder é tratado como campo VAZIO)."""
+        assert curadoria.eh_placeholder("VA") is True
+        assert curadoria.eh_placeholder("Vá") is False
+        assert curadoria.eh_placeholder("vá") is False
+
+    def test_a_musica_de_coletanea_volta_a_ser_incompleta(self, tmp_path):
+        """Ponta a ponta: com "Various Artists" contando como artista real,
+        a música saía COMPLETA da varredura — e sumia da curadoria."""
+        alvo = tmp_path / "musica.mp3"
+        make_mp3(alvo)
+        tags = ID3()
+        tags.add(TIT2(encoding=3, text=["Asa Branca"]))
+        tags.add(TPE1(encoding=3, text=["Various Artists"]))
+        tags.save(str(alvo), v2_version=4)
+        info = curadoria.ler_info(alvo)
+        assert curadoria._sem_placeholder(info["artista"]) == ""
+        # e o rótulo nunca vira consulta nem conflito contra o artista real
+        # (o `_discorda` do Python recebe o valor já sem placeholder, como
+        # fazem os chamadores; no Rust a mesma checagem é feita dentro dele)
+        assert curadoria._discorda(
+            curadoria._sem_placeholder("Various Artists"),
+            "Luiz Gonzaga") is False
+        palpites = curadoria.gerar_palpites(
+            alvo.name, info["titulo"], info["artista"])
+        assert all("various" not in a.lower() for _, a in palpites)
+
+
 class TestFetchSearch:
     def test_monta_url_com_q_escapado(self):
         urls = []

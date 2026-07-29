@@ -471,6 +471,65 @@ const MARCA_DE_RIPADOR: &[&str] = &[
     "untitled",
 ];
 
+/// V10 — `Various Artists` NÃO é artista.
+///
+/// É o rótulo que o ripador escreve no lugar do artista quando o CD é uma
+/// coletânea, e é dos mais comuns que existem. Não estava em lista nenhuma —
+/// nem aqui, nem no `tools/curadoria.py` —, então passava por artista REAL: a
+/// música era julgada completa, sumia da curadoria **para sempre**, e ainda
+/// virava CONFLITO contra o artista verdadeiro que a etapa 2 identificasse.
+///
+/// Comparação sobre a chave do `norm`: "V.A." vira `"v a"`, "[Various
+/// Artists]" vira `"various artists"`, "Coletânea" vira `"coletanea"`.
+///
+/// **A LIÇÃO DA DECISÃO 89 é o que limita esta lista.** Ao completar o lixo de
+/// ripador, este arquivo passou a marcar "Pista" sozinha como placeholder, e
+/// "Pista" é título real no repertório; placeholder é tratado como campo VAZIO
+/// (DECISIONS #65), e apagar título de verdade é o pior modo de falha do
+/// projeto. Por isso só entram rótulos que NENHUMA canção usa como nome —
+/// "Vai", "Vamos", "Valsa", "Variações", "Compilado" e "Artista" ficam de
+/// fora, com teste fixando cada um.
+const ROTULOS_DE_COLETANEA: &[&str] = &[
+    "various artists",
+    "various artist",
+    "various",
+    "varios artistas",
+    "varias artistas",
+    "varios interpretes",
+    "varias interpretes",
+    "artistas variados",
+    "artistas diversos",
+    "interpretes diversos",
+    "varios",
+    "varias",
+    "diversos",
+    "v a",
+    "compilation",
+    "compilacao",
+    "coletanea",
+    "coletaneas",
+];
+
+/// A abreviação escrita SEM acento. "VA" é coletânea; "Vá" é o verbo, e o
+/// `norm` tira o acento — as duas chegariam à mesma chave. Duas letras não dão
+/// margem a mais nada, então a única prova disponível é o acento do texto
+/// ORIGINAL.
+const ROTULOS_DE_COLETANEA_SEM_ACENTO: &[&str] = &["va"];
+
+/// True quando o texto original traz algum diacrítico. Vale para as duas
+/// formas Unicode: `fold_pt` tira tanto o precomposto quanto a marca
+/// combinante do NFD, e `to_lowercase` não tira nenhum dos dois.
+fn tem_acento(texto: &str) -> bool {
+    let so_minusculo: String = texto.chars().flat_map(char::to_lowercase).collect();
+    crate::db::fold_pt(texto) != so_minusculo
+}
+
+/// True quando o texto é o rótulo de uma COLETÂNEA, e não um nome.
+fn e_rotulo_de_coletanea(chave: &str, bruto: &str) -> bool {
+    ROTULOS_DE_COLETANEA.contains(&chave)
+        || (ROTULOS_DE_COLETANEA_SEM_ACENTO.contains(&chave) && !tem_acento(bruto))
+}
+
 /// Sequência de no máximo `max` dígitos ASCII, não vazia.
 fn so_digitos(s: &str, max: usize) -> bool {
     !s.is_empty() && s.len() <= max && s.bytes().all(|b| b.is_ascii_digit())
@@ -546,6 +605,9 @@ pub fn is_placeholder(texto: &str) -> bool {
         return true; // vazio, só pontuação/# ou só dígitos
     }
     if PLACEHOLDERS_EXATOS.contains(&chave.as_str()) {
+        return true;
+    }
+    if e_rotulo_de_coletanea(&chave, texto) {
         return true;
     }
     if placeholder_faixa(&chave) {
@@ -1919,6 +1981,91 @@ mod tests {
                 "{texto:?} — o Python decide {esperado}"
             );
         }
+    }
+
+    /// V10 — `Various Artists` NÃO é artista, e não estava em lista nenhuma
+    /// (nem aqui, nem no `tools/curadoria.py`).
+    ///
+    /// Passava por artista REAL: a música era julgada completa, sumia da
+    /// curadoria para sempre, e ainda virava CONFLITO contra o artista
+    /// verdadeiro que a etapa do som identificasse. É a DECISIONS #95
+    /// ("etiqueta errada é modo de falha distinto de etiqueta faltando") com
+    /// um rótulo que qualquer CD ripado produz.
+    #[test]
+    fn rotulo_de_coletanea_nao_e_artista() {
+        for texto in [
+            "Various Artists",
+            "various artists",
+            "VARIOUS ARTISTS",
+            "Various Artist",
+            "Various",
+            "[Various Artists]",
+            "Vários Artistas",
+            "varios artistas",
+            "Vários Intérpretes",
+            "Artistas Variados",
+            "Artistas Diversos",
+            "Diversos",
+            "Vários",
+            "varios",
+            "V.A.",
+            "V. A.",
+            "V/A",
+            "VA",
+            "va",
+            "Compilation",
+            "Compilação",
+            "compilacao",
+            "Coletânea",
+            "coletanea",
+            "Coletâneas",
+        ] {
+            assert!(is_placeholder(texto), "{texto:?} é rótulo de coletânea");
+        }
+    }
+
+    /// A LIÇÃO DA DECISÃO 89, aplicada à regra nova antes de ela sair daqui.
+    ///
+    /// Ao completar a lista de lixo de ripador, este arquivo passou a marcar
+    /// **"Pista" sozinha** como placeholder — e "Pista" é título real no
+    /// repertório. Placeholder é tratado como campo VAZIO (DECISIONS #65),
+    /// então condenar um título de verdade é o pior modo de falha do projeto.
+    /// Nenhuma destas palavras pode cair na lista de coletânea.
+    #[test]
+    fn nenhum_titulo_legitimo_de_uma_palavra_cai_na_regra_nova() {
+        for texto in [
+            "Vá",
+            "Vai",
+            "Vamos",
+            "Vaca",
+            "Valsa",
+            "Vale",
+            "Vá Com Deus",
+            "Variações",
+            "Variação",
+            "Diverso",
+            "Coletivo",
+            "Vários Caminhos",
+            "Artista",
+            "Artistas",
+            "Compilado",
+        ] {
+            assert!(!is_placeholder(texto), "{texto:?} é título de verdade");
+        }
+    }
+
+    /// A abreviação "VA" se escreve sem acento; "Vá" é o verbo. Como o `norm`
+    /// tira o acento, as duas chegariam à MESMA chave — e "Vá" apagado é dano
+    /// permanente dentro do arquivo de alguém. Duas letras não dão margem a
+    /// mais nada: a única prova disponível é o acento do texto original.
+    #[test]
+    fn va_sem_acento_e_rotulo_e_va_com_acento_e_titulo() {
+        assert!(is_placeholder("VA"));
+        assert!(is_placeholder("va"));
+        assert!(!is_placeholder("Vá"));
+        assert!(!is_placeholder("vá"));
+        // e nas duas formas Unicode: o macOS entrega NFD
+        assert!(!is_placeholder("va\u{0301}"));
     }
 
     #[test]

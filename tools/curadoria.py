@@ -852,6 +852,52 @@ _MARCA_DE_RIPADOR = frozenset({
 })
 _RE_CARA_DE_HORARIO = re.compile(r"^\d{1,4}(?:[-:.]\d{1,2}){1,}$")
 
+# V10 — `Various Artists` NÃO é artista.
+#
+# É o rótulo que o ripador escreve no lugar do artista quando o CD é uma
+# coletânea, e é dos mais comuns que existem. Não estava em lista nenhuma:
+# passava por artista REAL, então a música era dada como COMPLETA, sumia da
+# curadoria para sempre, e ainda virava CONFLITO contra o artista verdadeiro
+# que a etapa do som identificasse. As duas pilhas erravam igual.
+#
+# Comparação sobre a chave _norm_comparacao — "V.A." vira "v a", "[Various
+# Artists]" vira "various artists", "Coletânea" vira "coletanea".
+#
+# A LIÇÃO DA DECISÃO 89 vale aqui, e é o que limita a lista: ao completar o
+# lixo de ripador, o Rust passou a marcar "Pista" sozinha como placeholder, e
+# "Pista" é título real no repertório. Placeholder é tratado como campo VAZIO
+# (decisão 65) — apagar um título de verdade é o pior modo de falha do
+# projeto. Por isso só entram rótulos que NENHUMA canção usa como nome:
+# "Vai", "Vamos", "Valsa", "Variações", "Compilado", "Artista" ficam de fora,
+# e há teste fixando cada um deles.
+_ROTULOS_DE_COLETANEA = frozenset({
+    "various artists", "various artist", "various",
+    "varios artistas", "varias artistas", "varios interpretes",
+    "varias interpretes", "artistas variados", "artistas diversos",
+    "interpretes diversos", "varios", "varias", "diversos",
+    "v a", "compilation", "compilacao", "coletanea", "coletaneas",
+})
+
+# A abreviação escrita SEM acento. "VA" é coletânea; "Vá" é o verbo, e o
+# _norm_comparacao tira o acento — as duas chegariam à mesma chave. Duas
+# letras não dão margem a mais nada, então a única prova disponível é o acento
+# do texto ORIGINAL.
+_ROTULOS_DE_COLETANEA_SEM_ACENTO = frozenset({"va"})
+
+
+def _tem_acento(texto: str) -> bool:
+    """True quando o texto original traz algum diacrítico."""
+    return any(unicodedata.combining(c)
+               for c in unicodedata.normalize("NFD", texto))
+
+
+def _eh_rotulo_de_coletanea(chave: str, bruto: str) -> bool:
+    """True quando o texto é o rótulo de uma COLETÂNEA, e não um nome."""
+    if chave in _ROTULOS_DE_COLETANEA:
+        return True
+    return (chave in _ROTULOS_DE_COLETANEA_SEM_ACENTO
+            and not _tem_acento(bruto))
+
 
 def _tem_marca_de_ripador(chave: str, bruto: str) -> bool:
     """True quando o texto traz prova de que saiu de uma máquina."""
@@ -872,6 +918,8 @@ def eh_placeholder(texto: str) -> bool:
     if not chave or chave.isdigit():
         return True  # vazio, só pontuação/# ou só dígitos
     if chave in _PLACEHOLDERS_EXATOS:
+        return True
+    if _eh_rotulo_de_coletanea(chave, texto):
         return True
     if bool(_RE_PLACEHOLDER_FAIXA.match(chave)):
         return True
