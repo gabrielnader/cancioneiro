@@ -58,6 +58,7 @@
 use crate::error::{AppError, Result};
 use crate::lyrics_fetch::{norm, percent_encode, similarity};
 use serde_json::Value;
+use std::io::Read;
 use std::path::Path;
 use std::time::Duration;
 
@@ -120,12 +121,24 @@ pub const ERRO_CHAVE_RECUSADA: &str =
 /// vaza para a tela.
 pub const ERRO_RESPOSTA: &str = "o reconhecimento pelo som respondeu com erro";
 
-/// O `fpcalc` não conseguiu ler o som deste arquivo (ou não rodou). Uma só
-/// mensagem para os dois casos porque, para quem está olhando, eles são a
-/// mesma coisa: o som não foi lido. Quando é o binário que está quebrado,
-/// isto acontece em TODOS os arquivos — e o funil desliga a etapa depois da
-/// primeira falha, em vez de repetir a mesma linha 95 vezes (DECISIONS #83).
+/// O `fpcalc` rodou e não conseguiu ler o som DESTE arquivo: faixa curta
+/// demais para render impressão, gravação silenciosa, MP3 danificado. Medido
+/// nas fixtures do projeto com o `fpcalc` de verdade — três dos quatro
+/// arquivos saem com código 2 (`Empty fingerprint`, `Could not open the input
+/// file`), e num acervo de gravação de casa isso é COMUM, não excepcional.
+///
+/// É erro de UMA música: o funil registra a linha e segue para a seguinte
+/// (QA A2). O que desliga a etapa é o `ERRO_FPCALC_NAO_EXECUTA`.
 pub const ERRO_FPCALC: &str = "não foi possível ler o som deste arquivo";
+
+/// O acessório não conseguiu nem ser EXECUTADO nesta máquina: arquivo
+/// ausente, sem bit de execução, de outra arquitetura, bloqueado pelo
+/// antivírus. Isto não é um defeito de um arquivo de música — vai acontecer
+/// em todos —, e é o ÚNICO veredito do som que desliga a etapa pelo resto da
+/// varredura, exatamente como o `vagalume::ERRO_CHAVE_RECUSADA` faz com a
+/// etapa 4 (DECISIONS #83).
+pub const ERRO_FPCALC_NAO_EXECUTA: &str =
+    "o programa que reconhece o som não conseguiu ser executado neste computador";
 
 /// A chave do AcoustID compilada nesta build. Vazia = etapa pulada em
 /// silêncio.
@@ -155,9 +168,19 @@ pub struct Identificacao {
 
 /// Roda o `fpcalc -json` do cache sobre o arquivo e lê duração e impressão.
 ///
-/// Nada é escrito: o `fpcalc` só lê. O erro é sempre a mesma frase em pt-BR —
-/// a saída original vem em inglês e costuma ser um despejo de decodificador.
-pub fn impressao_digital(fpcalc: &Path, mp3: &Path) -> Result<Impressao> {
+/// Nada é escrito: o `fpcalc` só lê. O erro é quase sempre a mesma frase em
+/// pt-BR — a saída original vem em inglês e costuma ser um despejo de
+/// decodificador. A exceção é o binário que não SOBE
+/// (`ERRO_FPCALC_NAO_EXECUTA`), que é veredito sobre a máquina e não sobre
+/// este arquivo.
+///
+/// `cancelado()` é consultado DURANTE a espera, a cada 20 ms: sem isso o
+/// "Cancelar" da tela ficava até 120 s sem resposta (QA A4).
+pub fn impressao_digital(
+    fpcalc: &Path,
+    mp3: &Path,
+    cancelado: &dyn Fn() -> bool,
+) -> Result<Impressao> {
     let mut filho = std::process::Command::new(fpcalc)
         .arg("-json")
         .arg(mp3)
@@ -165,33 +188,72 @@ pub fn impressao_digital(fpcalc: &Path, mp3: &Path) -> Result<Impressao> {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .map_err(|_| AppError(ERRO_FPCALC.into()))?;
+        // O binário não subiu: não existe, não é executável, é de outra
+        // arquitetura. Isso não é um defeito DESTE arquivo — vai acontecer em
+        // todos —, e é o único caso em que o funil desliga a etapa.
+        .map_err(|_| AppError(ERRO_FPCALC_NAO_EXECUTA.into()))?;
+
+    // OS CANOS PRECISAM SER DRENADOS ENQUANTO O FILHO RODA (QA A4). O cano do
+    // Linux tem 64 KiB: um filho que escreva mais que isso e não seja lido
+    // bloqueia na própria escrita, para sempre — e a espera abaixo, que só
+    // olha `try_wait()`, esperaria os 120 s inteiros. Duas threads, uma por
+    // cano, é o que o `subprocess.run(..., timeout=)` do Python faz por baixo
+    // e é por isso que o lado Python nunca teve este defeito.
+    let dreno = |cano: Option<std::process::ChildStdout>| {
+        cano.map(|mut c| {
+            std::thread::spawn(move || {
+                let mut buf = Vec::new();
+                let _ = c.read_to_end(&mut buf);
+                buf
+            })
+        })
+    };
+    let lendo_saida = dreno(filho.stdout.take());
+    // o stderr é lido e DESCARTADO: vem em inglês e nunca chega à tela, mas
+    // não lê-lo é o que trava o filho
+    let lendo_erro = filho.stderr.take().map(|mut c| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            let _ = c.read_to_end(&mut buf);
+        })
+    });
 
     // Espera com teto: `wait()` puro deixaria a varredura presa para sempre
     // num binário travado, e o "Cancelar" da tela não teria como voltar.
     let limite = std::time::Instant::now() + TIMEOUT_FPCALC;
-    loop {
+    let status = loop {
         match filho.try_wait() {
-            Ok(Some(_)) => break,
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if cancelado() => break None,
             Ok(None) if std::time::Instant::now() < limite => {
                 std::thread::sleep(Duration::from_millis(20));
             }
-            Ok(None) => {
-                let _ = filho.kill();
-                let _ = filho.wait();
-                return Err(AppError(ERRO_FPCALC.into()));
-            }
-            Err(_) => return Err(AppError(ERRO_FPCALC.into())),
+            Ok(None) => break None,
+            Err(_) => break None,
         }
-    }
+    };
 
-    let saida = filho
-        .wait_with_output()
-        .map_err(|_| AppError(ERRO_FPCALC.into()))?;
-    if !saida.status.success() {
+    // Cancelamento ou estouro do teto: o processo morre aqui. Deixá-lo vivo
+    // numa varredura de 150 arquivos seria um `fpcalc` por música consumindo
+    // a máquina de quem mandou PARAR.
+    let Some(status) = status else {
+        let _ = filho.kill();
+        let _ = filho.wait(); // colhe o zumbi; os canos fecham e as threads saem
+        let _ = lendo_saida.map(std::thread::JoinHandle::join);
+        let _ = lendo_erro.map(std::thread::JoinHandle::join);
+        return Err(AppError(ERRO_FPCALC.into()));
+    };
+
+    let saida = lendo_saida
+        .map(std::thread::JoinHandle::join)
+        .transpose()
+        .map_err(|_| AppError(ERRO_FPCALC.into()))?
+        .unwrap_or_default();
+    let _ = lendo_erro.map(std::thread::JoinHandle::join);
+    if !status.success() {
         return Err(AppError(ERRO_FPCALC.into()));
     }
-    let texto = String::from_utf8_lossy(&saida.stdout);
+    let texto = String::from_utf8_lossy(&saida);
     let dados: Value = serde_json::from_str(&texto).map_err(|_| AppError(ERRO_FPCALC.into()))?;
     let duracao = dados
         .get("duration")
@@ -824,19 +886,148 @@ mod tests {
     // O binário: o fpcalc de verdade, executado
     // -----------------------------------------------------------------------
 
+    /// Nunca cancela — o que a varredura passa quando ninguém clicou em
+    /// "Cancelar".
+    const SEGUE: &dyn Fn() -> bool = &|| false;
+
     /// Cria um "fpcalc" de mentira que imprime o que se pedir e sai com o
     /// código pedido.
     #[cfg(unix)]
     fn fpcalc_falso(dir: &Path, saida: &str, codigo: i32) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-        let caminho = dir.join("fpcalc-falso");
-        std::fs::write(
-            &caminho,
-            format!("#!/bin/sh\ncat <<'FIM'\n{saida}\nFIM\nexit {codigo}\n"),
+        script(
+            dir,
+            &format!("cat <<'FIM'\n{saida}\nFIM\nexit {codigo}\n"),
         )
-        .unwrap();
+    }
+
+    /// Um executável de mentira com o corpo de shell que se pedir.
+    #[cfg(unix)]
+    fn script(dir: &Path, corpo: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        // nome único: vários scripts convivem na mesma pasta temporária
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let n = N.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let caminho = dir.join(format!("fpcalc-falso-{n}"));
+        std::fs::write(&caminho, format!("#!/bin/sh\n{corpo}")).unwrap();
         std::fs::set_permissions(&caminho, std::fs::Permissions::from_mode(0o755)).unwrap();
         caminho
+    }
+
+    /// QA A4 — o filho que escreve muito em stderr NÃO pode travar.
+    ///
+    /// `stdout` e `stderr` são canos, e o cano do Linux tem 64 KiB. Enquanto
+    /// a espera era `try_wait()` + `sleep`, SEM ler, um filho que passasse
+    /// disso bloqueava para sempre na própria escrita e o `fpcalc` só voltava
+    /// no teto de 120 s — medido pelo QA em 120,009 s, contra 20,6 ms com
+    /// stderr pequeno.
+    ///
+    /// Com o `fpcalc` real o stderr nunca passou de 56 bytes, então o defeito
+    /// não estava disparando em campo. Ele está aqui porque **a etapa 5 da
+    /// v0.10.0 monta o `whisper-cli` sobre esta mesma função**, e o
+    /// whisper-cli despeja progresso em stderr muito acima de 64 KiB numa
+    /// faixa longa. Defeito plantado para detonar na entrega seguinte.
+    #[cfg(unix)]
+    #[test]
+    fn stderr_maior_que_o_cano_nao_trava_a_leitura_do_som() {
+        let dir = tempfile::tempdir().unwrap();
+        // ~200 KiB em stderr: mais de três vezes o cano de 64 KiB
+        let fpcalc = script(
+            dir.path(),
+            r#"i=0
+while [ $i -lt 200 ]; do
+  awk 'BEGIN{s="";while(length(s)<1023)s=s "x";print s}' >&2
+  i=$((i+1))
+done
+cat <<'FIM'
+{"duration": 210.5, "fingerprint": "AQADtE..."}
+FIM
+"#,
+        );
+        let mp3 = dir.path().join("x.mp3");
+        std::fs::write(&mp3, b"nao importa").unwrap();
+
+        let inicio = std::time::Instant::now();
+        let i = impressao_digital(&fpcalc, &mp3, SEGUE).expect("stderr grande não é falha");
+        let gasto = inicio.elapsed();
+
+        assert!((i.duracao - 210.5).abs() < 1e-9);
+        assert_eq!(i.fingerprint, "AQADtE...");
+        assert!(
+            gasto < Duration::from_secs(20),
+            "travou nos canos: {gasto:?} (o teto é 120 s)"
+        );
+    }
+
+    /// E o mesmo pelo stdout: um decodificador tagarela enche o outro cano.
+    #[cfg(unix)]
+    #[test]
+    fn stdout_maior_que_o_cano_tambem_nao_trava() {
+        let dir = tempfile::tempdir().unwrap();
+        // 200 KiB de lixo antes do JSON: o JSON não é o começo da saída, e o
+        // que interessa é que a leitura não bloqueie
+        let fpcalc = script(
+            dir.path(),
+            r#"i=0
+while [ $i -lt 200 ]; do
+  awk 'BEGIN{s="";while(length(s)<1023)s=s "x";print s}'
+  i=$((i+1))
+done
+exit 0
+"#,
+        );
+        let mp3 = dir.path().join("x.mp3");
+        std::fs::write(&mp3, b"nao importa").unwrap();
+
+        let inicio = std::time::Instant::now();
+        // saída fora de forma continua sendo erro — o que não pode é travar
+        let erro = impressao_digital(&fpcalc, &mp3, SEGUE).expect_err("não é JSON");
+        assert_eq!(erro.to_string(), ERRO_FPCALC);
+        assert!(inicio.elapsed() < Duration::from_secs(20), "travou no cano");
+    }
+
+    /// QA A4 — "Cancelar" volta DURANTE a leitura do som, não depois dela.
+    ///
+    /// Um `fpcalc` travado segurava a varredura por 120 s sem consultar o
+    /// cancelamento uma única vez: quem clicasse em "Cancelar" ficava dois
+    /// minutos olhando para um botão que não respondia.
+    #[cfg(unix)]
+    #[test]
+    fn cancelar_interrompe_a_leitura_do_som_sem_esperar_o_teto() {
+        let dir = tempfile::tempdir().unwrap();
+        let fpcalc = script(dir.path(), "sleep 30\n");
+        let mp3 = dir.path().join("x.mp3");
+        std::fs::write(&mp3, b"nao importa").unwrap();
+
+        let inicio = std::time::Instant::now();
+        let erro = impressao_digital(&fpcalc, &mp3, &|| true).expect_err("cancelado não lê som");
+        let gasto = inicio.elapsed();
+
+        assert_eq!(erro.to_string(), ERRO_FPCALC);
+        assert!(
+            gasto < Duration::from_secs(5),
+            "o cancelamento esperou o filho terminar: {gasto:?}"
+        );
+    }
+
+    /// O processo morre junto com o cancelamento: deixar um `fpcalc` rodando
+    /// por música numa varredura de 150 arquivos consome a máquina de quem
+    /// mandou PARAR.
+    #[cfg(unix)]
+    #[test]
+    fn o_processo_cancelado_e_encerrado_e_nao_fica_orfao() {
+        let dir = tempfile::tempdir().unwrap();
+        let marca = dir.path().join("ainda-vivo");
+        // se o filho sobreviver ao cancelamento, ele cria a marca em 2 s
+        let fpcalc = script(
+            dir.path(),
+            &format!("sleep 2\ntouch '{}'\n", marca.display()),
+        );
+        let mp3 = dir.path().join("x.mp3");
+        std::fs::write(&mp3, b"nao importa").unwrap();
+
+        let _ = impressao_digital(&fpcalc, &mp3, &|| true);
+        std::thread::sleep(Duration::from_millis(3500));
+        assert!(!marca.exists(), "o fpcalc continuou rodando depois do PARE");
     }
 
     #[cfg(unix)]
@@ -851,7 +1042,7 @@ mod tests {
         let mp3 = dir.path().join("x.mp3");
         std::fs::write(&mp3, b"nao importa").unwrap();
 
-        let i = impressao_digital(&fpcalc, &mp3).unwrap();
+        let i = impressao_digital(&fpcalc, &mp3, SEGUE).unwrap();
         assert!((i.duracao - 210.5).abs() < 1e-9);
         assert_eq!(i.fingerprint, "AQADtE...");
     }
@@ -864,7 +1055,7 @@ mod tests {
         let mp3 = dir.path().join("x.mp3");
         std::fs::write(&mp3, b"nao importa").unwrap();
 
-        let erro = impressao_digital(&fpcalc, &mp3).expect_err("saída 1 é falha");
+        let erro = impressao_digital(&fpcalc, &mp3, SEGUE).expect_err("saída 1 é falha");
         assert_eq!(erro.to_string(), ERRO_FPCALC);
     }
 
@@ -877,7 +1068,7 @@ mod tests {
         for saida in ["não é json", "{}", r#"{"duration": 1}"#] {
             let fpcalc = fpcalc_falso(dir.path(), saida, 0);
             assert_eq!(
-                impressao_digital(&fpcalc, &mp3)
+                impressao_digital(&fpcalc, &mp3, SEGUE)
                     .expect_err("{saida} deveria falhar")
                     .to_string(),
                 ERRO_FPCALC
@@ -885,10 +1076,39 @@ mod tests {
         }
     }
 
+    /// Binário que não sobe é VEREDITO sobre a máquina, não sobre o arquivo —
+    /// e é a única falha do som que desliga a etapa (QA A2). A mensagem tem
+    /// de ser distinta, senão o funil não consegue diferenciar as duas coisas.
     #[test]
-    fn binario_que_nao_existe_e_erro_e_nao_panico() {
-        let erro = impressao_digital(Path::new("/nao/existe/fpcalc"), Path::new("/tmp/x.mp3"))
-            .expect_err("binário ausente é falha");
-        assert_eq!(erro.to_string(), ERRO_FPCALC);
+    fn binario_que_nao_existe_e_veredito_sobre_a_maquina_e_nao_panico() {
+        let erro = impressao_digital(
+            Path::new("/nao/existe/fpcalc"),
+            Path::new("/tmp/x.mp3"),
+            SEGUE,
+        )
+        .expect_err("binário ausente é falha");
+        assert_eq!(erro.to_string(), ERRO_FPCALC_NAO_EXECUTA);
+        assert_ne!(ERRO_FPCALC_NAO_EXECUTA, ERRO_FPCALC);
+    }
+
+    /// E o contrário: o binário RODOU e não deu conta deste arquivo. Medido
+    /// com o `fpcalc` de verdade nas fixtures — `corrompido.mp3` sai com
+    /// "Could not open the input file", `sem_letra.mp3` e `sem_tags.mp3` com
+    /// "Empty fingerprint", os três com código 2. É o caso comum num acervo de
+    /// gravação de casa, e ele NÃO pode desligar a etapa das outras músicas.
+    #[cfg(unix)]
+    #[test]
+    fn arquivo_que_o_fpcalc_nao_le_e_erro_de_uma_musica_so() {
+        let dir = tempfile::tempdir().unwrap();
+        let mp3 = dir.path().join("x.mp3");
+        std::fs::write(&mp3, b"nao importa").unwrap();
+        for (saida, codigo) in [
+            ("ERROR: Empty fingerprint", 2),
+            ("ERROR: Could not open the input file", 2),
+        ] {
+            let fpcalc = fpcalc_falso(dir.path(), saida, codigo);
+            let erro = impressao_digital(&fpcalc, &mp3, SEGUE).expect_err("código 2 é falha");
+            assert_eq!(erro.to_string(), ERRO_FPCALC, "{saida}");
+        }
     }
 }

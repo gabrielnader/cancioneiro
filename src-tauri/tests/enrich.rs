@@ -48,7 +48,7 @@ fn scan_props(
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
     )
-    .unwrap()
+    .unwrap().propostas
 }
 
 /// Só os eventos que fazem a barra andar — a cadência de "1 evento inicial +
@@ -118,7 +118,7 @@ fn enrich_scan_proposes_and_apply_writes_full_flow() {
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
     )
-    .unwrap();
+    .unwrap().propostas;
 
     // com_letra tem título+artista+letra: completa, fora da lista
     assert!(
@@ -298,7 +298,7 @@ fn placeholder_tags_are_treated_as_empty_and_never_queried() {
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
     )
-    .unwrap();
+    .unwrap().propostas;
 
     assert_eq!(props.len(), 1, "placeholder conta como incompleta");
     let p = &props[0];
@@ -415,7 +415,7 @@ fn error_proposal_survives_even_when_it_changes_nothing() {
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
     )
-    .unwrap();
+    .unwrap().propostas;
 
     assert_eq!(props.len(), 1, "linha de erro nunca é descartada como no-op");
     assert_eq!(props[0].error.as_deref(), Some("sem conexão"));
@@ -496,7 +496,7 @@ fn enrich_scan_reports_progress_per_candidate_song() {
         },
         SEM_CANCELAMENTO,
     )
-    .unwrap();
+    .unwrap().propostas;
 
     let todos = eventos.borrow();
     let ev = passos(&todos);
@@ -568,7 +568,7 @@ fn progress_advances_for_dropped_failed_and_missing_songs() {
         },
         SEM_CANCELAMENTO,
     )
-    .unwrap();
+    .unwrap().propostas;
 
     // resultado: a no-op sumiu, as duas com erro ficaram
     assert_eq!(props.len(), 2, "só a no-op é descartada");
@@ -758,7 +758,7 @@ fn scan_skips_instrumental_songs_without_network_or_proposal() {
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
     )
-    .unwrap();
+    .unwrap().propostas;
 
     assert!(
         !props.iter().any(|p| p.song_id == preludio.id),
@@ -816,7 +816,7 @@ fn scan_progress_total_excludes_instrumental_songs() {
         |done, total, _, _| progresso.borrow_mut().push((done, total)),
         SEM_CANCELAMENTO,
     )
-    .unwrap();
+    .unwrap().propostas;
 
     let p = progresso.borrow();
     assert_eq!(p.first().copied(), Some((0, 1)), "total anunciado: {p:?}");
@@ -847,7 +847,7 @@ fn missing_file_becomes_proposal_with_error_without_network() {
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
     )
-    .unwrap();
+    .unwrap().propostas;
     assert_eq!(props.len(), 1);
     assert_eq!(props[0].confidence, "baixa");
     assert!(props[0].error.is_some(), "arquivo ausente reportado na proposta");
@@ -989,7 +989,7 @@ fn network_error_yields_baixa_proposal_and_never_aborts_batch() {
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
     )
-    .unwrap();
+    .unwrap().propostas;
 
     assert_eq!(props.len(), 2, "erro de rede nunca aborta o lote");
     for p in &props {
@@ -1035,7 +1035,7 @@ fn network_error_keeps_candidate_found_by_earlier_guess() {
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
     )
-    .unwrap();
+    .unwrap().propostas;
 
     assert!(*calls.borrow() >= 2, "houve palpite depois do candidato válido");
     assert_eq!(props.len(), 1);
@@ -1353,7 +1353,7 @@ fn a_rejected_key_switches_the_vagalume_stage_off_for_the_rest_of_the_scan() {
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
     )
-    .unwrap();
+    .unwrap().propostas;
 
     assert_eq!(
         urls_de(&urls, "vagalume").len(),
@@ -1405,7 +1405,7 @@ fn a_passing_vagalume_failure_does_not_switch_the_stage_off() {
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
     )
-    .unwrap();
+    .unwrap().propostas;
 
     assert_eq!(urls_de(&urls, "vagalume").len(), 2, "as duas são tentadas");
 }
@@ -1439,7 +1439,7 @@ fn count_candidatas_is_the_same_rule_the_scan_uses() {
         |_, total, _, _| eventos.borrow_mut().push(total),
         SEM_CANCELAMENTO,
     )
-    .unwrap();
+    .unwrap().propostas;
     let total_da_varredura = eventos.borrow()[0];
 
     assert_eq!(enrich::count_candidatas(&conn, &pasta, enrich::Modo::Completar).unwrap(), 2);
@@ -1753,7 +1753,7 @@ fn enrich_scan_stops_early_when_cancelled_between_songs() {
         },
         || cancelada.get(),
     )
-    .unwrap();
+    .unwrap().propostas;
 
     let todos = eventos.borrow();
     let ev = passos(&todos);
@@ -1802,7 +1802,7 @@ fn enrich_scan_cancelled_before_starting_does_nothing() {
         |_, _, _, _| *eventos.borrow_mut() += 1,
         || true,
     )
-    .unwrap();
+    .unwrap().propostas;
 
     assert!(props.is_empty());
     assert_eq!(*chamadas.borrow(), 0, "cancelada antes de começar: zero rede");
@@ -1892,7 +1892,7 @@ fn vagalume_answers_only_where_lrclib_came_up_empty() {
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
     )
-    .unwrap();
+    .unwrap().propostas;
 
     assert!(!urls_de(&urls, "lrclib").is_empty(), "o LRCLIB vem primeiro");
     assert_eq!(
@@ -1935,7 +1935,7 @@ fn vagalume_is_not_asked_when_lrclib_already_answered() {
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
     )
-    .unwrap();
+    .unwrap().propostas;
 
     assert!(
         urls_de(&urls, "vagalume").is_empty(),
@@ -1974,7 +1974,7 @@ fn without_a_key_the_vagalume_stage_is_silently_skipped() {
             |_, _, _, etapa| etapas.borrow_mut().push(etapa.to_string()),
             SEM_CANCELAMENTO,
         )
-        .unwrap();
+        .unwrap().propostas;
 
         assert!(urls_de(&urls, "vagalume").is_empty(), "sem chave, sem rede");
         assert!(
@@ -2016,7 +2016,7 @@ fn vagalume_is_never_asked_from_a_filename_guess() {
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
     )
-    .unwrap();
+    .unwrap().propostas;
 
     assert!(
         urls_de(&urls, "vagalume").is_empty(),
@@ -2072,7 +2072,7 @@ fn every_proposal_declares_the_stage_that_produced_it() {
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
     )
-    .unwrap();
+    .unwrap().propostas;
 
     let fonte_de = |sufixo: &str| {
         props
@@ -2125,7 +2125,7 @@ fn the_scan_announces_every_funnel_stage_it_enters() {
         },
         SEM_CANCELAMENTO,
     )
-    .unwrap();
+    .unwrap().propostas;
 
     let ev = eventos.borrow();
     let etapas: Vec<&str> = ev.iter().map(|e| e.3.as_str()).collect();
@@ -2180,7 +2180,7 @@ fn the_courtesy_pause_applies_to_both_sources() {
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
     )
-    .unwrap();
+    .unwrap().propostas;
     let gasto = inicio.elapsed();
 
     let consultas = urls.borrow().len();
@@ -2215,7 +2215,7 @@ fn cancelling_stops_before_the_vagalume_query() {
         SEM_PROGRESSO,
         || cancelada.get(),
     )
-    .unwrap();
+    .unwrap().propostas;
 
     assert_eq!(urls.borrow().len(), 1, "para na consulta seguinte");
     assert!(urls_de(&urls, "vagalume").is_empty(), "o Vagalume nem começa");
@@ -2249,7 +2249,7 @@ fn a_vagalume_network_error_never_aborts_the_batch() {
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
     )
-    .unwrap();
+    .unwrap().propostas;
 
     let com_erro = props
         .iter()
@@ -2289,7 +2289,7 @@ fn the_api_key_never_leaves_the_query_string() {
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
     )
-    .unwrap();
+    .unwrap().propostas;
     assert_eq!(consultas_vg.get(), 1, "o Vagalume foi mesmo consultado");
     assert_eq!(
         props[0].error.as_deref(),
@@ -2350,7 +2350,7 @@ fn none_of_the_new_network_messages_leak_the_key() {
             SEM_PROGRESSO,
             SEM_CANCELAMENTO,
         )
-        .unwrap();
+        .unwrap().propostas;
 
         assert_eq!(props[0].error.as_deref(), Some(mensagem));
         assert!(
@@ -2386,7 +2386,7 @@ fn applying_a_vagalume_lyric_records_its_provenance() {
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
     )
-    .unwrap();
+    .unwrap().propostas;
     let p = props.iter().find(|p| p.song_id == song.id).expect("proposta");
 
     let results = enrich::apply(
@@ -2580,7 +2580,7 @@ fn an_instrumental_skips_the_lyric_stages_but_still_gets_title_and_artist() {
         |_, _, _, etapa| etapas.borrow_mut().push(etapa.to_string()),
         SEM_CANCELAMENTO,
     )
-    .unwrap();
+    .unwrap().propostas;
 
     assert!(urls.borrow().is_empty(), "nenhuma etapa de letra: {:?}", urls.borrow());
     assert_eq!(
@@ -2641,7 +2641,7 @@ fn an_instrumental_with_both_names_is_not_even_a_candidate() {
         |done, total, _, _| eventos.borrow_mut().push((done, total)),
         SEM_CANCELAMENTO,
     )
-    .unwrap();
+    .unwrap().propostas;
 
     assert!(props.is_empty());
     assert!(urls.borrow().is_empty());
@@ -3048,6 +3048,9 @@ struct ComSom<F> {
     fetch: F,
     impressao: Option<Impressao>,
     chave: String,
+    /// Arquivos em que o "fpcalc" falha, com a mensagem de cada um: é assim
+    /// que se distingue "este MP3 não deu" de "o acessório não roda aqui".
+    falhas: Vec<(String, &'static str)>,
 }
 
 impl<F> ComSom<F> {
@@ -3056,7 +3059,14 @@ impl<F> ComSom<F> {
             fetch,
             impressao: Some(impressao(duracao)),
             chave: "chave-acoustid-de-teste".into(),
+            falhas: Vec::new(),
         }
+    }
+
+    /// O "fpcalc" falha SÓ nestes arquivos, com esta mensagem.
+    fn falhando_em(mut self, arquivos: &[&str], erro: &'static str) -> Self {
+        self.falhas = arquivos.iter().map(|a| ((*a).to_string(), erro)).collect();
+        self
     }
 }
 
@@ -3070,7 +3080,22 @@ where
     fn reconhece_pelo_som(&self) -> bool {
         true
     }
-    fn impressao_digital(&self, _mp3: &Path) -> Option<Result<Impressao, AppError>> {
+    fn impressao_digital(
+        &self,
+        mp3: &Path,
+        _cancelado: &dyn Fn() -> bool,
+    ) -> Option<Result<Impressao, AppError>> {
+        // QA A2 — o `fpcalc` de verdade falha em ALGUNS arquivos e não em
+        // outros (faixa curta, gravação silenciosa, MP3 danificado): o falso
+        // precisa saber fazer isso, senão nenhum teste alcança a diferença
+        // entre "este arquivo não deu" e "o acessório não roda".
+        let nome = mp3
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        if let Some((_, erro)) = self.falhas.iter().find(|(f, _)| *f == nome) {
+            return Some(Err(AppError((*erro).into())));
+        }
         Some(match &self.impressao {
             Some(i) => Ok(i.clone()),
             None => Err(AppError(
@@ -3135,7 +3160,7 @@ fn scan_com<S: enrich::Fontes>(
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
     )
-    .unwrap()
+    .unwrap().propostas
 }
 
 // ---------------------------------------------------------------------------
@@ -3504,10 +3529,12 @@ fn sem_o_acessorio_o_funil_fica_exatamente_como_era() {
     assert!(props[0].conflito.is_none());
 }
 
-/// Binário quebrado falha em TODOS os arquivos. Reportar uma vez e desligar
-/// a etapa é o que evita 95 linhas com a mesma acusação (DECISIONS #83).
+/// QA A2 — o acessório que NÃO RODA nesta máquina é veredito: reporta uma vez
+/// e desliga a etapa, em vez de 95 linhas com a mesma acusação
+/// (DECISIONS #83). E a varredura passa a DIZER quantas ficaram sem ser
+/// perguntadas.
 #[test]
-fn fpcalc_quebrado_reporta_uma_vez_e_desliga_a_etapa() {
+fn fpcalc_que_nao_executa_reporta_uma_vez_desliga_a_etapa_e_conta_as_que_sobraram() {
     let (_dir, conn, _f) = setup_with(&[
         ("sem_tags.mp3", "a - um.mp3"),
         ("sem_tags.mp3", "b - dois.mp3"),
@@ -3516,14 +3543,150 @@ fn fpcalc_quebrado_reporta_uma_vez_e_desliga_a_etapa() {
     let urls = RefCell::new(Vec::new());
     let fontes = ComSom {
         fetch: roteador(&urls, "{}", "[]", "{}"),
-        impressao: None, // o "binário" falha sempre
+        impressao: Some(impressao(180.0)),
         chave: "chave-acoustid-de-teste".into(),
+        // o binário não sobe: acontece em TODOS os arquivos
+        falhas: vec![
+            ("a - um.mp3".into(), cancioneiro_lib::fingerprint::ERRO_FPCALC_NAO_EXECUTA),
+            ("b - dois.mp3".into(), cancioneiro_lib::fingerprint::ERRO_FPCALC_NAO_EXECUTA),
+            ("c - tres.mp3".into(), cancioneiro_lib::fingerprint::ERRO_FPCALC_NAO_EXECUTA),
+        ],
     };
-    let props = scan_com(&conn, enrich::Modo::Completar, fontes, SEM_CHAVE);
+    let r = enrich::enrich_scan(
+        &conn,
+        "",
+        enrich::Modo::Conferencia,
+        fontes,
+        SEM_CHAVE,
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
 
-    let com_erro = props.iter().filter(|p| p.error.is_some()).count();
+    let com_erro = r.propostas.iter().filter(|p| p.error.is_some()).count();
     assert_eq!(com_erro, 1, "a primeira reporta; as demais pulam em silêncio");
-    assert_eq!(props.len(), 3, "e todas continuam sendo propostas");
+    assert_eq!(
+        r.sem_perguntar_ao_som, 2,
+        "e a varredura sabe dizer quantas não foram perguntadas"
+    );
+}
+
+/// QA A2 — falha do `fpcalc` num ARQUIVO não desliga a etapa do resto.
+///
+/// Medido pelo QA com o `fpcalc` de verdade nas fixtures do projeto: faixa
+/// silenciosa e MP3 danificado saem com código 2, e num acervo de gravação de
+/// casa isso é comum. Desligar a etapa no primeiro soluço fazia uma varredura
+/// de conferência de 4 músicas perguntar ao som ZERO vezes e devolver uma
+/// linha vermelha — e a pessoa, que esperou minutos por um trabalho caro que
+/// disparou de propósito, concluía que o resto estava conferido.
+#[test]
+fn falha_do_fpcalc_num_arquivo_nao_desliga_a_etapa_do_resto() {
+    let (_dir, conn, _f) = setup_with(&[
+        ("sem_tags.mp3", "a - um.mp3"),
+        ("sem_tags.mp3", "b - dois.mp3"),
+        ("sem_tags.mp3", "c - tres.mp3"),
+        ("sem_tags.mp3", "d - quatro.mp3"),
+    ]);
+    let urls = RefCell::new(Vec::new());
+    let resposta = acoustid(0.95, "Asa Branca", "Luiz Gonzaga", 180.0);
+    let fontes = ComSom::nova(roteador(&urls, &resposta, "[]", "{}"), 180.0)
+    // só o PRIMEIRO arquivo falha — exatamente a reprodução do QA
+    .falhando_em(&["a - um.mp3"], cancioneiro_lib::fingerprint::ERRO_FPCALC);
+
+    let r = enrich::enrich_scan(
+        &conn,
+        "",
+        enrich::Modo::Conferencia,
+        fontes,
+        SEM_CHAVE,
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+
+    assert_eq!(
+        urls_para(&urls, cancioneiro_lib::fingerprint::LOOKUP_URL).len(),
+        3,
+        "as outras TRÊS foram perguntadas ao AcoustID"
+    );
+    let com_erro = r.propostas.iter().filter(|p| p.error.is_some()).count();
+    assert_eq!(com_erro, 1, "o erro é só da música que falhou");
+    assert_eq!(
+        r.sem_perguntar_ao_som, 0,
+        "nenhuma ficou sem ser perguntada: a etapa não foi desligada"
+    );
+}
+
+/// E a chave recusada pelo AcoustID continua sendo veredito — a coerência que
+/// faltava: para o Vagalume só `ERRO_CHAVE_RECUSADA` desligava a etapa, para
+/// o som qualquer erro desligava.
+#[test]
+fn chave_recusada_pelo_acoustid_desliga_a_etapa_e_conta_o_resto() {
+    let (_dir, conn, _f) = setup_with(&[
+        ("sem_tags.mp3", "a - um.mp3"),
+        ("sem_tags.mp3", "b - dois.mp3"),
+        ("sem_tags.mp3", "c - tres.mp3"),
+    ]);
+    let urls = RefCell::new(Vec::new());
+    let recusa = format!(
+        r#"{{"status": "error", "error": {{"message": "invalid api key"}}}}"#
+    );
+    // o `consultar_acoustid` transforma status=error em ERRO_RESPOSTA; para
+    // exercitar a RECUSA usamos o fetcher devolvendo o erro nomeado
+    let fontes = ComSom::nova(
+        move |url: &str| {
+            urls.borrow_mut().push(url.to_string());
+            if url.starts_with(cancioneiro_lib::fingerprint::LOOKUP_URL) {
+                Err(AppError(cancioneiro_lib::fingerprint::ERRO_CHAVE_RECUSADA.into()))
+            } else {
+                Ok(recusa.clone())
+            }
+        },
+        180.0,
+    );
+    let r = enrich::enrich_scan(
+        &conn,
+        "",
+        enrich::Modo::Conferencia,
+        fontes,
+        SEM_CHAVE,
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+
+    let com_erro = r.propostas.iter().filter(|p| p.error.is_some()).count();
+    assert_eq!(com_erro, 1);
+    assert_eq!(r.sem_perguntar_ao_som, 2);
+}
+
+/// O caso normal não inventa aviso nenhum: sem desligamento, o contador é
+/// zero e a tela não tem o que dizer.
+#[test]
+fn sem_desligamento_nenhuma_musica_fica_sem_ser_perguntada() {
+    let (_dir, conn, _f) = setup_with(&[
+        ("sem_tags.mp3", "a - um.mp3"),
+        ("sem_tags.mp3", "b - dois.mp3"),
+    ]);
+    let urls = RefCell::new(Vec::new());
+    let r = enrich::enrich_scan(
+        &conn,
+        "",
+        enrich::Modo::Conferencia,
+        ComSom::nova(
+            roteador(&urls, r#"{"status":"ok","results":[]}"#, "[]", "{}"),
+            180.0,
+        ),
+        SEM_CHAVE,
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+    assert_eq!(r.sem_perguntar_ao_som, 0);
 }
 
 /// A duração que o `fpcalc` mediu é PROVA (decodificou o áudio); a do
@@ -3546,6 +3709,7 @@ fn a_duracao_medida_pelo_fpcalc_manda_no_lrclib() {
         fetch: roteador(&urls, r#"{"status":"ok","results":[]}"#, &letra, "{}"),
         impressao: Some(impressao(dur_real)),
         chave: "chave-acoustid-de-teste".into(),
+        falhas: Vec::new(),
     };
     let props = scan_com(&conn, enrich::Modo::Completar, fontes, SEM_CHAVE);
     assert_eq!(props[0].lyrics.as_deref(), Some("chove"));

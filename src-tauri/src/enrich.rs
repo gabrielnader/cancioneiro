@@ -95,7 +95,15 @@ pub trait Fontes {
 
     /// Roda o `fpcalc` sobre o arquivo. `None` = o acessório não está pronto
     /// (etapa pulada em silêncio); `Some(Err)` = ele rodou e falhou.
-    fn impressao_digital(&self, _mp3: &Path) -> Option<Result<fingerprint::Impressao>> {
+    ///
+    /// `cancelado` é consultado DENTRO da leitura do som: ela é a única etapa
+    /// do funil que gasta tempo sem tocar a rede, e um `fpcalc` travado
+    /// segurava o "Cancelar" por até 120 s (QA A4).
+    fn impressao_digital(
+        &self,
+        _mp3: &Path,
+        _cancelado: &dyn Fn() -> bool,
+    ) -> Option<Result<fingerprint::Impressao>> {
         None
     }
 
@@ -204,6 +212,45 @@ pub const ETAPA_CONCLUIDA: &str = "concluída";
 /// que um clique escreveria a letra da música errada num arquivo que estava
 /// bom.
 const TETO_COM_IDENTIDADE_DO_SOM: &str = "media";
+
+/// O que uma varredura aprende sobre SI MESMA enquanto roda: vereditos que
+/// valem para as músicas seguintes, e a conta do que deixou de ser feito por
+/// causa deles.
+///
+/// Um veredito é uma afirmação sobre a VARREDURA ("esta chave está recusada",
+/// "este acessório não roda nesta máquina"), nunca sobre um arquivo. Erro de
+/// um arquivo não entra aqui — ele vira a linha de erro daquela música e a
+/// fila segue (QA A2).
+#[derive(Default)]
+struct EstadoDaVarredura {
+    /// O Vagalume recusou a chave: etapa 4 desligada pelo resto da varredura,
+    /// em vez de reescrever a mesma acusação 95 vezes (DECISIONS #83).
+    chave_recusada: Cell<bool>,
+    /// O acessório do som não CONSEGUE RODAR nesta máquina, ou o AcoustID
+    /// recusou este aplicativo: etapa 2 desligada pelo resto.
+    som_desligado: Cell<bool>,
+    /// Quantas músicas passaram sem que o som fosse perguntado por causa do
+    /// desligamento acima. Sem este número, a pessoa vê uma linha vermelha,
+    /// as outras 149 sem nada, e conclui que o resto foi conferido — a
+    /// DECISIONS #86 acontecendo por omissão de escopo.
+    sem_perguntar_ao_som: Cell<usize>,
+}
+
+/// O que uma varredura em lote devolve.
+///
+/// Era um `Vec<EnrichProposal>` puro até a v0.9.0, e por isso não havia onde
+/// dizer que a etapa do som tinha sido desligada no meio: quem mandou
+/// conferir 150 músicas via uma linha de erro e 149 linhas em branco, sem
+/// nada na tela avisando que aquelas 149 nunca chegaram a ser perguntadas
+/// (QA A2). "Não sabemos" precisa ser um estado (DECISIONS #86), e para isso
+/// precisa existir um campo.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct EnrichScanResult {
+    pub propostas: Vec<EnrichProposal>,
+    /// Músicas que teriam sido perguntadas ao som e não foram, porque a etapa
+    /// 2 se desligou antes de chegar nelas. Zero é o caso normal.
+    pub sem_perguntar_ao_som: usize,
+}
 
 /// Proposta de enriquecimento para uma música incompleta. A letra achada vem
 /// na própria proposta (evita segunda rodada de rede no apply).
@@ -978,8 +1025,7 @@ fn processar_musica<S, C, E>(
     fontes: &S,
     modo: Modo,
     chave_vagalume: &str,
-    chave_recusada: &Cell<bool>,
-    som_desligado: &Cell<bool>,
+    estado: &EstadoDaVarredura,
     cortesia: &Cortesia,
     cancelled: &C,
     etapa: E,
@@ -994,8 +1040,7 @@ where
         fontes,
         modo,
         chave_vagalume,
-        chave_recusada,
-        som_desligado,
+        estado,
         cortesia,
         cancelled,
         etapa,
@@ -1032,8 +1077,7 @@ fn passar_pelo_funil<S, C, E>(
     fontes: &S,
     modo: Modo,
     chave_vagalume: &str,
-    chave_recusada: &Cell<bool>,
-    som_desligado: &Cell<bool>,
+    estado: &EstadoDaVarredura,
     cortesia: &Cortesia,
     cancelled: &C,
     etapa: E,
@@ -1064,23 +1108,46 @@ where
     let mut identidade: Option<(String, String, &'static str)> = None;
     let mut duracao_provada: Option<f64> = None;
 
-    if fontes.reconhece_pelo_som()
-        && !fontes.chave_acoustid().trim().is_empty()
-        && !som_desligado.get()
-    {
+    let som_disponivel =
+        fontes.reconhece_pelo_som() && !fontes.chave_acoustid().trim().is_empty();
+    if som_disponivel && estado.som_desligado.get() {
+        // A etapa existia para esta música e não foi feita. Contar é o que
+        // permite à tela dizer quantas ficaram sem ser perguntadas, em vez de
+        // deixar a pessoa concluir que o silêncio é aprovação (QA A2).
+        estado
+            .sem_perguntar_ao_som
+            .set(estado.sem_perguntar_ao_som.get() + 1);
+    }
+    if som_disponivel && !estado.som_desligado.get() {
         if cancelled() {
             return None;
         }
         etapa(ETAPA_IMPRESSAO_DIGITAL);
-        match fontes.impressao_digital(Path::new(&cand.song.file_path)) {
+        match fontes.impressao_digital(Path::new(&cand.song.file_path), &|| cancelled()) {
             // o acessório sumiu entre o começo da varredura e agora: silêncio
             None => {}
             Some(Err(e)) => {
-                // binário quebrado falha em TODOS os arquivos: reporta uma
-                // vez e desliga a etapa, em vez de repetir a mesma acusação
-                // 95 vezes (DECISIONS #83)
-                som_desligado.set(true);
-                erro = Some(e.to_string());
+                // QA A2 — falha do `fpcalc` é erro DESTA música, e o funil
+                // segue. Faixa curta, gravação silenciosa e arquivo danificado
+                // são comuns num acervo de gravação de casa: medido com o
+                // `fpcalc` de verdade nas fixtures do projeto, TRÊS dos quatro
+                // arquivos falham. Desligar a etapa no primeiro soluço fazia
+                // uma varredura de conferência de 150 músicas perguntar ao som
+                // UMA vez, mostrar uma linha vermelha e deixar as outras 149
+                // com a aparência de conferidas.
+                //
+                // Só VEREDITO desliga — o acessório que não roda nesta máquina
+                // ou o AcoustID que recusou este aplicativo —, exatamente como
+                // a etapa 4 só se desliga com `ERRO_CHAVE_RECUSADA`. A
+                // incoerência entre as duas etapas era o achado.
+                if cancelled() {
+                    return None; // o `fpcalc` foi morto pelo "Cancelar"
+                }
+                let msg = e.to_string();
+                if msg == fingerprint::ERRO_FPCALC_NAO_EXECUTA {
+                    estado.som_desligado.set(true);
+                }
+                erro = Some(msg);
             }
             Some(Ok(impressao)) => {
                 // A duração que o fpcalc mediu DECODIFICANDO o áudio é a
@@ -1115,7 +1182,7 @@ where
                         // chave recusada é veredito sobre a varredura
                         // INTEIRA, não sobre esta música
                         if msg == fingerprint::ERRO_CHAVE_RECUSADA {
-                            som_desligado.set(true);
+                            estado.som_desligado.set(true);
                         }
                         erro = Some(msg);
                     }
@@ -1259,7 +1326,7 @@ where
     if sem_letra_do_lrclib
         && !chave_vagalume.trim().is_empty()
         && tem_o_que_conferir
-        && !chave_recusada.get()
+        && !estado.chave_recusada.get()
     {
         if cancelled() {
             return None;
@@ -1311,7 +1378,7 @@ where
                 // qualquer (fora do ar, "espere um pouco") pode ter sido
                 // soluço, e a música seguinte merece a tentativa.
                 if msg == vagalume::ERRO_CHAVE_RECUSADA {
-                    chave_recusada.set(true);
+                    estado.chave_recusada.set(true);
                 }
                 erro = Some(msg);
             }
@@ -1456,14 +1523,22 @@ pub fn enrich_scan<S, P, C>(
     pausa: Duration,
     on_progress: P,
     cancelled: C,
-) -> Result<Vec<EnrichProposal>>
+) -> Result<EnrichScanResult>
 where
     S: Fontes,
     P: Fn(usize, usize, &str, &str),
     C: Fn() -> bool,
 {
+    // QA MÉDIO-6 e QA A2 — os vereditos e a conta do que não foi feito vivem
+    // pela varredura inteira, ao lado da cortesia.
+    let estado = EstadoDaVarredura::default();
+    let fechar = |propostas: Vec<EnrichProposal>| EnrichScanResult {
+        propostas,
+        sem_perguntar_ao_som: estado.sem_perguntar_ao_som.get(),
+    };
+
     if cancelled() {
-        return Ok(Vec::new());
+        return Ok(fechar(Vec::new()));
     }
 
     // 1ª passada (sem rede): seleciona as candidatas para o total do progresso
@@ -1478,36 +1553,28 @@ where
     on_progress(0, total, "", ETAPA_PREPARANDO); // total na tela antes da 1ª consulta
 
     let cortesia = Cortesia::nova(pausa);
-    // QA MÉDIO-6 — vive pela varredura inteira, ao lado da cortesia: assim
-    // que a API recusa a chave, a etapa 4 se desliga para as músicas
-    // seguintes.
-    let chave_recusada = Cell::new(false);
-    // ...e a mesma ideia para o som: acessório quebrado ou aplicativo
-    // recusado pelo AcoustID falham em TODOS os arquivos.
-    let som_desligado = Cell::new(false);
     let mut propostas = Vec::new();
     for (feitas, cand) in candidatas.iter().enumerate() {
         // cancelamento entre músicas: volta com o que já tem (QA M4)
         if cancelled() {
-            return Ok(propostas);
+            return Ok(fechar(propostas));
         }
         let Some(proposta) = processar_musica(
             cand,
             &fontes,
             modo,
             chave_vagalume,
-            &chave_recusada,
-            &som_desligado,
+            &estado,
             &cortesia,
             &cancelled,
             |etapa| on_progress(feitas, total, &cand.nome, etapa),
         ) else {
-            return Ok(propostas); // cancelada no meio desta música
+            return Ok(fechar(propostas)); // cancelada no meio desta música
         };
         registrar(&mut propostas, proposta);
         on_progress(feitas + 1, total, &cand.nome, ETAPA_CONCLUIDA);
     }
-    Ok(propostas)
+    Ok(fechar(propostas))
 }
 
 /// O MESMO funil de `enrich_scan`, numa música só — o "completar dados desta
@@ -1564,8 +1631,7 @@ where
     let cortesia = Cortesia::nova(pausa);
     // uma música só: não há "resto da varredura" para desligar, mas a recusa
     // da chave precisa chegar à proposta como o erro que é
-    let chave_recusada = Cell::new(false);
-    let som_desligado = Cell::new(false);
+    let estado = EstadoDaVarredura::default();
     let Some(proposta) = processar_musica(
         &cand,
         &fontes,
@@ -1574,8 +1640,7 @@ where
         // completude já não vale aqui (QA ALTO-3b)
         Modo::Completar,
         chave_vagalume,
-        &chave_recusada,
-        &som_desligado,
+        &estado,
         &cortesia,
         &cancelled,
         |etapa| on_progress(0, 1, &cand.nome, etapa),

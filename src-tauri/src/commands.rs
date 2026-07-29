@@ -564,6 +564,13 @@ fn chave(vagalume_key: Option<String>) -> String {
 /// Cancelável por `enrich_cancel_scan(scan_id)`: a varredura verifica a
 /// bandeira entre músicas e antes de cada consulta, e volta cedo com as
 /// propostas que já tiver.
+///
+/// **A resposta é um OBJETO, não a lista de propostas** (mudou na correção do
+/// QA A2): `{ propostas, sem_perguntar_ao_som }`. O segundo campo conta as
+/// músicas que teriam sido perguntadas ao som e não foram, porque a etapa 2
+/// se desligou no meio — sem ele, a tela mostrava uma linha de erro e o
+/// silêncio das outras, e o silêncio era lido como aprovação (DECISIONS #86).
+/// Zero é o caso normal e não merece texto na tela.
 #[tauri::command(async)]
 pub fn enrich_folder_scan(
     app: AppHandle,
@@ -572,7 +579,7 @@ pub fn enrich_folder_scan(
     scan_id: String,
     vagalume_key: Option<String>,
     modo: Option<crate::enrich::Modo>,
-) -> Result<Vec<crate::enrich::EnrichProposal>> {
+) -> Result<crate::enrich::EnrichScanResult> {
     let modo = modo.unwrap_or_default();
     let cancel = state.scan_begin(&scan_id)?;
     let fontes = fontes_do_funil(&app);
@@ -703,10 +710,11 @@ impl crate::enrich::Fontes for FontesDoFunil {
     fn impressao_digital(
         &self,
         mp3: &Path,
+        cancelado: &dyn Fn() -> bool,
     ) -> Option<Result<crate::fingerprint::Impressao>> {
         self.fpcalc
             .as_ref()
-            .map(|fpcalc| crate::fingerprint::impressao_digital(fpcalc, mp3))
+            .map(|fpcalc| crate::fingerprint::impressao_digital(fpcalc, mp3, cancelado))
     }
     fn chave_acoustid(&self) -> &str {
         self.chave_acoustid
