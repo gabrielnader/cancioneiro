@@ -234,6 +234,29 @@ pub struct EnrichProposal {
     /// dizer se o que seria sobrescrito é transcrição de máquina ou letra
     /// oficial.
     pub letra_origem: Option<String>,
+    /// Aceitar esta proposta trocaria um título ou artista que uma PESSOA
+    /// escreveu (V9).
+    ///
+    /// É a DECISIONS #79 do lado das etiquetas. O LRCLIB devolve a grafia
+    /// oficial, e a grafia oficial quase sempre difere da que alguém digitou:
+    /// "Ponto de Oxum" volta como "Ponto de Oxum (Ao Vivo)", com a duração
+    /// batendo, portanto ALTA, portanto PRÉ-MARCADA (DECISIONS #49) — e um
+    /// clique em "Aplicar selecionadas" leva embora a curadoria de ~40
+    /// pessoas que digitaram aquilo à mão.
+    ///
+    /// O que está errado NÃO é a troca: a revisão mostra o valor atual ao
+    /// lado do proposto, então trocar nome não é invisível como trocar letra
+    /// era (ali a linha dizia só "letra encontrada"). O que está errado é a
+    /// pré-marcação transformar em UM clique o que deveria ser uma escolha
+    /// por linha. Por isso aqui NÃO há o mecanismo de consentimento do
+    /// `substituir_letra`, e o `apply` não recusa nada: é informação, e o
+    /// frontend decide o que fazer com ela.
+    ///
+    /// "Escrito por gente" exclui três coisas — campo vazio, placeholder de
+    /// ripador, e o título que o indexador copiou do nome do arquivo
+    /// (DECISIONS #91). Preencher um branco ou substituir "Faixa 03" continua
+    /// pré-marcável: é exatamente para isso que a varredura existe.
+    pub substitui_nome_escrito: bool,
     /// O SOM discorda da etiqueta REAL que já está no arquivo (V9).
     ///
     /// Quando isto vem preenchido, a linha existe para INFORMAR, não para
@@ -745,6 +768,8 @@ fn proposta_baixa(
         fonte: fonte.into(),
         has_lyrics: song.has_lyrics,
         letra_origem: song.letra_origem.clone(),
+        // calculado num lugar só, na saída do `processar_musica`
+        substitui_nome_escrito: false,
         conflito: None,
         error,
     }
@@ -964,6 +989,60 @@ where
     C: Fn() -> bool,
     E: Fn(&str),
 {
+    let mut proposta = passar_pelo_funil(
+        cand,
+        fontes,
+        modo,
+        chave_vagalume,
+        chave_recusada,
+        som_desligado,
+        cortesia,
+        cancelled,
+        etapa,
+    )?;
+    // Num lugar SÓ, na saída: o funil tem cinco pontos de retorno com
+    // proposta, e uma etapa nova amanhã teria um sexto. Marcar em cada um
+    // deles é o tipo de coisa que fica correta hoje e silenciosamente errada
+    // na próxima rodada — e o modo de falhar aqui é pré-marcar a troca de um
+    // nome curado, que é justamente o que este campo existe para impedir.
+    proposta.substitui_nome_escrito = substitui_nome_escrito(cand, &proposta);
+    Some(proposta)
+}
+
+/// Esta proposta trocaria um título ou artista ESCRITO POR GENTE?
+///
+/// Compara por valor EFETIVO dos dois lados (`campo_efetivo`), como o
+/// `e_no_op`: " Oxum " não é outro nome que "Oxum". Proposta vazia num campo
+/// não conta como troca — o `apply` preserva o valor atual nesse caso, então
+/// avisar seria avisar de uma substituição que não aconteceria.
+fn substitui_nome_escrito(cand: &Candidata, p: &EnrichProposal) -> bool {
+    fn trocaria(escrito: &str, proposto: &str) -> bool {
+        let (escrito, proposto) = (campo_efetivo(escrito), campo_efetivo(proposto));
+        !escrito.is_empty() && !proposto.is_empty() && proposto != escrito
+    }
+    // `titulo_escrito` já descarta placeholder e a invenção do indexador;
+    // `artista_tag` já descarta placeholder (o indexador não inventa artista)
+    trocaria(cand.titulo_escrito(), &p.proposed_title)
+        || trocaria(&cand.artista_tag, p.proposed_artist.as_deref().unwrap_or(""))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn passar_pelo_funil<S, C, E>(
+    cand: &Candidata,
+    fontes: &S,
+    modo: Modo,
+    chave_vagalume: &str,
+    chave_recusada: &Cell<bool>,
+    som_desligado: &Cell<bool>,
+    cortesia: &Cortesia,
+    cancelled: &C,
+    etapa: E,
+) -> Option<EnrichProposal>
+where
+    S: Fontes,
+    C: Fn() -> bool,
+    E: Fn(&str),
+{
     // --- etapa 1: etiquetas + nome do arquivo (instantânea, sem rede) -----
     etapa(ETAPA_NOME_ARQUIVO);
 
@@ -1146,6 +1225,8 @@ where
             fonte: FONTE_LRCLIB.into(),
             has_lyrics: cand.song.has_lyrics,
             letra_origem: cand.song.letra_origem.clone(),
+            // calculado num lugar só, na saída do `processar_musica`
+            substitui_nome_escrito: false,
             conflito: None,
             error: None,
         });
@@ -1216,6 +1297,8 @@ where
                     fonte: FONTE_VAGALUME.into(),
                     has_lyrics: cand.song.has_lyrics,
                     letra_origem: cand.song.letra_origem.clone(),
+                    // calculado num lugar só, na saída do `processar_musica`
+                    substitui_nome_escrito: false,
                     conflito: None,
                     error: None,
                 })
@@ -1802,6 +1885,7 @@ mod tests {
             fonte: FONTE_NOME_ARQUIVO.into(),
             has_lyrics: false,
             letra_origem: None,
+            substitui_nome_escrito: false,
             conflito: None,
             error: None,
         }

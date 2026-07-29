@@ -1070,6 +1070,7 @@ mod tests {
             fonte: crate::enrich::FONTE_VAGALUME.into(),
             has_lyrics: true,
             letra_origem: Some("transcricao".into()),
+            substitui_nome_escrito: true,
             conflito: None,
             error: None,
         })
@@ -1098,8 +1099,12 @@ mod tests {
                 "proposed_artist",
                 "proposed_title",
                 "song_id",
+                "substitui_nome_escrito",
             ]
         );
+        // V9 — a revisão precisa saber que aceitar esta linha trocaria um
+        // nome que uma PESSOA escreveu, para não pré-marcá-la
+        assert_eq!(json["substitui_nome_escrito"], true);
     }
 
     /// V9 — o outro lado da divergência atravessa o IPC inteiro: sem os dois
@@ -1119,6 +1124,7 @@ mod tests {
             fonte: crate::enrich::FONTE_IMPRESSAO_DIGITAL.into(),
             has_lyrics: true,
             letra_origem: None,
+            substitui_nome_escrito: false,
             conflito: Some(crate::enrich::Conflito {
                 titulo: "Viver Feliz".into(),
                 artista: "Nilson Chaves".into(),

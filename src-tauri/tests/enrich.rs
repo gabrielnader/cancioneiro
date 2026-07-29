@@ -3596,3 +3596,194 @@ fn a_musica_avulsa_do_editor_tambem_pergunta_ao_som() {
     assert_eq!(c.titulo, "Viver Feliz");
     assert_eq!(c.artista, "Nilson Chaves");
 }
+
+// ===========================================================================
+// V9 — a proposta AVISA quando trocaria um nome ESCRITO POR GENTE
+// ===========================================================================
+//
+// A decisão 79 do lado das etiquetas. O LRCLIB devolve a grafia oficial, e a
+// grafia oficial quase sempre difere da que a pessoa digitou: "Ponto de
+// Oxum" volta como "Ponto de Oxum (Ao Vivo)", ALTA, PRÉ-MARCADA, e um clique
+// em "Aplicar selecionadas" leva embora a curadoria de quem digitou.
+//
+// O que está errado não é a troca — a tela de revisão mostra o valor atual
+// ao lado do proposto, então trocar nome não é invisível como trocar letra
+// era. O que está errado é a PRÉ-MARCAÇÃO transformar em um clique o que
+// deveria ser uma escolha por linha. O backend entrega a informação; o
+// frontend decide o que fazer com ela.
+//
+// "Escrito por gente" exclui três coisas: campo vazio, placeholder de
+// ripador, e o título que o indexador inventou a partir do nome do arquivo
+// (DECISIONS #91). Preencher um branco ou substituir "Faixa 03" continua
+// pré-marcável — é justamente para isso que a varredura existe.
+
+/// Prepara uma música com as etiquetas pedidas e devolve (song, duração).
+fn com_etiquetas(
+    conn: &Connection,
+    sufixo: &str,
+    titulo: &str,
+    artista: Option<&str>,
+) -> (db::Song, f64) {
+    let song = song_by_suffix(conn, sufixo);
+    writer::write_tags(conn, song.id, titulo, artista, None, None, None).unwrap();
+    let song = song_by_suffix(conn, sufixo);
+    let dur = song.duration_seconds.unwrap() as f64;
+    (song, dur)
+}
+
+/// Resposta do LRCLIB com um candidato de duração idêntica (⇒ ALTA).
+fn lrclib(titulo: &str, artista: &str, dur: f64, letra: &str) -> String {
+    format!(
+        r#"[{{"trackName": "{titulo}", "artistName": "{artista}",
+             "duration": {dur}, "plainLyrics": "{letra}"}}]"#
+    )
+}
+
+#[test]
+fn trocar_titulo_curado_por_outra_grafia_avisa() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "ponto.mp3")]);
+    let (song, dur) = com_etiquetas(&conn, "ponto.mp3", "Ponto de Oxum", Some("Coral Novo"));
+    let corpo = lrclib("Ponto de Oxum (Ao Vivo)", "Coral Novo", dur, "letra oficial");
+
+    let props = scan_props(&conn, "", |_: &str| Ok(corpo.clone()));
+    let p = props.iter().find(|p| p.song_id == song.id).unwrap();
+
+    assert_eq!(p.confidence, "alta", "a duração bate: é o caso perigoso");
+    assert_eq!(p.proposed_title, "Ponto de Oxum (Ao Vivo)");
+    assert!(
+        p.substitui_nome_escrito,
+        "trocaria um título que uma pessoa escreveu"
+    );
+}
+
+#[test]
+fn trocar_artista_curado_por_outra_grafia_avisa() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "ponto.mp3")]);
+    let (song, dur) = com_etiquetas(&conn, "ponto.mp3", "Ponto de Oxum", Some("Coral Novo"));
+    // mesmo título, artista diferente: o aviso é por QUALQUER um dos dois
+    let corpo = lrclib("Ponto de Oxum", "Coral Novo de Salvador", dur, "letra");
+
+    let props = scan_props(&conn, "", |_: &str| Ok(corpo.clone()));
+    let p = props.iter().find(|p| p.song_id == song.id).unwrap();
+    assert_eq!(p.proposed_title, "Ponto de Oxum");
+    assert!(p.substitui_nome_escrito, "o artista escrito seria trocado");
+}
+
+/// A MESMA troca do teste acima — "Ponto de Oxum" → "Ponto de Oxum (Ao
+/// Vivo)", ALTA —, mas por cima de etiqueta de ripador. Aqui não há
+/// curadoria para proteger: é exatamente para isto que a varredura existe, e
+/// a linha continua pré-marcável.
+#[test]
+fn substituir_placeholder_de_ripador_nao_avisa() {
+    let (_dir, conn, _f) =
+        setup_with(&[("sem_letra.mp3", "Coral Novo - Ponto de Oxum.mp3")]);
+    let (song, dur) = com_etiquetas(
+        &conn,
+        "Ponto de Oxum.mp3",
+        "Faixa 03",
+        Some("no artist"),
+    );
+    let corpo = lrclib("Ponto de Oxum (Ao Vivo)", "Coral Novo", dur, "letra");
+
+    let props = scan_props(&conn, "", |_: &str| Ok(corpo.clone()));
+    let p = props.iter().find(|p| p.song_id == song.id).unwrap();
+    assert_eq!(p.confidence, "alta");
+    assert_eq!(p.proposed_title, "Ponto de Oxum (Ao Vivo)");
+    assert!(
+        !p.substitui_nome_escrito,
+        "'Faixa 03' não foi escrito por gente — é para isso que a varredura existe"
+    );
+}
+
+#[test]
+fn substituir_o_titulo_que_o_indexador_inventou_nao_avisa() {
+    // arquivo SEM TIT2: o `title` do banco é o nome do arquivo copiado pelo
+    // indexador (DECISIONS #91), não etiqueta de ninguém
+    let (_dir, conn, _f) = setup_with(&[("sem_tags.mp3", "Falamansa - Oh! Chuva.mp3")]);
+    let song = song_by_suffix(&conn, "Oh! Chuva.mp3");
+    let dur = song.duration_seconds.unwrap() as f64;
+    let corpo = lrclib("Oh! Chuva", "Falamansa", dur, "chove");
+
+    let props = scan_props(&conn, "", |_: &str| Ok(corpo.clone()));
+    let p = props.iter().find(|p| p.song_id == song.id).unwrap();
+    assert_eq!(p.current_title, "Falamansa - Oh! Chuva", "o que o indexador pôs");
+    assert_eq!(p.proposed_title, "Oh! Chuva");
+    assert!(
+        !p.substitui_nome_escrito,
+        "invenção do indexador não é curadoria de ninguém"
+    );
+}
+
+#[test]
+fn preencher_campo_vazio_nao_avisa() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "ponto.mp3")]);
+    // título escrito, artista VAZIO: a proposta preenche o branco
+    let (song, dur) = com_etiquetas(&conn, "ponto.mp3", "Ponto de Oxum", None);
+    let corpo = lrclib("Ponto de Oxum", "Coral Novo", dur, "letra");
+
+    let props = scan_props(&conn, "", |_: &str| Ok(corpo.clone()));
+    let p = props.iter().find(|p| p.song_id == song.id).unwrap();
+    assert_eq!(p.proposed_artist.as_deref(), Some("Coral Novo"));
+    assert!(
+        !p.substitui_nome_escrito,
+        "ganhar artista onde não havia nenhum não substitui nada"
+    );
+}
+
+#[test]
+fn so_a_letra_mudando_nao_avisa() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "ponto.mp3")]);
+    let (song, dur) = com_etiquetas(&conn, "ponto.mp3", "Ponto de Oxum", Some("Coral Novo"));
+    // o LRCLIB devolve os MESMOS nomes: a letra é a mudança inteira
+    let corpo = lrclib("Ponto de Oxum", "Coral Novo", dur, "a letra");
+
+    let props = scan_props(&conn, "", |_: &str| Ok(corpo.clone()));
+    let p = props.iter().find(|p| p.song_id == song.id).unwrap();
+    assert_eq!(p.lyrics.as_deref(), Some("a letra"));
+    assert!(!p.substitui_nome_escrito);
+}
+
+/// Espaço das pontas não é troca — a comparação é por valor EFETIVO, a mesma
+/// noção que o `e_no_op` usa dos dois lados.
+#[test]
+fn diferenca_so_de_espaco_nao_avisa() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "ponto.mp3")]);
+    let (song, dur) = com_etiquetas(&conn, "ponto.mp3", "Ponto de Oxum", Some("Coral Novo"));
+    let corpo = lrclib("  Ponto de Oxum  ", "Coral Novo", dur, "a letra");
+
+    let props = scan_props(&conn, "", |_: &str| Ok(corpo.clone()));
+    let p = props.iter().find(|p| p.song_id == song.id).unwrap();
+    assert!(!p.substitui_nome_escrito, "' Oxum ' não é outro nome");
+}
+
+/// A linha de CONFLITO nunca avisa substituição: ela não propõe troca
+/// nenhuma (os nomes propostos são os atuais), e já não é pré-marcada por
+/// construção. São dois mecanismos separados, e continuam separados.
+#[test]
+fn a_linha_de_conflito_nao_avisa_substituicao() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "musica.mp3")]);
+    let (song, dur) = com_etiquetas(
+        &conn,
+        "musica.mp3",
+        "Te ver feliz, te ver contente",
+        Some("Caetano Veloso"),
+    );
+    let urls = RefCell::new(Vec::new());
+    let props = scan_com(
+        &conn,
+        enrich::Modo::Completar,
+        ComSom::nova(
+            roteador(
+                &urls,
+                &acoustid(0.95, "Viver Feliz", "Nilson Chaves", dur),
+                "[]",
+                "{}",
+            ),
+            dur,
+        ),
+        SEM_CHAVE,
+    );
+    let p = props.iter().find(|p| p.song_id == song.id).unwrap();
+    assert!(p.conflito.is_some());
+    assert!(!p.substitui_nome_escrito, "conflito não propõe troca");
+}
