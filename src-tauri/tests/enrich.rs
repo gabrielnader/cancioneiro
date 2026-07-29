@@ -5,7 +5,7 @@
 
 use cancioneiro_lib::enrich::{self, EnrichApply};
 use cancioneiro_lib::error::AppError;
-use cancioneiro_lib::{db, indexer, vagalume, writer};
+use cancioneiro_lib::{db, indexer, lyrics_ovh, writer};
 use rusqlite::Connection;
 use std::cell::RefCell;
 use std::fs;
@@ -23,24 +23,15 @@ const SEM_PROGRESSO: fn(usize, usize, &str, &str) = |_, _, _, _| {};
 /// Predicado de cancelamento dos testes que não exercitam o "Cancelar".
 const SEM_CANCELAMENTO: fn() -> bool = || false;
 
-/// Chave do Vagalume dos testes que não exercitam a etapa 3 (sem chave, ela
-/// é pulada em silêncio).
-const SEM_CHAVE: &str = "";
-
 /// As etapas ligadas na máquina dos testes: nenhuma que dependa de acessório
-/// baixado ou de chave. A conta do TEMPO é exercitada em teste próprio.
+/// baixado. A conta do TEMPO é exercitada em teste próprio.
 const PADRAO: enrich::EtapasLigadas = enrich::EtapasLigadas {
     som: false,
-    vagalume: false,
     transcricao: false,
 };
 
-/// Chave falsa dos testes que exercitam a etapa 3 — o Vagalume nunca é
-/// consultado de verdade (o `fetch` é sempre um stub).
-const CHAVE_VG: &str = "chave-vagalume-de-teste";
-
-/// `enrich_scan` sem pausa de cortesia, sem progresso e sem Vagalume — a
-/// forma usada pela maioria dos testes, que exercitam só as propostas.
+/// `enrich_scan` sem pausa de cortesia e sem progresso — a forma usada pela
+/// maioria dos testes, que exercitam só as propostas.
 fn scan_props(
     conn: &Connection,
     prefixo: &str,
@@ -50,7 +41,6 @@ fn scan_props(
         conn,
         prefixo,
         fetch,
-        SEM_CHAVE,
         ZERO,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -119,7 +109,6 @@ fn enrich_scan_proposes_and_apply_writes_full_flow() {
             urls.borrow_mut().push(url.to_string());
             Ok(body.clone())
         },
-        SEM_CHAVE,
         ZERO,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -299,7 +288,6 @@ fn placeholder_tags_are_treated_as_empty_and_never_queried() {
             urls.borrow_mut().push(url.to_string());
             Ok("[]".into())
         },
-        SEM_CHAVE,
         ZERO,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -415,7 +403,6 @@ fn error_proposal_survives_even_when_it_changes_nothing() {
         &conn,
         "",
         |_: &str| -> Result<String, AppError> { Err(AppError("sem conexão".into())) },
-        SEM_CHAVE,
         ZERO,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -491,7 +478,6 @@ fn enrich_scan_reports_progress_per_candidate_song() {
         &conn,
         "",
         |_: &str| Ok("[]".into()),
-        SEM_CHAVE,
         ZERO,
         |done, total, atual, etapa| {
             eventos
@@ -564,7 +550,6 @@ fn progress_advances_for_dropped_failed_and_missing_songs() {
                 Err(AppError("sem conexão".into()))
             }
         },
-        SEM_CHAVE,
         ZERO,
         |done, total, atual, etapa| {
             eventos
@@ -760,7 +745,6 @@ fn scan_skips_instrumental_songs_without_network_or_proposal() {
             urls.borrow_mut().push(url.to_string());
             Ok(body.clone())
         },
-        SEM_CHAVE,
         ZERO,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -818,7 +802,6 @@ fn o_instrumental_conta_no_progresso_e_nao_gasta_rede_de_letra() {
         &conn,
         "",
         |_: &str| Ok("[]".into()),
-        SEM_CHAVE,
         ZERO,
         |done, total, _, _| progresso.borrow_mut().push((done, total)),
         SEM_CANCELAMENTO,
@@ -848,7 +831,6 @@ fn missing_file_becomes_proposal_with_error_without_network() {
             *calls.borrow_mut() += 1;
             Ok("[]".into())
         },
-        SEM_CHAVE,
         ZERO,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -993,7 +975,6 @@ fn network_error_yields_baixa_proposal_and_never_aborts_batch() {
         &conn,
         "",
         |_: &str| -> Result<String, AppError> { Err(AppError("sem conexão".into())) },
-        SEM_CHAVE,
         ZERO,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -1038,7 +1019,6 @@ fn network_error_keeps_candidate_found_by_earlier_guess() {
                 Err(AppError("sem conexão".into()))
             }
         },
-        SEM_CHAVE,
         ZERO,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -1337,92 +1317,9 @@ fn apply_pass_through_keeps_the_transcription_marker() {
 // A chave errada não melhora entre uma música e a seguinte: repetir a
 // consulta é gastar meio segundo por arquivo para receber a mesma rejeição e
 // escrever a mesma linha de erro. A primeira música reporta; as demais pulam
-// o Vagalume em silêncio, exatamente como já acontece quando não há chave.
+// a etapa 4 em silêncio: sem nome real, não há o que conferir.
 // ===========================================================================
-#[test]
-fn a_rejected_key_switches_the_vagalume_stage_off_for_the_rest_of_the_scan() {
-    let (_dir, conn, _folder_id) = setup_with(&[
-        ("sem_letra.mp3", "Uma.mp3"),
-        ("sem_letra.mp3", "Duas.mp3"),
-    ]);
-    // as duas precisam de tags reais para a etapa 3 ser alcançada
-    for (suffix, titulo) in [("Uma.mp3", "Ponto de Oxum"), ("Duas.mp3", "Ponto de Iansã")] {
-        let s = song_by_suffix(&conn, suffix);
-        writer::write_tags(&conn, s.id, titulo, Some("Coral Novo"), None, None, None).unwrap();
-    }
 
-    let urls = RefCell::new(Vec::new());
-    let props = enrich::enrich_scan(
-        &conn,
-        "",
-        |url: &str| {
-            urls.borrow_mut().push(url.to_string());
-            if url.contains("vagalume") {
-                Err(AppError(vagalume::ERRO_CHAVE_RECUSADA.into()))
-            } else {
-                Ok("[]".to_string())
-            }
-        },
-        CHAVE_VG,
-        ZERO,
-        SEM_PROGRESSO,
-        SEM_CANCELAMENTO,
-    )
-    .unwrap().propostas;
-
-    assert_eq!(
-        urls_de(&urls, "vagalume").len(),
-        1,
-        "a chave recusada é consultada UMA vez: {:?}",
-        urls_de(&urls, "vagalume")
-    );
-    // e o LRCLIB, que não usa chave nenhuma, foi consultado pelas duas
-    let no_lrclib = urls_de(&urls, "lrclib").join(" ");
-    assert!(no_lrclib.contains("Oxum") && no_lrclib.contains("Ians"));
-    // UMA linha explica o problema; a outra nem aparece — sem a etapa 3 não
-    // sobra nada a propor para ela, e uma linha muda repetindo a mesma
-    // acusação seria só ruído na revisão
-    let com_erro: Vec<&str> = props.iter().filter_map(|p| p.error.as_deref()).collect();
-    assert_eq!(com_erro, vec![vagalume::ERRO_CHAVE_RECUSADA]);
-    // a chave nunca entra na explicação
-    assert!(!serde_json::to_string(&props).unwrap().contains(CHAVE_VG));
-}
-
-/// Um erro de rede QUALQUER do Vagalume (fora do ar, 429) não desliga a
-/// etapa: ele pode ter sido um soluço, e a música seguinte merece a tentativa.
-/// Só a chave recusada é veredito sobre a varredura inteira.
-#[test]
-fn a_passing_vagalume_failure_does_not_switch_the_stage_off() {
-    let (_dir, conn, _folder_id) = setup_with(&[
-        ("sem_letra.mp3", "Uma.mp3"),
-        ("sem_letra.mp3", "Duas.mp3"),
-    ]);
-    for (suffix, titulo) in [("Uma.mp3", "Ponto de Oxum"), ("Duas.mp3", "Ponto de Iansã")] {
-        let s = song_by_suffix(&conn, suffix);
-        writer::write_tags(&conn, s.id, titulo, Some("Coral Novo"), None, None, None).unwrap();
-    }
-
-    let urls = RefCell::new(Vec::new());
-    enrich::enrich_scan(
-        &conn,
-        "",
-        |url: &str| {
-            urls.borrow_mut().push(url.to_string());
-            if url.contains("vagalume") {
-                Err(AppError("o site de letras está fora do ar agora".into()))
-            } else {
-                Ok("[]".to_string())
-            }
-        },
-        CHAVE_VG,
-        ZERO,
-        SEM_PROGRESSO,
-        SEM_CANCELAMENTO,
-    )
-    .unwrap().propostas;
-
-    assert_eq!(urls_de(&urls, "vagalume").len(), 2, "as duas são tentadas");
-}
 
 // ===========================================================================
 // QA ALTO-2 — quantas músicas a varredura vai olhar é UMA regra, e ela mora
@@ -1452,7 +1349,6 @@ fn a_contagem_e_a_mesma_regra_que_a_varredura_usa() {
         &conn,
         &pasta,
         |_: &str| Ok("[]".to_string()),
-        SEM_CHAVE,
         ZERO,
         |_, total, _, _| eventos.borrow_mut().push(total),
         SEM_CANCELAMENTO,
@@ -1524,13 +1420,13 @@ fn a_estimativa_usa_o_custo_medido_de_cada_etapa() {
     assert_eq!((so_letra.total, so_letra.sem_letra), (2, 1));
     assert_eq!(
         so_letra.segundos_estimados,
-        enrich::SEGUNDOS_ETAPA_LRCLIB,
-        "sem acessório e sem chave, só a etapa 3 custa, e só na que não tem letra"
+        enrich::SEGUNDOS_ETAPA_LRCLIB + enrich::SEGUNDOS_ETAPA_LYRICS_OVH,
+        "sem acessório e sem chave rodam as etapas 3 e 4 — a 4 não pede chave —, \
+         e só na música que não tem letra"
     );
 
     let tudo = enrich::EtapasLigadas {
         som: true,
-        vagalume: true,
         transcricao: false,
     };
     let c = enrich::contar(&conn, "", tudo).unwrap();
@@ -1538,7 +1434,7 @@ fn a_estimativa_usa_o_custo_medido_de_cada_etapa() {
         c.segundos_estimados,
         2 * enrich::SEGUNDOS_ETAPA_SOM
             + enrich::SEGUNDOS_ETAPA_LRCLIB
-            + enrich::SEGUNDOS_ETAPA_VAGALUME,
+            + enrich::SEGUNDOS_ETAPA_LYRICS_OVH,
         "a etapa do som roda em TODAS; as de letra, só em quem não tem letra"
     );
 
@@ -1550,9 +1446,12 @@ fn a_estimativa_usa_o_custo_medido_de_cada_etapa() {
             enrich::ETAPA_NOME_ARQUIVO,
             enrich::ETAPA_IMPRESSAO_DIGITAL,
             enrich::ETAPA_LRCLIB,
-            enrich::ETAPA_VAGALUME,
+            enrich::ETAPA_LYRICS_OVH,
         ]
     );
+    // V10 — a etapa 4 aparece SEMPRE: ela não pede chave nenhuma, então
+    // nenhuma etapa do funil depende de credencial do usuário
+    assert!(so_letra.etapas.contains(&enrich::ETAPA_LYRICS_OVH.to_string()));
     assert!(!so_letra.etapas.contains(&enrich::ETAPA_IMPRESSAO_DIGITAL.to_string()));
     assert!(!c.etapas.contains(&enrich::ETAPA_TRANSCRICAO.to_string()));
 }
@@ -1635,7 +1534,6 @@ fn proposta_alta_sobre_a_transcricao(
         None,
         None,
         move |_url: &str| Ok(corpo.clone()),
-        SEM_CHAVE,
         ZERO,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -1742,7 +1640,7 @@ fn apply_replaces_the_existing_lyric_when_consent_is_explicit() {
         "letra do LRCLIB é oficial: a marca de transcrição cai"
     );
 
-    // ...e a mesma troca vinda do Vagalume fica marcada como tal
+    // ...e a mesma troca vinda da etapa 4 fica marcada como tal
     let (_dir, conn, song, _t) = transcricao_com_nome_de_ripador();
     let results = enrich::apply(
         &conn,
@@ -1754,7 +1652,7 @@ fn apply_replaces_the_existing_lyric_when_consent_is_explicit() {
             add_temas: None,
             current_title: song.title.clone(),
             current_artist: song.artist.clone(),
-            fonte: Some(enrich::FONTE_VAGALUME.into()),
+            fonte: Some(enrich::FONTE_LYRICS_OVH.into()),
             substituir_letra: true,
             marcar_instrumental: false,
         }],
@@ -1763,7 +1661,7 @@ fn apply_replaces_the_existing_lyric_when_consent_is_explicit() {
     assert_eq!(results[0].error, None);
     assert_eq!(
         id3(&song.file_path).get_user_text("LETRA_ORIGEM"),
-        Some("vagalume")
+        Some("lyrics.ovh")
     );
 }
 
@@ -1831,7 +1729,6 @@ fn enrich_scan_stops_early_when_cancelled_between_songs() {
             musicas_consultadas.borrow_mut().push(url.to_string());
             Ok("[]".into())
         },
-        SEM_CHAVE,
         ZERO,
         |done, total, atual, etapa| {
             eventos
@@ -1886,7 +1783,6 @@ fn enrich_scan_cancelled_before_starting_does_nothing() {
             *chamadas.borrow_mut() += 1;
             Ok("[]".into())
         },
-        SEM_CHAVE,
         ZERO,
         |_, _, _, _| *eventos.borrow_mut() += 1,
         || true,
@@ -1900,7 +1796,7 @@ fn enrich_scan_cancelled_before_starting_does_nothing() {
 
 // ===========================================================================
 // V8/F18 fase 1 — o funil dentro do app: etapas, fonte de cada proposta,
-// Vagalume como segunda fonte de letra e a varredura de UMA música só.
+// lyrics.ovh como segunda fonte de letra e a varredura de UMA música só.
 // ===========================================================================
 
 /// Tag ID3v2 lida do disco — para conferir os frames que o funil grava.
@@ -1918,27 +1814,24 @@ fn json(s: &str) -> String {
     serde_json::to_string(s).unwrap()
 }
 
-/// Corpo de resposta do `/search.php` do Vagalume, no formato real da API.
-fn corpo_vagalume(titulo: &str, artista: &str, letra: &str) -> String {
-    format!(
-        r#"{{"type":"exact","art":{{"name":{}}},"mus":[{{"name":{},"text":{}}}]}}"#,
-        json(artista),
-        json(titulo),
-        json(letra)
-    )
+/// Corpo de resposta do lyrics.ovh.
+/// Resposta do lyrics.ovh: só a letra. A fonte não devolve título nem artista
+/// — é a fraqueza dela, e está registrada no módulo.
+fn corpo_ovh(letra: &str) -> String {
+    format!(r#"{{"lyrics":{}}}"#, json(letra))
 }
 
 /// Fetcher único que atende as DUAS fontes pela URL e registra tudo que foi
 /// pedido — o mesmo desenho do `fetcher_de` da suíte Python.
-fn duas_fontes<'a>(
+fn fontes_de_letra<'a>(
     urls: &'a RefCell<Vec<String>>,
     lrclib: String,
-    vagalume: String,
+    ovh: String,
 ) -> impl Fn(&str) -> Result<String, AppError> + 'a {
     move |url: &str| {
         urls.borrow_mut().push(url.to_string());
-        if url.contains("vagalume") {
-            Ok(vagalume.clone())
+        if url.starts_with(lyrics_ovh::SEARCH_URL) {
+            Ok(ovh.clone())
         } else {
             Ok(lrclib.clone())
         }
@@ -1954,15 +1847,15 @@ fn urls_de(urls: &RefCell<Vec<String>>, fonte: &str) -> Vec<String> {
 }
 
 /// Uma música com tags REAIS e sem letra: a candidata típica da etapa 3 (o
-/// Vagalume só é consultado com título E artista para conferir).
-const LETRA_VG: &str = "Primeira linha inventada\nSegunda linha inventada à toa";
+/// a etapa 4 só é consultada com título E artista para conferir).
+const LETRA_OVH: &str = "Primeira linha inventada\nSegunda linha inventada à toa";
 
 // ---------------------------------------------------------------------------
-// O funil por custo crescente: o Vagalume recebe SÓ o que o LRCLIB não
+// O funil por custo crescente: a etapa 4 recebe SÓ o que o LRCLIB não
 // resolveu, e a proposta diz de onde veio (`fonte`) para quem revisa.
 // ---------------------------------------------------------------------------
 #[test]
-fn vagalume_answers_only_where_lrclib_came_up_empty() {
+fn a_etapa_4_responde_so_onde_o_lrclib_veio_vazio() {
     let (_dir, conn, _folder_id) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
     let song = song_by_suffix(&conn, "sem_letra.mp3");
 
@@ -1970,12 +1863,11 @@ fn vagalume_answers_only_where_lrclib_came_up_empty() {
     let props = enrich::enrich_scan(
         &conn,
         "",
-        duas_fontes(
+        fontes_de_letra(
             &urls,
             "[]".into(), // o LRCLIB não tem este repertório
-            corpo_vagalume("Instrumental Sem Letra", "Banda Fixture", LETRA_VG),
+            corpo_ovh(LETRA_OVH),
         ),
-        CHAVE_VG,
         ZERO,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -1984,17 +1876,17 @@ fn vagalume_answers_only_where_lrclib_came_up_empty() {
 
     assert!(!urls_de(&urls, "lrclib").is_empty(), "o LRCLIB vem primeiro");
     assert_eq!(
-        urls_de(&urls, "vagalume").len(),
+        urls_de(&urls, "api.lyrics.ovh").len(),
         1,
-        "uma consulta ao Vagalume por música, nunca uma por palpite"
+        "uma consulta ao lyrics.ovh por música, nunca uma por palpite"
     );
 
     let p = props.iter().find(|p| p.song_id == song.id).expect("proposta");
-    assert_eq!(p.fonte, "Vagalume");
-    assert_eq!(p.lyrics.as_deref(), Some(LETRA_VG));
+    assert_eq!(p.fonte, "lyrics.ovh");
+    assert_eq!(p.lyrics.as_deref(), Some(LETRA_OVH));
     assert_eq!(
         p.confidence, "media",
-        "sem duração para confirmar, o Vagalume nunca chega PRÉ-MARCADO na          revisão (DECISIONS #49 + #63)"
+        "sem duração para confirmar, esta fonte nunca chega PRÉ-MARCADA na revisão (DECISIONS #49 + #63)"
     );
     assert!(p.error.is_none());
     // a régua estrita garante as MESMAS palavras: a etapa não troca nomes
@@ -2003,7 +1895,7 @@ fn vagalume_answers_only_where_lrclib_came_up_empty() {
 }
 
 #[test]
-fn vagalume_is_not_asked_when_lrclib_already_answered() {
+fn a_etapa_4_nao_e_consultada_quando_o_lrclib_ja_respondeu() {
     let (_dir, conn, _folder_id) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
     let song = song_by_suffix(&conn, "sem_letra.mp3");
     let dur = song.duration_seconds.expect("fixture tem duração") as f64;
@@ -2016,8 +1908,7 @@ fn vagalume_is_not_asked_when_lrclib_already_answered() {
     let props = enrich::enrich_scan(
         &conn,
         "",
-        duas_fontes(&urls, lrclib, corpo_vagalume("x", "y", "z")),
-        CHAVE_VG,
+        fontes_de_letra(&urls, lrclib, corpo_ovh("z")),
         ZERO,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -2025,7 +1916,7 @@ fn vagalume_is_not_asked_when_lrclib_already_answered() {
     .unwrap().propostas;
 
     assert!(
-        urls_de(&urls, "vagalume").is_empty(),
+        urls_de(&urls, "api.lyrics.ovh").is_empty(),
         "cada etapa recebe só o que a anterior não resolveu: {:?}",
         urls.borrow()
     );
@@ -2040,50 +1931,15 @@ fn vagalume_is_not_asked_when_lrclib_already_answered() {
 // pessoas sem suporte possível — quem não cadastrou chave nenhuma não pode
 // tropeçar num erro que não sabe resolver.
 // ---------------------------------------------------------------------------
-#[test]
-fn without_a_key_the_vagalume_stage_is_silently_skipped() {
-    let (_dir, conn, _folder_id) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
-
-    for chave in ["", "   "] {
-        let urls = RefCell::new(Vec::new());
-        let etapas = RefCell::new(Vec::new());
-        let props = enrich::enrich_scan(
-            &conn,
-            "",
-            duas_fontes(
-                &urls,
-                "[]".into(),
-                corpo_vagalume("Instrumental Sem Letra", "Banda Fixture", LETRA_VG),
-            ),
-            chave,
-            ZERO,
-            |_, _, _, etapa| etapas.borrow_mut().push(etapa.to_string()),
-            SEM_CANCELAMENTO,
-        )
-        .unwrap().propostas;
-
-        assert!(urls_de(&urls, "vagalume").is_empty(), "sem chave, sem rede");
-        assert!(
-            !etapas.borrow().iter().any(|e| e == enrich::ETAPA_VAGALUME),
-            "sem chave, a etapa nem é anunciada"
-        );
-        assert!(
-            props.iter().all(|p| p.error.is_none()),
-            "sem chave não é erro: {props:?}"
-        );
-        // o LRCLIB continua sendo consultado normalmente
-        assert!(!urls_de(&urls, "lrclib").is_empty());
-    }
-}
 
 // ---------------------------------------------------------------------------
-// "Sem artista para conferir, não se consulta" (DECISIONS #63): o Vagalume
+// "Sem artista para conferir, não se consulta" (DECISIONS #63): a etapa 4
 // não tem duração, então a igualdade de palavras dos DOIS lados é a única
 // prova — e ela exige um pedido que já signifique alguma coisa. Palpite de
 // nome de arquivo não é isso.
 // ---------------------------------------------------------------------------
 #[test]
-fn vagalume_is_never_asked_from_a_filename_guess() {
+fn a_etapa_4_nunca_e_consultada_a_partir_de_palpite_de_nome_de_arquivo() {
     let (_dir, conn, _folder_id) =
         setup_with(&[("sem_tags.mp3", "Falamansa - Oh! Chuva.mp3")]);
 
@@ -2091,12 +1947,11 @@ fn vagalume_is_never_asked_from_a_filename_guess() {
     let props = enrich::enrich_scan(
         &conn,
         "",
-        duas_fontes(
+        fontes_de_letra(
             &urls,
             "[]".into(),
-            corpo_vagalume("Oh! Chuva", "Falamansa", LETRA_VG),
+            corpo_ovh(LETRA_OVH),
         ),
-        CHAVE_VG,
         ZERO,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -2104,8 +1959,8 @@ fn vagalume_is_never_asked_from_a_filename_guess() {
     .unwrap().propostas;
 
     assert!(
-        urls_de(&urls, "vagalume").is_empty(),
-        "arquivo sem tag real não vai ao Vagalume: {:?}",
+        urls_de(&urls, "api.lyrics.ovh").is_empty(),
+        "arquivo sem tag real não vai ao lyrics.ovh: {:?}",
         urls.borrow()
     );
     // continua saindo a proposta de etapa 1, com a fonte declarada
@@ -2122,7 +1977,7 @@ fn vagalume_is_never_asked_from_a_filename_guess() {
 #[test]
 fn every_proposal_declares_the_stage_that_produced_it() {
     let (_dir, conn, _folder_id) = setup_with(&[
-        ("sem_letra.mp3", "sem_letra.mp3"),              // vira vagalume
+        ("sem_letra.mp3", "sem_letra.mp3"),              // vira lyrics.ovh
         ("sem_tags.mp3", "Falamansa - Oh! Chuva.mp3"),   // vira lrclib
         ("sem_tags.mp3", "Sumida.mp3"),                  // vira erro
     ]);
@@ -2136,12 +1991,8 @@ fn every_proposal_declares_the_stage_that_produced_it() {
         "",
         |url: &str| {
             urls.borrow_mut().push(url.to_string());
-            if url.contains("vagalume") {
-                Ok(corpo_vagalume(
-                    "Instrumental Sem Letra",
-                    "Banda Fixture",
-                    LETRA_VG,
-                ))
+            if url.starts_with(lyrics_ovh::SEARCH_URL) {
+                Ok(corpo_ovh(LETRA_OVH))
             } else if url.contains("Chuva") {
                 Ok(format!(
                     r#"[{{"trackName":"Oh! Chuva","artistName":"Falamansa",
@@ -2151,7 +2002,6 @@ fn every_proposal_declares_the_stage_that_produced_it() {
                 Ok("[]".into())
             }
         },
-        CHAVE_VG,
         ZERO,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -2166,14 +2016,14 @@ fn every_proposal_declares_the_stage_that_produced_it() {
             .fonte
             .clone()
     };
-    assert_eq!(fonte_de("sem_letra.mp3"), "Vagalume");
+    assert_eq!(fonte_de("sem_letra.mp3"), "lyrics.ovh");
     assert_eq!(fonte_de("Oh! Chuva.mp3"), "LRCLIB");
     assert_eq!(fonte_de("Sumida.mp3"), "erro");
 
     // vocabulário fechado: a UI só precisa saber traduzir estes quatro
     for p in &props {
         assert!(
-            ["nome do arquivo", "LRCLIB", "Vagalume", "erro"].contains(&p.fonte.as_str()),
+            ["nome do arquivo", "LRCLIB", "lyrics.ovh", "erro"].contains(&p.fonte.as_str()),
             "fonte fora do vocabulário: {:?}",
             p.fonte
         );
@@ -2194,12 +2044,11 @@ fn the_scan_announces_every_funnel_stage_it_enters() {
     enrich::enrich_scan(
         &conn,
         "",
-        duas_fontes(
+        fontes_de_letra(
             &urls,
             "[]".into(),
-            corpo_vagalume("Instrumental Sem Letra", "Banda Fixture", LETRA_VG),
+            corpo_ovh(LETRA_OVH),
         ),
-        CHAVE_VG,
         ZERO,
         |done, total, atual, etapa| {
             eventos
@@ -2218,7 +2067,7 @@ fn the_scan_announces_every_funnel_stage_it_enters() {
             enrich::ETAPA_PREPARANDO,
             enrich::ETAPA_NOME_ARQUIVO,
             enrich::ETAPA_LRCLIB,
-            enrich::ETAPA_VAGALUME,
+            enrich::ETAPA_LYRICS_OVH,
             enrich::ETAPA_CONCLUIDA,
         ],
         "o funil se anuncia na ordem de custo crescente: {ev:?}"
@@ -2252,12 +2101,11 @@ fn the_courtesy_pause_applies_to_both_sources() {
     enrich::enrich_scan(
         &conn,
         "",
-        duas_fontes(
+        fontes_de_letra(
             &urls,
             "[]".into(),
-            corpo_vagalume("Instrumental Sem Letra", "Banda Fixture", LETRA_VG),
+            corpo_ovh(LETRA_OVH),
         ),
-        CHAVE_VG,
         pausa,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -2266,7 +2114,7 @@ fn the_courtesy_pause_applies_to_both_sources() {
     let gasto = inicio.elapsed();
 
     let consultas = urls.borrow().len();
-    assert!(consultas >= 3, "2 palpites no LRCLIB + 1 Vagalume: {consultas}");
+    assert!(consultas >= 3, "2 palpites no LRCLIB + 1 lyrics.ovh: {consultas}");
     assert!(
         gasto >= pausa * (consultas as u32 - 1),
         "uma pausa por consulta, menos a primeira: {consultas} consultas em {gasto:?}"
@@ -2275,10 +2123,10 @@ fn the_courtesy_pause_applies_to_both_sources() {
 
 // ---------------------------------------------------------------------------
 // Cancelar cancela a REDE, não só a fila: a bandeira é lida antes de cada
-// consulta, inclusive antes da do Vagalume.
+// consulta, inclusive antes da do lyrics.ovh.
 // ---------------------------------------------------------------------------
 #[test]
-fn cancelling_stops_before_the_vagalume_query() {
+fn cancelling_stops_before_the_lyrics_ovh_query() {
     let (_dir, conn, _folder_id) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
 
     let urls = RefCell::new(Vec::new());
@@ -2291,7 +2139,6 @@ fn cancelling_stops_before_the_vagalume_query() {
             cancelada.set(true); // usuário cancela durante a 1ª consulta
             Ok("[]".to_string())
         },
-        CHAVE_VG,
         ZERO,
         SEM_PROGRESSO,
         || cancelada.get(),
@@ -2299,7 +2146,7 @@ fn cancelling_stops_before_the_vagalume_query() {
     .unwrap().propostas;
 
     assert_eq!(urls.borrow().len(), 1, "para na consulta seguinte");
-    assert!(urls_de(&urls, "vagalume").is_empty(), "o Vagalume nem começa");
+    assert!(urls_de(&urls, "api.lyrics.ovh").is_empty(), "o lyrics.ovh nem começa");
     assert!(props.is_empty(), "volta com o que já tinha (nada)");
 }
 
@@ -2308,7 +2155,7 @@ fn cancelling_stops_before_the_vagalume_query() {
 // informação e o lote segue.
 // ---------------------------------------------------------------------------
 #[test]
-fn a_vagalume_network_error_never_aborts_the_batch() {
+fn a_lyrics_ovh_network_error_never_aborts_the_batch() {
     let (_dir, conn, _folder_id) = setup_with(&[
         ("sem_letra.mp3", "sem_letra.mp3"),
         ("sem_tags.mp3", "Falamansa - Oh! Chuva.mp3"),
@@ -2318,13 +2165,12 @@ fn a_vagalume_network_error_never_aborts_the_batch() {
         &conn,
         "",
         |url: &str| {
-            if url.contains("vagalume") {
+            if url.starts_with(lyrics_ovh::SEARCH_URL) {
                 Err(AppError("sem conexão".into()))
             } else {
                 Ok("[]".to_string())
             }
         },
-        CHAVE_VG,
         ZERO,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -2343,70 +2189,18 @@ fn a_vagalume_network_error_never_aborts_the_batch() {
 }
 
 // ---------------------------------------------------------------------------
-// A chave é do usuário: vive num lugar só (a query string da consulta) e não
-// pode vazar para a proposta, para o erro nem para o banco.
+// V10 — NENHUMA etapa do funil pede credencial do usuário (o Vagalume saiu,
+// DECISIONS #110). O que sobra é a chave do AcoustID, que é NOSSA e vem
+// compilada — e ela também não pode vazar para a proposta, para o erro nem
+// para o banco.
 // ---------------------------------------------------------------------------
-#[test]
-fn the_api_key_never_leaves_the_query_string() {
-    let (_dir, conn, _folder_id) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
 
-    let consultas_vg = std::cell::Cell::new(0usize);
-    let props = enrich::enrich_scan(
-        &conn,
-        "",
-        |url: &str| {
-            if url.contains("vagalume") {
-                consultas_vg.set(consultas_vg.get() + 1);
-                assert!(url.contains(CHAVE_VG), "a chave vai na consulta");
-                Err(AppError("sem conexão".into()))
-            } else {
-                Ok("[]".to_string())
-            }
-        },
-        CHAVE_VG,
-        ZERO,
-        SEM_PROGRESSO,
-        SEM_CANCELAMENTO,
-    )
-    .unwrap().propostas;
-    assert_eq!(consultas_vg.get(), 1, "o Vagalume foi mesmo consultado");
-    assert_eq!(
-        props[0].error.as_deref(),
-        Some("sem conexão"),
-        "e o erro que chega à UI não carrega a chave: {:?}",
-        props[0].error
-    );
-
-    let json = serde_json::to_string(&props).unwrap();
-    assert!(!json.contains(CHAVE_VG), "a chave não entra na proposta");
-
-    // ...nem no BANCO DE MÚSICAS: o esquema inteiro (tabelas e colunas) não
-    // menciona chave nenhuma. A do usuário fica guardada nas preferências
-    // locais do aplicativo, na máquina dela, e nunca é enviada a lugar nenhum
-    // além do próprio Vagalume.
-    let mut stmt = conn
-        .prepare("SELECT ifnull(sql, '') FROM sqlite_master")
-        .unwrap();
-    let esquema: String = stmt
-        .query_map([], |r| r.get::<_, String>(0))
-        .unwrap()
-        .map(|t| t.unwrap())
-        .collect::<Vec<_>>()
-        .join("\n")
-        .to_lowercase();
-    assert!(
-        !esquema.contains("chave") && !esquema.contains("apikey") && !esquema.contains("api_key"),
-        "o banco não guarda chave de API: {esquema}"
-    );
-}
-
-/// QA MÉDIO-6 — e os caminhos de erro NOVOS também não vazam a chave. É
-/// justamente a mensagem de "chave recusada" que teria a desculpa de mostrar
-/// o valor para ajudar a conferir; ela não mostra.
+/// QA MÉDIO-6 — os caminhos de erro de rede não vazam chave nenhuma, e a
+/// mensagem chega crua à linha daquela música.
 #[test]
 fn none_of_the_new_network_messages_leak_the_key() {
     for mensagem in [
-        vagalume::ERRO_CHAVE_RECUSADA,
+        lyrics_ovh::ERRO_FORA_DO_AR,
         "o site de letras pediu para esperar um pouco",
         "o site de letras está fora do ar agora",
         "o site de letras respondeu com erro",
@@ -2417,13 +2211,12 @@ fn none_of_the_new_network_messages_leak_the_key() {
             &conn,
             "",
             |url: &str| {
-                if url.contains("vagalume") {
-                    Err(AppError(mensagem.into()))
+                if url.starts_with(lyrics_ovh::SEARCH_URL) {
+                    Err(AppError(mensagem.to_string()))
                 } else {
                     Ok("[]".to_string())
                 }
             },
-            CHAVE_VG,
             ZERO,
             SEM_PROGRESSO,
             SEM_CANCELAMENTO,
@@ -2432,85 +2225,17 @@ fn none_of_the_new_network_messages_leak_the_key() {
 
         assert_eq!(props[0].error.as_deref(), Some(mensagem));
         assert!(
-            !serde_json::to_string(&props).unwrap().contains(CHAVE_VG),
+            !serde_json::to_string(&props).unwrap().contains("chave"),
             "a chave vazou pela mensagem {mensagem:?}"
         );
     }
 }
 
 // ---------------------------------------------------------------------------
-// V8/F18 item 4 — procedência: letra do Vagalume entra marcada
-// (TXXX:LETRA_ORIGEM = "vagalume", o mesmo valor do tools/curadoria.py), e a
+// V8/F18 item 4 — procedência: letra da etapa 4 entra marcada
+// (TXXX:LETRA_ORIGEM = "lyrics.ovh"), e a
 // marca sobrevive ao round-trip pelo indexer.
 // ---------------------------------------------------------------------------
-#[test]
-fn applying_a_vagalume_lyric_records_its_provenance() {
-    let (_dir, conn, folder_id) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
-    let song = song_by_suffix(&conn, "sem_letra.mp3");
-    let bytes_antes = fs::read(&song.file_path).unwrap();
-
-    let urls = RefCell::new(Vec::new());
-    let props = enrich::enrich_scan(
-        &conn,
-        "",
-        duas_fontes(
-            &urls,
-            "[]".into(),
-            corpo_vagalume("Instrumental Sem Letra", "Banda Fixture", LETRA_VG),
-        ),
-        CHAVE_VG,
-        ZERO,
-        SEM_PROGRESSO,
-        SEM_CANCELAMENTO,
-    )
-    .unwrap().propostas;
-    let p = props.iter().find(|p| p.song_id == song.id).expect("proposta");
-
-    let results = enrich::apply(
-        &conn,
-        &[EnrichApply {
-            song_id: p.song_id,
-            title: p.proposed_title.clone(),
-            artist: p.proposed_artist.clone(),
-            lyrics: p.lyrics.clone(),
-            add_temas: None,
-            current_title: p.current_title.clone(),
-            current_artist: p.current_artist.clone(),
-            fonte: Some(p.fonte.clone()), // eco da proposta
-            substituir_letra: false,
-            marcar_instrumental: false,
-        }],
-    )
-    .unwrap();
-    assert!(results[0].error.is_none(), "{:?}", results[0].error);
-
-    assert_eq!(
-        id3(&song.file_path).get_user_text("LETRA_ORIGEM"),
-        Some("vagalume"),
-        "a letra do Vagalume entra marcada, como no tools/curadoria.py"
-    );
-    let gravada = results[0].song.as_ref().unwrap();
-    assert!(gravada.has_lyrics);
-    assert_eq!(gravada.letra_origem.as_deref(), Some("vagalume"));
-
-    // inviolável: nunca renomeia, nunca move, nunca mexe no áudio
-    assert!(Path::new(&song.file_path).is_file(), "mesmo caminho");
-    let bytes_depois = fs::read(&song.file_path).unwrap();
-    // o áudio fica no FIM do arquivo, depois do bloco ID3v2 que cresceu
-    let cauda = |b: &[u8]| b[b.len() - 2048..].to_vec();
-    assert_eq!(
-        cauda(&bytes_antes),
-        cauda(&bytes_depois),
-        "os frames de áudio ficam byte a byte iguais"
-    );
-
-    // round-trip: o rescan relê a marca do disco
-    indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
-    assert_eq!(
-        song_by_suffix(&conn, "sem_letra.mp3").letra_origem.as_deref(),
-        Some("vagalume")
-    );
-}
 
 // ---------------------------------------------------------------------------
 // ...e letra do LRCLIB NUNCA carrega o marcador de transcrição. Nem quando o
@@ -2562,10 +2287,10 @@ fn an_lrclib_lyric_never_carries_the_transcription_mark() {
 
 // ---------------------------------------------------------------------------
 // A procedência descreve a letra ATUAL: aceitar só título/artista de uma
-// proposta do Vagalume (sem levar a letra) NÃO pode marcar o arquivo.
+// proposta da etapa 4 (sem levar a letra) NÃO pode marcar o arquivo.
 // ---------------------------------------------------------------------------
 #[test]
-fn declaring_vagalume_without_a_new_lyric_marks_nothing() {
+fn declarar_a_fonte_sem_letra_nova_nao_marca_nada() {
     let (_dir, conn, _folder_id) = setup_with(&[("com_letra.mp3", "com_letra.mp3")]);
     let song = song_by_suffix(&conn, "com_letra.mp3");
 
@@ -2579,7 +2304,7 @@ fn declaring_vagalume_without_a_new_lyric_marks_nothing() {
             add_temas: None,
             current_title: song.title.clone(),
             current_artist: song.artist.clone(),
-            fonte: Some("Vagalume".into()),
+            fonte: Some("lyrics.ovh".into()),
             substituir_letra: false,
             marcar_instrumental: false,
         }],
@@ -2594,11 +2319,11 @@ fn declaring_vagalume_without_a_new_lyric_marks_nothing() {
 }
 
 // ---------------------------------------------------------------------------
-// Proposta obsoleta continua sendo recusada — inclusive a do Vagalume, que é
+// Proposta obsoleta continua sendo recusada — inclusive a da etapa 4, que é
 // a que traz letra oficial e teria o efeito mais destrutivo (QA A5).
 // ---------------------------------------------------------------------------
 #[test]
-fn a_stale_vagalume_proposal_is_refused() {
+fn uma_proposta_obsoleta_da_etapa_4_e_recusada() {
     let (_dir, conn, _folder_id) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
     let song = song_by_suffix(&conn, "sem_letra.mp3");
 
@@ -2608,11 +2333,11 @@ fn a_stale_vagalume_proposal_is_refused() {
             song_id: song.id,
             title: song.title.clone(),
             artist: song.artist.clone(),
-            lyrics: Some(LETRA_VG.into()),
+            lyrics: Some(LETRA_OVH.into()),
             add_temas: None,
             current_title: "o que a varredura viu, e já não é".into(),
             current_artist: song.artist.clone(),
-            fonte: Some("Vagalume".into()),
+            fonte: Some("lyrics.ovh".into()),
             substituir_letra: false,
             marcar_instrumental: false,
         }],
@@ -2628,7 +2353,7 @@ fn a_stale_vagalume_proposal_is_refused() {
 }
 
 // ---------------------------------------------------------------------------
-// V8/F17+F18 — o instrumental sai das etapas de LETRA (LRCLIB e Vagalume),
+// V8/F17+F18 — o instrumental sai das etapas de LETRA (LRCLIB e lyrics.ovh),
 // mas continua elegível a título e artista: "instrumental sem letra ainda
 // pode (e deve) ter título e artista corretos" (PRD V8).
 // ---------------------------------------------------------------------------
@@ -2645,7 +2370,7 @@ fn an_instrumental_skips_the_lyric_stages_but_still_gets_title_and_artist() {
     let props = enrich::enrich_scan(
         &conn,
         "",
-        duas_fontes(
+        fontes_de_letra(
             &urls,
             // stub que casaria PERFEITAMENTE, se fosse consultado
             format!(
@@ -2653,9 +2378,8 @@ fn an_instrumental_skips_the_lyric_stages_but_still_gets_title_and_artist() {
                      "duration":{},"plainLyrics":"letra da versão cantada"}}]"#,
                 song.duration_seconds.unwrap_or(0)
             ),
-            corpo_vagalume("Doce Prelúdio", "Falamansa", LETRA_VG),
+            corpo_ovh(LETRA_OVH),
         ),
-        CHAVE_VG,
         ZERO,
         |_, _, _, etapa| etapas.borrow_mut().push(etapa.to_string()),
         SEM_CANCELAMENTO,
@@ -2711,12 +2435,11 @@ fn o_instrumental_com_os_dois_nomes_entra_mas_nao_gasta_rede() {
     let props = enrich::enrich_scan(
         &conn,
         "",
-        duas_fontes(
+        fontes_de_letra(
             &urls,
             "[]".into(),
-            corpo_vagalume("Instrumental Sem Letra", "Banda Fixture", LETRA_VG),
+            corpo_ovh(LETRA_OVH),
         ),
-        CHAVE_VG,
         ZERO,
         |done, total, _, _| eventos.borrow_mut().push((done, total)),
         SEM_CANCELAMENTO,
@@ -2751,12 +2474,11 @@ fn scan_song_runs_the_same_funnel_on_a_single_file() {
         song.id,
         None,
         None,
-        duas_fontes(
+        fontes_de_letra(
             &urls,
             "[]".into(),
-            corpo_vagalume("Instrumental Sem Letra", "Banda Fixture", LETRA_VG),
+            corpo_ovh(LETRA_OVH),
         ),
-        CHAVE_VG,
         ZERO,
         |done, total, atual, etapa| {
             eventos
@@ -2769,8 +2491,8 @@ fn scan_song_runs_the_same_funnel_on_a_single_file() {
     .expect("uma proposta para esta música");
 
     assert_eq!(p.song_id, song.id);
-    assert_eq!(p.fonte, "Vagalume");
-    assert_eq!(p.lyrics.as_deref(), Some(LETRA_VG));
+    assert_eq!(p.fonte, "lyrics.ovh");
+    assert_eq!(p.lyrics.as_deref(), Some(LETRA_OVH));
 
     // uma música só: a vizinha nem é olhada
     assert!(
@@ -2785,7 +2507,7 @@ fn scan_song_runs_the_same_funnel_on_a_single_file() {
             enrich::ETAPA_PREPARANDO,
             enrich::ETAPA_NOME_ARQUIVO,
             enrich::ETAPA_LRCLIB,
-            enrich::ETAPA_VAGALUME,
+            enrich::ETAPA_LYRICS_OVH,
             enrich::ETAPA_CONCLUIDA
         ]
     );
@@ -2837,8 +2559,8 @@ fn scan_song_consults_the_sources_even_for_a_complete_song() {
         song.id,
         None,
         None,
-        duas_fontes(&urls, "[]".into(), corpo_vagalume("x", "y", "z")),
-        CHAVE_VG,
+        // as duas fontes vêm vazias: é isso que o teste quer exercitar
+        fontes_de_letra(&urls, "[]".into(), "{}".into()),
         ZERO,
         |done, total, _, _| eventos.borrow_mut().push((done, total)),
         SEM_CANCELAMENTO,
@@ -2876,8 +2598,8 @@ fn scan_song_searches_for_what_the_person_typed() {
         song.id,
         Some("Asa Branca"),
         Some("Luiz Gonzaga"),
-        duas_fontes(&urls, "[]".into(), corpo_vagalume("x", "y", "z")),
-        CHAVE_VG,
+        // as duas fontes vêm vazias: é isso que o teste quer exercitar
+        fontes_de_letra(&urls, "[]".into(), "{}".into()),
         ZERO,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -2889,9 +2611,9 @@ fn scan_song_searches_for_what_the_person_typed() {
         consultas.contains("Asa%20Branca") && consultas.contains("Luiz%20Gonzaga"),
         "o texto digitado tem de chegar às fontes: {consultas}"
     );
-    // e o Vagalume, que exige título E artista reais, passa a ser consultado
+    // e a etapa 4, que exige título E artista reais, passa a ser consultada
     assert!(
-        !urls_de(&urls, "vagalume").is_empty(),
+        !urls_de(&urls, "api.lyrics.ovh").is_empty(),
         "com nomes digitados há o que conferir na base comunitária"
     );
 }
@@ -2919,7 +2641,6 @@ fn scan_song_echoes_the_database_values_never_the_typed_ones() {
         Some("Asa Branca"),
         Some("Luiz Gonzaga"),
         move |_: &str| Ok(corpo.clone()),
-        SEM_CHAVE,
         ZERO,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -2957,12 +2678,11 @@ fn scan_song_still_skips_the_lyric_stages_of_an_instrumental() {
         song.id,
         None,
         None,
-        duas_fontes(
+        fontes_de_letra(
             &urls,
             "[]".into(),
-            corpo_vagalume("Instrumental Sem Letra", "Banda Fixture", LETRA_VG),
+            corpo_ovh(LETRA_OVH),
         ),
-        CHAVE_VG,
         ZERO,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -2985,7 +2705,6 @@ fn scan_song_returns_none_when_the_funnel_finds_nothing_new() {
         None,
         None,
         |_: &str| Ok("[]".to_string()),
-        CHAVE_VG,
         ZERO,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -3003,7 +2722,6 @@ fn scan_song_errors_for_an_unknown_song() {
         None,
         None,
         |_: &str| Ok("[]".to_string()),
-        SEM_CHAVE,
         ZERO,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -3027,7 +2745,6 @@ fn scan_song_is_cancellable_like_the_batch() {
             *chamadas.borrow_mut() += 1;
             Ok("[]".to_string())
         },
-        CHAVE_VG,
         ZERO,
         SEM_PROGRESSO,
         || true,
@@ -3104,7 +2821,7 @@ fn a_well_named_file_whose_title_matches_it_proposes_nothing() {
 // de IDENTIDADE, e identidade é ENTRADA das etapas de letra. Ela passou a
 // vir logo depois das etiquetas:
 //
-//   1 etiquetas/nome → 2 impressão digital → 3 LRCLIB → 4 Vagalume
+//   1 etiquetas/nome → 2 impressão digital → 3 LRCLIB → 4 lyrics.ovh
 //
 // Duas consequências que estes testes fixam:
 //
@@ -3213,7 +2930,7 @@ fn roteador<'a>(
         urls.borrow_mut().push(url.to_string());
         if url.starts_with(cancioneiro_lib::fingerprint::LOOKUP_URL) {
             Ok(acoustid_body.to_string())
-        } else if url.starts_with(vagalume::SEARCH_URL) {
+        } else if url.starts_with(lyrics_ovh::SEARCH_URL) {
             Ok(vagalume_body.to_string())
         } else {
             Ok(lrclib_body.to_string())
@@ -3229,16 +2946,11 @@ fn urls_para(urls: &RefCell<Vec<String>>, prefixo: &str) -> Vec<String> {
         .collect()
 }
 
-fn scan_com<S: enrich::Fontes>(
-    conn: &Connection,
-    fontes: S,
-    chave_vagalume: &str,
-) -> Vec<enrich::EnrichProposal> {
+fn scan_com<S: enrich::Fontes>(conn: &Connection, fontes: S) -> Vec<enrich::EnrichProposal> {
     enrich::enrich_scan(
         conn,
         "",
         fontes,
-        chave_vagalume,
         ZERO,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -3271,7 +2983,6 @@ fn com_o_nome_do_som_o_lrclib_recebe_um_palpite_so() {
             ),
             dur,
         ),
-        SEM_CHAVE,
     );
 
     // UMA consulta ao LRCLIB — não a cascata de palpites do nome do arquivo
@@ -3319,7 +3030,6 @@ fn letra_achada_por_nome_do_som_nunca_chega_pre_marcada() {
             ),
             dur,
         ),
-        SEM_CHAVE,
     );
     assert_eq!(props[0].confidence, "media");
     assert_eq!(props[0].fonte, enrich::FONTE_LRCLIB);
@@ -3350,8 +3060,7 @@ fn nome_recusado_pela_regua_nao_vaza_para_as_etapas_de_letra() {
         scan_com(
             &conn,
             ComSom::nova(roteador(&urls, &corpo, "[]", "{}"), dur),
-            SEM_CHAVE,
-        );
+            );
         let lrclib = urls_para(&urls, cancioneiro_lib::lyrics_fetch::SEARCH_URL);
         assert!(
             lrclib.len() > 1,
@@ -3399,7 +3108,6 @@ fn divergencia_entre_o_som_e_a_etiqueta_real_e_conflito() {
             ),
             dur,
         ),
-        CHAVE_VG,
     );
 
     let p = props
@@ -3424,7 +3132,7 @@ fn divergencia_entre_o_som_e_a_etiqueta_real_e_conflito() {
         urls_para(&urls, cancioneiro_lib::lyrics_fetch::SEARCH_URL).is_empty(),
         "conflito não consulta letra"
     );
-    assert!(urls_para(&urls, vagalume::SEARCH_URL).is_empty());
+    assert!(urls_para(&urls, lyrics_ovh::SEARCH_URL).is_empty());
 }
 
 /// Variação de grafia NÃO é conflito (o `_discorda` do Python): tratá-la
@@ -3456,7 +3164,6 @@ fn variacao_de_grafia_nao_vira_conflito() {
             ),
             dur,
         ),
-        SEM_CHAVE,
     );
     assert!(
         props.iter().all(|p| p.conflito.is_none()),
@@ -3495,7 +3202,6 @@ fn a_varredura_alcanca_a_musica_completa_e_o_som_denuncia_a_etiqueta() {
             roteador(&urls, &acoustid(0.95, "Outra Coisa", "Outro Artista", dur), "[]", "{}"),
             dur,
         ),
-        CHAVE_VG,
     );
     let p = props
         .iter()
@@ -3510,7 +3216,7 @@ fn a_varredura_alcanca_a_musica_completa_e_o_som_denuncia_a_etiqueta() {
         1
     );
     assert!(urls_para(&urls, cancioneiro_lib::lyrics_fetch::SEARCH_URL).is_empty());
-    assert!(urls_para(&urls, vagalume::SEARCH_URL).is_empty());
+    assert!(urls_para(&urls, lyrics_ovh::SEARCH_URL).is_empty());
 }
 
 /// **As etapas 3 e 4 rodam SÓ em quem não tem letra.** Não faz sentido buscar
@@ -3533,7 +3239,6 @@ fn as_etapas_de_letra_rodam_so_em_quem_nao_tem_letra() {
             urls.borrow_mut().push(url.to_string());
             Ok("[]".to_string())
         },
-        SEM_CHAVE,
     );
     assert!(
         !urls_para(&urls, cancioneiro_lib::lyrics_fetch::SEARCH_URL).is_empty(),
@@ -3572,7 +3277,6 @@ fn a_varredura_diz_quem_sobrou_sem_letra_e_quanto_tempo_isso_leva() {
         &conn,
         "",
         |_: &str| Ok("[]".to_string()),
-        SEM_CHAVE,
         ZERO,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -3605,7 +3309,6 @@ fn quem_ganhou_letra_na_varredura_nao_sobra_para_a_transcricao() {
         &conn,
         "",
         move |_: &str| Ok(corpo.clone()),
-        SEM_CHAVE,
         ZERO,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -3636,7 +3339,6 @@ fn a_musica_avulsa_consulta_mesmo_tendo_letra() {
             urls.borrow_mut().push(url.to_string());
             Ok("[]".to_string())
         },
-        SEM_CHAVE,
         ZERO,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -3674,7 +3376,6 @@ fn instrumental_entra_na_etapa_2_e_continua_fora_das_etapas_de_letra() {
             ),
             dur,
         ),
-        CHAVE_VG,
     );
 
     let p = &props[0];
@@ -3703,7 +3404,6 @@ fn sem_o_acessorio_o_funil_fica_exatamente_como_era() {
             urls.borrow_mut().push(url.to_string());
             Ok("[]".to_string())
         },
-        SEM_CHAVE,
     );
     assert!(
         urls_para(&urls, cancioneiro_lib::fingerprint::LOOKUP_URL).is_empty(),
@@ -3742,7 +3442,6 @@ fn fpcalc_que_nao_executa_reporta_uma_vez_desliga_a_etapa_e_conta_as_que_sobrara
         &conn,
         "",
         fontes,
-        SEM_CHAVE,
         ZERO,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -3783,7 +3482,6 @@ fn falha_do_fpcalc_num_arquivo_nao_desliga_a_etapa_do_resto() {
         &conn,
         "",
         fontes,
-        SEM_CHAVE,
         ZERO,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -3804,7 +3502,7 @@ fn falha_do_fpcalc_num_arquivo_nao_desliga_a_etapa_do_resto() {
 }
 
 /// E a chave recusada pelo AcoustID continua sendo veredito — a coerência que
-/// faltava: para o Vagalume só `ERRO_CHAVE_RECUSADA` desligava a etapa, para
+/// faltava: para as fontes de letra nenhum erro desliga a etapa, para
 /// o som qualquer erro desligava.
 #[test]
 fn chave_recusada_pelo_acoustid_desliga_a_etapa_e_conta_o_resto() {
@@ -3833,7 +3531,6 @@ fn chave_recusada_pelo_acoustid_desliga_a_etapa_e_conta_o_resto() {
         &conn,
         "",
         fontes,
-        SEM_CHAVE,
         ZERO,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -3861,7 +3558,6 @@ fn sem_desligamento_nenhuma_musica_fica_sem_ser_perguntada() {
             roteador(&urls, r#"{"status":"ok","results":[]}"#, "[]", "{}"),
             180.0,
         ),
-        SEM_CHAVE,
         ZERO,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -3892,7 +3588,7 @@ fn a_duracao_medida_pelo_fpcalc_manda_no_lrclib() {
         chave: "chave-acoustid-de-teste".into(),
         falhas: Vec::new(),
     };
-    let props = scan_com(&conn, fontes, SEM_CHAVE);
+    let props = scan_com(&conn, fontes);
     assert_eq!(props[0].lyrics.as_deref(), Some("chove"));
     assert_eq!(props[0].confidence, "alta", "sem identidade do som, a régua é a de sempre");
 }
@@ -3930,7 +3626,6 @@ fn a_musica_avulsa_do_editor_tambem_pergunta_ao_som() {
             ),
             dur,
         ),
-        SEM_CHAVE,
         ZERO,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -4125,7 +3820,6 @@ fn a_linha_de_conflito_nao_avisa_substituicao() {
             ),
             dur,
         ),
-        SEM_CHAVE,
     );
     let p = props.iter().find(|p| p.song_id == song.id).unwrap();
     assert!(p.conflito.is_some());
@@ -4175,7 +3869,6 @@ fn identidade_que_so_ecoa_a_etiqueta_nao_muda_nada_no_funil() {
             ),
             dur,
         ),
-        SEM_CHAVE,
     );
 
     // SEM som: o mesmo arquivo, o mesmo LRCLIB, sem acessório nenhum
@@ -4214,7 +3907,6 @@ fn artista_vindo_do_som_nao_reduz_a_cascata_de_palpites_do_titulo() {
             roteador(&urls, &acoustid(0.95, "Lampejo", "Adventício", dur), "[]", "{}"),
             dur,
         ),
-        SEM_CHAVE,
     );
 
     let lrclib = urls_para(&urls, cancioneiro_lib::lyrics_fetch::SEARCH_URL);
@@ -4254,7 +3946,6 @@ fn titulo_vindo_do_som_ainda_rende_um_palpite_so_e_teto_media() {
             ),
             dur,
         ),
-        SEM_CHAVE,
     );
     assert_eq!(
         urls_para(&urls, cancioneiro_lib::lyrics_fetch::SEARCH_URL).len(),
@@ -4585,7 +4276,6 @@ fn o_que_sobra_da_varredura_e_o_que_a_etapa_5_recebe() {
         &conn,
         "",
         |_: &str| Ok("[]".to_string()),
-        SEM_CHAVE,
         ZERO,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -4621,7 +4311,6 @@ fn o_que_sobra_da_varredura_e_o_que_a_etapa_5_recebe() {
         &conn,
         "",
         |_: &str| Ok("[]".to_string()),
-        SEM_CHAVE,
         ZERO,
         SEM_PROGRESSO,
         SEM_CANCELAMENTO,
@@ -4631,4 +4320,250 @@ fn o_que_sobra_da_varredura_e_o_que_a_etapa_5_recebe() {
         depois.sem_letra_no_fim.is_empty(),
         "a música transcrita não volta para a fila da etapa 5"
     );
+}
+
+// ===========================================================================
+// V10 — ETAPA 4: lyrics.ovh, a fonte SEM CHAVE, antes da fonte COM CHAVE
+// ===========================================================================
+
+
+fn com_tags(conn: &Connection, arquivo: &str, titulo: &str, artista: &str) -> db::Song {
+    let song = song_by_suffix(conn, arquivo);
+    writer::write_tags(conn, song.id, titulo, Some(artista), None, None, None).unwrap();
+    song_by_suffix(conn, arquivo)
+}
+
+/// **A etapa 4 roda sem credencial nenhuma.**
+///
+/// É a razão de ela existir, e de ela ter substituído o Vagalume: API
+/// descontinuada, chave inalcançável, e um módulo que nunca rodou contra o
+/// serviço real (DECISIONS #110). Nenhuma etapa do funil pede credencial do
+/// usuário agora.
+#[test]
+fn a_etapa_4_acha_letra_sem_credencial_nenhuma() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
+    let song = com_tags(&conn, "sem_letra.mp3", "Asa Branca", "Luiz Gonzaga");
+
+    let urls = RefCell::new(Vec::new());
+    let props = enrich::enrich_scan(
+        &conn,
+        "",
+        fontes_de_letra(&urls, "[]".into(), r#"{"lyrics": "Quando olhei a terra ardendo"}"#.into()),
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap()
+    .propostas;
+
+    let p = props.iter().find(|p| p.song_id == song.id).expect("proposta");
+    assert_eq!(p.fonte, enrich::FONTE_LYRICS_OVH);
+    assert_eq!(p.lyrics.as_deref(), Some("Quando olhei a terra ardendo"));
+    // MÉDIA, nunca ALTA: sem duração não há confirmação independente, e ALTA
+    // chega PRÉ-MARCADA (DECISIONS #49)
+    assert_eq!(p.confidence, "media");
+    // e a etapa não propõe trocar nome nenhum
+    assert_eq!(p.proposed_title, "Asa Branca");
+    assert_eq!(p.proposed_artist.as_deref(), Some("Luiz Gonzaga"));
+}
+
+/// A ordem das fontes de letra: LRCLIB (que confere pela DURAÇÃO) e depois
+/// lyrics.ovh (que não tem duração e por isso é mais rígida e tem teto MÉDIA).
+#[test]
+fn a_ordem_e_lrclib_e_depois_lyrics_ovh() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
+    com_tags(&conn, "sem_letra.mp3", "Asa Branca", "Luiz Gonzaga");
+
+    let urls = RefCell::new(Vec::new());
+    enrich::enrich_scan(
+        &conn,
+        "",
+        // nenhuma das três acha nada: assim as três são consultadas
+        fontes_de_letra(&urls, "[]".into(), "{}".into()),
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+
+    let vistas = urls.borrow().clone();
+    let posicao = |agulha: &str| vistas.iter().position(|u| u.contains(agulha));
+    let lrclib = posicao("lrclib.net").expect("o LRCLIB foi consultado");
+    let ovh = posicao("api.lyrics.ovh").expect("o lyrics.ovh foi consultado");
+    assert!(
+        lrclib < ovh,
+        "o LRCLIB vem primeiro: ele confere pela DURAÇÃO, e a etapa 4 não tem \
+         duração para conferir nada ({vistas:?})"
+    );
+    // e são só DUAS fontes de letra: nenhuma terceira apareceu
+    assert!(
+        vistas.iter().all(|u| u.contains("lrclib.net") || u.contains("api.lyrics.ovh")),
+        "destino inesperado: {vistas:?}"
+    );
+}
+
+/// Achou no lyrics.ovh: o Vagalume nem é consultado. O funil só passa adiante
+/// o que a etapa anterior não resolveu.
+#[test]
+fn achando_no_ovh_a_transcricao_nao_e_cobrada() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
+    com_tags(&conn, "sem_letra.mp3", "Asa Branca", "Luiz Gonzaga");
+
+    let urls = RefCell::new(Vec::new());
+    let props = enrich::enrich_scan(
+        &conn,
+        "",
+        fontes_de_letra(&urls, "[]".into(), r#"{"lyrics": "a letra que o ovh tem"}"#.into()),
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap()
+    .propostas;
+
+    assert_eq!(props[0].fonte, enrich::FONTE_LYRICS_OVH);
+    assert!(props[0].lyrics.is_some(), "e a letra vem na proposta");
+}
+
+/// **O lyrics.ovh cai com frequência, e a queda dele é erro de UMA MÚSICA.**
+///
+/// A etapa NÃO se desliga: desligar no primeiro soluço deixaria as outras 149
+/// músicas com a aparência de conferidas (a mesma correção do QA A2 no
+/// `fpcalc`). Cada arquivo tem a sua chance, e a linha de cada um diz o que
+/// aconteceu com ele.
+#[test]
+fn a_queda_do_ovh_e_erro_de_uma_musica_e_nao_desliga_a_etapa() {
+    let (_dir, conn, _f) = setup_with(&[
+        ("sem_letra.mp3", "a.mp3"),
+        ("sem_letra.mp3", "b.mp3"),
+    ]);
+    for nome in ["a.mp3", "b.mp3"] {
+        com_tags(&conn, nome, "Asa Branca", "Luiz Gonzaga");
+    }
+
+    let urls = RefCell::new(Vec::new());
+    let props = enrich::enrich_scan(
+        &conn,
+        "",
+        |url: &str| {
+            urls.borrow_mut().push(url.to_string());
+            if url.starts_with(lyrics_ovh::SEARCH_URL) {
+                Err(AppError(lyrics_ovh::ERRO_FORA_DO_AR.into()))
+            } else {
+                Ok("[]".to_string())
+            }
+        },
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap()
+    .propostas;
+
+    // as DUAS foram tentadas: a falha da primeira não desligou a etapa
+    assert_eq!(urls_de(&urls, "api.lyrics.ovh").len(), 2);
+    assert_eq!(props.len(), 2);
+    for p in &props {
+        assert_eq!(
+            p.error.as_deref(),
+            Some(lyrics_ovh::ERRO_FORA_DO_AR),
+            "cada linha diz o que aconteceu com ela"
+        );
+        assert!(p.lyrics.is_none(), "erro nunca traz letra");
+    }
+}
+
+/// Quando ninguém acha letra, a queda do lyrics.ovh VIRA a linha de erro
+/// daquela música — a pessoa precisa saber que a busca foi tentada e falhou.
+#[test]
+fn quando_ninguem_acha_a_queda_do_ovh_aparece_na_linha() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
+    com_tags(&conn, "sem_letra.mp3", "Asa Branca", "Luiz Gonzaga");
+
+    let props = enrich::enrich_scan(
+        &conn,
+        "",
+        |url: &str| {
+            if url.starts_with(lyrics_ovh::SEARCH_URL) {
+                Err(AppError(lyrics_ovh::ERRO_FORA_DO_AR.into()))
+            } else {
+                Ok("[]".to_string())
+            }
+        },
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap()
+    .propostas;
+    assert_eq!(
+        props[0].error.as_deref(),
+        Some(lyrics_ovh::ERRO_FORA_DO_AR)
+    );
+    assert_eq!(props[0].fonte, enrich::FONTE_ERRO);
+}
+
+/// Aplicar a letra do lyrics.ovh grava a procedência certa em
+/// `TXXX:LETRA_ORIGEM` — o dado viaja no MP3, e as duas pilhas precisam falar
+/// a mesma língua (DECISIONS #82).
+#[test]
+fn aplicar_a_letra_do_ovh_grava_a_procedencia() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
+    let song = com_tags(&conn, "sem_letra.mp3", "Asa Branca", "Luiz Gonzaga");
+    let urls = RefCell::new(Vec::new());
+    let props = enrich::enrich_scan(
+        &conn,
+        "",
+        fontes_de_letra(&urls, "[]".into(), r#"{"lyrics": "a letra sem cadastro"}"#.into()),
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap()
+    .propostas;
+    let p = &props[0];
+
+    let res = enrich::apply(
+        &conn,
+        &[EnrichApply {
+            song_id: song.id,
+            title: p.proposed_title.clone(),
+            artist: p.proposed_artist.clone(),
+            lyrics: p.lyrics.clone(),
+            add_temas: None,
+            current_title: p.current_title.clone(),
+            current_artist: p.current_artist.clone(),
+            fonte: Some(p.fonte.clone()),
+            substituir_letra: false,
+            marcar_instrumental: false,
+        }],
+    )
+    .unwrap();
+    assert!(res[0].error.is_none(), "{:?}", res[0].error);
+    let depois = song_by_suffix(&conn, "sem_letra.mp3");
+    assert_eq!(
+        depois.letra_origem.as_deref(),
+        Some("lyrics.ovh"),
+        "e NÃO \"vagalume\" nem \"transcricao\""
+    );
+}
+
+/// A música que ganhou letra do lyrics.ovh não sobra para a etapa 6: a
+/// pergunta do fim não pode cobrar horas de CPU por um trabalho já feito.
+#[test]
+fn quem_ganhou_letra_no_ovh_nao_sobra_para_a_transcricao() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
+    com_tags(&conn, "sem_letra.mp3", "Asa Branca", "Luiz Gonzaga");
+    let urls = RefCell::new(Vec::new());
+    let r = enrich::enrich_scan(
+        &conn,
+        "",
+        fontes_de_letra(&urls, "[]".into(), r#"{"lyrics": "a letra sem cadastro"}"#.into()),
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+    assert!(r.propostas[0].lyrics.is_some());
+    assert!(r.sem_letra_no_fim.is_empty());
 }

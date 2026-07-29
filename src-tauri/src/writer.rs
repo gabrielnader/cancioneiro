@@ -38,16 +38,34 @@ const TEMAS_DESC: &str = "TEMAS";
 /// (`TXXX:LETRA_ORIGEM = "transcricao"` = letra saída do áudio). A marca
 /// descreve a letra que está NO ARQUIVO: quem troca a letra derruba a marca.
 const LETRA_ORIGEM_DESC: &str = "LETRA_ORIGEM";
-/// V8/F18 — letra vinda da base comunitária Vagalume. É o MESMO valor que o
-/// `tools/embed_lyrics.py` grava (`ORIGEM_VAGALUME`): o dado viaja no MP3 e
-/// os dois stacks precisam falar a mesma língua. Letra do LRCLIB é oficial
-/// também, mas não leva marca nenhuma — o valor "" limpa o frame.
+/// Letra vinda da base comunitária Vagalume — **valor HERANÇA, só de
+/// leitura** (V10).
+///
+/// A etapa do Vagalume saiu do aplicativo (DECISIONS #110) e **nada mais
+/// escreve este valor aqui**. Ele continua existindo por uma razão: o
+/// `tools/curadoria.py` o grava, e arquivos do acervo real já o carregam. Um
+/// valor que o programa não reconhece não é lixo a limpar — "nunca apagar dado
+/// existente" vale para INTERPRETAR dado existente também.
+///
+/// Na prática a garantia é a da DECISIONS #54: a marca só muda quando a LETRA
+/// muda, então uma gravação de título/artista sobre um arquivo marcado
+/// `vagalume` o preserva. Há teste fixando isso.
 pub const ORIGEM_VAGALUME: &str = "vagalume";
 /// V10 — letra ESCRITA ouvindo o áudio (etapa 5). É o mesmo valor que o
 /// `tools/embed_lyrics.py` grava desde a V5/F14 (`ORIGEM_TRANSCRICAO`) e que o
 /// player já sabe exibir como "pode conter erros": o dado viaja no MP3, e os
 /// dois stacks precisam falar a mesma língua.
 pub const ORIGEM_TRANSCRICAO: &str = "transcricao";
+/// V10 — letra vinda do `lyrics.ovh`, a fonte de letra da etapa 4, que não
+/// pede credencial nenhuma.
+///
+/// O valor é o nome do serviço, minúsculo, no mesmo estilo dos demais: o dado
+/// viaja no MP3, e é assim que a próxima ferramenta sabe de onde a letra veio.
+/// **O `tools/embed_lyrics.py` ainda não conhece este valor** — enquanto não
+/// conhecer, o `rotulo_letra` do `tools/curadoria.py` mostra o "SIM" genérico
+/// em vez de "lyrics.ovh". É perda de RÓTULO, não de dado: origem desconhecida
+/// nunca é lida como transcrição, e nada apaga a marca.
+pub const ORIGEM_LYRICS_OVH: &str = "lyrics.ovh";
 /// V8/F17 — marca de música sem voz. O valor canônico gravado é "1", o mesmo
 /// que o `embed_lyrics.py --instrumental` grava; desmarcar REMOVE o frame.
 const INSTRUMENTAL_DESC: &str = "INSTRUMENTAL";
@@ -106,9 +124,9 @@ pub fn write_tags(
 /// `letra_origem`:
 /// - `None` — "não sei": vale a regra da DECISIONS #54, a marca sobrevive
 ///   se e só se a letra do arquivo não mudou;
-/// - `Some("vagalume")` — a letra que está sendo gravada veio da base
-///   comunitária, e é assim que ela fica marcada, exatamente como o
-///   `tools/curadoria.py` faz;
+/// - `Some("lyrics.ovh")` / `Some("transcricao")` — a letra que está sendo
+///   gravada veio daquela fonte, e é assim que ela fica marcada, no mesmo
+///   vocabulário que o `tools/curadoria.py` usa;
 /// - `Some("")` — declaração de que a letra é oficial e SEM marca (o caminho
 ///   do LRCLIB): limpa qualquer marca herdada, inclusive a de transcrição.
 ///
@@ -194,7 +212,7 @@ pub fn write_tags_com_origem(
     //
     // V8/F18: a letra MUDOU é o momento em que a marca precisa ser refeita.
     // Sem declaração ela some (regra acima); com declaração ela passa a ser o
-    // que o funil informou — "" para letra oficial sem marca, "vagalume" para
+    // que o funil informou — "" para letra oficial sem marca, o nome da fonte para
     // a base comunitária. O frame antigo cai antes em qualquer caso, para
     // substituir em vez de duplicar.
     if letra_nova != letra_anterior.as_deref() {

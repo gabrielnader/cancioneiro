@@ -1,4 +1,5 @@
 pub mod acessorios;
+pub mod casamento_estrito;
 pub mod commands;
 pub mod db;
 pub mod enrich;
@@ -6,9 +7,9 @@ pub mod error;
 pub mod fingerprint;
 pub mod indexer;
 pub mod lyrics_fetch;
+pub mod lyrics_ovh;
 pub mod search;
 pub mod transcricao;
-pub mod vagalume;
 pub mod writer;
 
 use tauri::Manager;

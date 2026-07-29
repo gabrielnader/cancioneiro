@@ -355,14 +355,16 @@ pub fn write_tags(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Destino {
     Lrclib,
-    Vagalume,
+    /// lyrics.ovh (V10) — a fonte de letra que tomou o lugar do Vagalume, e
+    /// que não pede chave nenhuma.
+    LyricsOvh,
     /// AcoustID (V9) — recebe um resumo acústico, nunca o áudio.
     Acoustid,
 }
 
 fn destino_de(url: &str) -> Option<Destino> {
-    if url.starts_with(crate::vagalume::SEARCH_URL) {
-        Some(Destino::Vagalume)
+    if url.starts_with(crate::lyrics_ovh::SEARCH_URL) {
+        Some(Destino::LyricsOvh)
     } else if url.starts_with(crate::lyrics_fetch::SEARCH_URL) {
         Some(Destino::Lrclib)
     } else if url.starts_with(crate::fingerprint::LOOKUP_URL) {
@@ -376,12 +378,14 @@ fn destino_de(url: &str) -> Option<Destino> {
 /// `enrich_song_scan`. GET com timeout de 10 s e User-Agent
 /// "Cancioneiro/0.9".
 ///
-/// A primeira coisa que ele faz é conferir o DESTINO: só LRCLIB, Vagalume e
+/// A primeira coisa que ele faz é conferir o DESTINO: só LRCLIB, lyrics.ovh e
 /// AcoustID passam (ver `Destino`).
 ///
-/// 404 no Vagalume é resposta legítima ("não conheço esta música") e vira
-/// corpo vazio, que o módulo lê como "sem resultado". Chamar isso de falha de
-/// rede transformaria repertório desconhecido em erro na tela do usuário.
+/// 404 no lyrics.ovh é resposta legítima ("não conheço esta música") e vira
+/// corpo vazio, que o módulo lê como "sem resultado". Chamar
+/// isso de falha de rede transformaria repertório desconhecido em erro na tela
+/// do usuário — e num acervo de cobertura ~3% seriam 145 linhas vermelhas
+/// acusando a internet de quem está olhando.
 ///
 /// As demais falhas viram mensagens DISTINTAS (ver `mensagem_de_status`).
 pub(crate) fn funil_fetcher(url: &str) -> Result<String> {
@@ -396,7 +400,7 @@ pub(crate) fn funil_fetcher(url: &str) -> Result<String> {
         Ok(resp) => resp
             .into_string()
             .map_err(|_| AppError("sem conexão".into())),
-        Err(ureq::Error::Status(404, _)) if destino == Destino::Vagalume => Ok(String::new()),
+        Err(ureq::Error::Status(404, _)) if destino == Destino::LyricsOvh => Ok(String::new()),
         Err(ureq::Error::Status(status, _)) => {
             Err(AppError(mensagem_de_status(status, destino).into()))
         }
@@ -419,17 +423,22 @@ pub(crate) fn funil_fetcher(url: &str) -> Result<String> {
 /// mandar a pessoa procurar defeito no lugar errado — ele não devolve letra
 /// nenhuma.
 ///
-/// São TEXTO FIXO, sem interpolação: é o que garante que nenhuma chave (a do
-/// usuário, no Vagalume, ou a nossa, no AcoustID) possa aparecer numa
-/// mensagem de erro.
+/// São TEXTO FIXO, sem interpolação: é o que garante que a chave do AcoustID
+/// (a única que o produto tem, e ela é NOSSA) nunca apareça numa mensagem de
+/// erro.
 fn mensagem_de_status(status: u16, destino: Destino) -> &'static str {
     match (status, destino) {
-        // a chave do Vagalume é do USUÁRIO: dá para conferir se copiou certo
-        (401 | 403, Destino::Vagalume) => crate::vagalume::ERRO_CHAVE_RECUSADA,
-        // a do AcoustID é NOSSA e vem compilada: não há nada que a pessoa
+        // a chave do AcoustID é NOSSA e vem compilada: não há nada que a pessoa
         // possa fazer, e mandá-la conferir uma chave que ela nunca digitou
         // seria mandá-la procurar defeito onde não há
         (401 | 403, Destino::Acoustid) => crate::fingerprint::ERRO_CHAVE_RECUSADA,
+        // O lyrics.ovh não tem chave NENHUMA — é a razão de ele existir no
+        // funil —, e cai com frequência: toda falha dele fala de
+        // indisponibilidade, nunca de cadastro. A frase precisa ser DELE, e
+        // não a genérica do "site de letras", para a pessoa não procurar
+        // defeito no site errado. Ela também NÃO desliga a etapa: o funil
+        // registra o erro daquela música e segue (QA A2).
+        (_, Destino::LyricsOvh) => crate::lyrics_ovh::ERRO_FORA_DO_AR,
         // o LRCLIB não tem chave nenhuma: 401/403 lá é outra coisa
         (429, Destino::Acoustid) => "o reconhecimento pelo som pediu para esperar um pouco",
         (500..=599, Destino::Acoustid) => "o reconhecimento pelo som está fora do ar agora",
@@ -522,38 +531,6 @@ fn emissor_de_progresso(
     }
 }
 
-/// A chave do Vagalume que o funil vai usar. Duas podem existir, e a ordem
-/// entre elas é o ponto (PRD V9):
-///
-/// 1. **a do usuário**, se ele digitou uma. Ela vem do frontend a cada
-///    chamada (é preferência dele, não dado do acervo) e fica guardada nas
-///    preferências locais, na máquina da própria pessoa;
-/// 2. **a nossa**, embutida em tempo de build a partir de um segredo do
-///    repositório. Ela existe para ninguém precisar de chave nenhuma: pedir
-///    uma chave de API a quem não sabe o que é terminal era um pedágio
-///    absurdo, e o campo por pessoa existia só porque a alternativa não
-///    tinha sido pensada.
-///
-/// A do usuário vem PRIMEIRO de propósito: é a saída se a nossa for
-/// bloqueada algum dia. Build sem o segredo (desenvolvimento, fork)
-/// simplesmente não tem chave embutida, e aí vale a regra de sempre — sem
-/// nenhuma das duas, a etapa é pulada em silêncio e nada falha.
-///
-/// Assumido conscientemente: chave dentro de programa distribuído não é
-/// segredo — qualquer pessoa a extrai do binário. Aceito porque o estrago é
-/// recuperável (chave nova numa atualização, em uma hora) e o ganho é ~40
-/// pessoas que nunca veem uma tela de configuração.
-///
-/// Nenhuma das duas entra no banco de músicas, em log ou em mensagem de
-/// erro, nem vai a lugar nenhum além do próprio Vagalume.
-fn chave(vagalume_key: Option<String>) -> String {
-    let do_usuario = vagalume_key.unwrap_or_default().trim().to_string();
-    if !do_usuario.is_empty() {
-        return do_usuario;
-    }
-    option_env!("VAGALUME_API_KEY").unwrap_or("").trim().to_string()
-}
-
 /// Passa as músicas incompletas sob `folder_prefix` (vazio = biblioteca
 /// inteira) pelo funil — etiquetas/nome do arquivo → LRCLIB → Vagalume — e
 /// devolve as propostas para a UI de revisão.
@@ -587,7 +564,6 @@ pub fn enrich_folder_scan(
     state: State<'_, Db>,
     folder_prefix: String,
     scan_id: String,
-    vagalume_key: Option<String>,
 ) -> Result<crate::enrich::EnrichScanResult> {
     let cancel = state.scan_begin(&scan_id)?;
     let fontes = fontes_do_funil(&app);
@@ -598,7 +574,6 @@ pub fn enrich_folder_scan(
             &conn,
             &folder_prefix,
             fontes,
-            &chave(vagalume_key),
             PAUSA_CORTESIA,
             progresso,
             || cancel.load(Ordering::SeqCst),
@@ -626,9 +601,8 @@ pub fn enrich_count(
     app: AppHandle,
     state: State<'_, Db>,
     folder_prefix: String,
-    vagalume_key: Option<String>,
 ) -> Result<crate::enrich::Contagem> {
-    let etapas = etapas_ligadas(&app, &chave(vagalume_key));
+    let etapas = etapas_ligadas(&app);
     let conn = state.scan_conn()?;
     crate::enrich::contar(&conn, &folder_prefix, etapas)
 }
@@ -641,12 +615,11 @@ pub fn enrich_count(
 /// varredura depende exatamente disto — a etapa 2 são 2 s por música, medidos
 /// em campo, e numa pasta de 150 músicas são cinco minutos que a pessoa
 /// precisa saber ANTES.
-fn etapas_ligadas(app: &AppHandle, chave_vagalume: &str) -> crate::enrich::EtapasLigadas {
+fn etapas_ligadas(app: &AppHandle) -> crate::enrich::EtapasLigadas {
     let cache = diretorio_de_cache(app).ok();
     crate::enrich::EtapasLigadas {
         som: fpcalc_pronto(app).is_some()
             && !crate::fingerprint::chave_acoustid().trim().is_empty(),
-        vagalume: !chave_vagalume.trim().is_empty(),
         transcricao: cache
             .as_deref()
             .and_then(crate::transcricao::acessorios_prontos)
@@ -676,7 +649,6 @@ pub fn enrich_song_scan(
     app: AppHandle,
     state: State<'_, Db>,
     song_id: i64,
-    vagalume_key: Option<String>,
     scan_id: Option<String>,
     title: Option<String>,
     artist: Option<String>,
@@ -693,7 +665,6 @@ pub fn enrich_song_scan(
             title.as_deref(),
             artist.as_deref(),
             fontes,
-            &chave(vagalume_key),
             PAUSA_CORTESIA,
             progresso,
             || cancel.load(Ordering::SeqCst),
@@ -1183,7 +1154,7 @@ mod tests {
             done: 2,
             total: 7,
             atual: "Falamansa - Oh! Chuva.mp3".into(),
-            etapa: crate::enrich::ETAPA_VAGALUME.into(),
+            etapa: crate::enrich::ETAPA_LYRICS_OVH.into(),
             scan_id: "scan-42".into(),
         })
         .unwrap();
@@ -1191,7 +1162,7 @@ mod tests {
         assert_eq!(json["done"], 2);
         assert_eq!(json["total"], 7);
         assert_eq!(json["atual"], "Falamansa - Oh! Chuva.mp3");
-        assert_eq!(json["etapa"], "procurando no Vagalume");
+        assert_eq!(json["etapa"], "procurando no lyrics.ovh");
         assert_eq!(json["scan_id"], "scan-42");
         // o evento tem exatamente estes cinco campos, em snake_case
         let campos: Vec<&String> = json.as_object().unwrap().keys().collect();
@@ -1215,7 +1186,8 @@ mod tests {
                 ETAPA_NOME_ARQUIVO,
                 ETAPA_IMPRESSAO_DIGITAL,
                 ETAPA_LRCLIB,
-                ETAPA_VAGALUME,
+                ETAPA_LYRICS_OVH,
+                ETAPA_TRANSCRICAO,
                 ETAPA_CONCLUIDA
             ],
             [
@@ -1223,7 +1195,8 @@ mod tests {
                 "lendo etiquetas e nome do arquivo",
                 "reconhecendo pelo som",
                 "procurando no LRCLIB",
-                "procurando no Vagalume",
+                "procurando no lyrics.ovh",
+                "escrevendo a letra ouvindo o áudio",
                 "concluída"
             ]
         );
@@ -1232,14 +1205,16 @@ mod tests {
                 FONTE_NOME_ARQUIVO,
                 FONTE_IMPRESSAO_DIGITAL,
                 FONTE_LRCLIB,
-                FONTE_VAGALUME,
+                FONTE_LYRICS_OVH,
+                FONTE_TRANSCRICAO,
                 FONTE_ERRO
             ],
             [
                 "nome do arquivo",
                 "reconhecimento pelo som",
                 "LRCLIB",
-                "Vagalume",
+                "lyrics.ovh",
+                "transcrição do áudio",
                 "erro"
             ]
         );
@@ -1260,7 +1235,7 @@ mod tests {
             proposed_artist: Some("Antônio Nóbrega".into()),
             lyrics: Some("letra".into()),
             confidence: "alta".into(),
-            fonte: crate::enrich::FONTE_VAGALUME.into(),
+            fonte: crate::enrich::FONTE_LYRICS_OVH.into(),
             has_lyrics: true,
             letra_origem: Some("transcricao".into()),
             substitui_nome_escrito: true,
@@ -1272,7 +1247,7 @@ mod tests {
         })
         .unwrap();
 
-        assert_eq!(json["fonte"], "Vagalume");
+        assert_eq!(json["fonte"], "lyrics.ovh");
         assert_eq!(json["confidence"], "alta");
         // QA CRÍTICO-1 — a revisão precisa saber que aceitar esta linha
         // SUBSTITUIRIA uma letra, e o que seria sobrescrito
@@ -1414,12 +1389,17 @@ mod tests {
 
     // -----------------------------------------------------------------------
     // V8/F18 — "nenhuma telemetria, nada do acervo sai da máquina": o único
-    // fetcher do produto recusa qualquer destino que não seja LRCLIB ou
-    // Vagalume, ANTES de abrir conexão. Roda offline: nenhuma das URLs abaixo
-    // chega a virar requisição.
+    // fetcher do funil recusa qualquer destino que não esteja na lista,
+    // ANTES de abrir conexão. Roda offline: nenhuma das URLs abaixo chega a
+    // virar requisição.
+    //
+    // V10 — a lista passou a ter QUATRO destinos (o lyrics.ovh entrou), e a
+    // regra "rede só em pontos explícitos e enumerados" só vale se a lista
+    // estiver certa. O teste inclui um sósia de cada host: um prefixo que
+    // "começa igual" é exatamente como um destino não previsto entraria.
     // -----------------------------------------------------------------------
     #[test]
-    fn the_fetcher_refuses_any_host_other_than_lrclib_and_vagalume() {
+    fn the_fetcher_refuses_any_host_outside_the_enumerated_list() {
         for url in [
             "https://exemplo.invalido/coleta",
             "http://localhost:9/x",
@@ -1427,6 +1407,12 @@ mod tests {
             "https://lrclib.net.exemplo.invalido/api/search?q=x",
             "https://api.vagalume.com.br.exemplo.invalido/search.php",
             "https://api.acoustid.org.exemplo.invalido/v2/lookup",
+            // V10 — os sósias do destino novo
+            "https://api.lyrics.ovh.exemplo.invalido/v1/A/B",
+            "https://api.lyrics.ovh.br/v1/A/B",
+            "http://api.lyrics.ovh/v1/A/B", // sem TLS não passa
+            "https://api.lyrics.ovh/v2/A/B", // outra versão do caminho
+            "https://lyrics.ovh/v1/A/B",
             // o lançamento de acessórios NÃO é destino do funil: cada
             // fetcher tem a sua lista, e nenhuma empresta para a outra
             crate::acessorios::URL_BASE,
@@ -1439,11 +1425,14 @@ mod tests {
 
     /// ...e os três destinos legítimos passam pela trava (o erro que sobra é
     /// de rede, não de permissão — a suíte roda sem internet).
+    ///
+    /// V10 — continuam TRÊS, mas o do meio mudou: o Vagalume saiu e o
+    /// lyrics.ovh entrou (DECISIONS #110).
     #[test]
     fn the_three_legitimate_destinations_pass_the_guard() {
         for url in [
             crate::lyrics_fetch::SEARCH_URL,
-            crate::vagalume::SEARCH_URL,
+            crate::lyrics_ovh::SEARCH_URL,
             crate::fingerprint::LOOKUP_URL,
         ] {
             if let Err(e) = funil_fetcher(url) {
@@ -1476,7 +1465,7 @@ mod tests {
             "https://github.com/gabrielnader/cancioneiro/releases/download/acessorios-v2/fpcalc-linux-x86_64",
             // destinos do funil não valem aqui
             crate::lyrics_fetch::SEARCH_URL,
-            crate::vagalume::SEARCH_URL,
+            crate::lyrics_ovh::SEARCH_URL,
             crate::fingerprint::LOOKUP_URL,
             "",
         ] {
@@ -1553,14 +1542,11 @@ mod tests {
     // -----------------------------------------------------------------------
     #[test]
     fn each_http_failure_says_what_actually_happened() {
-        use crate::vagalume::ERRO_CHAVE_RECUSADA;
-
-        // chave recusada: as duas fontes que levam chave têm mensagens
-        // DIFERENTES, porque as chaves são de donos diferentes — a do
-        // Vagalume é do usuário (dá para conferir se copiou certo), a do
-        // AcoustID é nossa e vem compilada (não há nada que ele possa fazer)
-        assert_eq!(mensagem_de_status(401, Destino::Vagalume), ERRO_CHAVE_RECUSADA);
-        assert_eq!(mensagem_de_status(403, Destino::Vagalume), ERRO_CHAVE_RECUSADA);
+        // V10 — sobrou UMA chave no produto, e ela é NOSSA: a do AcoustID, que
+        // vem compilada. Não há nada que a pessoa possa fazer a respeito, e
+        // mandá-la conferir uma chave que ela nunca digitou seria mandá-la
+        // procurar defeito onde não há. (A do Vagalume era do usuário e tinha
+        // frase própria; o Vagalume saiu — DECISIONS #110.)
         assert_eq!(
             mensagem_de_status(401, Destino::Acoustid),
             crate::fingerprint::ERRO_CHAVE_RECUSADA
@@ -1570,11 +1556,16 @@ mod tests {
             mensagem_de_status(401, Destino::Lrclib),
             "o site de letras respondeu com erro"
         );
+        // e o lyrics.ovh também não: TODA falha dele fala de
+        // indisponibilidade, porque não há cadastro nenhum a conferir
+        for status in [400, 401, 403, 429, 500, 502, 503] {
+            assert_eq!(
+                mensagem_de_status(status, Destino::LyricsOvh),
+                crate::lyrics_ovh::ERRO_FORA_DO_AR,
+                "status {status}"
+            );
+        }
 
-        assert_eq!(
-            mensagem_de_status(429, Destino::Vagalume),
-            "o site de letras pediu para esperar um pouco"
-        );
         assert_eq!(
             mensagem_de_status(429, Destino::Lrclib),
             "o site de letras pediu para esperar um pouco"
@@ -1610,14 +1601,14 @@ mod tests {
 
     /// Nenhuma dessas frases pode carregar chave nenhuma: elas são texto
     /// FIXO, sem interpolação, e é assim que a garantia se sustenta.
+    ///
+    /// V10 — sobrou UMA chave no produto, a do AcoustID, e ela é nossa: o
+    /// Vagalume saiu (DECISIONS #110) e o lyrics.ovh nunca teve.
     #[test]
     fn no_network_message_can_ever_carry_the_key() {
-        for chave in [
-            "minha-chave-secreta-do-vagalume",
-            "minha-chave-secreta-do-acoustid",
-        ] {
+        for chave in ["minha-chave-secreta-do-acoustid"] {
             for status in [400, 401, 403, 404, 429, 500, 502, 503] {
-                for destino in [Destino::Lrclib, Destino::Vagalume, Destino::Acoustid] {
+                for destino in [Destino::Lrclib, Destino::LyricsOvh, Destino::Acoustid] {
                     assert!(
                         !mensagem_de_status(status, destino).contains(chave),
                         "status {status}, destino {destino:?}"
@@ -1627,18 +1618,37 @@ mod tests {
         }
     }
 
-    /// A chave do Vagalume é resolvida num lugar só. A do USUÁRIO tem
-    /// precedência sobre a nossa — é a saída se a nossa for bloqueada algum
-    /// dia —, e sem nenhuma das duas a etapa é pulada, nunca um erro.
+    /// **Nenhuma etapa do funil exige credencial do usuário** (V10).
+    ///
+    /// Era o Vagalume que exigia, e ele saiu (DECISIONS #110). O que sobrou
+    /// vem tudo compilado ou não vem: a chave do AcoustID é NOSSA (modelo
+    /// por-aplicativo deles), o LRCLIB e o lyrics.ovh não têm chave nenhuma.
+    /// Isso apaga da tela de configuração um campo de chave de API e o
+    /// parágrafo que o explicava — para 40 pessoas que não sabem o que é uma
+    /// chave de API.
+    ///
+    /// Este teste é uma GUARDA: ele falha se alguém acrescentar um parâmetro
+    /// de credencial a qualquer comando do funil.
     #[test]
-    fn a_chave_do_usuario_tem_precedencia_sobre_a_nossa() {
-        let nossa = option_env!("VAGALUME_API_KEY").unwrap_or("").trim();
-        // digitada pela pessoa: vence sempre, e chega aparada
-        assert_eq!(chave(Some("  minha-chave \n".into())), "minha-chave");
-        // ausente ou em branco: cai para a nossa (vazia nesta build, e aí a
-        // etapa é pulada em silêncio)
-        assert_eq!(chave(None), nossa);
-        assert_eq!(chave(Some("   ".into())), nossa);
+    fn nenhum_comando_do_funil_pede_credencial_do_usuario() {
+        // as assinaturas, lidas do próprio código-fonte deste arquivo: é o
+        // único jeito de um teste enxergar um PARÂMETRO
+        let fonte = include_str!("commands.rs");
+        for comando in [
+            "pub fn enrich_count(",
+            "pub fn enrich_folder_scan(",
+            "pub fn enrich_song_scan(",
+            "pub fn transcrever_musicas(",
+        ] {
+            let i = fonte.find(comando).expect(comando);
+            let assinatura = &fonte[i..i + fonte[i..].find(" -> Result").expect("retorno")];
+            for proibido in ["vagalume_key", "api_key", "apikey", "chave", "token"] {
+                assert!(
+                    !assinatura.contains(proibido),
+                    "{comando} pede credencial: {proibido}"
+                );
+            }
+        }
     }
 
     // -----------------------------------------------------------------------

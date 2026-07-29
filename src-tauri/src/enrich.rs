@@ -9,8 +9,24 @@
 //! | 1     | "nome do arquivo"        | instantâneo  | todas              |
 //! | 2     | "reconhecimento pelo som"| **2 s**      | todas              |
 //! | 3     | "LRCLIB"                 | ~7 s         | quem não tem letra |
-//! | 4     | "Vagalume"               | ~2 s         | quem não tem letra |
+//! | 4     | "lyrics.ovh"             | ~2 s         | quem não tem letra |
 //! | 5     | "transcrição do áudio"   | MINUTOS      | comando à parte    |
+//!
+//! # NENHUMA etapa exige credencial do usuário (V10)
+//!
+//! O Vagalume era a única que exigia, e ele **saiu** (DECISIONS #110): API
+//! descontinuada, chave inalcançável, e um módulo que nunca rodou contra o
+//! serviço real — dezenas de testes verdes com `fetch` injetado e zero contato
+//! com a realidade, que é a mesma forma de confiança falsa da DECISIONS #92.
+//! O `lyrics.ovh` tomou o lugar dele e não pede nada. A etapa 2 usa chave
+//! NOSSA, embutida no build (é o modelo por-aplicativo do AcoustID).
+//!
+//! Isso apaga da tela de configuração um campo de chave de API e o parágrafo
+//! que o explicava — para 40 pessoas que não sabem o que é uma chave de API.
+//!
+//! Nada disso promete cobertura: o LRCLIB cobriu ~3% do acervo real, e o
+//! `lyrics.ovh` não muda essa ordem de grandeza. Ele entra para **eliminar a
+//! exigência de chave**. Quem resolve este repertório é a etapa 5.
 //!
 //! # Por que a impressão digital vem ANTES das fontes de letra
 //!
@@ -69,7 +85,8 @@
 //!
 //! Todo o acesso à rede entra por `Fontes`, injetável — os testes rodam sem
 //! rede; no comando real é o `ureq`, e continua sendo ponto de rede
-//! EXPLÍCITO, acionado pelo usuário, limitado a LRCLIB, Vagalume e AcoustID.
+//! EXPLÍCITO, acionado pelo usuário, limitado a LRCLIB, lyrics.ovh e
+//! AcoustID.
 //!
 //! `apply` grava as propostas aceitas via writer::write_tags. Regra do lote
 //! (V3.1): NUNCA apaga dados existentes — campo ausente/vazio na aplicação
@@ -79,7 +96,7 @@ use crate::db::{self, Song};
 use crate::error::Result;
 use crate::fingerprint::{self, Identificacao};
 use crate::lyrics_fetch::{self, ScoredCandidate};
-use crate::vagalume;
+use crate::lyrics_ovh;
 use crate::writer;
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
@@ -178,9 +195,10 @@ pub const FONTE_NOME_ARQUIVO: &str = "nome do arquivo";
 pub const FONTE_IMPRESSAO_DIGITAL: &str = "reconhecimento pelo som";
 /// `fonte` — etapa 3: LRCLIB, com a duração conferida.
 pub const FONTE_LRCLIB: &str = "LRCLIB";
-/// `fonte` — etapa 4: Vagalume, por casamento estrito de texto (não há
-/// duração para conferir).
-pub const FONTE_VAGALUME: &str = "Vagalume";
+/// `fonte` — etapa 4 (V10): lyrics.ovh, a fonte de letra SEM CHAVE. Também
+/// não tem duração para conferir, então vale a MESMA régua estrita do
+/// Vagalume e o MESMO teto de confiança MÉDIA.
+pub const FONTE_LYRICS_OVH: &str = "lyrics.ovh";
 /// `fonte` — etapa 5 (V10): a letra foi ESCRITA ouvindo o áudio. É letra de
 /// máquina, e a tela precisa dizer isso: ela vai para o MP3 com
 /// `TXXX:LETRA_ORIGEM = "transcricao"`, a marca que o curador aprendeu a ler
@@ -199,8 +217,8 @@ pub const ETAPA_NOME_ARQUIVO: &str = "lendo etiquetas e nome do arquivo";
 pub const ETAPA_IMPRESSAO_DIGITAL: &str = "reconhecendo pelo som";
 /// `etapa` — consultando o LRCLIB.
 pub const ETAPA_LRCLIB: &str = "procurando no LRCLIB";
-/// `etapa` — consultando o Vagalume.
-pub const ETAPA_VAGALUME: &str = "procurando no Vagalume";
+/// `etapa` — consultando o lyrics.ovh, que não pede chave nenhuma.
+pub const ETAPA_LYRICS_OVH: &str = "procurando no lyrics.ovh";
 /// `etapa` — escrevendo a letra ouvindo o áudio (V10). Não sai na varredura
 /// da pasta: a etapa 5 é perguntada no FIM e roda por um comando próprio.
 pub const ETAPA_TRANSCRICAO: &str = "escrevendo a letra ouvindo o áudio";
@@ -230,10 +248,11 @@ pub const SEGUNDOS_ETAPA_SOM: u64 = 2;
 /// maioria gasta todos.
 pub const SEGUNDOS_ETAPA_LRCLIB: u64 = 7;
 
-/// Etapa 4 (Vagalume): UMA consulta, ~1,5 s com a cortesia — arredondado para
-/// cima. Ela não roda para todo mundo (exige título E artista reais), então
-/// isto é TETO, e teto é o lado certo de errar numa estimativa.
-pub const SEGUNDOS_ETAPA_VAGALUME: u64 = 2;
+/// Etapa 4 (lyrics.ovh): UMA consulta, ~1,5 s com a cortesia — arredondado
+/// para cima. Ela não roda para todo mundo (exige título E artista reais),
+/// então isto é TETO, e teto é o lado certo de errar numa estimativa.
+pub const SEGUNDOS_ETAPA_LYRICS_OVH: u64 = 2;
+
 
 /// Quais etapas vão de fato rodar NESTA máquina — é isto que a tela lista, e
 /// não o que o produto sabe fazer (DECISIONS #101).
@@ -241,9 +260,8 @@ pub const SEGUNDOS_ETAPA_VAGALUME: u64 = 2;
 pub struct EtapasLigadas {
     /// Etapa 2: o acessório do som está pronto e há chave do AcoustID.
     pub som: bool,
-    /// Etapa 4: há chave do Vagalume (nossa ou do usuário).
-    pub vagalume: bool,
-    /// Etapa 5: o transcritor E o modelo estão prontos.
+    /// Etapa 5 (transcrição): o transcritor E o modelo estão prontos. A etapa
+    /// 4 não tem interruptor — ela não pede chave nenhuma.
     pub transcricao: bool,
 }
 
@@ -274,8 +292,7 @@ pub struct Contagem {
 /// A conta da estimativa, num lugar só.
 fn segundos_da_varredura(total: usize, sem_letra: usize, etapas: EtapasLigadas) -> u64 {
     let por_musica = if etapas.som { SEGUNDOS_ETAPA_SOM } else { 0 };
-    let por_musica_sem_letra =
-        SEGUNDOS_ETAPA_LRCLIB + if etapas.vagalume { SEGUNDOS_ETAPA_VAGALUME } else { 0 };
+    let por_musica_sem_letra = SEGUNDOS_ETAPA_LRCLIB + SEGUNDOS_ETAPA_LYRICS_OVH;
     total as u64 * por_musica + sem_letra as u64 * por_musica_sem_letra
 }
 
@@ -286,9 +303,9 @@ fn nomes_das_etapas(etapas: EtapasLigadas) -> Vec<String> {
         nomes.push(ETAPA_IMPRESSAO_DIGITAL.to_string());
     }
     nomes.push(ETAPA_LRCLIB.to_string());
-    if etapas.vagalume {
-        nomes.push(ETAPA_VAGALUME.to_string());
-    }
+    // a etapa 4 aparece SEMPRE: ela não pede chave, então existe em toda
+    // máquina com internet
+    nomes.push(ETAPA_LYRICS_OVH.to_string());
     nomes
 }
 
@@ -320,9 +337,6 @@ const TETO_COM_IDENTIDADE_DO_SOM: &str = "media";
 /// fila segue (QA A2).
 #[derive(Default)]
 struct EstadoDaVarredura {
-    /// O Vagalume recusou a chave: etapa 4 desligada pelo resto da varredura,
-    /// em vez de reescrever a mesma acusação 95 vezes (DECISIONS #83).
-    chave_recusada: Cell<bool>,
     /// O acessório do som não CONSEGUE RODAR nesta máquina, ou o AcoustID
     /// recusou este aplicativo: etapa 2 desligada pelo resto.
     som_desligado: Cell<bool>,
@@ -501,10 +515,10 @@ pub struct EnrichApply {
     /// Eco do `fonte` da proposta (V8/F18) — o frontend copia o campo da
     /// `EnrichProposal` sem alterar. Só tem efeito quando `lyrics` traz letra
     /// NOVA, e serve a uma coisa só: gravar a procedência certa em
-    /// `TXXX:LETRA_ORIGEM`. `"Vagalume"` (comparado sem distinguir caixa)
-    /// marca a letra como vinda da base comunitária, com o mesmo valor
-    /// `"vagalume"` que o `tools/curadoria.py` grava; qualquer outra fonte
-    /// LIMPA a marca, porque letra oficial não é transcrição.
+    /// `TXXX:LETRA_ORIGEM`. `"lyrics.ovh"` e `"transcrição do áudio"`
+    /// (comparados sem distinguir caixa) marcam a letra com a procedência
+    /// correspondente; qualquer outra fonte LIMPA a marca, porque letra do
+    /// LRCLIB é oficial e não leva marca nenhuma.
     ///
     /// Ausente no JSON = `None` = "não sei de onde veio", tratado como
     /// qualquer-outra-fonte: a marca é limpa, nunca inventada. É por isso que
@@ -1256,7 +1270,6 @@ fn processar_musica<S, C, E>(
     cand: &Candidata,
     fontes: &S,
     origem: Origem,
-    chave_vagalume: &str,
     estado: &EstadoDaVarredura,
     cortesia: &Cortesia,
     cancelled: &C,
@@ -1271,7 +1284,6 @@ where
         cand,
         fontes,
         origem,
-        chave_vagalume,
         estado,
         cortesia,
         cancelled,
@@ -1308,7 +1320,6 @@ fn passar_pelo_funil<S, C, E>(
     cand: &Candidata,
     fontes: &S,
     origem: Origem,
-    chave_vagalume: &str,
     estado: &EstadoDaVarredura,
     cortesia: &Cortesia,
     cancelled: &C,
@@ -1546,69 +1557,53 @@ where
         });
     }
 
-    // --- etapa 4: Vagalume, SÓ onde o LRCLIB veio vazio --------------------
+    // --- etapas 4 e 5: as fontes SEM DURAÇÃO ------------------------------
     //
-    // Quatro condições, as três primeiras herdadas do tools/curadoria.py:
-    // - o LRCLIB não trouxe letra confiável (o funil só passa adiante o que a
-    //   etapa anterior não resolveu) E não falhou (rede caída derruba as duas
-    //   fontes; insistir só gastaria o tempo do usuário);
-    // - há chave (sem chave a etapa é pulada em silêncio);
-    // - há título E artista REAIS para conferir. O Vagalume não tem duração:
-    //   a igualdade de palavras dos dois lados é a única prova que existe, e
-    //   ela precisa de um pedido que já signifique alguma coisa. Palpite de
-    //   nome de arquivo não é isso — mas identidade vinda do SOM é, e é
-    //   justamente por isso que ela vem antes: o que a etapa 2 conquista
-    //   habilita esta aqui;
-    // - a chave ainda não foi recusada nesta varredura (QA MÉDIO-6): chave
-    //   errada não melhora entre uma música e a seguinte, e insistir custa
-    //   meio segundo por arquivo para reescrever a mesma linha de erro 95
-    //   vezes. A primeira reporta; as demais pulam em silêncio, igual ao que
-    //   já acontece quando não há chave nenhuma.
+    // As duas exigem título E artista REAIS para conferir. Nenhuma delas tem
+    // duração: a igualdade de palavras dos dois lados é a única prova que
+    // existe, e ela precisa de um pedido que já signifique alguma coisa.
+    // Palpite de nome de arquivo não é isso — mas identidade vinda do SOM é, e
+    // é justamente por isso que a etapa 2 vem antes: o que ela conquista
+    // habilita estas aqui.
     let (titulo_consulta, artista_consulta) = match &identidade {
         Some(i) => (i.titulo.clone(), i.artista.clone()),
         None => (cand.titulo_tag.clone(), cand.artista_tag.clone()),
     };
     let sem_letra_do_lrclib = erro.is_none() && confianca.is_none();
     let tem_o_que_conferir = !titulo_consulta.is_empty() && !artista_consulta.is_empty();
-    if sem_letra_do_lrclib
-        && !chave_vagalume.trim().is_empty()
-        && tem_o_que_conferir
-        && !estado.chave_recusada.get()
-    {
+
+    // --- etapa 4: lyrics.ovh, SEM CHAVE -----------------------------------
+    //
+    // Ela vem ANTES do Vagalume porque não pede chave: a etapa com chave é a
+    // que quase ninguém alcança (a API do Vagalume está descontinuada e o dono
+    // do produto nunca conseguiu a chave), e pôr a única fonte utilizável
+    // atrás de um pedágio é o mesmo que não tê-la.
+    //
+    // Confiança MÉDIA, nunca ALTA, pelo MESMO motivo do Vagalume: sem duração
+    // não há confirmação independente, e ALTA chega PRÉ-MARCADA (DECISIONS #49).
+    if sem_letra_do_lrclib && tem_o_que_conferir {
         if cancelled() {
             return None;
         }
-        etapa(ETAPA_VAGALUME);
+        etapa(ETAPA_LYRICS_OVH);
         cortesia.esperar();
-        match vagalume::fetch_lyrics_vagalume(
+        match lyrics_ovh::fetch_lyrics_ovh(
             &titulo_consulta,
             &artista_consulta,
-            chave_vagalume,
             &|url| fontes.buscar(url),
             |t, a| !is_placeholder(t) && !is_placeholder(a),
         ) {
-            // A régua estrita garante que o título/artista devolvidos são as
-            // MESMAS palavras do que foi pedido; então a etapa não propõe
-            // trocar nome nenhum — a letra é a mudança inteira.
-            //
-            // Confiança MÉDIA, nunca ALTA, e isso é deliberado: ALTA chega
-            // PRÉ-MARCADA na revisão (DECISIONS #49), e ALTA no resto do
-            // produto significa "a duração confirmou". Aqui não há duração
-            // para confirmar nada (DECISIONS #63) — a prova é só textual, e
-            // foi exatamente esta fonte que uma vez gravou "Ponto de Ogum"
-            // dentro de "Ponto de Oxum". A letra chega, com a fonte visível,
-            // e quem cura dá o clique.
             Ok(Some(m)) => {
                 return Some(EnrichProposal {
                     song_id: cand.song.id,
                     file_path: cand.song.file_path.clone(),
                     current_title: cand.song.title.clone(),
                     current_artist: cand.song.artist.clone(),
-                    proposed_title: titulo_consulta,
-                    proposed_artist: Some(artista_consulta),
+                    proposed_title: titulo_consulta.clone(),
+                    proposed_artist: Some(artista_consulta.clone()),
                     lyrics: Some(m.lyrics),
                     confidence: "media".into(),
-                    fonte: FONTE_VAGALUME.into(),
+                    fonte: FONTE_LYRICS_OVH.into(),
                     has_lyrics: cand.song.has_lyrics,
                     letra_origem: cand.song.letra_origem.clone(),
                     // calculado num lugar só, na saída do `processar_musica`
@@ -1622,15 +1617,12 @@ where
             }
             Ok(None) => {}
             Err(e) => {
-                let msg = e.to_string();
-                // chave recusada é veredito sobre a varredura INTEIRA, não
-                // sobre esta música: registra e desliga a etapa. Um erro
-                // qualquer (fora do ar, "espere um pouco") pode ter sido
-                // soluço, e a música seguinte merece a tentativa.
-                if msg == vagalume::ERRO_CHAVE_RECUSADA {
-                    estado.chave_recusada.set(true);
-                }
-                erro = Some(msg);
+                // Este serviço cai com frequência, e a falha dele é erro DESTA
+                // MÚSICA — nunca desligamento da etapa (a mesma correção do QA
+                // A2 no `fpcalc`). E ela também NÃO derruba o Vagalume:
+                // "lyrics.ovh fora do ar" não diz nada sobre outro serviço, e
+                // encadeá-los faria a queda de um cancelar o outro.
+                erro = Some(e.to_string());
             }
         }
     }
@@ -1821,7 +1813,6 @@ pub fn enrich_scan<S, P, C>(
     conn: &Connection,
     folder_prefix: &str,
     fontes: S,
-    chave_vagalume: &str,
     pausa: Duration,
     on_progress: P,
     cancelled: C,
@@ -1877,8 +1868,7 @@ where
             cand,
             &fontes,
             Origem::Varredura,
-            chave_vagalume,
-            &estado,
+                &estado,
             &cortesia,
             &cancelled,
             |etapa| on_progress(feitas, total, &cand.nome, etapa),
@@ -2115,7 +2105,6 @@ pub fn enrich_scan_song<S, P, C>(
     titulo: Option<&str>,
     artista: Option<&str>,
     fontes: S,
-    chave_vagalume: &str,
     pausa: Duration,
     on_progress: P,
     cancelled: C,
@@ -2148,7 +2137,6 @@ where
         // que o produto sabe fazer por aquele arquivo — inclusive uma segunda
         // opinião sobre a letra que já está lá (QA ALTO-3b, DECISIONS #81)
         Origem::UmaMusica,
-        chave_vagalume,
         &estado,
         &cortesia,
         &cancelled,
@@ -2276,7 +2264,7 @@ fn apply_one(conn: &Connection, ap: &EnrichApply) -> Result<Song> {
     // `transcricao`, o mesmo valor que o `tools/curadoria.py` grava desde a
     // V5/F14 e que o player já sabe exibir como "pode conter erros".
     let origem_declarada = lyrics_novo.and_then(|_| match ap.fonte.as_deref() {
-        Some(f) if f.eq_ignore_ascii_case(FONTE_VAGALUME) => Some(writer::ORIGEM_VAGALUME),
+        Some(f) if f.eq_ignore_ascii_case(FONTE_LYRICS_OVH) => Some(writer::ORIGEM_LYRICS_OVH),
         Some(f) if f == FONTE_TRANSCRICAO => Some(writer::ORIGEM_TRANSCRICAO),
         _ => Some(""),
     });

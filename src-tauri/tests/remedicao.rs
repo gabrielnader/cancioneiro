@@ -239,7 +239,7 @@ fn contrato_com_o_frontend() {
             etapas: enrich::contar(
                 &db::open_in_memory().unwrap(),
                 "",
-                enrich::EtapasLigadas { som: true, vagalume: true, transcricao: true },
+                enrich::EtapasLigadas { som: true, transcricao: true },
             )
             .unwrap()
             .etapas,

@@ -754,7 +754,7 @@ fn write_tags_never_invents_instrumental() {
 // V8/F18 — procedência DECLARADA pelo chamador. O funil sabe de onde a letra
 // veio; o editor do player não sabe e continua no `write_tags` de sempre.
 //
-// `Some("vagalume")` marca `TXXX:LETRA_ORIGEM = "vagalume"` — o mesmo valor
+// `Some("vagalume")` marca `TXXX:LETRA_ORIGEM = "vagalume"` — o valor herdado
 // que o `tools/embed_lyrics.py` grava, porque o dado viaja no MP3 e os dois
 // stacks precisam falar a mesma língua. `Some("")` declara letra oficial sem
 // marca e LIMPA a herdada. Nos dois casos os frames estrangeiros sobrevivem.
@@ -928,4 +928,68 @@ fn write_tags_is_write_tags_com_origem_without_a_declaration() {
     )
     .unwrap();
     assert_eq!(letra_origem(&path), None);
+}
+
+// ---------------------------------------------------------------------------
+// V10 — o valor de procedência do VAGALUME é HERANÇA, e herança não se apaga.
+//
+// A etapa do Vagalume saiu do aplicativo (DECISIONS #110) e nada mais a
+// escreve. Mas o `tools/curadoria.py` a grava, e arquivos do acervo real já a
+// carregam: um valor que este programa não produz mais NÃO é lixo a limpar.
+// "Nunca apagar dado existente" vale para INTERPRETAR dado existente também.
+// ---------------------------------------------------------------------------
+
+/// Gravar título e artista sobre um arquivo marcado `vagalume` PRESERVA a
+/// marca — pela regra da DECISIONS #54 (a marca descreve a letra, e a letra
+/// não mudou). É o caminho de quem aceita só o nome numa revisão.
+#[test]
+fn a_marca_herdada_do_vagalume_sobrevive_a_gravacao_de_nome() {
+    let (_dir, conn, _folder_id) = setup();
+    let song = song_by_suffix(&conn, "com_letra.mp3");
+    let path = PathBuf::from(&song.file_path);
+    const LETRA_HERDADA: &str = "letra que veio da base comunitária";
+
+    // o estado que o `tools/curadoria.py` deixa num arquivo do acervo real: a
+    // letra dele, com a marca dele. (A declaração só vale quando a letra MUDA
+    // — DECISIONS #54 —, então a letra aqui é nova.)
+    writer::write_tags_com_origem(
+        &conn,
+        song.id,
+        "Título Antigo",
+        Some("Artista Antigo"),
+        Some(LETRA_HERDADA),
+        None,
+        None,
+        Some(writer::ORIGEM_VAGALUME),
+    )
+    .unwrap();
+    assert_eq!(letra_origem(&path), Some("vagalume".into()));
+
+    // agora o APLICATIVO grava só NOME, repassando a letra intacta e sem
+    // declarar procedência nenhuma — é o caminho do `enrich::apply` para quem
+    // aceita o título e não mexe na letra.
+    let atualizada = writer::write_tags_com_origem(
+        &conn,
+        song.id,
+        "Título Novo",
+        Some("Artista Novo"),
+        Some(LETRA_HERDADA),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(
+        letra_origem(&path),
+        Some("vagalume".into()),
+        "a marca herdada NÃO é apagada por uma gravação de nome"
+    );
+    assert_eq!(atualizada.letra_origem.as_deref(), Some("vagalume"));
+    assert_eq!(atualizada.title, "Título Novo");
+
+    // e a REINDEXAÇÃO continua lendo o valor do arquivo: ele chega ao banco e
+    // à tela como qualquer outra procedência, sem ninguém precisar conhecê-lo
+    indexer::scan_folder(&conn, song.folder_id, |_, _| {}).unwrap();
+    let relido = song_by_suffix(&conn, "com_letra.mp3");
+    assert_eq!(relido.letra_origem.as_deref(), Some("vagalume"));
 }

@@ -1,77 +1,48 @@
-//! V8/F18 (fase 1) — o Vagalume como SEGUNDA fonte de letra oficial dentro
-//! do app, sempre DEPOIS do LRCLIB e só no que ele não tiver.
+//! **A disciplina do casamento estrito: comparar palavra por palavra quando
+//! não há duração para confirmar.**
 //!
-//! Porte fiel do `tools/curadoria.py` (`buscar_letra_vagalume`,
-//! `_confere_estrito`, `_VAGALUME_TIPO_EXATO`, `_VAGALUME_INDISPONIVEL`).
-//! Existe por medição: no acervo real (94 arquivos de repertório brasileiro
-//! regional/devocional) o LRCLIB cobriu ~3%; o Vagalume é base comunitária
-//! brasileira e cobre justamente esse buraco.
+//! # De onde ela veio, e por que ela sobreviveu ao Vagalume
 //!
-//! # Por que esta fonte é mais rígida que o LRCLIB (DECISIONS #63)
+//! Esta régua nasceu no módulo do Vagalume, que a V10 **removeu** (ver o
+//! cabeçalho do `lyrics_ovh` e a DECISIONS #110). Ela não saiu com ele porque
+//! ela não é dele: **fonte de letra sem duração é uma CATEGORIA**, e o
+//! `lyrics.ovh` está exatamente nela.
 //!
-//! A API do Vagalume **não tem campo de duração**. A trava que sustenta todo
-//! o resto do funil (±3 s = ALTA, >15 s desqualifica) simplesmente não existe
-//! aqui. A única prova disponível é textual, e por isso ela é exigida dos
-//! DOIS lados e por uma régua PRÓPRIA e estrita — as mesmas palavras, na
-//! mesma ordem, sem contenção —, NÃO pela similaridade do LRCLIB: aquela foi
-//! afrouxada justamente porque lá a duração confirma o casamento.
+//! A trava que sustenta o resto do funil — ±3 s = ALTA, >15 s desqualifica —
+//! depende de a fonte devolver a DURAÇÃO da gravação. O LRCLIB devolve; o
+//! AcoustID devolve. Quando a fonte não devolve, a única prova disponível é
+//! textual, e ela tem de ser exigida por uma régua PRÓPRIA e estrita: as
+//! mesmas palavras, na mesma ordem, sem contenção. **Nunca** pela similaridade
+//! do `lyrics_fetch`, que foi afrouxada justamente porque lá a duração
+//! confirma o casamento.
+//!
+//! # O incidente que a comprou (DECISIONS #63)
 //!
 //! Sob a régua frouxa o QA mediu colisões graves: "Ponto de Oxum" x "Ponto de
 //! Ogum" (0,923), "Ponto de Iansã" x "Ponto de Iemanjá" (0,867), "Cantiga" x
 //! "Cantigas" (0,933); e a contenção aceitava "A Volta da Asa Branca" para
 //! "Asa Branca". Uma rodada de QA pegou a implementação gravando a letra de
-//! "Ponto de Ogum" dentro de um arquivo "Ponto de Oxum" — com a marca de
-//! letra OFICIAL. Daí as três travas desta fonte:
+//! "Ponto de Ogum" dentro de um arquivo "Ponto de Oxum" — com a marca de letra
+//! OFICIAL.
 //!
-//! 1. só `type: "exact"` é aceito — `"aprox"` é literalmente a API dizendo
-//!    "isto NÃO é a música que você pediu, é a mais parecida que eu tenho",
-//!    e resposta SEM `type` não traz veredito nenhum;
-//! 2. título E artista conferidos por igualdade de palavras significativas;
-//! 3. sem título E artista para conferir, não se consulta (foi um casamento
-//!    sem prova — "Lampejo" com uma faixa do Roberto Carlos — que ensinou
-//!    isso ao projeto).
+//! # O desescape de HTML mora aqui pelo mesmo motivo
 //!
-//! # A chave da API
-//!
-//! Gratuita, do usuário, entra por PARÂMETRO. Ela nunca entra no banco de
-//! músicas nem em log, nenhuma mensagem de erro deste módulo a inclui, e ela
-//! não é enviada a lugar nenhum além do próprio Vagalume: aparece num lugar
-//! só, a query string da consulta. Fica GUARDADA nas preferências locais do
-//! aplicativo, na máquina da própria pessoa — mandar ~40 curadores sem
-//! suporte redigitar uma chave de API a cada sessão seria pior do que
-//! guardá-la. Sem chave, a etapa é pulada em silêncio (`Ok(None)`, zero rede)
-//! e o resto do funil segue igual.
+//! A tabela de 120 entidades existe porque o outro lado do produto usa o
+//! `html.unescape` do Python sobre o MESMO texto vindo da MESMA base. O que os
+//! dois decodificarem diferente vira diferença DENTRO do arquivo de música: a
+//! tabela curta que existia antes não tinha uma única vogal acentuada, e
+//! `Cora&ccedil;&atilde;o` entrava literal no quadro USLT e no índice de busca
+//! do player enquanto o `tools/curadoria.py` gravava "Coração"
+//! (DECISIONS #89).
 //!
 //! # Normalização Unicode
 //!
-//! O lado Python normaliza para NFC antes de enviar (o macOS entrega NFD em
-//! nome de arquivo). Aqui o texto enviado vem sempre das TAGS ID3 lidas pelo
-//! lofty, e a comparação passa por `fold_pt`, que dá a MESMA chave para NFC e
-//! NFD — então a régua nunca erra por causa de forma de composição. O que
-//! pode acontecer, no limite, é uma tag NFD não ser encontrada pela API; o
+//! A comparação passa por `fold_pt`, que dá a MESMA chave para NFC e NFD —
+//! então a régua nunca erra por causa de forma de composição. O que pode
+//! acontecer, no limite, é uma tag NFD não ser encontrada pela fonte; o
 //! resultado é uma busca a menos, nunca uma letra errada.
 
-use crate::error::Result;
-use crate::lyrics_fetch::{norm, percent_encode, similarity};
-
-/// Endereço da busca. Junto com o do LRCLIB, é um dos DOIS únicos destinos
-/// de rede de todo o produto.
-pub const SEARCH_URL: &str = "https://api.vagalume.com.br/search.php";
-
-/// A API responde por tipo. `"exact"` é a ÚNICA resposta aproveitável.
-const TIPO_EXATO: &str = "exact";
-
-/// Mensagem (pt-BR) de chave recusada pela API — a chave foi digitada errada
-/// ou copiada pela metade, e nenhuma consulta desta varredura vai passar.
-///
-/// Ela é PRODUZIDA pelo fetcher real (`commands::funil_fetcher`, o único que
-/// enxerga o status HTTP) e RECONHECIDA pelo funil (`enrich`), que ao vê-la
-/// desliga a etapa do Vagalume pelo resto da varredura em vez de repetir a
-/// mesma rejeição em 95 linhas. O acoplamento pelo texto é deliberado: o
-/// fetcher é injetável — é assim que a suíte roda sem rede — e a mensagem é
-/// o único canal que atravessa a injeção.
-pub const ERRO_CHAVE_RECUSADA: &str =
-    "a chave do Vagalume foi recusada — confira se copiou a chave inteira";
+use crate::lyrics_fetch::norm;
 
 /// Texto de "não temos esta letra" que a base comunitária às vezes devolve no
 /// lugar da letra. Comparado sobre a chave normalizada (sem acento, sem
@@ -105,21 +76,8 @@ const INDISPONIVEL: &[&str] = &[
 /// estiver aqui é palavra que distingue.
 const CONECTIVOS: &[&str] = &["e", "y", "and", "feat", "ft", "featuring"];
 
-/// Letra aprovada pela régua estrita, com os nomes que a base devolveu.
-///
-/// `matched_title`/`matched_artist` existem para a UI poder MOSTRAR de onde a
-/// letra veio; o enriquecimento NÃO os propõe como título/artista novos — a
-/// régua garante que são as mesmas palavras do que já está no arquivo, e
-/// trocar a grafia curada de alguém não é trabalho desta etapa.
-#[derive(Debug, Clone)]
-pub struct VagalumeMatch {
-    pub lyrics: String,
-    pub matched_title: String,
-    pub matched_artist: String,
-}
-
 /// Palavras significativas de um texto: chave normalizada sem os conectivos.
-fn palavras_significativas(texto: &str) -> Vec<String> {
+pub fn palavras_significativas(texto: &str) -> Vec<String> {
     norm(texto)
         .split_whitespace()
         .filter(|p| !CONECTIVOS.contains(p))
@@ -127,7 +85,10 @@ fn palavras_significativas(texto: &str) -> Vec<String> {
         .collect()
 }
 
-/// Casamento do VAGALUME: as MESMAS palavras, na mesma ordem.
+/// Casamento das fontes SEM DURAÇÃO: as MESMAS palavras, na mesma ordem.
+///
+/// **Esta é A régua, e ela é uma só** — toda fonte sem duração usa esta
+/// função, não uma cópia (DECISIONS #80).
 ///
 /// Passa: acento, caixa, pontuação e conectivo ("&" x "y" x "e").
 /// Não passa: qualquer palavra a mais, a menos ou trocada.
@@ -135,7 +96,7 @@ fn palavras_significativas(texto: &str) -> Vec<String> {
 /// Única flexibilidade, e do lado do PEDIDO: tag de título no formato
 /// "Artista - Título" (visto no acervo real) vale também por cada segmento do
 /// traço — mas por IGUALDADE de palavras, nunca por contenção.
-fn confere_estrito(pedido: &str, devolvido: &str) -> bool {
+pub fn confere_estrito(pedido: &str, devolvido: &str) -> bool {
     let alvo = palavras_significativas(devolvido);
     if alvo.is_empty() {
         return false;
@@ -150,7 +111,7 @@ fn confere_estrito(pedido: &str, devolvido: &str) -> bool {
 
 /// Quebra o pedido nos traços cercados de espaço (`\s+[-–—]\s+` do Python):
 /// hífen, meia-risca e travessão.
-fn segmentos_do_traco(pedido: &str) -> Vec<&str> {
+pub fn segmentos_do_traco(pedido: &str) -> Vec<&str> {
     let mut partes = Vec::new();
     let mut inicio = 0usize;
     let bytes: Vec<(usize, char)> = pedido.char_indices().collect();
@@ -175,7 +136,7 @@ fn segmentos_do_traco(pedido: &str) -> Vec<&str> {
 }
 
 /// True quando o "texto" devolvido é um recado da base, não a letra.
-fn letra_indisponivel(letra: &str) -> bool {
+pub fn letra_indisponivel(letra: &str) -> bool {
     let chave = norm(letra);
     INDISPONIVEL.iter().any(|marca| chave.contains(marca))
 }
@@ -241,7 +202,7 @@ const NOMEADAS: &[(&str, char)] = &[
 /// no índice de busca do player. Cobre as `NOMEADAS` mais as numéricas
 /// (decimais e hexadecimais); entidade desconhecida fica como está, que é o
 /// comportamento seguro E o do Python — nunca some texto do usuário.
-fn unescape_html(texto: &str) -> String {
+pub fn unescape_html(texto: &str) -> String {
     if !texto.contains('&') {
         return texto.to_string();
     }
@@ -289,122 +250,6 @@ fn unescape_html(texto: &str) -> String {
     }
     out.push_str(resto);
     out
-}
-
-/// Letra do Vagalume para um título+artista JÁ conhecidos (tag real ou
-/// identificação confirmada). Devolve `Ok(None)` para "não temos" e `Err` só
-/// para falha de rede — que o lote transforma em erro POR MÚSICA.
-///
-/// `keep(titulo, artista)` é o mesmo filtro de placeholder que o LRCLIB usa
-/// (`query_best`), aplicado aos DOIS lados: no PEDIDO (tag de ripador não vira
-/// consulta — nem gasta rede) e em cada entrada da RESPOSTA.
-///
-/// Entre as entradas que passam a régua, vence a MELHOR (igualdade literal do
-/// título primeiro, depois similaridade), não a primeira da lista: `mus` é uma
-/// lista e a exata pode vir atrás de uma variação.
-pub fn fetch_lyrics_vagalume<F, K>(
-    title: &str,
-    artist: &str,
-    api_key: &str,
-    fetch: &F,
-    keep: K,
-) -> Result<Option<VagalumeMatch>>
-where
-    F: Fn(&str) -> Result<String>,
-    K: Fn(&str, &str) -> bool,
-{
-    // 1. sem chave: etapa pulada em silêncio, zero rede
-    let api_key = api_key.trim();
-    if api_key.is_empty() {
-        return Ok(None);
-    }
-    // 2. sem os DOIS lados não há o que conferir: não se consulta
-    let (title, artist) = (title.trim(), artist.trim());
-    if title.is_empty() || artist.is_empty() {
-        return Ok(None);
-    }
-    // 3. tag de ripador não identifica nada: não se consulta
-    if !keep(title, artist) {
-        return Ok(None);
-    }
-
-    let url = format!(
-        "{SEARCH_URL}?art={}&mus={}&apikey={}",
-        percent_encode(artist),
-        percent_encode(title),
-        percent_encode(api_key)
-    );
-    let body = fetch(&url)?;
-
-    // Corpo vazio/inválido/fora de forma = "não temos" (nunca erro): a base
-    // responde 404 com corpo vazio para música que não conhece, e uma página
-    // de manutenção não é motivo para marcar a música como falha de rede.
-    let Ok(dados) = serde_json::from_str::<serde_json::Value>(&body) else {
-        return Ok(None);
-    };
-    let Some(dados) = dados.as_object() else {
-        return Ok(None);
-    };
-
-    // `aprox` é a API dizendo que devolveu OUTRA música; sem `type` não há
-    // veredito nenhum em que se apoiar.
-    if dados.get("type").and_then(|v| v.as_str()) != Some(TIPO_EXATO) {
-        return Ok(None);
-    }
-
-    let artista_res = dados
-        .get("art")
-        .and_then(|v| v.get("name"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    let Some(musicas) = dados.get("mus").and_then(|v| v.as_array()) else {
-        return Ok(None);
-    };
-
-    let mut melhor: Option<((u8, f64), VagalumeMatch)> = None;
-    for musica in musicas {
-        let Some(musica) = musica.as_object() else {
-            continue;
-        };
-        let titulo_res = musica
-            .get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim()
-            .to_string();
-        let letra = unescape_html(musica.get("text").and_then(|v| v.as_str()).unwrap_or(""))
-            .trim()
-            .to_string();
-        if letra.is_empty() || letra_indisponivel(&letra) {
-            continue;
-        }
-        if !keep(&titulo_res, &artista_res) {
-            continue;
-        }
-        if !(confere_estrito(title, &titulo_res) && confere_estrito(artist, &artista_res)) {
-            continue;
-        }
-        let nota = (
-            u8::from(norm(title) == norm(&titulo_res)),
-            similarity(title, &titulo_res),
-        );
-        let melhor_ate_agora = melhor
-            .as_ref()
-            .is_none_or(|(n, _)| nota.0 > n.0 || (nota.0 == n.0 && nota.1 > n.1));
-        if melhor_ate_agora {
-            melhor = Some((
-                nota,
-                VagalumeMatch {
-                    lyrics: letra,
-                    matched_title: titulo_res,
-                    matched_artist: artista_res.clone(),
-                },
-            ));
-        }
-    }
-    Ok(melhor.map(|(_, m)| m))
 }
 
 #[cfg(test)]
