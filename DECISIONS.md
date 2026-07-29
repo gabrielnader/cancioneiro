@@ -635,3 +635,69 @@ opção mais simples que passa nos Acceptance Checks do PRD.
     prova de duração, o produto adia em vez de marcar instrumental por engano.
     O custo de manter é um `if`; o custo de remover seria descobrir o
     contrário dentro do arquivo de alguém.
+109. **A fonte de letra SEM CHAVE vem antes da fonte com chave — e Genius e
+    Musixmatch foram recusadas por nome.** O `lyrics.ovh` entrou como etapa 4
+    porque não pede credencial nenhuma. Pôr uma fonte sem chave DEPOIS de uma
+    com chave é o mesmo que não tê-la: a etapa com chave é a que quase ninguém
+    alcança, e quem cura são ~40 pessoas que não sabem o que é uma chave de
+    API.
+    **Isto não promete cobertura**, e nenhum texto pode sugerir que promete: o
+    LRCLIB cobriu ~3% do acervo real e esta fonte não muda essa ordem de
+    grandeza — ela entra para eliminar a EXIGÊNCIA DE CHAVE. Quem resolve este
+    repertório é a transcrição.
+    As duas fontes recusadas, com nome e motivo, para ninguém reabrir a
+    discussão em seis meses lendo o mesmo blog: **Genius** não devolve letra
+    pela API (licenciamento — só metadados e a URL da página), e o plano
+    gratuito da **Musixmatch** devolve um trecho truncado de ~30% da letra.
+    Num app cujo propósito é achar música por um pedaço lembrado, indexar 30%
+    é pior que não indexar: a busca falha e a pessoa conclui que a música não
+    está lá.
+    **A fraqueza do `lyrics.ovh` está escrita onde ela mora**: ele não devolve
+    título nem artista, então não há segundo lado a conferir — nem o
+    `type: "exact"` do Vagalume, nem nomes para a régua estrita comparar. Se o
+    serviço fizer casamento aproximado por dentro, ele pode devolver a letra de
+    "Ponto de Ogum" para um pedido de "Ponto de Oxum" **e o programa não tem
+    como perceber**. É a única etapa do funil cujo casamento não é verificável
+    por nós. O que compensa é pouco, e de propósito: só se consulta com título
+    E artista REAIS, título COMPOSTO ("Adventício - Lampejo") é recusado
+    (sem resposta verificável não se adivinha qual metade é o título), o teto é
+    MÉDIA — então a linha nunca chega pré-marcada — e a proposta não troca nome
+    nenhum. **A prova, aqui, é o olho de quem revisa.**
+110. **O Vagalume foi REMOVIDO, não desligado — porque código nunca exercitado
+    contra a realidade é pior que código ausente.** A API está descontinuada e
+    sem suporte oficial, o dono do produto nunca conseguiu a chave, e o módulo
+    **nunca rodou contra o serviço real**: dezenas de testes verdes com o
+    `fetch` injetado e zero contato com o serviço. É a MESMA forma de confiança
+    falsa da decisão 92 (quatro suítes verdes, aplicativo congelando) e da 98
+    (a especificação certa, o código certo, e o passo que ligava os dois nunca
+    escrito). Suíte verde mede o que a suíte alcança.
+    "Não remova, só deixe de ser o caminho padrão" foi recusado como reflexo de
+    custo afundado. **Existir custa mais que zero**: um campo de chave de API
+    numa tela para 40 pessoas leigas, um parágrafo explicando o campo, um
+    destino na lista de pontos de rede enumerados, e atrito em toda
+    refatoração — o mock e o Rust tiveram de ser realinhados sobre o gating do
+    Vagalume duas vezes na mesma semana. E não se perde nada: está no histórico
+    do git.
+    O ganho de produto é maior que a subtração: **nenhuma etapa do funil exige
+    credencial do usuário.** Sobrou a chave do AcoustID, que é NOSSA e vem
+    compilada (modelo por-aplicativo deles). A tela de configuração perde o
+    campo e o texto que o explicava. Há teste que falha se alguém acrescentar
+    um parâmetro de credencial a qualquer comando do funil.
+    **O que ficou, e é o que importava**: a disciplina do casamento estrito
+    mudou de casa (`casamento_estrito.rs`) em vez de sair com o módulo. Régua
+    de palavra por palavra, segmentos do traço, as 120 entidades HTML, a lista
+    de "ainda não temos a letra" — tudo isso nasceu no Vagalume mas não é dele:
+    **fonte de letra sem duração é uma CATEGORIA**, e o `lyrics.ovh` está nela.
+    Os seis testes da régua vieram inteiros; só os do transporte saíram.
+    **E a leitura da procedência antiga fica.** O `tools/curadoria.py` grava
+    `TXXX:LETRA_ORIGEM=vagalume`, e arquivos do acervo real já a carregam:
+    nada mais a escreve, e nada a apaga. "Nunca apagar dado existente" vale
+    para INTERPRETAR dado existente também — um valor que o programa não
+    produz mais não é lixo a limpar.
+    **O `tools/curadoria.py` fica como está**, e o cálculo é outro: ele é
+    ferramenta de terminal do dono do produto, não vai para as 40 máquinas, a
+    chave vem de variável de ambiente e não de tela, e — o argumento decisivo —
+    **ele é o oráculo do porte**. Metade dos comentários do Rust cita o Python
+    como a referência contra a qual a régua foi conferida caso a caso; apagar o
+    original transformaria cada um desses comentários numa afirmação que
+    ninguém pode mais verificar.
