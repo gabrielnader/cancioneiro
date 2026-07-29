@@ -238,12 +238,22 @@ pub fn impressao_digital(
     // a máquina de quem mandou PARAR.
     let Some(status) = status else {
         let _ = filho.kill();
-        let _ = filho.wait(); // colhe o zumbi; os canos fecham e as threads saem
-        let _ = lendo_saida.map(std::thread::JoinHandle::join);
-        let _ = lendo_erro.map(std::thread::JoinHandle::join);
+        let _ = filho.wait(); // colhe o zumbi
+        // As threads de dreno NÃO são esperadas aqui, e isto é deliberado:
+        // matar o filho nem sempre fecha os canos. Se ele tiver deixado um
+        // NETO com a ponta de escrita na mão, o `read_to_end` fica pendurado
+        // até o neto morrer — e esperar por isso devolveria ao "Cancelar"
+        // exatamente a demora que esta correção veio tirar (medido: 30 s num
+        // teste com o filho embrulhado em shell). Elas terminam sozinhas
+        // quando o cano fechar; até lá estão paradas numa leitura, sem
+        // consumir CPU, e o que leram é descartado.
+        drop(lendo_saida);
+        drop(lendo_erro);
         return Err(AppError(ERRO_FPCALC.into()));
     };
 
+    // No caminho normal a espera é obrigatória: é dela que sai o JSON. O
+    // filho já terminou, então os canos já fecharam.
     let saida = lendo_saida
         .map(std::thread::JoinHandle::join)
         .transpose()
@@ -990,6 +1000,13 @@ exit 0
     /// Um `fpcalc` travado segurava a varredura por 120 s sem consultar o
     /// cancelamento uma única vez: quem clicasse em "Cancelar" ficava dois
     /// minutos olhando para um botão que não respondia.
+    ///
+    /// O falso é um shell que chama `sleep`, e isso é de PROPÓSITO: matar o
+    /// filho não fecha os canos quando existe um NETO segurando a ponta de
+    /// escrita, e esperar as threads de dreno nesse caso trazia a demora toda
+    /// de volta (30 s medidos, com o teste passando por acaso quando a suíte
+    /// rodava inteira e falhando sozinho). É a forma mais fiel ao que
+    /// acontece quando um decodificador chama uma ferramenta auxiliar.
     #[cfg(unix)]
     #[test]
     fn cancelar_interrompe_a_leitura_do_som_sem_esperar_o_teto() {
