@@ -1105,7 +1105,7 @@ where
     // Roda também para INSTRUMENTAL: ela dá título e artista sem encostar em
     // letra — é o oposto das etapas de letra, e "instrumental sem letra ainda
     // pode (e deve) ter título e artista corretos" (PRD V8).
-    let mut identidade: Option<(String, String, &'static str)> = None;
+    let mut identidade: Option<IdentidadeDoSom> = None;
     let mut duracao_provada: Option<f64> = None;
 
     let som_disponivel =
@@ -1174,7 +1174,7 @@ where
                             p.conflito = Some(conflito);
                             return Some(p);
                         }
-                        identidade = Some(identidade_util(cand, &id));
+                        identidade = identidade_do_som(cand, &id);
                     }
                     Ok(None) => {}
                     Err(e) => {
@@ -1273,7 +1273,7 @@ where
         // LRCLIB devolveu: a autoridade sobre a identidade é a impressão
         // digital, e uma segunda fonte de nome só criaria divergência.
         let (titulo_prop, artista_prop) = match &identidade {
-            Some((t, a, _)) => (t.clone(), a.clone()),
+            Some(i) => (i.titulo.clone(), i.artista.clone()),
             None => (b.matched_title.clone(), b.matched_artist.clone()),
         };
         return Some(EnrichProposal {
@@ -1318,7 +1318,7 @@ where
     //   vezes. A primeira reporta; as demais pulam em silêncio, igual ao que
     //   já acontece quando não há chave nenhuma.
     let (titulo_consulta, artista_consulta) = match &identidade {
-        Some((t, a, _)) => (t.clone(), a.clone()),
+        Some(i) => (i.titulo.clone(), i.artista.clone()),
         None => (cand.titulo_tag.clone(), cand.artista_tag.clone()),
     };
     let sem_letra_do_lrclib = erro.is_none() && confianca.is_none();
@@ -1404,36 +1404,80 @@ fn conflito_com_a_etiqueta(cand: &Candidata, id: &Identificacao) -> Option<Confl
     })
 }
 
-/// A identidade APROVEITÁVEL de uma identificação sem conflito: regra da
-/// V3.1, só preenche campo vazio ou placeholder. Etiqueta REAL é preservada
-/// em qualquer confiança — palpite vindo do áudio não encosta em trabalho de
-/// curador (DECISIONS #53), e o `identificar` do Python faz o mesmo.
-fn identidade_util(cand: &Candidata, id: &Identificacao) -> (String, String, &'static str) {
-    let titulo = if cand.titulo_escrito().is_empty() {
-        id.titulo.clone()
-    } else {
-        cand.titulo_escrito().to_string()
-    };
-    let artista = if cand.artista_tag.is_empty() {
-        id.artista.clone()
-    } else {
-        cand.artista_tag.clone()
-    };
-    (titulo, artista, id.confianca)
+/// O que o SOM acrescentou a esta música, e o que continua sendo etiqueta.
+///
+/// A distinção é o achado do QA M5. `titulo`/`artista` são os valores que
+/// seguem adiante — regra da V3.1: o som só preenche campo vazio ou
+/// placeholder, etiqueta REAL é preservada em qualquer confiança, porque
+/// palpite vindo do áudio não encosta em trabalho de curador
+/// (DECISIONS #53). Mas *quais deles vieram do som* muda o que o resto do
+/// funil pode concluir, e o funil vinha tratando os dois casos como um só.
+struct IdentidadeDoSom {
+    titulo: String,
+    artista: String,
+    confianca: &'static str,
+    /// O TÍTULO é o que o som disse (o campo estava vazio ou era
+    /// placeholder). É a única condição que autoriza cortar a cascata de
+    /// palpites: a consulta ao LRCLIB gira em torno do título, e um título de
+    /// etiqueta no formato "Adventício - Lampejo" ainda precisa da quebra em
+    /// título/artista que o `gerar_palpites` faz.
+    titulo_do_som: bool,
+}
+
+/// A identidade APROVEITÁVEL de uma identificação sem conflito, ou `None`
+/// quando o som não acrescentou NADA.
+///
+/// `None` é o coração da correção do QA M5: quando as duas etiquetas já eram
+/// reais, o que esta função devolvia era um `Some` com os valores da própria
+/// etiqueta — e todo o resto do funil lê `Some` como "temos o nome
+/// verdadeiro, vindo do som". Resultado: a cascata virava um palpite só e a
+/// letra achada levava o teto MÉDIA, tirando a pré-marcação de uma ALTA que
+/// não tinha risco nenhum (o nome não veio do áudio, veio da etiqueta que já
+/// estava no arquivo). Quem baixava o acessório achava MENOS letras e
+/// precisava de MAIS cliques — o oposto do que a tela promete ao oferecer o
+/// download.
+///
+/// Com `None`, o funil se comporta exatamente como o de quem não tem o
+/// acessório. A única coisa que a etapa 2 deixa para trás nesse caso é a
+/// `duracao_provada`, que é ganho puro.
+fn identidade_do_som(cand: &Candidata, id: &Identificacao) -> Option<IdentidadeDoSom> {
+    let titulo_do_som = cand.titulo_escrito().is_empty();
+    let artista_do_som = cand.artista_tag.is_empty();
+    if !titulo_do_som && !artista_do_som {
+        return None; // o som só confirmou o que a etiqueta já dizia
+    }
+    Some(IdentidadeDoSom {
+        titulo: if titulo_do_som {
+            id.titulo.clone()
+        } else {
+            cand.titulo_escrito().to_string()
+        },
+        artista: if artista_do_som {
+            id.artista.clone()
+        } else {
+            cand.artista_tag.clone()
+        },
+        confianca: id.confianca,
+        titulo_do_som,
+    })
 }
 
 /// Os palpites que as etapas de letra recebem.
 ///
-/// Com identidade vinda do som: UM palpite, o verdadeiro. Sem ela: a cascata
-/// local de até sete do `gerar_palpites`, que continua sendo o caminho de
-/// quem o AcoustID não reconheceu — a maioria.
+/// Com o TÍTULO vindo do som: UM palpite, o verdadeiro — é a economia de até
+/// seis idas à rede que o PRD V9 promete. Senão: a cascata local de até sete
+/// do `gerar_palpites`, que continua sendo o caminho de quem o AcoustID não
+/// reconheceu (a maioria) **e também de quem tem título de etiqueta e ganhou
+/// só o artista do som** (QA M5): o artista ter vindo do áudio não torna
+/// verdadeiro um título que ainda é "Adventício - Lampejo", e é a quebra
+/// dele em título/artista que acha a letra desse arquivo.
 fn palpites_de_letra(
     cand: &Candidata,
-    identidade: &Option<(String, String, &'static str)>,
+    identidade: &Option<IdentidadeDoSom>,
 ) -> Vec<(String, String)> {
     match identidade {
-        Some((titulo, artista, _)) => vec![(titulo.clone(), artista.clone())],
-        None => gerar_palpites(&cand.nome, &cand.titulo_tag, &cand.artista_tag),
+        Some(i) if i.titulo_do_som => vec![(i.titulo.clone(), i.artista.clone())],
+        _ => gerar_palpites(&cand.nome, &cand.titulo_tag, &cand.artista_tag),
     }
 }
 
@@ -1441,7 +1485,7 @@ fn palpites_de_letra(
 /// descobriu alguma coisa, ou o palpite local de sempre.
 fn proposta_da_identidade(
     cand: &Candidata,
-    identidade: Option<(String, String, &'static str)>,
+    identidade: Option<IdentidadeDoSom>,
     erro: Option<String>,
 ) -> EnrichProposal {
     let mut p = proposta_baixa(cand, erro);
@@ -1450,7 +1494,13 @@ fn proposta_da_identidade(
     if p.error.is_some() {
         return p;
     }
-    if let Some((titulo, artista, confianca)) = identidade {
+    if let Some(IdentidadeDoSom {
+        titulo,
+        artista,
+        confianca,
+        ..
+    }) = identidade
+    {
         // Só vira proposta se MUDA alguma coisa, pela mesma noção de campo
         // efetivo que o resto do módulo usa; senão o `e_no_op` a derruba de
         // qualquer jeito e a confiança alta só faria a linha aparecer

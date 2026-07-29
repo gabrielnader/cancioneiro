@@ -3951,3 +3951,138 @@ fn a_linha_de_conflito_nao_avisa_substituicao() {
     assert!(p.conflito.is_some());
     assert!(!p.substitui_nome_escrito, "conflito não propõe troca");
 }
+
+// ---------------------------------------------------------------------------
+// QA M5 — instalar o acessório não pode PIORAR o resultado
+//
+// `identidade_util` devolvia os valores DA ETIQUETA quando ela era real, mas
+// devolvia-os dentro de um `Some` — e o resto do funil lê esse `Some` como
+// "temos o nome verdadeiro, vindo do som". Duas consequências, as duas na
+// direção errada: a cascata de palpites virava UM palpite (perdendo a quebra
+// de "Adventício - Lampejo" em título e artista) e a letra achada levava o
+// teto de confiança MÉDIA, tirando a pré-marcação de uma ALTA que não tinha
+// nada de arriscado — o nome não veio do som, veio da etiqueta que já estava
+// lá. A máquina que baixou o acessório achava MENOS letras e pedia MAIS
+// cliques, que é o oposto do que a tela promete ao oferecer o download.
+// ---------------------------------------------------------------------------
+
+/// Quando o som não acrescenta NADA — a etiqueta já era real e a
+/// identificação só a confirma —, o resultado tem de ser idêntico ao de quem
+/// não baixou o acessório. É a régua inteira em uma frase.
+#[test]
+fn identidade_que_so_ecoa_a_etiqueta_nao_muda_nada_no_funil() {
+    let letra_de = |dur: f64| {
+        format!(
+            r#"[{{"trackName": "Asa Branca", "artistName": "Luiz Gonzaga",
+                 "duration": {dur}, "plainLyrics": "quando olhei a terra ardendo"}}]"#
+        )
+    };
+
+    // COM som: a etiqueta é real dos dois lados e o AcoustID confirma os
+    // mesmos nomes
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "musica.mp3")]);
+    let (_song, dur) = com_etiquetas(&conn, "musica.mp3", "Asa Branca", Some("Luiz Gonzaga"));
+    let urls_com = RefCell::new(Vec::new());
+    let letra = letra_de(dur);
+    let com_som = scan_com(
+        &conn,
+        enrich::Modo::Completar,
+        ComSom::nova(
+            roteador(
+                &urls_com,
+                &acoustid(0.95, "Asa Branca", "Luiz Gonzaga", dur),
+                &letra,
+                "{}",
+            ),
+            dur,
+        ),
+        SEM_CHAVE,
+    );
+
+    // SEM som: o mesmo arquivo, o mesmo LRCLIB, sem acessório nenhum
+    let (_dir2, conn2, _f2) = setup_with(&[("sem_letra.mp3", "musica.mp3")]);
+    let (_s2, dur2) = com_etiquetas(&conn2, "musica.mp3", "Asa Branca", Some("Luiz Gonzaga"));
+    assert!((dur - dur2).abs() < 1e-9, "as duas fixtures têm a mesma duração");
+    let sem_som = scan_props(&conn2, "", |_url: &str| Ok(letra_de(dur2)));
+
+    assert_eq!(com_som.len(), 1);
+    assert_eq!(sem_som.len(), 1);
+    let (c, s) = (&com_som[0], &sem_som[0]);
+    assert_eq!(c.lyrics, s.lyrics, "a letra achada é a mesma");
+    assert_eq!(
+        c.confidence, s.confidence,
+        "e a confiança também: o teto do som não se aplica a nome de etiqueta"
+    );
+    assert_eq!(c.confidence, "alta", "a duração confirmou, como sempre");
+    assert_eq!(c.proposed_title, s.proposed_title);
+    assert_eq!(c.proposed_artist, s.proposed_artist);
+}
+
+/// Título que é a etiqueta ("Adventício - Lampejo") continua rendendo a
+/// CASCATA — a quebra em título/artista é justamente o que acha a letra desse
+/// arquivo. O som ter preenchido o artista não torna o título verdadeiro.
+#[test]
+fn artista_vindo_do_som_nao_reduz_a_cascata_de_palpites_do_titulo() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "musica.mp3")]);
+    // título REAL, mas no formato "Artista - Título"; artista vazio
+    let (_song, dur) = com_etiquetas(&conn, "musica.mp3", "Adventício - Lampejo", None);
+    let urls = RefCell::new(Vec::new());
+    let props = scan_com(
+        &conn,
+        enrich::Modo::Completar,
+        ComSom::nova(
+            // o som identifica "Lampejo" (contido no título: não é conflito)
+            // e traz o artista que faltava
+            roteador(&urls, &acoustid(0.95, "Lampejo", "Adventício", dur), "[]", "{}"),
+            dur,
+        ),
+        SEM_CHAVE,
+    );
+
+    let lrclib = urls_para(&urls, cancioneiro_lib::lyrics_fetch::SEARCH_URL);
+    assert!(
+        lrclib.len() > 1,
+        "a cascata continua: o título ainda é a etiqueta, não o som — {lrclib:?}"
+    );
+    // a consulta é "{título} {artista}": o palpite quebrado pede "Lampejo"
+    // como TÍTULO, que é o que acha a letra deste arquivo
+    assert!(
+        lrclib.iter().any(|u| u.contains("q=Lampejo")),
+        "e a quebra em título/artista está entre os palpites: {lrclib:?}"
+    );
+    assert_eq!(props.len(), 1);
+}
+
+/// E o caso que o teto existe para proteger continua protegido: quando o
+/// TÍTULO veio do som, é um palpite só e a confiança é MÉDIA.
+#[test]
+fn titulo_vindo_do_som_ainda_rende_um_palpite_so_e_teto_media() {
+    let (_dir, conn, _f) = setup_with(&[("sem_tags.mp3", "Falamansa - Oh! Chuva.mp3")]);
+    let song = song_by_suffix(&conn, "Oh! Chuva.mp3");
+    let dur = song.duration_seconds.unwrap() as f64;
+    let urls = RefCell::new(Vec::new());
+    let letra = format!(
+        r#"[{{"trackName": "Viver Feliz", "artistName": "Nilson Chaves",
+             "duration": {dur}, "plainLyrics": "a letra certa"}}]"#
+    );
+    let props = scan_com(
+        &conn,
+        enrich::Modo::Completar,
+        ComSom::nova(
+            roteador(
+                &urls,
+                &acoustid(0.95, "Viver Feliz", "Nilson Chaves", dur),
+                &letra,
+                "{}",
+            ),
+            dur,
+        ),
+        SEM_CHAVE,
+    );
+    assert_eq!(
+        urls_para(&urls, cancioneiro_lib::lyrics_fetch::SEARCH_URL).len(),
+        1,
+        "com o título vindo do som, um palpite basta"
+    );
+    assert_eq!(props[0].confidence, "media", "e o teto do som vale");
+}
