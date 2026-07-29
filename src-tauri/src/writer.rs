@@ -43,6 +43,11 @@ const LETRA_ORIGEM_DESC: &str = "LETRA_ORIGEM";
 /// os dois stacks precisam falar a mesma língua. Letra do LRCLIB é oficial
 /// também, mas não leva marca nenhuma — o valor "" limpa o frame.
 pub const ORIGEM_VAGALUME: &str = "vagalume";
+/// V10 — letra ESCRITA ouvindo o áudio (etapa 5). É o mesmo valor que o
+/// `tools/embed_lyrics.py` grava desde a V5/F14 (`ORIGEM_TRANSCRICAO`) e que o
+/// player já sabe exibir como "pode conter erros": o dado viaja no MP3, e os
+/// dois stacks precisam falar a mesma língua.
+pub const ORIGEM_TRANSCRICAO: &str = "transcricao";
 /// V8/F17 — marca de música sem voz. O valor canônico gravado é "1", o mesmo
 /// que o `embed_lyrics.py --instrumental` grava; desmarcar REMOVE o frame.
 const INSTRUMENTAL_DESC: &str = "INSTRUMENTAL";

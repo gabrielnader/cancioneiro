@@ -123,35 +123,27 @@ where
     }
 }
 
-/// O que a varredura está fazendo. São dois TRABALHOS distintos, com custos
-/// distintos, e o padrão não muda.
+/// De onde veio o pedido — e é só isso que decide se as etapas de LETRA
+/// rodam. **Não é modo de usuário**: ninguém escolhe entre os dois.
 ///
-/// A separação existe por um caso real: um arquivo etiquetado "Te ver feliz,
-/// te ver contente" / "Caetano Veloso" que é, de verdade, "Viver Feliz" do
-/// Nilson Chaves. O funil inteiro supunha duas categorias — campo faltando =
-/// completar, campo com texto real = confiável —, e "Caetano Veloso" não é
-/// placeholder por regra nenhuma. Com letra no arquivo, essa música é
-/// "completa" e **nunca entra em varredura**: o erro fica invisível para
-/// sempre. São duas populações diferentes, e só a etapa 2 alcança a segunda,
-/// porque é a única que ignora a etiqueta e pergunta ao som.
-///
-/// Atravessa o IPC como texto minúsculo e sem acento — `"completar"` ou
-/// `"conferencia"` —, no mesmo estilo do resto do contrato. Ausente no JSON
-/// vale `Completar`: se um dia o frontend esquecer o campo, o que acontece é
-/// a varredura barata de sempre, nunca a cara por engano.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Modo {
-    /// Completar o que falta — a varredura de sempre, só nas músicas
-    /// incompletas, com o funil inteiro.
-    #[default]
-    Completar,
-    /// Conferir se a etiqueta bate com o som. Alcança TODAS as músicas
-    /// disponíveis, inclusive as completas, e roda **só a etapa 2**: as
-    /// etapas de letra são o outro trabalho. O custo é outro também — o
-    /// `fpcalc` lê o áudio de cada arquivo, então isto são minutos para um
-    /// acervo, não segundos —, e por isso é disparada de propósito.
-    Conferencia,
+/// V10 — `Modo::{Completar,Conferencia}` deixou de existir. Modo é escolha, e
+/// escolha é pedágio para quem não tem a quem perguntar: separar "completar o
+/// que falta" de "conferir se está certo" custava 2 minutos e meio num acervo
+/// de 150 músicas e cobrava, por eles, que uma pessoa que não sabe o que é
+/// terminal escolhesse entre dois nomes que ela não entende. Pior: a
+/// conferência era **a única coisa que acha etiqueta errada** (o caso
+/// "Caetano Veloso" que era Nilson Chaves), e recurso que depende de o usuário
+/// adivinhar que existe é recurso que não existe (DECISIONS #95).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Origem {
+    /// A varredura da pasta. Etapas 1 e 2 em TODAS as músicas — é assim que
+    /// etiqueta errada aparece —, etapas 3 e 4 só em quem não tem letra: não
+    /// faz sentido procurar letra para quem já tem.
+    Varredura,
+    /// O botão de UMA música, no editor. O funil INTEIRO, sempre: quem clicou
+    /// sabe o que quer, e responder "não achamos" a uma busca que não
+    /// aconteceu é mentir (DECISIONS #81).
+    UmaMusica,
 }
 
 // ---------------------------------------------------------------------------
@@ -177,6 +169,11 @@ pub const FONTE_LRCLIB: &str = "LRCLIB";
 /// `fonte` — etapa 4: Vagalume, por casamento estrito de texto (não há
 /// duração para conferir).
 pub const FONTE_VAGALUME: &str = "Vagalume";
+/// `fonte` — etapa 5 (V10): a letra foi ESCRITA ouvindo o áudio. É letra de
+/// máquina, e a tela precisa dizer isso: ela vai para o MP3 com
+/// `TXXX:LETRA_ORIGEM = "transcricao"`, a marca que o curador aprendeu a ler
+/// como "isto pode estar errado".
+pub const FONTE_TRANSCRICAO: &str = "transcrição do áudio";
 /// `fonte` — a música foi tentada e falhou; `error` traz a explicação em
 /// pt-BR e a linha não é aplicável.
 pub const FONTE_ERRO: &str = "erro";
@@ -192,8 +189,91 @@ pub const ETAPA_IMPRESSAO_DIGITAL: &str = "reconhecendo pelo som";
 pub const ETAPA_LRCLIB: &str = "procurando no LRCLIB";
 /// `etapa` — consultando o Vagalume.
 pub const ETAPA_VAGALUME: &str = "procurando no Vagalume";
+/// `etapa` — escrevendo a letra ouvindo o áudio (V10). Não sai na varredura
+/// da pasta: a etapa 5 é perguntada no FIM e roda por um comando próprio.
+pub const ETAPA_TRANSCRICAO: &str = "escrevendo a letra ouvindo o áudio";
 /// `etapa` — esta música terminou; é o ÚNICO evento que faz `done` crescer.
 pub const ETAPA_CONCLUIDA: &str = "concluída";
+
+// ---------------------------------------------------------------------------
+// O custo de cada etapa, por música — MEDIDO, não derivado (DECISIONS #85)
+// ---------------------------------------------------------------------------
+//
+// A conta mora aqui, e não em TypeScript, pelo motivo da DECISIONS #80: regra
+// duplicada em duas linguagens diverge, e a divergência escolhe o pior momento
+// para aparecer. O frontend recebe o número pronto (`Contagem`) e formata.
+
+/// Etapa 2 (som): **2 s por música, medido em campo**.
+///
+/// A estimativa anterior dizia 0,3 s — erro de 7x, e num acervo de 150 músicas
+/// isso é a diferença entre "45 segundos" e "cinco minutos". O `fpcalc` lê só
+/// os primeiros ~120 s do áudio, mas a consulta ao AcoustID tem o piso de
+/// cortesia de 340 ms (`fingerprint::PAUSA_ACOUSTID`) e a resposta do
+/// servidor por cima.
+pub const SEGUNDOS_ETAPA_SOM: u64 = 2;
+
+/// Etapa 3 (LRCLIB): 7 s por música sem letra, medido em campo — 16 músicas em
+/// ~2 min com as etapas 1 e 3 apenas. Bate com a derivação: sem nome conhecido
+/// o `gerar_palpites` produz até 7 palpites, e num acervo de cobertura ~3% a
+/// maioria gasta todos.
+pub const SEGUNDOS_ETAPA_LRCLIB: u64 = 7;
+
+/// Etapa 4 (Vagalume): UMA consulta, ~1,5 s com a cortesia — arredondado para
+/// cima. Ela não roda para todo mundo (exige título E artista reais), então
+/// isto é TETO, e teto é o lado certo de errar numa estimativa.
+pub const SEGUNDOS_ETAPA_VAGALUME: u64 = 2;
+
+/// Quais etapas vão de fato rodar NESTA máquina — é isto que a tela lista, e
+/// não o que o produto sabe fazer (DECISIONS #101).
+#[derive(Debug, Clone, Copy, Default, Serialize)]
+pub struct EtapasLigadas {
+    /// Etapa 2: o acessório do som está pronto e há chave do AcoustID.
+    pub som: bool,
+    /// Etapa 4: há chave do Vagalume (nossa ou do usuário).
+    pub vagalume: bool,
+    /// Etapa 5: o transcritor E o modelo estão prontos.
+    pub transcricao: bool,
+}
+
+/// O tamanho do trabalho que a varredura vai dar, para a tela poder dizê-lo
+/// ANTES de a pessoa mandar começar.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct Contagem {
+    /// Músicas que a varredura vai OLHAR — todas as disponíveis da pasta. É o
+    /// mesmo número que ela anuncia como `total` no primeiro evento de
+    /// progresso.
+    pub total: usize,
+    /// Destas, quantas não têm letra (nem a marca de instrumental, que
+    /// dispensa a letra): são as únicas que passam pelas etapas 3 e 4.
+    pub sem_letra: usize,
+    /// Segundos estimados da varredura inteira, já com as etapas que ESTA
+    /// máquina tem ligadas. Sem internet lenta na conta — a copy avisa.
+    pub segundos_estimados: u64,
+    /// As etapas que vão rodar, em pt-BR e na ordem do funil. A etapa 5 nunca
+    /// está aqui: ela é perguntada no fim.
+    pub etapas: Vec<String>,
+}
+
+/// A conta da estimativa, num lugar só.
+fn segundos_da_varredura(total: usize, sem_letra: usize, etapas: EtapasLigadas) -> u64 {
+    let por_musica = if etapas.som { SEGUNDOS_ETAPA_SOM } else { 0 };
+    let por_musica_sem_letra =
+        SEGUNDOS_ETAPA_LRCLIB + if etapas.vagalume { SEGUNDOS_ETAPA_VAGALUME } else { 0 };
+    total as u64 * por_musica + sem_letra as u64 * por_musica_sem_letra
+}
+
+/// Os nomes das etapas que vão rodar nesta máquina, na ordem do funil.
+fn nomes_das_etapas(etapas: EtapasLigadas) -> Vec<String> {
+    let mut nomes = vec![ETAPA_NOME_ARQUIVO.to_string()];
+    if etapas.som {
+        nomes.push(ETAPA_IMPRESSAO_DIGITAL.to_string());
+    }
+    nomes.push(ETAPA_LRCLIB.to_string());
+    if etapas.vagalume {
+        nomes.push(ETAPA_VAGALUME.to_string());
+    }
+    nomes
+}
 
 /// Teto de confiança da letra achada com um nome que veio do SOM.
 ///
@@ -250,6 +330,21 @@ pub struct EnrichScanResult {
     /// Músicas que teriam sido perguntadas ao som e não foram, porque a etapa
     /// 2 se desligou antes de chegar nelas. Zero é o caso normal.
     pub sem_perguntar_ao_som: usize,
+    /// V10 — as músicas que chegaram ao FIM da varredura ainda sem letra, na
+    /// ordem em que foram vistas. É a lista que a pergunta do fim usa:
+    ///
+    /// > Sobraram 47 músicas sem letra. Escrever a letra ouvindo o áudio leva
+    /// > cerca de 3 horas neste computador. Começar agora?
+    ///
+    /// Vem em ids, e não em contagem, porque é exatamente o que
+    /// `transcrever_musicas` recebe: a regra de quem sobrou é UMA, e mora
+    /// aqui (DECISIONS #80). Música marcada como instrumental não entra —
+    /// instrumental não é transcrito.
+    pub sem_letra_no_fim: Vec<i64>,
+    /// Estimativa, em segundos, de transcrever essas músicas NESTA máquina.
+    /// Ver `transcricao::RAZAO_DE_REFERENCIA`: é número declarado enquanto
+    /// esta máquina não transcreveu nada, e a copy tem de dizer "cerca de".
+    pub segundos_de_transcricao: u64,
 }
 
 /// Proposta de enriquecimento para uma música incompleta. A letra achada vem
@@ -318,6 +413,30 @@ pub struct EnrichProposal {
     /// é uma escolha humana explícita, que volta pelo `apply` como qualquer
     /// outra edição.
     pub conflito: Option<Conflito>,
+    /// V10 — a etapa 5 ouviu o áudio até o fim e não achou voz nenhuma: esta
+    /// música é INSTRUMENTAL (V7/F16).
+    ///
+    /// É proposta, não gravação: a marca tira o arquivo da fila de letra para
+    /// sempre (ela vence até o `--forcar-tudo` do lado Python), e desfazê-la é
+    /// trabalho de gente. Quem grava é o `apply`, com o
+    /// `EnrichApply::marcar_instrumental` que a pessoa confirmou.
+    pub marcar_instrumental: bool,
+    /// V10 — o trecho mais repetido da letra que a máquina escreveu.
+    ///
+    /// Só INFORMAÇÃO, e existe por uma razão prática: quem vai conferir 47
+    /// letras escritas por máquina precisa reconhecer a música de relance, sem
+    /// abrir cada uma. Nunca vira consulta, nome proposto ou etiqueta — a
+    /// identificação pelo refrão ficou de fora por medição (DECISIONS #74).
+    pub refrao: Option<String>,
+    /// V10 — explicação de uma proposta que a pessoa PODE aplicar, ao
+    /// contrário do `error`, que descreve uma linha que ela não pode.
+    ///
+    /// Existe por causa do instrumental: "20 caracteres em 5m00s de áudio dão
+    /// 0,07, abaixo do mínimo de 0,30" é a única explicação que alguém vai
+    /// receber para uma marca que tira o arquivo da fila de letra para sempre.
+    /// Pôr isso em `error` desabilitaria justamente a linha que precisa de um
+    /// clique.
+    pub aviso: Option<String>,
     /// Erro por música (ex.: "sem conexão", arquivo sumido) — nunca aborta
     /// o lote.
     pub error: Option<String>,
@@ -381,6 +500,14 @@ pub struct EnrichApply {
     /// a gravação.
     #[serde(default)]
     pub substituir_letra: bool,
+    /// V10 — marcar esta música como INSTRUMENTAL (eco do
+    /// `EnrichProposal::marcar_instrumental`, confirmado por quem revisou).
+    ///
+    /// Só MARCA. Desmarcar continua sendo exclusividade do editor: a marca é
+    /// escolha humana, e nenhuma rotina a desfaz sozinha (DECISIONS #71).
+    /// Ausente no JSON = não mexer.
+    #[serde(default)]
+    pub marcar_instrumental: bool,
 }
 
 /// Mensagem (pt-BR, curta) que a UI mostra como está quando a proposta ficou
@@ -880,6 +1007,9 @@ fn proposta_baixa(
         // calculado num lugar só, na saída do `processar_musica`
         substitui_nome_escrito: false,
         conflito: None,
+        marcar_instrumental: false,
+        refrao: None,
+        aviso: None,
         error,
     }
 }
@@ -1010,39 +1140,40 @@ fn montar_candidata(song: Song, titulo: Option<&str>, artista: Option<&str>) -> 
     }
 }
 
-/// Filtro de entrada da varredura EM LOTE: devolve `None` para a música que
-/// não tem o que completar (e portanto não conta no total do progresso nem
-/// gasta rede).
+/// Filtro de entrada da varredura EM LOTE: **todas as músicas disponíveis da
+/// pasta**.
 ///
-/// Completa = título E artista reais (não-placeholder) mais letra. Para o
-/// INSTRUMENTAL a letra sai da conta (V8/F17): música sem voz não tem letra a
-/// buscar, em fonte nenhuma, e cobrá-la para sempre era exatamente a
-/// pendência eterna que a marca veio resolver. O que ela AINDA pode ganhar é
-/// título e artista — por isso ela não é descartada aqui, e sim nas etapas de
-/// LETRA (ver `processar_musica`): "instrumental sem letra ainda pode (e
-/// deve) ter título e artista corretos" (PRD V8).
+/// V10 — o portão de completude SAIU daqui, e é a mudança central do caminho
+/// único. Ele existia para 95 músicas não virarem 95 consultas inúteis, e para
+/// as etapas de LETRA isso continua valendo — mas o portão está agora onde a
+/// economia é (`etapas_de_letra_valem_a_pena`), não na porta de entrada.
 ///
-/// O filtro é do LOTE, e só dele: ele existe para 95 músicas não virarem 95
-/// consultas inúteis. A música avulsa do editor entra por `candidata_pedida`,
-/// sem este portão.
+/// A porta de entrada precisava abrir porque as etapas 1 e 2 têm de rodar em
+/// TODAS: é a única maneira de etiqueta ERRADA aparecer. Um arquivo etiquetado
+/// "Te ver feliz, te ver contente" / "Caetano Veloso" que é "Viver Feliz" do
+/// Nilson Chaves não tem placeholder nenhum — ele era julgado completo e o
+/// erro ficava invisível **para sempre** (DECISIONS #95). Antes isso dependia
+/// de a pessoa adivinhar que existia um "modo de conferência"; agora é o
+/// caminho.
 ///
-/// No `Modo::Conferencia` o filtro NÃO se aplica: o trabalho ali é perguntar
-/// ao som se a etiqueta está certa, e a música que mais precisa dessa
-/// pergunta é justamente a que parece completa — título real, artista real,
-/// letra — e está errada. Um `if` no mesmo lugar, e não uma segunda função:
-/// a regra de quem é candidata é UMA (a cópia divergente foi o defeito
-/// ALTO-2 da rodada passada).
-fn candidata(song: Song, modo: Modo) -> Option<Candidata> {
-    if !song.available {
-        return None;
-    }
-    let cand = montar_candidata(song, None, None);
-    if modo == Modo::Conferencia {
-        return Some(cand);
-    }
-    let nomes_prontos = !cand.titulo_tag.is_empty() && !cand.artista_tag.is_empty();
-    let completa = nomes_prontos && (cand.song.instrumental || cand.song.has_lyrics);
-    (!completa).then_some(cand)
+/// O custo do que se abriu está medido e vai para a tela ANTES: 2 s por música
+/// na etapa 2, ~5 minutos numa pasta de 150 (ver `Contagem`).
+fn candidata(song: Song) -> Option<Candidata> {
+    song.available.then(|| montar_candidata(song, None, None))
+}
+
+/// As etapas 3 e 4 (LRCLIB, Vagalume) valem a pena para esta música?
+///
+/// Não faz sentido buscar letra para quem já tem — e para o INSTRUMENTAL a
+/// letra sai da conta (V8/F17): música sem voz não tem letra a buscar, em
+/// fonte nenhuma, e cobrá-la para sempre era a pendência eterna que a marca
+/// veio resolver.
+///
+/// Isto é o que restou do antigo portão de completude, e note o que ele NÃO
+/// olha mais: título e artista. Música sem letra passa pelas etapas de letra
+/// mesmo com nomes prontos — é assim que ela ganha a letra que lhe falta.
+fn etapas_de_letra_valem_a_pena(song: &Song) -> bool {
+    !song.has_lyrics && !song.instrumental
 }
 
 /// Entrada da varredura de UMA música: quem clicou sabe o que quer.
@@ -1058,21 +1189,42 @@ fn candidata_pedida(song: Song, titulo: Option<&str>, artista: Option<&str>) -> 
         .then(|| montar_candidata(song, titulo, artista))
 }
 
-/// Quantas músicas sob `folder_prefix` (vazio = biblioteca inteira) a
-/// varredura vai olhar — o mesmo número que ela anuncia como `total` no
-/// primeiro evento de progresso.
+/// O tamanho do trabalho que a varredura de `folder_prefix` (vazio =
+/// biblioteca inteira) vai dar — contagem E estimativa de tempo.
 ///
-/// Existe para a tela poder dizer "vou olhar N músicas" ANTES de a pessoa
-/// mandar começar, e mora aqui por um motivo (QA ALTO-2): a regra de quem é
-/// candidata é UMA, a `candidata`. A cópia que existia em TypeScript já havia
-/// divergido, e uma contagem que não bate com a barra de progresso não tem
-/// como ser explicada a quem não abre terminal.
-pub fn count_candidatas(conn: &Connection, folder_prefix: &str, modo: Modo) -> Result<usize> {
-    Ok(db::list_songs(conn)?
+/// Existe para a tela poder dizer quantas músicas e quanto tempo ANTES de a
+/// pessoa mandar começar, e mora aqui por um motivo (QA ALTO-2): a regra de
+/// quem é candidata é UMA, a `candidata`, e a conta do custo é UMA. A cópia
+/// que existia em TypeScript já havia divergido, e uma contagem que não bate
+/// com a barra de progresso não tem como ser explicada a quem não abre
+/// terminal.
+///
+/// V10 — devolve um OBJETO, e não um número: com o caminho único, "quantas
+/// músicas" deixou de bastar. A etapa 2 roda em todas e as etapas de letra só
+/// em quem não tem letra, então o tempo depende dos DOIS números — e o de 2 s
+/// por música é medido em campo, contra os 0,3 s que a estimativa antiga
+/// usava (erro de 7x).
+pub fn contar(
+    conn: &Connection,
+    folder_prefix: &str,
+    etapas: EtapasLigadas,
+) -> Result<Contagem> {
+    let candidatas: Vec<Candidata> = db::list_songs(conn)?
         .into_iter()
         .filter(|s| under_prefix(&s.file_path, folder_prefix))
-        .filter_map(|s| candidata(s, modo))
-        .count())
+        .filter_map(candidata)
+        .collect();
+    let total = candidatas.len();
+    let sem_letra = candidatas
+        .iter()
+        .filter(|c| etapas_de_letra_valem_a_pena(&c.song))
+        .count();
+    Ok(Contagem {
+        total,
+        sem_letra,
+        segundos_estimados: segundos_da_varredura(total, sem_letra, etapas),
+        etapas: nomes_das_etapas(etapas),
+    })
 }
 
 /// Passa UMA música pelo funil e devolve a proposta. `None` significa
@@ -1085,7 +1237,7 @@ pub fn count_candidatas(conn: &Connection, folder_prefix: &str, modo: Modo) -> R
 fn processar_musica<S, C, E>(
     cand: &Candidata,
     fontes: &S,
-    modo: Modo,
+    origem: Origem,
     chave_vagalume: &str,
     estado: &EstadoDaVarredura,
     cortesia: &Cortesia,
@@ -1100,7 +1252,7 @@ where
     let mut proposta = passar_pelo_funil(
         cand,
         fontes,
-        modo,
+        origem,
         chave_vagalume,
         estado,
         cortesia,
@@ -1137,7 +1289,7 @@ fn substitui_nome_escrito(cand: &Candidata, p: &EnrichProposal) -> bool {
 fn passar_pelo_funil<S, C, E>(
     cand: &Candidata,
     fontes: &S,
-    modo: Modo,
+    origem: Origem,
     chave_vagalume: &str,
     estado: &EstadoDaVarredura,
     cortesia: &Cortesia,
@@ -1253,22 +1405,34 @@ where
         }
     }
 
-    // A conferência é UM trabalho — perguntar ao som —, e termina aqui.
-    if modo == Modo::Conferencia {
-        return Some(proposta_da_identidade(cand, identidade, erro));
-    }
-
     // V8/F17 — as etapas 3 e 4 são etapas de LETRA, e a música marcada como
     // instrumental para aqui, com o que as etapas 1 e 2 acharam.
     //
     // Não é economia de rede, e NÃO é filtro de completude: é regra de
-    // INTEGRIDADE, e por isso ela sobreviveu à remoção do portão da varredura
-    // de uma música só (QA ALTO-3b). Um instrumental com título e artista
-    // corretos casa com a versão CANTADA da mesma peça no LRCLIB e sai ALTA —
-    // e ALTA chega pré-marcada na revisão (DECISIONS #49). Um clique gravaria
-    // a letra de outra gravação dentro do arquivo. Nem "quem clicou sabe o
-    // que quer" autoriza pôr letra de terceiro dentro de uma peça sem voz.
+    // INTEGRIDADE, e por isso ela vale nas DUAS portas de entrada (QA
+    // ALTO-3b). Um instrumental com título e artista corretos casa com a
+    // versão CANTADA da mesma peça no LRCLIB e sai ALTA — e ALTA chega
+    // pré-marcada na revisão (DECISIONS #49). Um clique gravaria a letra de
+    // outra gravação dentro do arquivo. Nem "quem clicou sabe o que quer"
+    // autoriza pôr letra de terceiro dentro de uma peça sem voz.
     if cand.song.instrumental {
+        return Some(proposta_da_identidade(cand, identidade, erro));
+    }
+
+    // V10 — na VARREDURA, as etapas de letra rodam só em quem não tem letra.
+    //
+    // As etapas 1 e 2 já rodaram, e rodaram em todas: é assim que etiqueta
+    // errada aparece. Daqui para baixo o trabalho é outro — achar a letra que
+    // falta —, e procurar letra para quem já tem não faz sentido: gasta 7 a 9
+    // segundos de rede por música e, se achasse, a proposta seria uma
+    // SUBSTITUIÇÃO de letra existente, que o `apply` recusa sem consentimento
+    // explícito (DECISIONS #79). Custo alto para um resultado que o produto já
+    // decidiu não aplicar sozinho.
+    //
+    // A porta de UMA música não passa por aqui: quem clicou quer tudo que o
+    // produto sabe fazer por aquele arquivo, inclusive uma segunda opinião
+    // sobre a letra que já está lá (DECISIONS #81).
+    if origem == Origem::Varredura && cand.song.has_lyrics {
         return Some(proposta_da_identidade(cand, identidade, erro));
     }
 
@@ -1357,6 +1521,9 @@ where
             // calculado num lugar só, na saída do `processar_musica`
             substitui_nome_escrito: false,
             conflito: None,
+            marcar_instrumental: false,
+            refrao: None,
+            aviso: None,
             error: None,
         });
     }
@@ -1429,6 +1596,9 @@ where
                     // calculado num lugar só, na saída do `processar_musica`
                     substitui_nome_escrito: false,
                     conflito: None,
+                    marcar_instrumental: false,
+                    refrao: None,
+                    aviso: None,
                     error: None,
                 })
             }
@@ -1584,13 +1754,16 @@ fn proposta_da_identidade(
     p
 }
 
-/// Varre as músicas available sob `folder_prefix` (vazio = todas), passa as
-/// escolhidas pelo funil (etiquetas/nome → som → LRCLIB → Vagalume) e
-/// devolve as propostas.
+/// Varre TODAS as músicas disponíveis sob `folder_prefix` (vazio = a
+/// biblioteca inteira) e passa cada uma pelo funil.
 ///
-/// `modo` escolhe o TRABALHO: `Completar` olha só as incompletas e roda o
-/// funil inteiro; `Conferencia` olha TODAS as disponíveis e roda só a etapa
-/// do som (ver `Modo`).
+/// **V10 — uma varredura só, sem modo.** Etapas 1 e 2 (etiquetas/nome e som)
+/// rodam em todas: é o único jeito de etiqueta ERRADA aparecer sem a pessoa
+/// precisar adivinhar que existe um recurso para isso. Etapas 3 e 4 (LRCLIB,
+/// Vagalume) rodam só em quem não tem letra. A etapa 5 (transcrição) **não
+/// roda aqui**: ela custa minutos por música e é perguntada no fim, com o
+/// número de músicas que sobraram e a estimativa de tempo — ver
+/// `EnrichScanResult::sem_letra_no_fim` e o comando `transcrever_musicas`.
 ///
 /// `chave_vagalume` é a chave do Vagalume já resolvida pelo comando (a
 /// pessoal do usuário tem precedência sobre a nossa, compilada). Vazia, a
@@ -1613,10 +1786,10 @@ fn proposta_da_identidade(
 ///   o tempo todo. `done` só cresce no evento `etapa = "concluída"`, um por
 ///   música — quem só quer a barra pode ignorar os demais.
 ///
-/// `total` é o número de CANDIDATAS (depois do filtro de músicas completas,
-/// antes do descarte de no-op): mede trabalho, não resultado — o progresso
-/// avança mesmo quando a proposta é descartada, quando a rede falha ou quando
-/// o arquivo sumiu do disco.
+/// `total` é o número de músicas disponíveis da pasta (antes do descarte de
+/// no-op): mede trabalho, não resultado — o progresso avança mesmo quando a
+/// proposta é descartada, quando a rede falha ou quando o arquivo sumiu do
+/// disco. É o mesmo número que `contar` devolve.
 ///
 /// `cancelled()` (QA M4) é consultado ANTES de cada música e ANTES de CADA
 /// consulta de rede — inclusive antes da primeira, quando nem o evento
@@ -1629,7 +1802,6 @@ fn proposta_da_identidade(
 pub fn enrich_scan<S, P, C>(
     conn: &Connection,
     folder_prefix: &str,
-    modo: Modo,
     fontes: S,
     chave_vagalume: &str,
     pausa: Duration,
@@ -1644,9 +1816,21 @@ where
     // QA MÉDIO-6 e QA A2 — os vereditos e a conta do que não foi feito vivem
     // pela varredura inteira, ao lado da cortesia.
     let estado = EstadoDaVarredura::default();
-    let fechar = |propostas: Vec<EnrichProposal>| EnrichScanResult {
-        propostas,
-        sem_perguntar_ao_som: estado.sem_perguntar_ao_som.get(),
+    // V10 — quem sobrou sem letra, para a pergunta do fim. A lista é montada
+    // AQUI, música a música, e não deduzida das propostas: uma proposta pode
+    // ter sido descartada por no-op e a música continuar sem letra.
+    let sobraram: Cell<Vec<(i64, f64)>> = Cell::new(Vec::new());
+    let fechar = |propostas: Vec<EnrichProposal>| {
+        let restantes = sobraram.take();
+        EnrichScanResult {
+            propostas,
+            sem_perguntar_ao_som: estado.sem_perguntar_ao_som.get(),
+            segundos_de_transcricao: crate::transcricao::segundos_para_transcrever(
+                restantes.iter().map(|(_, d)| *d),
+                crate::transcricao::RAZAO_DE_REFERENCIA,
+            ),
+            sem_letra_no_fim: restantes.into_iter().map(|(id, _)| id).collect(),
+        }
     };
 
     if cancelled() {
@@ -1658,7 +1842,7 @@ where
     let candidatas: Vec<Candidata> = db::list_songs(conn)?
         .into_iter()
         .filter(|s| under_prefix(&s.file_path, folder_prefix))
-        .filter_map(|s| candidata(s, modo))
+        .filter_map(candidata)
         .collect();
 
     let total = candidatas.len();
@@ -1674,7 +1858,7 @@ where
         let Some(proposta) = processar_musica(
             cand,
             &fontes,
-            modo,
+            Origem::Varredura,
             chave_vagalume,
             &estado,
             &cortesia,
@@ -1683,10 +1867,196 @@ where
         ) else {
             return Ok(fechar(propostas)); // cancelada no meio desta música
         };
+        // Sobra para a etapa 5 quem continuaria SEM LETRA depois de aplicar
+        // tudo o que esta varredura achou. Instrumental não entra: música sem
+        // voz não é transcrita, e insistir era a pendência eterna que a marca
+        // veio resolver (V8/F17).
+        if etapas_de_letra_valem_a_pena(&cand.song) && proposta.lyrics.is_none() {
+            let mut lista = sobraram.take();
+            lista.push((cand.song.id, cand.song.duration_seconds.unwrap_or(0) as f64));
+            sobraram.set(lista);
+        }
         registrar(&mut propostas, proposta);
         on_progress(feitas + 1, total, &cand.nome, ETAPA_CONCLUIDA);
     }
     Ok(fechar(propostas))
+}
+
+/// A etapa 5, sobre a lista de músicas que a pessoa mandou transcrever.
+///
+/// Comando à parte, e não uma etapa da varredura, porque a conversa é outra:
+/// são MINUTOS por música, e a pergunta só pode ser respondida no fim, quando
+/// o app já sabe quantas sobraram e quanto tempo isso leva nesta máquina.
+///
+/// Nada é gravado aqui. O que sai são propostas, no mesmo formato da
+/// varredura, para a MESMA tela de revisão — inclusive a de marcar
+/// instrumental, que é uma proposta como qualquer outra (a marca tira o
+/// arquivo da fila para sempre, e isso não se faz sem alguém olhar).
+///
+/// `transcritor(mp3, cancelado, progresso) -> Result<Option<SaidaDoMotor>>` é
+/// injetável: a suíte roda sem o binário e sem o modelo de 180 MB. `Ok(None)`
+/// é cancelamento.
+///
+/// `on_progress(feitas, total, nome, porcento_da_musica)` — `porcento_da_musica`
+/// existe porque uma única música leva minutos: uma barra que só anda entre
+/// arquivos fica parada por tempo demais para parecer viva.
+pub fn transcricao_scan<T, P, C>(
+    conn: &Connection,
+    song_ids: &[i64],
+    transcritor: T,
+    on_progress: P,
+    cancelled: C,
+) -> Result<TranscricaoResultado>
+where
+    T: Fn(&Path, &dyn Fn() -> bool, &dyn Fn(u8)) -> Result<Option<crate::transcricao::SaidaDoMotor>>,
+    P: Fn(usize, usize, &str, u8),
+    C: Fn() -> bool,
+{
+    use crate::transcricao::{self, Desfecho};
+
+    let total = song_ids.len();
+    let mut propostas = Vec::new();
+    // Medição desta máquina: segundos de CPU por segundo de áudio. É o que
+    // torna a estimativa "neste computador" verdadeira em vez de declarada
+    // (DECISIONS #72 aplicada a uma estimativa).
+    let mut audio_medido = 0.0f64;
+    let mut relogio_medido = 0.0f64;
+    let mut desligado = false;
+
+    on_progress(0, total, "", 0);
+    for (feitas, id) in song_ids.iter().enumerate() {
+        if cancelled() {
+            break;
+        }
+        let Some(song) = db::get_song(conn, *id)? else {
+            continue; // a música saiu da biblioteca no meio: nada a fazer
+        };
+        let cand = montar_candidata(song, None, None);
+        let nome = cand.nome.clone();
+        on_progress(feitas, total, &nome, 0);
+
+        let desfecho = if desligado {
+            Desfecho::Erro {
+                mensagem: transcricao::ERRO_NAO_EXECUTA.into(),
+            }
+        } else if cand.song.instrumental {
+            // Instrumental NÃO é transcrito, e a linha diz por quê: a marca é
+            // escolha humana, e refazer horas de CPU contra ela seria
+            // desrespeitar a decisão de quem ouviu o áudio (DECISIONS #71).
+            Desfecho::Erro {
+                mensagem: AVISO_INSTRUMENTAL_NAO_TRANSCREVE.into(),
+            }
+        } else if cand.song.has_lyrics {
+            // Letra existente não é substituída sem consentimento
+            // (DECISIONS #79). A varredura já não manda estas músicas para cá;
+            // esta é a trava para quando alguém mandar mesmo assim.
+            Desfecho::Erro {
+                mensagem: AVISO_LETRA_EXISTENTE.into(),
+            }
+        } else if !Path::new(&cand.song.file_path).is_file() {
+            Desfecho::Erro {
+                mensagem: format!("arquivo não encontrado: {}", cand.song.file_path),
+            }
+        } else {
+            let comeco = std::time::Instant::now();
+            let saida = transcritor(
+                Path::new(&cand.song.file_path),
+                &|| cancelled(),
+                &|p| on_progress(feitas, total, &nome, p),
+            );
+            match saida {
+                Ok(None) => break, // cancelado no meio desta música
+                Ok(Some(s)) => {
+                    if s.duracao > 0.0 {
+                        audio_medido += s.duracao;
+                        relogio_medido += comeco.elapsed().as_secs_f64();
+                    }
+                    transcricao::decidir(
+                        &s.texto,
+                        s.duracao,
+                        cand.song.duration_seconds.unwrap_or(0) as f64,
+                    )
+                }
+                Err(e) => {
+                    let mensagem = e.to_string();
+                    // Binário que não sobe é veredito sobre a MÁQUINA, não
+                    // sobre este arquivo: desliga a etapa pelo resto da fila,
+                    // em vez de repetir a mesma acusação 47 vezes (a mesma
+                    // regra da etapa 2, QA A2).
+                    if mensagem == transcricao::ERRO_NAO_EXECUTA
+                        || mensagem == transcricao::ERRO_SEM_MODELO
+                    {
+                        desligado = true;
+                    }
+                    Desfecho::Erro { mensagem }
+                }
+            }
+        };
+        propostas.push(proposta_da_transcricao(&cand, desfecho));
+        on_progress(feitas + 1, total, &nome, 100);
+    }
+
+    Ok(TranscricaoResultado {
+        propostas,
+        razao_medida: (audio_medido > 0.0).then(|| relogio_medido / audio_medido),
+    })
+}
+
+/// O que a etapa 5 devolve.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct TranscricaoResultado {
+    pub propostas: Vec<EnrichProposal>,
+    /// Segundos de CPU por segundo de ÁUDIO medidos NESTA máquina, quando
+    /// houve o que medir. É o número que troca a estimativa declarada pela
+    /// verdadeira nas próximas vezes — guarde-o e mande-o de volta.
+    pub razao_medida: Option<f64>,
+}
+
+/// Mensagem (pt-BR) de quem não é transcrito por já ter sido julgado sem voz.
+pub const AVISO_INSTRUMENTAL_NAO_TRANSCREVE: &str =
+    "esta música está marcada como instrumental — não há letra a escrever";
+
+/// Converte o desfecho da etapa 5 numa proposta da MESMA forma que o resto do
+/// funil: a revisão é uma só.
+///
+/// Note o que NUNCA muda aqui: `proposed_title` e `proposed_artist` são o que
+/// já está no arquivo. A transcrição não identifica música nenhuma, então não
+/// há nome para propor — e portanto não há como ela sobrescrever etiqueta
+/// real, em confiança nenhuma. Isto é garantia de construção, não regra a
+/// lembrar.
+fn proposta_da_transcricao(cand: &Candidata, desfecho: crate::transcricao::Desfecho) -> EnrichProposal {
+    use crate::transcricao::Desfecho;
+    let mut p = proposta_baixa(cand, None);
+    match desfecho {
+        Desfecho::Transcrita { letra, refrao, .. } => {
+            p.lyrics = Some(letra);
+            p.refrao = refrao;
+            // MÉDIA, nunca ALTA: ALTA chega pré-marcada (DECISIONS #49), e
+            // letra escrita por máquina é justamente a que precisa de olho
+            // humano antes de entrar no arquivo.
+            p.confidence = "media".into();
+            p.fonte = FONTE_TRANSCRICAO.into();
+        }
+        Desfecho::Instrumental { motivo } => {
+            p.marcar_instrumental = true;
+            p.confidence = "media".into();
+            p.fonte = FONTE_TRANSCRICAO.into();
+            p.error = None;
+            p.aviso = Some(motivo);
+        }
+        // ADIADA não é falha: é "nada foi feito, e aqui está o porquê". Ela
+        // usa o mesmo campo das falhas porque o efeito na tela é o mesmo —
+        // linha que informa e não se aplica —, e o texto diz o que fazer.
+        Desfecho::Adiada { motivo } => {
+            p.fonte = FONTE_ERRO.into();
+            p.error = Some(motivo);
+        }
+        Desfecho::Erro { mensagem } => {
+            p.fonte = FONTE_ERRO.into();
+            p.error = Some(mensagem);
+        }
+    }
+    p
 }
 
 /// O MESMO funil de `enrich_scan`, numa música só — o "completar dados desta
@@ -1748,9 +2118,9 @@ where
         &cand,
         &fontes,
         // a música avulsa é sempre o funil INTEIRO: quem clicou quer tudo
-        // que o produto sabe fazer por aquele arquivo, e o portão de
-        // completude já não vale aqui (QA ALTO-3b)
-        Modo::Completar,
+        // que o produto sabe fazer por aquele arquivo — inclusive uma segunda
+        // opinião sobre a letra que já está lá (QA ALTO-3b, DECISIONS #81)
+        Origem::UmaMusica,
         chave_vagalume,
         &estado,
         &cortesia,
@@ -1874,12 +2244,15 @@ fn apply_one(conn: &Connection, ap: &EnrichApply) -> Result<Song> {
     // marcada como tal — o mesmo `TXXX:LETRA_ORIGEM = "vagalume"` que o
     // tools/curadoria.py grava —, e letra de qualquer outra fonte LIMPA a
     // marca: letra oficial nunca é transcrição.
-    let do_vagalume = ap
-        .fonte
-        .as_deref()
-        .is_some_and(|f| f.eq_ignore_ascii_case(FONTE_VAGALUME));
-    let origem_declarada =
-        lyrics_novo.map(|_| if do_vagalume { writer::ORIGEM_VAGALUME } else { "" });
+    //
+    // V10 — e letra vinda da ETAPA 5 é letra de MÁQUINA: ela sai marcada
+    // `transcricao`, o mesmo valor que o `tools/curadoria.py` grava desde a
+    // V5/F14 e que o player já sabe exibir como "pode conter erros".
+    let origem_declarada = lyrics_novo.and_then(|_| match ap.fonte.as_deref() {
+        Some(f) if f.eq_ignore_ascii_case(FONTE_VAGALUME) => Some(writer::ORIGEM_VAGALUME),
+        Some(f) if f == FONTE_TRANSCRICAO => Some(writer::ORIGEM_TRANSCRICAO),
+        _ => Some(""),
+    });
     writer::write_tags_com_origem(
         conn,
         ap.song_id,
@@ -1887,9 +2260,13 @@ fn apply_one(conn: &Connection, ap: &EnrichApply) -> Result<Song> {
         artist_final.as_deref(),
         lyrics_final.as_deref(),
         temas_final.as_deref(),
-        // V8/F17 — o lote NUNCA mexe na marca de instrumental: ela é escolha
-        // humana (ou da curadoria olhando o áudio), e nada aqui a examinou.
-        None,
+        // V8/F17 — o lote nunca mexe na marca de instrumental por conta
+        // própria: ela é escolha humana. V10 — a exceção é a etapa 5, que
+        // OUVIU o áudio inteiro e não achou voz; e mesmo ela só PROPÕE, e só
+        // é gravada com o `marcar_instrumental` que a pessoa confirmou na
+        // revisão. Nunca `Some(false)`: DESmarcar continua sendo exclusividade
+        // do editor (DECISIONS #71).
+        ap.marcar_instrumental.then_some(true),
         origem_declarada,
     )
 }
@@ -2149,6 +2526,9 @@ mod tests {
             letra_origem: None,
             substitui_nome_escrito: false,
             conflito: None,
+            marcar_instrumental: false,
+            refrao: None,
+            aviso: None,
             error: None,
         }
     }

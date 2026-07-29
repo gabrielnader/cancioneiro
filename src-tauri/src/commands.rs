@@ -588,9 +588,7 @@ pub fn enrich_folder_scan(
     folder_prefix: String,
     scan_id: String,
     vagalume_key: Option<String>,
-    modo: Option<crate::enrich::Modo>,
 ) -> Result<crate::enrich::EnrichScanResult> {
-    let modo = modo.unwrap_or_default();
     let cancel = state.scan_begin(&scan_id)?;
     let fontes = fontes_do_funil(&app);
     let progresso = emissor_de_progresso(app, scan_id.clone());
@@ -599,7 +597,6 @@ pub fn enrich_folder_scan(
         crate::enrich::enrich_scan(
             &conn,
             &folder_prefix,
-            modo,
             fontes,
             &chave(vagalume_key),
             PAUSA_CORTESIA,
@@ -626,12 +623,35 @@ pub fn enrich_folder_scan(
 /// inteira: percorrer o banco já basta para o `(async)`.
 #[tauri::command(async)]
 pub fn enrich_count(
+    app: AppHandle,
     state: State<'_, Db>,
     folder_prefix: String,
-    modo: Option<crate::enrich::Modo>,
-) -> Result<usize> {
+    vagalume_key: Option<String>,
+) -> Result<crate::enrich::Contagem> {
+    let etapas = etapas_ligadas(&app, &chave(vagalume_key));
     let conn = state.scan_conn()?;
-    crate::enrich::count_candidatas(&conn, &folder_prefix, modo.unwrap_or_default())
+    crate::enrich::contar(&conn, &folder_prefix, etapas)
+}
+
+/// Quais etapas realmente rodam NESTA máquina, nesta build.
+///
+/// A tela lista o que esta máquina faz, não o que o produto sabe fazer
+/// (DECISIONS #101): sem o acessório baixado a etapa não aparece no funil,
+/// porque listá-la seria prometer trabalho que não vai acontecer. E o custo da
+/// varredura depende exatamente disto — a etapa 2 são 2 s por música, medidos
+/// em campo, e numa pasta de 150 músicas são cinco minutos que a pessoa
+/// precisa saber ANTES.
+fn etapas_ligadas(app: &AppHandle, chave_vagalume: &str) -> crate::enrich::EtapasLigadas {
+    let cache = diretorio_de_cache(app).ok();
+    crate::enrich::EtapasLigadas {
+        som: fpcalc_pronto(app).is_some()
+            && !crate::fingerprint::chave_acoustid().trim().is_empty(),
+        vagalume: !chave_vagalume.trim().is_empty(),
+        transcricao: cache
+            .as_deref()
+            .and_then(crate::transcricao::acessorios_prontos)
+            .is_some(),
+    }
 }
 
 /// O MESMO funil, numa música só: o "completar dados desta música" do editor
@@ -675,6 +695,106 @@ pub fn enrich_song_scan(
             fontes,
             &chave(vagalume_key),
             PAUSA_CORTESIA,
+            progresso,
+            || cancel.load(Ordering::SeqCst),
+        )
+    })();
+    state.scan_end(&scan_id);
+    resultado
+}
+
+/// Progresso da etapa 5 (evento `transcricao:progresso`).
+///
+/// `porcento_da_musica` existe porque UMA música leva minutos: uma barra que
+/// só anda entre arquivos fica parada tempo demais para parecer viva, e a
+/// v0.8.1 já ensinou o custo de deixar a pessoa olhando para uma tela parada.
+///
+/// `segundos_restantes` é a estimativa do que falta da FILA inteira, pela
+/// velocidade medida nesta máquina — `null` enquanto nenhuma música terminou,
+/// porque antes disso não há o que medir e um número inventado seria pior que
+/// nenhum (DECISIONS #85 e #86).
+#[derive(Debug, Clone, Serialize)]
+pub struct TranscricaoProgresso {
+    pub done: usize,
+    pub total: usize,
+    pub atual: String,
+    pub porcento_da_musica: u8,
+    pub segundos_restantes: Option<u64>,
+    pub scan_id: String,
+}
+
+/// A etapa 5: escreve a letra ouvindo o áudio das músicas pedidas.
+///
+/// **Comando à parte, e não uma etapa da varredura** (PRD V10). A varredura
+/// custa segundos por música; esta custa MINUTOS, e a pergunta só pode ser
+/// feita no fim, quando o app já sabe quantas sobraram e quanto tempo isso
+/// leva aqui. `song_ids` é exatamente o `sem_letra_no_fim` que
+/// `enrich_folder_scan` devolveu — a regra de quem sobrou é uma só, e mora no
+/// backend (DECISIONS #80).
+///
+/// Nada é gravado: o que sai são propostas, para o mesmo `enrich_apply` da
+/// varredura. Inclusive a de marcar instrumental, que é o desfecho de uma
+/// música cujo áudio foi ouvido até o fim sem voz nenhuma.
+///
+/// Cancelável por `enrich_cancel_scan(scan_id)`, e o cancelamento é consultado
+/// a cada 20 ms DENTRO da música — não entre uma e outra, que aqui seria
+/// esperar minutos por um clique.
+///
+/// `(async)` pela DECISIONS #92, com folga: percorre disco, executa processo e
+/// leva horas.
+#[tauri::command(async)]
+pub fn transcrever_musicas(
+    app: AppHandle,
+    state: State<'_, Db>,
+    song_ids: Vec<i64>,
+    scan_id: String,
+) -> Result<crate::enrich::TranscricaoResultado> {
+    let cache = diretorio_de_cache(&app)?;
+    let (whisper, modelo) = crate::transcricao::acessorios_prontos(&cache)
+        .ok_or_else(|| AppError(crate::transcricao::ERRO_SEM_MODELO.into()))?;
+    let cancel = state.scan_begin(&scan_id)?;
+
+    // O relógio da fila: é dele que sai o "faltam N minutos" honesto. Começa
+    // antes da primeira música porque é isso que a pessoa está esperando.
+    let inicio = std::time::Instant::now();
+    let restantes = std::sync::Mutex::new(song_ids.len());
+    let id_evento = scan_id.clone();
+    let progresso = |done: usize, total: usize, atual: &str, porcento: u8| {
+        if let Ok(mut r) = restantes.lock() {
+            *r = total.saturating_sub(done);
+        }
+        let segundos_restantes = (done > 0).then(|| {
+            let por_musica = inicio.elapsed().as_secs_f64() / done as f64;
+            (por_musica * (total - done) as f64).ceil() as u64
+        });
+        let _ = app.emit(
+            "transcricao:progresso",
+            TranscricaoProgresso {
+                done,
+                total,
+                atual: atual.to_string(),
+                porcento_da_musica: porcento,
+                segundos_restantes,
+                scan_id: id_evento.clone(),
+            },
+        );
+    };
+
+    let resultado = (|| {
+        let conn = state.scan_conn()?;
+        crate::enrich::transcricao_scan(
+            &conn,
+            &song_ids,
+            |mp3, cancelado, por_musica| {
+                crate::transcricao::transcrever(
+                    &whisper,
+                    &modelo,
+                    mp3,
+                    crate::transcricao::IDIOMA,
+                    cancelado,
+                    por_musica,
+                )
+            },
             progresso,
             || cancel.load(Ordering::SeqCst),
         )
@@ -1138,6 +1258,9 @@ mod tests {
             letra_origem: Some("transcricao".into()),
             substitui_nome_escrito: true,
             conflito: None,
+            marcar_instrumental: false,
+            refrao: None,
+            aviso: None,
             error: None,
         })
         .unwrap();
@@ -1152,6 +1275,10 @@ mod tests {
         assert_eq!(
             campos,
             [
+                // V10 — `aviso` explica uma proposta APLICÁVEL (o instrumental
+                // que a etapa 5 concluiu), ao contrário de `error`, que
+                // descreve uma linha que a pessoa não pode aplicar
+                "aviso",
                 "confidence",
                 "conflito",
                 "current_artist",
@@ -1162,8 +1289,13 @@ mod tests {
                 "has_lyrics",
                 "letra_origem",
                 "lyrics",
+                // V10 — a etapa 5 ouviu o áudio inteiro e não achou voz
+                "marcar_instrumental",
                 "proposed_artist",
                 "proposed_title",
+                // V10 — o trecho mais repetido, só para a revisão reconhecer a
+                // música de relance
+                "refrao",
                 "song_id",
                 "substitui_nome_escrito",
             ]
@@ -1196,6 +1328,9 @@ mod tests {
                 artista: "Nilson Chaves".into(),
                 confianca: "alta".into(),
             }),
+            marcar_instrumental: false,
+            refrao: None,
+            aviso: None,
             error: None,
         })
         .unwrap();
@@ -1212,26 +1347,31 @@ mod tests {
         assert_eq!(campos, ["artista", "confianca", "titulo"]);
     }
 
-    /// O modo da varredura chega do frontend como texto minúsculo e sem
-    /// acento, e ausente vale a varredura BARATA — nunca a cara por engano.
+    /// V10 — **os modos sumiram do contrato de IPC.** Nenhum comando aceita
+    /// `modo`, e um payload que ainda o mande é simplesmente ignorado pelo
+    /// serde: o frontend antigo não quebra, e a varredura que roda é a única
+    /// que existe.
+    ///
+    /// Modo é escolha, e escolha é pedágio para quem não tem a quem
+    /// perguntar. Pior: a conferência era a única coisa que achava etiqueta
+    /// errada, e recurso que depende de o usuário adivinhar que existe é
+    /// recurso que não existe.
     #[test]
-    fn o_modo_da_varredura_atravessa_o_ipc_como_texto() {
-        use crate::enrich::Modo;
+    fn o_contrato_de_ipc_nao_tem_mais_modo_de_varredura() {
+        let contagem = crate::enrich::Contagem {
+            total: 150,
+            sem_letra: 80,
+            segundos_estimados: 1_020,
+            etapas: vec!["lendo etiquetas e nome do arquivo".into()],
+        };
+        let json = serde_json::to_value(&contagem).unwrap();
+        let campos: Vec<&String> = json.as_object().unwrap().keys().collect();
         assert_eq!(
-            serde_json::from_str::<Modo>("\"completar\"").unwrap(),
-            Modo::Completar
+            campos,
+            ["etapas", "segundos_estimados", "sem_letra", "total"],
+            "a contagem virou objeto: só o total não diz mais o tamanho do trabalho"
         );
-        assert_eq!(
-            serde_json::from_str::<Modo>("\"conferencia\"").unwrap(),
-            Modo::Conferencia
-        );
-        assert_eq!(
-            serde_json::from_str::<Option<Modo>>("null")
-                .unwrap()
-                .unwrap_or_default(),
-            Modo::Completar
-        );
-        assert!(serde_json::from_str::<Modo>("\"CONFERENCIA\"").is_err());
+        assert!(!json.as_object().unwrap().contains_key("modo"));
     }
 
     /// O eco de `fonte` é OPCIONAL: um payload sem ele continua válido e vale

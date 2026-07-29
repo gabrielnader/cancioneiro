@@ -7,6 +7,7 @@ pub mod fingerprint;
 pub mod indexer;
 pub mod lyrics_fetch;
 pub mod search;
+pub mod transcricao;
 pub mod vagalume;
 pub mod writer;
 
@@ -59,6 +60,7 @@ pub fn run() {
             commands::enrich_song_scan,
             commands::enrich_cancel_scan,
             commands::enrich_apply,
+            commands::transcrever_musicas,
             commands::acessorios_estado,
             commands::acessorio_baixar,
             commands::acessorio_cancelar,
