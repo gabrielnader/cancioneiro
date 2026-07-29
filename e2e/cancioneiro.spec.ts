@@ -766,13 +766,13 @@ test.describe("V4", () => {
     // ALTO-3b: o texto fala de "nada novo" — a busca ACONTECEU, e é só isso
     // que o `null` do backend passou a significar
     await expect(
-      panel.getByText(/não achamos nada novo para esta música nos sites de letra/),
+      panel.getByText(/não achamos nada novo para esta música/),
     ).toBeVisible();
     // não lê como fracasso nem como "esta música está completa"
     await expect(panel.getByText(/Isso é comum/)).toBeVisible();
-    await expect(
-      panel.getByText(/Escrever a letra ouvindo o áudio ainda não é feito/),
-    ).toBeVisible();
+    // V9 — "nos sites de letra" saiu porque deixou de ser verdade (a etapa do
+    // som não é site de letra), e a frase que mandava a pessoa para as
+    // ferramentas de fora saiu no passe de redução
   });
 
   test("árvore de pastas: subpastas com contadores, clique filtra, chip remove o filtro", async ({
@@ -1142,8 +1142,10 @@ test.describe("V8 — O funil dentro do app (F18)", () => {
     const secao = page.getByRole("region", { name: "Curadoria do acervo" });
     await expect(secao.getByText(/Nada é gravado sem você conferir/)).toBeVisible();
     await expect(secao.getByText(/LRCLIB/).first()).toBeVisible();
+    // V9 — o texto que negava DUAS etapas pesadas nega uma só: o
+    // reconhecimento pelo som passou a existir dentro do app
     await expect(
-      secao.getByText(/ainda não são feitos aqui dentro/),
+      secao.getByText(/Escrever a letra ouvindo o áudio ainda não é feito aqui/),
     ).toBeVisible();
     expect(errors).toEqual([]);
   });
@@ -1179,7 +1181,7 @@ test.describe("V8 — O funil dentro do app (F18)", () => {
     // preferência como as outras: sobrevive ao reinício do app — e a tela diz
     // que ela fica guardada nesta máquina (QA MÉDIO-10)
     await expect(
-      page.getByText(/Ela fica guardada nas preferências do aplicativo/),
+      page.getByText(/Ela fica guardada neste computador/),
     ).toBeVisible();
     await page.reload();
     await page.getByRole("button", { name: "Configurações" }).click();
@@ -1255,10 +1257,10 @@ test.describe("V8 — O funil dentro do app (F18)", () => {
       .getByText(/Conferimos a única música incompleta desta pasta/)
       .last();
     await expect(aviso).toBeVisible();
-    await expect(aviso).toContainText("não quer dizer que a pasta esteja completa");
-    await expect(aviso).toContainText(
-      "Escrever a letra ouvindo o áudio ainda não é feito pelo aplicativo",
-    );
+    // o passe de redução da V9 cortou a terceira frase (a que mandava a pessoa
+    // para uma ferramenta de terminal que ela não tem), e manteve a que
+    // responde à pergunta do momento: "então está pronto?" (DECISIONS #60)
+    await expect(aviso).toContainText("não significa pasta completa");
     expect(errors).toEqual([]);
   });
 
@@ -1273,7 +1275,7 @@ test.describe("V8 — O funil dentro do app (F18)", () => {
     await page.getByRole("button", { name: "Configurações" }).click();
     const secao = page.getByRole("region", { name: "Curadoria do acervo" });
     await expect(secao.getByText(/Não há nenhuma música nesta pasta/)).toBeVisible();
-    await expect(secao.getByText(/Adicione uma pasta de música/)).toBeVisible();
+    await expect(secao.getByText(/Adicione uma pasta/)).toBeVisible();
     // MÉDIO-14: o motivo do bloqueio é texto na tela, não `title=`
     await expect(
       secao.getByText("Não há música nesta pasta para procurar."),
@@ -1325,7 +1327,7 @@ test.describe("V8 — O funil dentro do app (F18)", () => {
 
     // a linha DIZ que existe letra ali, e de que tipo ela é
     await expect(
-      dialog.getByText(/Esta música já tem letra, escrita ouvindo o áudio/),
+      dialog.getByText(/Já tem letra, escrita ouvindo o áudio/),
     ).toBeVisible();
     // a substituição é uma segunda marcação, desmarcada por padrão
     const substituir = dialog.getByRole("checkbox", {
@@ -1348,6 +1350,137 @@ test.describe("V8 — O funil dentro do app (F18)", () => {
       page.getByLabel("Painel de letra").getByTestId("lyrics-body"),
     ).toHaveText("Letra conferida à mão");
     expect(errors).toEqual([]);
+  });
+});
+
+
+test.describe("V9 — o acessório do som, a conferência e o conflito (F18 fase 2)", () => {
+  // O caminho inteiro da fase 2, pela porta que a pessoa usa: baixar o
+  // acessório em Configurações, ligar o modo de conferência que ele
+  // habilita, e resolver a divergência que só ele acha. É o caso real que
+  // criou o modo — etiqueta certa na aparência, música errada no arquivo.
+  test("baixar o acessório liga a conferência, que acha a etiqueta errada", async ({
+    page,
+  }) => {
+    const errors = trackErrors(page);
+    await resetApp(page);
+    await addMockFolder(page);
+
+    await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const mock = (window as any).__CANCIONEIRO_MOCK__;
+      // o download precisa durar o bastante para a barra existir na tela
+      mock._acessorio.atrasoMs = 150;
+      // o que o som responde sobre este arquivo: outra música, outro artista
+      mock._ensinarSom("/musicas/mock/com_letra.mp3", {
+        titulo: "Viver Feliz",
+        artista: "Nilson Chaves",
+        confianca: "alta",
+      });
+    });
+
+    await page.getByRole("button", { name: "Configurações" }).click();
+    const secao = page.getByRole("region", { name: "Curadoria do acervo" });
+    const bloco = page.getByRole("region", { name: "Reconhecer música pelo som" });
+
+    // a tela diz o que vai baixar, quanto ocupa e de onde vem — ANTES
+    await expect(bloco.getByText(/é preciso baixar um arquivo de 5,3 MB/)).toBeVisible();
+    await expect(bloco.getByText(/acessorios-v1/)).toBeVisible();
+    // e a conferência ainda não é possível, com o motivo escrito na tela
+    const conferir = page.getByRole("radio", { name: /Conferir se a etiqueta/ });
+    await expect(conferir).toBeDisabled();
+    await expect(
+      secao.getByText("Precisa do reconhecimento pelo som — baixe o acessório abaixo."),
+    ).toBeVisible();
+
+    // nada baixou sozinho: só depois do clique
+    await bloco.getByRole("button", { name: /^Baixar \(/ }).click();
+    await expect(bloco.getByText(/^Baixando…/)).toBeVisible();
+    await expect(
+      bloco.getByText("Pronto — a busca já reconhece música pelo som."),
+    ).toBeVisible();
+    // baixou uma vez, não pergunta de novo
+    await expect(bloco.getByRole("button", { name: /Baixar/ })).toHaveCount(0);
+
+    // com o acessório, a etapa 2 entra no funil e a conferência é possível
+    await expect(secao.getByText(/Reconhecer pelo som/)).toBeVisible();
+    await conferir.click();
+    await page.getByRole("button", { name: "Conferir esta pasta" }).click();
+
+    const dialog = page.getByRole("dialog", { name: "Completar dados" });
+    await expect(dialog.getByText("CONFLITO")).toBeVisible();
+    await expect(dialog.getByText(/Sua etiqueta diz/)).toBeVisible();
+    await expect(
+      dialog.getByText("Coração Sertanejo — Artista Teste"),
+    ).toBeVisible();
+    await expect(dialog.getByText("Viver Feliz — Nilson Chaves")).toBeVisible();
+    await expect(dialog.getByText("confiança alta")).toBeVisible();
+
+    // aceitar o som é escolha POR LINHA: nem pré-marcada, nem em massa
+    const aceitar = dialog.getByRole("checkbox", {
+      name: /Aceitar o que o som diz/,
+    });
+    await expect(aceitar).not.toBeChecked();
+    await dialog.getByRole("button", { name: "Marcar todas", exact: true }).click();
+    await expect(aceitar).not.toBeChecked();
+    await dialog.getByRole("button", { name: "Desmarcar todas" }).click();
+
+    await aceitar.check();
+    await dialog.getByRole("button", { name: "Aplicar selecionadas (1)" }).click();
+    await expect(
+      page.getByText(
+        "1 música teve título ou artista corrigido. A biblioteca já está atualizada.",
+      ),
+    ).toBeVisible();
+
+    // e a música passou a se chamar o que o som disse
+    await page.getByRole("button", { name: "Biblioteca", exact: true }).click();
+    await expect(page.getByText("Viver Feliz").first()).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
+  // Cancelar e falhar terminam os dois com o acessório ausente: a tela tem de
+  // dizer QUAL dos dois aconteceu, sem adivinhação.
+  test("o download é cancelável, e o cancelamento é dito como cancelamento", async ({
+    page,
+  }) => {
+    await resetApp(page);
+    await page.getByRole("button", { name: "Configurações" }).click();
+    await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__CANCIONEIRO_MOCK__._acessorio.atrasoMs = 400;
+    });
+    const bloco = page.getByRole("region", { name: "Reconhecer música pelo som" });
+    await bloco.getByRole("button", { name: /^Baixar \(/ }).click();
+    await bloco.getByRole("button", { name: "Parar" }).click();
+
+    await expect(bloco.getByText("Download cancelado. Nada foi instalado.")).toBeVisible();
+    // continua oferecendo, sem tratar o cancelamento como falha
+    await expect(bloco.getByRole("button", { name: /^Baixar \(/ })).toBeVisible();
+  });
+
+  // A soma SHA-256 é a verificação que impede um download comprometido de
+  // virar execução de código. Quando ela falha, a frase do backend é a
+  // explicação inteira — e ela aparece como veio.
+  test("soma que não confere: a frase do backend, e nada instalado", async ({
+    page,
+  }) => {
+    await resetApp(page);
+    await page.getByRole("button", { name: "Configurações" }).click();
+    await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__CANCIONEIRO_MOCK__._acessorio.erro = "soma";
+    });
+    const bloco = page.getByRole("region", { name: "Reconhecer música pelo som" });
+    await bloco.getByRole("button", { name: /^Baixar \(/ }).click();
+
+    await expect(
+      bloco.getByText(/não confere com o esperado — foi descartado/),
+    ).toBeVisible();
+    await expect(bloco.getByRole("button", { name: /^Baixar \(/ })).toBeVisible();
+    await expect(
+      page.getByRole("radio", { name: /Conferir se a etiqueta/ }),
+    ).toBeDisabled();
   });
 });
 
@@ -1455,7 +1588,7 @@ test.describe("V8 — instrumental sem etiqueta (QA ALTO-5)", () => {
     // a contagem (que vem do backend) conta as duas, e o disparo continua vivo
     await page.getByRole("button", { name: "Configurações" }).click();
     await expect(
-      page.getByText(/2 músicas desta pasta estão incompletas/),
+      page.getByText(/2 músicas incompletas nesta pasta/),
     ).toBeVisible();
     const disparo = page.getByRole("button", { name: "Buscar dados desta pasta" });
     await expect(disparo).toBeEnabled();

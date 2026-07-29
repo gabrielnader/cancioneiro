@@ -606,6 +606,26 @@ describe("SettingsView — o modo de conferência (V9)", () => {
     ).toBeEnabled();
   });
 
+  // "Nenhuma música precisa de busca agora" seria falso aqui: a conferência
+  // não olha completude nenhuma. Estado raro, mas só é verdade sobre a tela o
+  // que o teste visitou (DECISIONS #87).
+  it("conferência sem nada a conferir: o motivo fala a língua do modo", async () => {
+    acessoriosEstado.mockResolvedValue([acessorio("pronto")]);
+    enrichCount.mockImplementation(async (_prefixo: string, modo?: Modo) =>
+      modo === "conferencia" ? 0 : 2,
+    );
+    render(<SettingsView />);
+    await screen.findByText(ACESSORIO_PRONTO);
+
+    fireEvent.click(opcaoConferir());
+    expect(
+      await screen.findByText("Não há o que conferir nesta pasta."),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Conferir esta pasta" }),
+    ).toBeDisabled();
+  });
+
   it("disparar em conferência leva o modo à varredura", async () => {
     const startScan = vi.fn(async () => {});
     useEnrichStore.setState({ startScan });
@@ -714,7 +734,12 @@ describe("SettingsView — acessibilidade da seção nova", () => {
   // MÉDIO-14 — a varredura só rodava no estado `idle`, e a afirmação "varre
   // TODOS os elementos" (DECISIONS #76) só valia de um estado: o bloco de
   // progresso (#115E59 sobre #F0FDFA) nunca era medido.
-  it("todo texto da curadoria passa em AA — em TODOS os estados da seção", () => {
+  it("todo texto da curadoria passa em AA — em TODOS os estados da seção", async () => {
+    // Os estados do acessório entram AQUI, e não numa varredura à parte: o
+    // bloco novo é feito de texto secundário sobre fundo claro, que é
+    // exatamente onde o contraste cai (DECISIONS #69). E a varredura precisa
+    // ESPERAR a resposta do backend — antes de ela chegar o bloco não desenha
+    // nada, e um sweep síncrono mediria uma tela que ninguém vê.
     const estados: Array<[string, () => void]> = [
       ["parada", () => {}],
       [
@@ -740,15 +765,59 @@ describe("SettingsView — acessibilidade da seção nova", () => {
         "encerrando",
         () => useEnrichStore.setState({ status: "idle", scanInFlight: true }),
       ],
+      [
+        "acessório pronto (e a conferência disponível)",
+        () => acessoriosEstado.mockResolvedValue([acessorio("pronto")]),
+      ],
+      [
+        "acessório corrompido",
+        () => acessoriosEstado.mockResolvedValue([acessorio("corrompido")]),
+      ],
+      [
+        "acessório indisponível nesta versão",
+        () => acessoriosEstado.mockResolvedValue([acessorio("indisponivel")]),
+      ],
+      [
+        "sem binário para este computador",
+        () => acessoriosEstado.mockResolvedValue([]),
+      ],
+      [
+        "estado do acessório desconhecido",
+        () => acessoriosEstado.mockRejectedValue(new Error("sem perfil")),
+      ],
     ];
     for (const [nome, preparar] of estados) {
       estadoBase();
       preparar();
       const { unmount } = render(<SettingsView />);
+      // deixa a consulta do acessório e a contagem resolverem
+      await act(async () => {});
       const medidos = varrerContraste(secaoCuradoria());
       expect(medidos, `estado ${nome} sem texto medido`).toBeGreaterThan(0);
       unmount();
     }
+  });
+
+  // O download é o único estado que não nasce de uma resposta do backend: ele
+  // existe entre o clique e o desfecho, e tem barra, contagem e um botão.
+  it("o texto do download em curso também passa em AA", async () => {
+    acessorioBaixar.mockImplementation(() => new Promise(() => {}));
+    render(<SettingsView />);
+    const botao = await screen.findByRole("button", {
+      name: rotuloBaixarAcessorio(acessorio("ausente"), false),
+    });
+    await act(async () => {
+      fireEvent.click(botao);
+    });
+    await act(async () => {
+      emitirProgressoDoAcessorio?.({
+        nome: "fpcalc",
+        baixados: 2_000_000,
+        total: 5_538_312,
+        download_id: acessorioBaixar.mock.calls[0][1] as string,
+      });
+    });
+    expect(varrerContraste(secaoCuradoria())).toBeGreaterThan(0);
   });
 
   it("os controles da curadoria são alcançáveis por teclado (nativos, sem tabindex negativo)", () => {

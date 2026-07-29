@@ -333,7 +333,13 @@ function CuradoriaSection() {
       : pastaVazia
         ? "Não há música nesta pasta para procurar."
         : nadaACurar
-          ? "Nenhuma música desta pasta precisa de busca agora."
+          ? modo === "conferencia"
+            ? // a conferência olha TODAS as músicas: chegar a zero aqui é não
+              // haver nenhuma disponível, e não "está tudo completo". Frase
+              // diferente da estimativa de propósito — a mesma sentença duas
+              // vezes seguidas na tela é ruído, não reforço.
+              "Não há o que conferir nesta pasta."
+            : "Nenhuma música desta pasta precisa de busca agora."
           : null;
 
   return (
@@ -654,9 +660,8 @@ function AcessorioDoSom({
         Reconhecer música pelo som
       </h3>
 
-      {/* enquanto a pergunta não volta, nada é afirmado */}
-      {lista === undefined && null}
-
+      {/* enquanto a pergunta não volta nada é afirmado: nem que existe, nem
+          que não existe, nem que está pronto */}
       {lista === null && (
         <p className="mt-1 text-[13px] text-[#5B6472]">{ACESSORIO_INDETERMINADO}</p>
       )}
