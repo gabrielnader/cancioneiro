@@ -3,6 +3,7 @@ import {
   createMockBackend,
   discordaDoSom,
   isPlaceholder,
+  similaridadeDeNomes,
   tituloEhDoIndexador,
   type MockBackend,
 } from "./mockBackend";
@@ -183,7 +184,8 @@ const DISCORDA: Array<[string, string, boolean]> = [
   ["Marinheiro Só (dj mitsu remix)", "Marinheiro Só", false],
   // música diferente: continua conflito
   ["Satania", "Sabrina", true],
-  ["Ponto de Oxum", "Ponto de Ogum", true],
+  ["Asa Branca", "Asa Morena", true],
+  ["Tim Maia", "Tom Jobim", true],
   // contenção curta demais não absolve
   ["Sol", "Sol Nascente", true],
   // campo vazio ou placeholder não contradiz nada — só espera ser preenchido
@@ -214,6 +216,68 @@ describe("contrato mock × Rust — discorda (V9)", () => {
         `${identificado} × ${atual}`,
       ).toBe(esperado);
     }
+  });
+
+  /**
+   * QA A1, do lado do mock. A métrica por trás do limiar 0,85 mudou no Rust
+   * DEPOIS que este mock foi escrito: era coeficiente de Dice sobre bigramas
+   * e passou a ser o `difflib.SequenceMatcher.ratio()` do
+   * `tools/curadoria.py`, que é o que calibrou o 0,85 num acervo real de 94
+   * arquivos. Um mock com a métrica velha condena estes sete pares.
+   *
+   * Por que doem tanto: uma troca de UM caractere destrói DOIS bigramas, e
+   * nome de artista brasileiro é curto. E conflito faz o funil VOLTAR antes
+   * das etapas de letra — com o Dice, um MP3 etiquetado "Luis Gonzaga" que o
+   * AcoustID identifica como "Luiz Gonzaga" perdia as consultas ao LRCLIB
+   * inteiras: **baixar o acessório piorava a música**, e a tela acusava a
+   * etiqueta certa.
+   *
+   * Mesma tabela do `variacao_de_um_caractere_em_nome_curto_nao_e_conflito`
+   * (`fingerprint.rs`), com os valores medidos lá.
+   */
+  const UM_CARACTERE: Array<[string, string, number]> = [
+    // (atual, identificado, difflib medido no Rust)
+    ["Luiz Gonzaga", "Luis Gonzaga", 0.9167],
+    ["Nilson Chaves", "Nilton Chaves", 0.9231],
+    ["Cabocla Jurema", "Cabocla Jurama", 0.9286],
+    ["Zé Pilintra", "Zé Pelintra", 0.9091],
+    ["Roda Viva", "Roda Vida", 0.8889],
+    ["Ponto de Oxum", "Ponto de Ogum", 0.9231],
+    ["Ponto de Iemanjá", "Ponto de Iansã", 0.8667],
+  ];
+
+  for (const [a, b, medido] of UM_CARACTERE) {
+    it(`um caractere de diferença não é conflito: ${a} × ${b} (${medido})`, () => {
+      expect(discordaDoSom(a, b)).toBe(false);
+      expect(discordaDoSom(b, a)).toBe(false);
+    });
+  }
+
+  /**
+   * E o número em si, não só o veredito: se o mock devolvesse OUTRA
+   * similaridade que por sorte cai do mesmo lado do 0,85, a próxima mudança
+   * de limiar faria os dois lados divergirem de novo em silêncio. É a régua
+   * que precisa ser a mesma, não o resultado de hoje.
+   */
+  it("a similaridade do mock reproduz os números medidos no Rust", () => {
+    for (const [a, b, medido] of UM_CARACTERE) {
+      expect(similaridadeDeNomes(a, b), `${a} × ${b}`).toBeCloseTo(medido, 4);
+    }
+  });
+
+  // O `2·M/T` do difflib sobre casos extremos, como o Python os resolve.
+  it("os casos de borda da similaridade batem com o difflib", () => {
+    expect(similaridadeDeNomes("Asa Branca", "Asa Branca")).toBe(1);
+    // dois vazios NÃO são a mesma música: divergência deliberada do Python,
+    // documentada no `lyrics_fetch::similarity`
+    expect(similaridadeDeNomes("", "")).toBe(0);
+    expect(similaridadeDeNomes("abc", "xyz")).toBe(0);
+    // "Ponto de Oxum" x "Ponto de Ogum" pontua ACIMA de "Roda Viva" x "Roda
+    // Vida": nenhum limiar separa as classes, e é por isso que o número não
+    // foi recalibrado — foi a métrica que foi portada
+    expect(similaridadeDeNomes("Ponto de Oxum", "Ponto de Ogum")).toBeGreaterThan(
+      similaridadeDeNomes("Roda Viva", "Roda Vida"),
+    );
   });
 });
 

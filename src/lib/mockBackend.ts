@@ -634,7 +634,8 @@ function propostaNoOp(p: EnrichProposal): boolean {
 /**
  * Acima disto, duas grafias são o MESMO nome ("Milionário & José Rico" x
  * "Milionário y José Rico"). Calibrado no acervo real de 94 arquivos, onde
- * 6 dos 8 conflitos eram a mesma música escrita de outro jeito.
+ * 6 dos 8 conflitos eram a mesma música escrita de outro jeito — e calibrado
+ * contra o `difflib`, que é a métrica que `similaridadeDeNomes` porta.
  *
  * Espelha `fingerprint::LIMIAR_MESMA_GRAFIA` — o valor mora lá, aqui é cópia.
  */
@@ -647,32 +648,113 @@ const LIMIAR_MESMA_GRAFIA = 0.85;
  */
 const MIN_CONTENCAO = 5;
 
-/** Bigramas de caracteres COM multiplicidade (`lyrics_fetch::bigrams`). */
-function bigramas(s: string): Map<string, number> {
-  const mapa = new Map<string, number>();
-  const chars = [...s];
-  for (let i = 0; i + 1 < chars.length; i++) {
-    const par = chars[i] + chars[i + 1];
-    mapa.set(par, (mapa.get(par) ?? 0) + 1);
+// ---------------------------------------------------------------------------
+// A similaridade: porte do difflib.SequenceMatcher.ratio() do Python
+// ---------------------------------------------------------------------------
+//
+// Espelha `lyrics_fetch::similarity`. Até o QA A1 os dois lados usavam
+// coeficiente de Dice sobre bigramas, e o 0,85 que decide grafia foi
+// calibrado contra o `difflib` do `tools/curadoria.py` — número de uma
+// métrica aplicado a outra. Medido em 49 pares do repertório: o Dice dava 8
+// falsos conflitos contra 1 do difflib, porque uma troca de UM caractere
+// destrói DOIS bigramas e nome de artista brasileiro é curto ("Luiz"/"Luis").
+// E conflito faz o funil VOLTAR antes das etapas de letra: com o Dice, baixar
+// o acessório piorava a música.
+
+/**
+ * O `find_longest_match` do difflib, restrito a `a[alo..ahi]` e `b[blo..bhi]`:
+ * devolve `[início em a, início em b, tamanho]`. Empate fica com o bloco que
+ * começa mais cedo em `a` e depois mais cedo em `b` — o desempate muda a
+ * recursão, e portanto o total.
+ */
+function maiorBloco(
+  a: string[],
+  b: string[],
+  b2j: Map<string, number[]>,
+  alo: number,
+  ahi: number,
+  blo: number,
+  bhi: number,
+): [number, number, number] {
+  let [besti, bestj, bestsize] = [alo, blo, 0];
+  // j2len[j] = tamanho do bloco que termina em a[i-1]/b[j]
+  let j2len = new Map<number, number>();
+  for (let i = alo; i < ahi; i++) {
+    const novo = new Map<number, number>();
+    for (const j of b2j.get(a[i]) ?? []) {
+      if (j < blo) continue;
+      if (j >= bhi) break;
+      const k = (j2len.get(j - 1) ?? 0) + 1;
+      novo.set(j, k);
+      if (k > bestsize) [besti, bestj, bestsize] = [i + 1 - k, j + 1 - k, k];
+    }
+    j2len = novo;
   }
-  return mapa;
+  // Estende o bloco pelas pontas: no difflib isto reabsorve os caracteres
+  // "populares" purgados do b2j. Sem `isjunk` (é sempre None aqui) é só isto.
+  while (besti > alo && bestj > blo && a[besti - 1] === b[bestj - 1]) {
+    [besti, bestj, bestsize] = [besti - 1, bestj - 1, bestsize + 1];
+  }
+  while (
+    besti + bestsize < ahi &&
+    bestj + bestsize < bhi &&
+    a[besti + bestsize] === b[bestj + bestsize]
+  ) {
+    bestsize++;
+  }
+  return [besti, bestj, bestsize];
 }
 
 /**
- * Similaridade textual em [0, 1]: coeficiente de Dice sobre bigramas de
- * caracteres das chaves normalizadas. Porte do `lyrics_fetch::similarity`.
+ * Casamentos totais entre `a` e `b`, pelo algoritmo do
+ * `get_matching_blocks()`: acha o maior bloco comum e recorre à ESQUERDA e à
+ * DIREITA dele, nunca cruzado — é o que faz o difflib não ser um casamento de
+ * conjuntos.
  */
-function similaridade(bruto1: string, bruto2: string): number {
+function casamentos(a: string[], b: string[]): number {
+  const b2j = new Map<string, number[]>();
+  b.forEach((c, j) => {
+    const js = b2j.get(c);
+    if (js) js.push(j);
+    else b2j.set(c, [j]);
+  });
+  // o `autojunk` do difflib descarta os caracteres populares demais, e só a
+  // partir de 200 elementos — nomes nunca chegam lá, mas o porte inclui a
+  // regra para não divergir no dia em que alguém comparar textos longos
+  if (b.length >= 200) {
+    const teto = Math.floor(b.length / 100) + 1;
+    for (const [c, js] of [...b2j]) if (js.length > teto) b2j.delete(c);
+  }
+
+  let total = 0;
+  const fila: Array<[number, number, number, number]> = [[0, a.length, 0, b.length]];
+  while (fila.length > 0) {
+    const [alo, ahi, blo, bhi] = fila.pop()!;
+    const [i, j, k] = maiorBloco(a, b, b2j, alo, ahi, blo, bhi);
+    if (k === 0) continue;
+    total += k;
+    if (alo < i && blo < j) fila.push([alo, i, blo, j]);
+    if (i + k < ahi && j + k < bhi) fila.push([i + k, ahi, j + k, bhi]);
+  }
+  return total;
+}
+
+/**
+ * Similaridade textual em [0, 1] entre as chaves normalizadas: o
+ * `difflib.SequenceMatcher.ratio()`, 2·M/T sobre os caracteres casados.
+ * Porte do `lyrics_fetch::similarity` — exportado para o teste de contrato,
+ * onde os NÚMEROS são conferidos, e não só o veredito: uma régua diferente
+ * que hoje cai do mesmo lado do limiar volta a divergir na próxima calibração.
+ */
+export function similaridadeDeNomes(bruto1: string, bruto2: string): number {
   const a = chaveDeTag(bruto1);
   const b = chaveDeTag(bruto2);
+  // Divergência deliberada do Python, igual à do Rust: lá dois vazios dão 1,0
+  // (2·M/T com T = 0). Aqui valem 0,0 — a resposta decide IDENTIDADE, e dois
+  // campos vazios não são a mesma música, são dois nadas.
   if (a === b) return a === "" ? 0 : 1;
-  const [ba, bb] = [bigramas(a), bigramas(b)];
-  const soma = (m: Map<string, number>) => [...m.values()].reduce((x, y) => x + y, 0);
-  const [na, nb] = [soma(ba), soma(bb)];
-  if (na === 0 || nb === 0) return 0; // uma das chaves tem < 2 chars e diferem
-  let inter = 0;
-  for (const [par, n] of ba) inter += Math.min(n, bb.get(par) ?? 0);
-  return (2 * inter) / (na + nb);
+  const [ca, cb] = [[...a], [...b]];
+  return (2 * casamentos(ca, cb)) / (ca.length + cb.length);
 }
 
 /**
@@ -696,9 +778,11 @@ export function discordaDoSom(atual: string, identificado: string): boolean {
   const a = chaveDeTag(atual);
   const b = chaveDeTag(identificado);
   if (a === b) return false;
-  const [curta, longa] = a.length <= b.length ? [a, b] : [b, a];
+  // par ordenado em CARACTERES, como o `sorted((a, b), key=len)` do Python e
+  // o `curta_e_longa` do Rust (QA B7)
+  const [curta, longa] = [...a].length <= [...b].length ? [a, b] : [b, a];
   if ([...curta].length >= MIN_CONTENCAO && longa.includes(curta)) return false;
-  return similaridade(a, b) < LIMIAR_MESMA_GRAFIA;
+  return similaridadeDeNomes(a, b) < LIMIAR_MESMA_GRAFIA;
 }
 
 export function createMockBackend(): MockBackend {

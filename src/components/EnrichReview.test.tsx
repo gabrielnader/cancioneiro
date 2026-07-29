@@ -1021,6 +1021,66 @@ describe("EnrichReview (V5 — F13)", () => {
       ]);
     });
 
+    /**
+     * SUGESTÃO-3, avaliada e RECUSADA — e por isso fixada em teste.
+     *
+     * A proposta era gravar só o campo que DIVERGIU quando um dos dois
+     * coincide. Três razões para não:
+     *
+     * 1. **o rótulo é "Aceitar o que o som diz"**, e a linha mostra o lado do
+     *    som inteiro, com título e artista juntos. Gravar metade dele seria
+     *    aplicar algo DIFERENTE do que a pessoa leu — num produto sem suporte,
+     *    aplicar exatamente o texto exibido vale mais que a economia;
+     * 2. **saber qual campo divergiu exige o `discorda`** (contenção mínima e
+     *    tolerância de grafia). Ele mora no Rust e no mock; trazê-lo para a
+     *    UI seria a QUARTA implementação da mesma regra, que é exatamente o
+     *    defeito das DECISIONS #80 e #88;
+     * 3. **o campo que coincide é gravado com o mesmo valor** — escrita
+     *    inócua. O único caso com efeito real é o de grafia (o som escreve
+     *    "y" onde a etiqueta tinha "&"), e nesse caso a pessoa leu as duas
+     *    grafias lado a lado antes de marcar.
+     *
+     * Se um dia o backend mandar QUAL campo divergiu (como já manda
+     * `confianca`), a conta muda: aí não é regra duplicada, é dado.
+     */
+    it("aceitar aplica o lado do som INTEIRO, inclusive o campo que coincide", async () => {
+      const enrichApply = vi.fn(async (aplicacoes: EnrichApply[]) =>
+        aplicacoes.map((a) => ok(song(a.song_id, a.title))),
+      );
+      setBackendForTests({ enrichApply } as unknown as Backend);
+      // só o ARTISTA diverge: o título é o mesmo dos dois lados
+      const soArtista = proposal({
+        song_id: 8,
+        file_path: "/acervo/8.mp3",
+        current_title: "Sol Nascente",
+        current_artist: "Alceu Valença",
+        proposed_title: "Sol Nascente",
+        proposed_artist: "Alceu Valença",
+        lyrics: null,
+        confidence: "baixa",
+        fonte: "reconhecimento pelo som",
+        conflito: {
+          titulo: "Sol Nascente",
+          artista: "Chico César",
+          confianca: "alta",
+        },
+      });
+      renderReview([soArtista]);
+      fireEvent.click(
+        screen.getByRole("checkbox", { name: rotuloAceitarSom("Sol Nascente") }),
+      );
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: "Aplicar selecionadas (1)" }),
+        );
+      });
+      const enviado = enrichApply.mock.calls[0][0][0];
+      // o título vai junto, com o MESMO valor que já estava lá — escrita
+      // inócua, e o que a pessoa leu na linha
+      expect(enviado.title).toBe("Sol Nascente");
+      expect(enviado.artist).toBe("Chico César");
+    });
+
     it("o aviso final conta a correção de nome vinda do som", async () => {
       setBackendForTests({
         enrichApply: vi.fn(async (aplicacoes: EnrichApply[]) =>
