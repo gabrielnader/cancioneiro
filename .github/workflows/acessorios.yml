@@ -1,0 +1,138 @@
+name: acessorios
+
+# Publica os ACESSÓRIOS do funil (F18 fase 2 / PRD V9) num lançamento à parte
+# e ESTÁVEL — `acessorios-v1` —, e não a cada versão do app.
+#
+# Por que rehospedar em vez de apontar para a origem: o app fixa URL e SHA-256
+# no binário, e quem usa o Cancioneiro não tem a quem perguntar quando um
+# download falha. URL que não muda, hash sob nosso controle e uma origem só
+# para explicar na tela valem mais que a economia de não copiar 2 MB.
+#
+# Rodar de novo com a mesma tag SUBSTITUI os arquivos — e portanto muda os
+# hashes que o app espera. Só faça isso subindo a tag (`acessorios-v2`).
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag do lançamento de acessórios"
+        required: true
+        default: "acessorios-v1"
+      chromaprint:
+        description: "Versão do Chromaprint (fpcalc)"
+        required: true
+        default: "v1.5.1"
+
+permissions:
+  contents: write
+
+jobs:
+  reunir:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: O que a release do Chromaprint realmente oferece
+        # Impresso SEMPRE, mesmo quando tudo dá certo: a lista de plataformas
+        # disponíveis é a informação que decide se o Apple Silicon precisa de
+        # Rosetta ou tem binário próprio, e descobrir isso por dedução foi o
+        # tipo de suposição que já custou caro neste projeto.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSAO: ${{ github.event.inputs.chromaprint }}
+        run: |
+          set -euo pipefail
+          gh release view "$VERSAO" --repo acoustid/chromaprint \
+            --json assets --jq '.assets[].name' | tee ativos.txt
+
+      - name: Baixar e extrair o fpcalc de cada plataforma
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSAO: ${{ github.event.inputs.chromaprint }}
+        run: |
+          set -euo pipefail
+          mkdir -p saida trabalho
+          num="${VERSAO#v}"
+
+          pegar() {  # $1 = sufixo do ativo, $2 = nome final do acessório
+            local ativo alvo
+            ativo=$(grep -E "$1\$" ativos.txt | head -1 || true)
+            if [ -z "$ativo" ]; then
+              echo "::error::nenhum ativo casa com '$1' na release $VERSAO do Chromaprint"
+              echo "::error::disponíveis: $(tr '\n' ' ' < ativos.txt)"
+              return 1
+            fi
+            echo "== $2 <- $ativo"
+            gh release download "$VERSAO" --repo acoustid/chromaprint \
+              --pattern "$ativo" --dir trabalho --clobber
+            rm -rf trabalho/extraido && mkdir -p trabalho/extraido
+            case "$ativo" in
+              *.zip) unzip -q -o "trabalho/$ativo" -d trabalho/extraido ;;
+              *.tar.gz) tar xzf "trabalho/$ativo" -C trabalho/extraido ;;
+              *) echo "::error::formato desconhecido: $ativo"; return 1 ;;
+            esac
+            alvo=$(find trabalho/extraido -type f \( -name fpcalc -o -name fpcalc.exe \) | head -1)
+            if [ -z "$alvo" ]; then
+              echo "::error::fpcalc não encontrado dentro de $ativo"
+              find trabalho/extraido -type f | head -20
+              return 1
+            fi
+            cp "$alvo" "saida/$2"
+            chmod +x "saida/$2" || true
+          }
+
+          pegar "windows-x86_64.zip"  "fpcalc-windows-x86_64.exe"
+          pegar "linux-x86_64.tar.gz" "fpcalc-linux-x86_64"
+
+          # macOS: o nome do ativo mudou entre versões do Chromaprint (houve
+          # x86_64 e houve universal). Tenta o universal primeiro; se não
+          # existir, cai no x86_64 — que em Apple Silicon depende de Rosetta,
+          # e isso PRECISA aparecer no resumo, não ser descoberto pelo usuário.
+          if grep -qE "macos-universal" ativos.txt; then
+            pegar "macos-universal.tar.gz" "fpcalc-macos-universal"
+            echo "MACOS_UNIVERSAL=sim" >> "$GITHUB_ENV"
+          else
+            pegar "macos-x86_64.tar.gz" "fpcalc-macos-x86_64"
+            echo "MACOS_UNIVERSAL=nao" >> "$GITHUB_ENV"
+          fi
+
+          echo "CHROMAPRINT_NUM=$num" >> "$GITHUB_ENV"
+
+      - name: Somas de verificação
+        run: |
+          set -euo pipefail
+          cd saida
+          sha256sum * | tee ../SHA256SUMS.txt
+
+      - name: Publicar no lançamento de acessórios
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          if ! gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "Acessórios do Cancioneiro" --notes \
+              "Binários auxiliares baixados sob demanda pelo aplicativo (PRD V9).
+          Não são instaladores — o instalador do Cancioneiro está nos lançamentos \`v*\`.
+          Cada arquivo é conferido por SHA-256 pelo aplicativo antes de ser executado."
+          fi
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            saida/* SHA256SUMS.txt
+
+      - name: Resumo (é daqui que os hashes vão para o código)
+        env:
+          TAG: ${{ github.event.inputs.tag }}
+        run: |
+          {
+            echo "## Acessórios publicados em \`$TAG\`"
+            echo
+            echo "Chromaprint \`${{ github.event.inputs.chromaprint }}\`, macOS universal: \`$MACOS_UNIVERSAL\`"
+            echo
+            echo '```'
+            cat SHA256SUMS.txt
+            echo '```'
+            echo
+            echo "### Ativos disponíveis na origem"
+            echo '```'
+            cat ativos.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
