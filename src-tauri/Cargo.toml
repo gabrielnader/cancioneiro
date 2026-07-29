@@ -25,8 +25,14 @@ serde_json = "1"
 lofty = "0.22"
 rusqlite = { version = "0.32", features = ["bundled", "collation"] }
 walkdir = "2"
-# usado SOMENTE pelo comando fetch_lyrics_online (único ponto de rede do app)
+# usado SOMENTE pelos pontos de rede enumerados do app (funil de curadoria e
+# download de acessórios) — ver commands.rs
 ureq = { version = "2", features = ["tls"] }
+# V9/F18 fase 2 — conferência do SHA-256 dos acessórios ANTES de executá-los.
+# Implementação de terceiros de propósito: hash é primitiva de segurança, e
+# escrever a nossa daria uma linha de defesa auditada por uma pessoa só. A
+# crate já estava na árvore como dependência transitiva do Tauri.
+sha2 = "0.10"
 
 [dev-dependencies]
 tempfile = "3"

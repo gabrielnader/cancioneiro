@@ -1,3 +1,4 @@
+pub mod acessorios;
 pub mod commands;
 pub mod db;
 pub mod enrich;
