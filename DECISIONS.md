@@ -539,3 +539,99 @@ opção mais simples que passa nos Acceptance Checks do PRD.
     seria prometer trabalho que não vai acontecer. O princípio vale para
     todas as etapas — inclusive as que dependem de chave embutida no build —,
     e aplicá-lo a uma só foi o defeito que o QA apontou.
+
+## V10/F18 fase 3 — a etapa que resolve, e o caminho único
+
+102. **Modo é escolha, e escolha é pedágio para quem não tem a quem
+    perguntar.** `Modo::{Completar,Conferencia}` sumiu: uma varredura só, em
+    TODAS as músicas da pasta. Com os 2 s por música medidos em campo (a
+    estimativa antiga dizia 0,3 s — erro de 7×), separar os dois trabalhos
+    custava 2 minutos e meio num acervo de 150 músicas, e cobrava por eles que
+    alguém que não sabe o que é terminal escolhesse entre dois nomes que não
+    entende. Pior: a conferência era **a única coisa que achava etiqueta
+    errada** (decisão 95), e recurso que depende de o usuário adivinhar que
+    existe é recurso que não existe. O portão de completude não foi apagado —
+    ele MUDOU DE LUGAR: saiu da porta de entrada (por isso a música que parece
+    completa chega à etapa 2 e o som a desmente) e virou o guarda das etapas 3
+    e 4, que continuam rodando só em quem não tem letra. Efeito colateral que
+    vale registrar: **o lote perdeu a rota que destruía transcrição corrigida
+    à mão** (a repro da decisão 79), porque ele não busca mais letra para quem
+    já tem. A trava do consentimento fica de pé, porque a porta de UMA música
+    continua rodando o funil inteiro (decisão 81).
+103. **A etapa 5 escreve letra, e só letra — e isso é garantia de construção,
+    não regra a lembrar.** A identificação pelo refrão (F14.1) ficou fora do
+    aplicativo pelo mesmo motivo que já a mantinha fora do `fingerprint.rs`:
+    em duas passadas completas do acervo real ela rendeu 0 e 1 identificação,
+    e a única foi **errada e aplicada** (decisão 74). A consequência é melhor
+    que a regra que se pediu: sem nome vindo daqui, "transcrição nunca
+    sobrescreve etiqueta real" não precisa de mecanismo nenhum — o tipo de
+    retorno não tem onde pôr um nome, e não existe CONFLITO possível. O refrão
+    continua sendo extraído, com todas as travas do candidato (2 palavras, 8
+    caracteres, repetição real, sem alucinação, sem placeholder), mas para uma
+    coisa só: mostrar UMA linha a quem vai conferir 47 letras escritas por
+    máquina. **Recurso que erra metade do que produz não entra num produto sem
+    suporte; a parte dele que só informa, entra.**
+104. **A lista negra de alucinação tem dois níveis, e é o `_MIN_LACO` outra
+    vez.** As frases inconfundíveis ("legendas pela comunidade", "inscreva-se
+    no canal") APAGAM a linha: nenhuma canção as contém, e deixá-las dentro da
+    letra faz o arquivo "ter letra" e sumir da fila para sempre (decisão 70).
+    As frases exatas e curtas ("Obrigado", "Fim", "Tchau") **não apagam nada**
+    — são verso legítimo em canto devocional —, só deixam de contar como
+    conteúdo: se a transcrição inteira for isso, ela vale vazia e a música é
+    marcada instrumental em vez de receber lixo como letra. Um nível só, para
+    qualquer dos lados, seria mutilar letra de verdade ou gravar legenda de
+    vídeo dentro do MP3 de alguém.
+105. **`Various Artists` não é artista, e a lista é curta de propósito.** O
+    rótulo que todo CD ripado põe no lugar do artista não estava em pilha
+    nenhuma: passava por artista REAL, a música era dada como completa, sumia
+    da curadoria para sempre e ainda virava CONFLITO contra o artista
+    verdadeiro. O que limita a lista é a lição da decisão 89: ao completar o
+    lixo de ripador, o Rust passou a marcar "Pista" sozinha como placeholder,
+    e "Pista" é título real. Só entram rótulos que NENHUMA canção usa como
+    nome — "Vai", "Vamos", "Valsa", "Variações", "Compilado" e "Artista" ficam
+    de fora, com teste fixando cada um. E **"VA" só conta escrito sem
+    acento**: "Vá" é o verbo, a normalização tira o acento, e as duas
+    chegariam à mesma chave — placeholder é tratado como campo VAZIO
+    (decisão 65), então condenar "Vá" apagaria o título de alguém.
+106. **Estimativa declarada e estimativa medida são coisas diferentes, e a
+    tela precisa saber qual está mostrando.** Para 180 MB a dispensa do tempo
+    acabou: o download anuncia `segundos_estimados` a partir de uma banda de
+    REFERÊNCIA (1 MB/s, deliberadamente conservadora) e, assim que há amostra
+    suficiente, troca para `segundos_restantes` medido nesta conexão — nulo
+    enquanto a amostra é curta, porque "faltam 0 segundos" durante dez minutos
+    é pior que nenhum número (decisões 85 e 86). O mesmo vale para a
+    transcrição: `RAZAO_DE_REFERENCIA` começa em 1,0 (um minuto de máquina por
+    minuto de música) porque **os 0,25 do `tools/curadoria.py` são a proporção
+    publicada de OUTRO motor** — reusá-los seria a decisão 72 aplicada a uma
+    estimativa. A primeira transcrição desta máquina devolve a razão real, e é
+    ela que passa a valer. Toda a conta mora no Rust, e não em TypeScript,
+    porque a cópia em TS já divergiu uma vez e foi o botão do produto que
+    ficou cinza (decisão 80).
+107. **Não se depende do formato de entrada de um binário de terceiro.** O
+    `whisper-cli` lê WAV 16 kHz mono, e só decodifica outros formatos quando
+    compilado com ffmpeg — opção de Linux, que brigaria com o
+    `BUILD_SHARED_LIBS=OFF` que faz do acessório UM arquivo conferível por UM
+    SHA-256. Entregar-lhe um MP3 e torcer seria a decisão 96 de novo: hash
+    prova que baixou o arquivo certo, não que ele faz o que a gente precisa —
+    e a etapa 5 nasceria morta nas 40 máquinas, descoberta por quem não tem a
+    quem perguntar. O aplicativo passa a **decodificar em Rust puro**
+    (`symphonia`, só a feature `mp3`: nenhuma biblioteca de sistema, nenhum
+    compilador C, o mesmo código nas quatro plataformas — um binding C
+    precisaria de toolchain por plataforma) e a entregar o WAV que o motor sabe
+    ler. O temporário nunca é criado ao lado do MP3, e a guarda de `Drop` o
+    apaga em qualquer saída, inclusive pânico: a regra "nenhum arquivo é
+    renomeado ou movido" ganhou o irmão que nunca havia sido escrito — **nada
+    é CRIADO dentro do acervo**.
+108. **A decodificação fechou o buraco que criou a decisão 72.** Contar
+    amostras dá duração MEDIDA do áudio, e ela passa a ser o topo da ordem de
+    autoridade: acima do número que o motor anuncia no stderr (que agora só
+    corrobora) e muito acima do cabeçalho do MP3. É a resposta direta ao
+    incidente: sem cabeçalho Xing, 300 segundos reais foram lidos como 2365, e
+    uma música CANTADA foi marcada instrumental para sempre — com a contagem
+    de amostras, 355 caracteres em 300 s dão 1,18 c/s (letra) em vez de 0,15
+    c/s (instrumental). A regra da F17 não mudou; ela passou a receber o número
+    certo. **`Adiada` ficou inalcançável pelo caminho real e NÃO foi
+    removida**: se alguém amanhã acrescentar uma porta que chegue à decisão sem
+    prova de duração, o produto adia em vez de marcar instrumental por engano.
+    O custo de manter é um `if`; o custo de remover seria descobrir o
+    contrário dentro do arquivo de alguém.
