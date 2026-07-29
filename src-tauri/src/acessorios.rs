@@ -112,6 +112,66 @@ pub const ERRO_DOWNLOAD_INTERROMPIDO: &str =
     "o download foi interrompido antes do fim — nada foi instalado";
 pub const ERRO_ACESSORIO_DESCONHECIDO: &str = "não há este acessório para este computador";
 
+// QA M4 — as falhas de ESCRITA também falam pt-BR.
+//
+// Seis pontos deste módulo subiam `io::Error` pelo `?` (`create_dir_all`,
+// `File::create`, `write_all`, `sync_all`, `set_permissions`, `rename`), e o
+// `From` do `error.rs` os transformava em "erro de arquivo: {e}" — a frase do
+// sistema operacional, em inglês, direto na tela. Só as falhas de LEITURA DA
+// REDE tinham frase própria; as de escrita, que são as PROVÁVEIS num parque
+// de máquinas que ninguém pode olhar, não tinham. Cada frase abaixo termina
+// dizendo o que fazer, porque não há a quem perguntar.
+
+/// `ENOSPC` no Unix; `ERROR_HANDLE_DISK_FULL` e `ERROR_DISK_FULL` no Windows.
+#[cfg(unix)]
+const CODIGOS_DISCO_CHEIO: &[i32] = &[28];
+#[cfg(windows)]
+const CODIGOS_DISCO_CHEIO: &[i32] = &[39, 112];
+#[cfg(not(any(unix, windows)))]
+const CODIGOS_DISCO_CHEIO: &[i32] = &[];
+
+pub const ERRO_DISCO_CHEIO: &str =
+    "não há espaço em disco para este download — libere espaço e tente de novo";
+pub const ERRO_SEM_PERMISSAO: &str =
+    "o computador não deixou gravar na pasta do aplicativo — se houver antivírus ou pasta \
+     sincronizada com a nuvem, pause e tente de novo";
+pub const ERRO_ARQUIVO_EM_USO: &str =
+    "o acessório está em uso por outro programa — feche o aplicativo, abra de novo e tente";
+pub const ERRO_GRAVACAO: &str = "não foi possível gravar o download neste computador";
+
+/// Em que passo do download a escrita falhou. A MESMA `io::Error` quer dizer
+/// coisas diferentes conforme o passo, e mandar a pessoa procurar no lugar
+/// errado é pior que não dizer nada.
+#[derive(Debug, Clone, Copy)]
+enum Passo {
+    /// Criar a pasta de cache.
+    Pasta,
+    /// Escrever o `.parcial`.
+    Gravacao,
+    /// Trocar o `.parcial` de nome (e o bit de execução antes dele).
+    Instalacao,
+}
+
+/// Traduz a falha de escrita para uma frase em pt-BR que diz o que fazer.
+fn erro_de_escrita(passo: Passo, e: &std::io::Error) -> AppError {
+    if e.raw_os_error()
+        .is_some_and(|c| CODIGOS_DISCO_CHEIO.contains(&c))
+    {
+        return AppError(ERRO_DISCO_CHEIO.into());
+    }
+    if e.kind() == std::io::ErrorKind::PermissionDenied {
+        // No Windows, `rename` por cima de um `fpcalc` que está RODANDO dá
+        // "os error 5" (acesso negado) — que não é problema de permissão de
+        // pasta nenhum. É o caso real de quem manda baixar de novo com uma
+        // varredura em curso.
+        return AppError(match passo {
+            Passo::Instalacao => ERRO_ARQUIVO_EM_USO.into(),
+            Passo::Pasta | Passo::Gravacao => ERRO_SEM_PERMISSAO.into(),
+        });
+    }
+    AppError(ERRO_GRAVACAO.into())
+}
+
 /// Pedaço de leitura do download. 64 KiB dá progresso miúdo o bastante para a
 /// barra andar visivelmente em 2 MB sem inundar o WebView de eventos.
 const PEDACO: usize = 64 * 1024;
@@ -323,7 +383,7 @@ where
         Estado::Ausente | Estado::Corrompido => {}
     }
 
-    std::fs::create_dir_all(cache)?;
+    std::fs::create_dir_all(cache).map_err(|e| erro_de_escrita(Passo::Pasta, &e))?;
     let corpo = fetch(&acessorio.url())?;
     let total = corpo.total;
     let mut origem = corpo.bytes;
@@ -331,8 +391,8 @@ where
     // a partir daqui existe um parcial no disco, e ele some sozinho em
     // qualquer caminho de saída que não seja o sucesso (ver `Parcial`)
     let parcial = Parcial(acessorio.parcial(cache));
-    let mut destino = std::fs::File::create(&parcial.0)?;
-    let mut hasher = Sha256::new();
+    let mut destino =
+        std::fs::File::create(&parcial.0).map_err(|e| erro_de_escrita(Passo::Gravacao, &e))?;
     let mut buf = vec![0u8; PEDACO];
     let mut baixados: u64 = 0;
     on_progress(0, total);
@@ -347,15 +407,36 @@ where
         if lidos == 0 {
             break;
         }
-        destino.write_all(&buf[..lidos])?;
-        hasher.update(&buf[..lidos]);
+        destino
+            .write_all(&buf[..lidos])
+            .map_err(|e| erro_de_escrita(Passo::Gravacao, &e))?;
         baixados += lidos as u64;
         on_progress(baixados, total);
     }
-    destino.flush()?;
+    // `sync_all`, e não `flush` (QA B2): o `flush` de um `File` do Rust é
+    // no-op — não existe buffer de usuário para esvaziar —, então o que havia
+    // aqui não era barreira nenhuma. Sem forçar os dados ao disco antes da
+    // troca de nome, um desligamento na hora errada deixaria no cache um
+    // arquivo com o nome CERTO e conteúdo indefinido — e é justamente o
+    // arquivo que o produto executa depois.
+    destino
+        .sync_all()
+        .map_err(|e| erro_de_escrita(Passo::Gravacao, &e))?;
     drop(destino);
 
-    if hex(&hasher.finalize()) != acessorio.sha256 {
+    // QA M3 — A SOMA CONFERE O ARQUIVO DO DISCO, não os bytes que passaram
+    // pela rede.
+    //
+    // Até a v0.9.0 o SHA-256 era acumulado sobre o que se LIA da conexão e
+    // comparado antes do `rename`: isso confere o FLUXO, e o que vai ser
+    // executado é o ARQUIVO. Um `.parcial` esvaziado depois da última escrita
+    // — antivírus em quarentena, sincronizador de nuvem, disco que não gravou
+    // — saía "instalado" com 0 byte, e o módulo cuja razão de existir é
+    // "nada entra no cache sem conferir" devolvia `Ok`. Reler custa alguns MB
+    // de leitura de disco (180 MB na etapa 5), que é o preço de a garantia
+    // ser verdadeira.
+    let soma = sha256_do_arquivo(&parcial.0).map_err(|_| AppError(ERRO_GRAVACAO.into()))?;
+    if soma != acessorio.sha256 {
         return Err(AppError(ERRO_SOMA_NAO_CONFERE.into()));
     }
 
@@ -365,11 +446,12 @@ where
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&parcial.0, std::fs::Permissions::from_mode(0o755))?;
+        std::fs::set_permissions(&parcial.0, std::fs::Permissions::from_mode(0o755))
+            .map_err(|e| erro_de_escrita(Passo::Instalacao, &e))?;
     }
 
     let caminho = acessorio.caminho(cache);
-    std::fs::rename(&parcial.0, &caminho)?;
+    std::fs::rename(&parcial.0, &caminho).map_err(|e| erro_de_escrita(Passo::Instalacao, &e))?;
     std::mem::forget(parcial); // deu certo: não há mais parcial para apagar
     Ok(Some(caminho))
 }
@@ -814,6 +896,175 @@ mod tests {
         assert_eq!(erro.to_string(), ERRO_DOWNLOAD_INTERROMPIDO);
         assert!(!a.caminho(dir.path()).exists());
         assert_eq!(sobrou_na_pasta(dir.path()), Vec::<String>::new());
+    }
+
+    // -----------------------------------------------------------------------
+    // QA M3 — o que se confere tem de ser o que se INSTALA
+    // -----------------------------------------------------------------------
+
+    /// Um leitor que entrega os bytes certos e ESVAZIA o `.parcial` no fim.
+    ///
+    /// É o modelo do que separa "os bytes que vieram da rede" de "os bytes que
+    /// ficaram no disco": antivírus que põe o arquivo em quarentena logo
+    /// depois de escrito, sincronizador de nuvem que o troca, disco que
+    /// silenciosamente não gravou. Nenhum deles é hipotético num parque de
+    /// ~40 máquinas Windows que ninguém pode olhar.
+    struct EsvaziaNoFim {
+        restante: Vec<u8>,
+        parcial: PathBuf,
+    }
+
+    impl std::io::Read for EsvaziaNoFim {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.restante.is_empty() {
+                // fim do corpo: os bytes já foram todos escritos, e é AQUI
+                // que o arquivo do disco deixa de ser o que se baixou
+                let _ = std::fs::File::create(&self.parcial);
+                return Ok(0);
+            }
+            let n = buf.len().min(self.restante.len());
+            buf[..n].copy_from_slice(&self.restante[..n]);
+            self.restante.drain(..n);
+            Ok(n)
+        }
+    }
+
+    /// A soma era calculada sobre os bytes LIDOS DA REDE e comparada antes do
+    /// `rename` — nada relia o arquivo do disco. Isso confere o FLUXO, não o
+    /// arquivo que vai ser executado, e um `.parcial` esvaziado depois da
+    /// última escrita saía "instalado" com 0 byte.
+    ///
+    /// Hoje o `fpcalc_pronto` reconfere lendo o disco antes de cada varredura,
+    /// então nada não-conferido chega a rodar. Mas a garantia está escrita
+    /// como se fosse deste módulo, e um dia alguém vai confiar nela.
+    #[test]
+    fn a_soma_confere_o_arquivo_do_disco_e_nao_os_bytes_da_rede() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = acessorio_de_teste(&sha256_dos_bytes(CONTEUDO));
+        let parcial = a.parcial(dir.path());
+        // O que faz este teste valer: os bytes que passam pela REDE são
+        // exatamente os esperados, então a conferência antiga — a que somava
+        // o que era lido da conexão — aprovava. É a diferença entre conferir
+        // o fluxo e conferir o arquivo.
+        assert_eq!(sha256_dos_bytes(CONTEUDO), a.sha256);
+
+        let erro = baixar(
+            &a,
+            dir.path(),
+            |_url| {
+                Ok(Corpo {
+                    total: Some(CONTEUDO.len() as u64),
+                    bytes: Box::new(EsvaziaNoFim {
+                        restante: CONTEUDO.to_vec(),
+                        parcial: parcial.clone(),
+                    }),
+                })
+            },
+            sem_progresso,
+            sem_cancelamento,
+        )
+        .expect_err("arquivo esvaziado no disco não confere");
+
+        assert_eq!(erro.to_string(), ERRO_SOMA_NAO_CONFERE);
+        assert!(!a.caminho(dir.path()).exists(), "nada foi instalado");
+        assert_eq!(sobrou_na_pasta(dir.path()), Vec::<String>::new());
+        assert_eq!(estado(&a, dir.path()), Estado::Ausente);
+    }
+
+    // -----------------------------------------------------------------------
+    // QA M4 — erro de escrita fala pt-BR e diz o que fazer
+    // -----------------------------------------------------------------------
+
+    /// Seis pontos do download subiam `io::Error` pelo `?`, e o `From` do
+    /// `error.rs` os transformava em "erro de arquivo: {e}" — a frase do
+    /// sistema operacional, em inglês, direto na tela de quem não tem a quem
+    /// perguntar. Só as falhas de LEITURA DA REDE tinham frase própria; as de
+    /// ESCRITA, que são as prováveis, não.
+    #[test]
+    fn falha_de_escrita_vira_frase_em_pt_br_que_diz_o_que_fazer() {
+        use std::io::{Error, ErrorKind};
+        let cheio = Error::from_raw_os_error(CODIGOS_DISCO_CHEIO[0]);
+        let sem_permissao = Error::from(ErrorKind::PermissionDenied);
+        let outro = Error::other("qualquer coisa");
+
+        // disco cheio é disco cheio em qualquer passo
+        for passo in [Passo::Pasta, Passo::Gravacao, Passo::Instalacao] {
+            assert_eq!(
+                erro_de_escrita(passo, &cheio).to_string(),
+                ERRO_DISCO_CHEIO
+            );
+        }
+        // "sem permissão" quer dizer coisas diferentes conforme o passo: na
+        // INSTALAÇÃO (o rename) o caso real é o Windows recusando trocar um
+        // `fpcalc` que está rodando — os error 5 —, e mandar a pessoa olhar
+        // permissão de pasta ali seria mandá-la procurar no lugar errado
+        assert_eq!(
+            erro_de_escrita(Passo::Pasta, &sem_permissao).to_string(),
+            ERRO_SEM_PERMISSAO
+        );
+        assert_eq!(
+            erro_de_escrita(Passo::Gravacao, &sem_permissao).to_string(),
+            ERRO_SEM_PERMISSAO
+        );
+        assert_eq!(
+            erro_de_escrita(Passo::Instalacao, &sem_permissao).to_string(),
+            ERRO_ARQUIVO_EM_USO
+        );
+        assert_eq!(
+            erro_de_escrita(Passo::Gravacao, &outro).to_string(),
+            ERRO_GRAVACAO
+        );
+    }
+
+    /// E nenhuma delas repassa o texto do sistema: "os error 28" e "No space
+    /// left on device" não explicam nada a quem só clicou em "baixar".
+    #[test]
+    fn nenhuma_mensagem_de_escrita_repassa_o_texto_do_sistema() {
+        for msg in [
+            ERRO_DISCO_CHEIO,
+            ERRO_SEM_PERMISSAO,
+            ERRO_ARQUIVO_EM_USO,
+            ERRO_GRAVACAO,
+            ERRO_SOMA_NAO_CONFERE,
+            ERRO_DOWNLOAD_INTERROMPIDO,
+        ] {
+            assert!(!msg.contains("os error"), "{msg}");
+            assert!(!msg.contains("erro de arquivo"), "{msg}");
+            // nenhuma palavra em inglês do repertório do sistema
+            for ingles in ["denied", "space", "device", "permission", "Access"] {
+                assert!(!msg.contains(ingles), "{msg} tem {ingles}");
+            }
+            assert!(msg.chars().next().is_some_and(|c| c.is_lowercase()));
+        }
+    }
+
+    /// Fim a fim: a pasta de cache não pode ser criada (há um ARQUIVO no
+    /// caminho dela) e a mensagem que sobe é a de pt-BR, não a do sistema.
+    #[test]
+    fn pasta_de_cache_que_nao_pode_ser_criada_nao_vaza_o_erro_do_sistema() {
+        let dir = tempfile::tempdir().unwrap();
+        let atravancado = dir.path().join("acessorios");
+        std::fs::write(&atravancado, b"um arquivo onde devia haver pasta").unwrap();
+        let cache = atravancado.join("dentro");
+        let a = acessorio_de_teste(&sha256_dos_bytes(CONTEUDO));
+        let chamadas = Cell::new(0);
+
+        let erro = baixar(
+            &a,
+            &cache,
+            fetcher(CONTEUDO, &chamadas),
+            sem_progresso,
+            sem_cancelamento,
+        )
+        .expect_err("não dá para criar a pasta");
+
+        let msg = erro.to_string();
+        assert!(!msg.contains("os error"), "vazou o erro do sistema: {msg}");
+        assert!(
+            [ERRO_DISCO_CHEIO, ERRO_SEM_PERMISSAO, ERRO_GRAVACAO].contains(&msg.as_str()),
+            "é uma das frases de escrita, e veio: {msg}"
+        );
+        assert_eq!(chamadas.get(), 0, "nem chega a abrir conexão");
     }
 
     // -----------------------------------------------------------------------

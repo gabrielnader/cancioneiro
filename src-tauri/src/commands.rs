@@ -34,6 +34,16 @@ use tauri::{AppHandle, Emitter, Manager, State};
 //
 // A regra para quem vier depois: se o comando faz rede, percorre disco ou
 // escreve arquivo, ele é `(async)`.
+//
+// E a metade que faltava na regra (QA B5): **`(async)` não basta se o comando
+// disputa o LOCK COMPARTILHADO com um que demora.** O `enrich_apply` segura o
+// lock enquanto grava dezenas de MP3s; um comando síncrono que peça o mesmo
+// lock nesse meio-tempo bloqueia a thread principal do mesmo jeito, só que
+// pela porta do mutex. Quem pode ser chamado durante um lote longo usa
+// `scan_conn()` — conexão dedicada quando o banco é um arquivo — e é
+// `(async)`. Consulta de milissegundos que a UI só dispara em repouso
+// continua no lock, que é o certo: uma conexão nova por tecla digitada seria
+// pior.
 
 /// Estado global: conexão SQLite protegida por mutex + caminho do arquivo do
 /// banco (quando file-backed), para abrir conexões dedicadas de scan, + o
@@ -606,13 +616,21 @@ pub fn enrich_folder_scan(
 /// a pessoa mandar começar. Sem rede, sem gravação: é a mesma
 /// `enrich::candidata` da varredura, contada (QA ALTO-2 — havia uma segunda
 /// cópia da regra em TypeScript, já divergente).
-#[tauri::command]
+///
+/// É `(async)` e usa CONEXÃO DEDICADA (QA B5). Era síncrono e pegava o lock
+/// compartilhado — o mesmo que o `enrich_apply` segura enquanto grava dezenas
+/// de MP3s —, então uma contagem disparada durante a gravação parava a thread
+/// que desenha a janela até o lote terminar. É a DECISIONS #92 entrando pela
+/// porta do mutex em vez da porta do comando síncrono, e a V9 dispara esta
+/// contagem mais vezes (a cada troca de pasta e de modo). Ela lê a biblioteca
+/// inteira: percorrer o banco já basta para o `(async)`.
+#[tauri::command(async)]
 pub fn enrich_count(
     state: State<'_, Db>,
     folder_prefix: String,
     modo: Option<crate::enrich::Modo>,
 ) -> Result<usize> {
-    let conn = state.lock()?;
+    let conn = state.scan_conn()?;
     crate::enrich::count_candidatas(&conn, &folder_prefix, modo.unwrap_or_default())
 }
 
