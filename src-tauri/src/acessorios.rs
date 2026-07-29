@@ -34,22 +34,25 @@ use std::path::{Path, PathBuf};
 //  ██  CATÁLOGO DOS ACESSÓRIOS — É AQUI QUE OS SHA-256 SÃO PREENCHIDOS  ██
 // ===========================================================================
 //
-// DE ONDE VÊM AS SOMAS: do resumo do fluxo `.github/workflows/acessorios.yml`
-// (passo "Resumo (é daqui que os hashes vão para o código)"), que publica os
-// binários no lançamento `acessorios-v1` e imprime o `sha256sum` de cada um.
-// Copie de lá, tal e qual, em minúsculas.
+// DE ONDE VÊM AS SOMAS: do lançamento `acessorios-v1` (Chromaprint v1.5.1),
+// publicado pelo fluxo `.github/workflows/acessorios.yml`. Cada valor tem
+// DUAS contas independentes sobre o mesmo arquivo: o `digest` que o próprio
+// GitHub calcula sobre o ativo armazenado e o `SHA256SUMS.txt` que o fluxo
+// calcula no runner. Se um dia elas divergirem, desconfie do ATIVO — nunca
+// ajuste a constante para o valor novo.
 //
-// TROCAR UMA SOMA À TOA DESLIGA O ACESSÓRIO DE TODO MUNDO: o aplicativo
-// recusa qualquer arquivo que não bata com o valor daqui, e quem receber a
-// atualização passa a ver "o arquivo baixado não confere" para sempre, sem
-// ter a quem perguntar. Soma só muda junto com o arquivo publicado — e
-// republicar arquivo com a MESMA tag é proibido pelo próprio fluxo: sobe-se
-// a tag (`acessorios-v2`) e trocam-se as duas coisas de uma vez.
+// TROCAR UMA SOMA DESLIGA O ACESSÓRIO PARA QUEM JÁ BAIXOU: o arquivo que
+// está no cache passa a ser considerado corrompido, e quem receber a
+// atualização vê a etapa 4 sumir sem ter a quem perguntar. Se o Chromaprint
+// for atualizado um dia, o caminho é publicar `acessorios-v2` com tag NOVA e
+// trocar URL e somas de uma vez — nunca sobrescrever os ativos da v1 (o
+// próprio fluxo diz isso).
 //
-// ENQUANTO ESTIVEREM PENDENTES (64 zeros), o acessório é `Indisponivel`: o
-// aplicativo diz isso ANTES de gastar o download de alguém, em vez de baixar
-// 2 MB para então acusar o arquivo de estar corrompido — acusação falsa é
-// pior que ausência de recurso quando a mensagem é a explicação inteira.
+// SOMA PENDENTE (64 zeros) deixa o acessório `Indisponivel`: o aplicativo diz
+// isso ANTES de gastar o download de alguém, em vez de baixar 2 MB para então
+// acusar o arquivo de estar corrompido — acusação falsa é pior que ausência
+// de recurso quando a mensagem é a explicação inteira. Nenhuma entrada está
+// pendente hoje, e há teste fixando isso.
 
 /// Soma ainda não preenchida (64 zeros). Ver o bloco acima.
 pub const SHA256_PENDENTE: &str =
@@ -59,10 +62,10 @@ pub const SHA256_PENDENTE: &str =
 pub const URL_BASE: &str =
     "https://github.com/gabrielnader/cancioneiro/releases/download/acessorios-v1";
 
-/// Nome do arquivo do macOS. O ativo do Chromaprint mudou de nome entre
-/// versões (houve `macos-x86_64` e houve `macos-universal`), e o fluxo de CI
-/// escolhe o que existir na release usada — o valor daqui tem de casar com o
-/// que ele publicou, e sai no mesmo resumo das somas.
+/// Nome do arquivo do macOS. O Chromaprint v1.5.1 publica um binário
+/// UNIVERSAL: um arquivo só serve Intel e Apple Silicon, os dois nativos.
+/// Não há Rosetta no caminho, não há aviso a dar na tela, e o catálogo tem
+/// três entradas — não quatro.
 pub const ARQUIVO_MACOS: &str = "fpcalc-macos-universal";
 
 /// Tudo que o aplicativo sabe sobre os acessórios, compilado no binário.
@@ -71,22 +74,22 @@ pub const CATALOGO: &[Acessorio] = &[
         nome: FPCALC,
         plataforma: "windows-x86_64",
         arquivo: "fpcalc-windows-x86_64.exe",
-        sha256: SHA256_PENDENTE, // ← preencher
-        tamanho_bytes: 0,        // ← preencher (bytes, do mesmo resumo)
+        sha256: "659ea2dba1a12d7df4fe2b6f23f60fd9414ae61aca1b014ee8fa37c5e09b930b",
+        tamanho_bytes: 3_418_112,
     },
     Acessorio {
         nome: FPCALC,
         plataforma: "linux-x86_64",
         arquivo: "fpcalc-linux-x86_64",
-        sha256: SHA256_PENDENTE, // ← preencher
-        tamanho_bytes: 0,        // ← preencher
+        sha256: "085a1adf67b4a71a2e57b7b05bc425c1ea21b371b2b43049fc8ba37b53cb472b",
+        tamanho_bytes: 5_538_312,
     },
     Acessorio {
         nome: FPCALC,
         plataforma: "macos",
         arquivo: ARQUIVO_MACOS,
-        sha256: SHA256_PENDENTE, // ← preencher
-        tamanho_bytes: 0,        // ← preencher
+        sha256: "ede0f92ac30807799872f8700d5e334e9ddef738a6b1b9d154097954619d68f8",
+        tamanho_bytes: 4_739_368,
     },
 ];
 
@@ -455,11 +458,22 @@ mod tests {
         let arquivos: Vec<&str> = CATALOGO.iter().map(|a| a.arquivo).collect();
         assert!(arquivos.contains(&"fpcalc-windows-x86_64.exe"));
         assert!(arquivos.contains(&"fpcalc-linux-x86_64"));
-        assert!(
-            arquivos.contains(&"fpcalc-macos-universal")
-                || arquivos.contains(&"fpcalc-macos-x86_64"),
-            "o macOS precisa de UM dos dois nomes (ver ARQUIVO_MACOS)"
-        );
+        // o Chromaprint v1.5.1 publica binário UNIVERSAL para macOS: um
+        // arquivo só, nativo nos dois processadores, sem Rosetta
+        assert!(arquivos.contains(&"fpcalc-macos-universal"));
+        assert_eq!(arquivos.len(), 3, "três plataformas, não quatro");
+    }
+
+    /// Guarda de regressão: o catálogo publicado NÃO pode voltar a ter soma
+    /// pendente nem tamanho zero. Uma soma zerada por um merge desligaria a
+    /// etapa 4 de todo mundo, e um tamanho zerado faria a tela prometer um
+    /// download de 0 byte antes de baixar 5 MB.
+    #[test]
+    fn o_catalogo_publicado_nao_tem_nada_pendente() {
+        for a in CATALOGO {
+            assert_ne!(a.sha256, SHA256_PENDENTE, "{}: soma pendente", a.arquivo);
+            assert!(a.tamanho_bytes > 0, "{}: tamanho pendente", a.arquivo);
+        }
     }
 
     /// Soma tem 64 dígitos hexadecimais minúsculos — ou é a pendente. Um
