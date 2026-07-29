@@ -8,30 +8,78 @@ promessa: **nunca mais um terminal**.
 
 Três coisas vieram do uso real da v0.8.0/v0.8.1 e mudam o desenho.
 
-### 1. O funil ganha um RETORNO (ideia do dono do produto)
+### 1. O funil deixa de ser uma fila e vira DUAS FASES
 
-O desenho anterior era uma fila de mão única, por custo crescente. Está
-errado, e o erro é caro: a impressão digital descobre **título e artista**, e
-as etapas de letra só falharam antes porque **não havia nome para procurar**.
-Passar direto da impressão digital para a transcrição joga fora a única coisa
-que a etapa acabou de conquistar.
+O desenho anterior era uma fila única ordenada por custo crescente, com a
+impressão digital no meio das fontes de letra. Isso é um erro de categoria: a
+impressão digital **não devolve letra nenhuma**. Ela devolve **identidade** —
+que é *entrada* de todas as outras etapas.
 
-O funil passa a ser:
+São duas fases:
+
+**Fase A — que música é esta?**
 
 | # | etapa | custo | o que faz |
 |---|---|---|---|
 | 1 | tags + nome do arquivo | instantâneo | palpite local |
-| 2 | LRCLIB | ~0,5 s | letra, conferida pela DURAÇÃO |
-| 3 | Vagalume | ~0,5 s | letra, casamento estrito de texto |
-| 4 | impressão digital (AcoustID) | ~1 s | **título e artista** pelo som |
-| 4b | **volta ao 2 e ao 3** | ~1 s | agora COM nome de verdade para procurar |
+| 2 | impressão digital (AcoustID) | ~0,3 s | título e artista pelo SOM |
+
+**Fase B — qual é a letra dela?**
+
+| # | etapa | custo | o que faz |
+|---|---|---|---|
+| 3 | LRCLIB | ~0,5 s | letra, conferida pela DURAÇÃO |
+| 4 | Vagalume | ~0,5 s | letra, casamento estrito de texto |
 | 5 | transcrição (whisper.cpp) | minutos | letra ouvindo o áudio |
 
-A volta (4b) só acontece quando a etapa 4 produziu nome **novo** — senão é
-repetir a consulta que já falhou. E ela roda **antes** da transcrição, que é
-a etapa mais cara do produto por três ordens de grandeza.
+Quando a fase A produz nome confiável, a fase B parte DELE. Senão, parte da
+cascata de palpites locais, como sempre.
+
+**Isto também sai mais barato**, e não só mais correto: sem nome conhecido, o
+`gerar_palpites` produz até 7 palpites e cada um é uma consulta ao LRCLIB com
+pausa de cortesia. Com o nome verdadeiro, é **uma**. Trocamos décimos de
+segundo de CPU local (o `fpcalc` lê só os primeiros ~120 s do áudio) por até
+seis idas à rede evitadas.
+
+Uma versão anterior deste PRD previa um RETORNO (voltar às etapas de letra
+depois da impressão digital). A ordem por fases resolve o mesmo problema sem
+o ciclo, e some com ele.
+
+**O risco que a mudança cria.** Com o AcoustID na frente, um erro dele
+contamina tudo o que vem depois: com título/artista errados, o LRCLIB acha a
+letra da música errada e devolve **ALTA**, porque a duração vai bater — as
+duas fontes casam por duração e erram juntas, de forma consistente. Letra
+errada com aparência de certa. É a família do "Ponto de Ogum" dentro de
+"Ponto de Oxum" (decisão 63), com um multiplicador. Portanto: **a régua de
+aceitação do AcoustID não é afrouxável**, e nome recusado por ela não vaza
+para a fase B.
 
 Vale nas duas telas: na varredura por pasta e no botão de uma música só.
+
+### 1b. Etiqueta ERRADA é um modo de falha distinto de etiqueta faltando
+
+Caso real: arquivo etiquetado "Te ver feliz, te ver contente" / "Caetano
+Veloso" que é, na verdade, "Viver Feliz" do Nilson Chaves. Nada ali é
+placeholder, então o funil considera a música **completa** e ela nunca mais
+entra em varredura: o erro é invisível para sempre. E quem não conhece o
+repertório — as outras 39 pessoas — nunca vai desconfiar; a música só não
+aparece quando procuram.
+
+Duas populações, que o PRD vinha tratando como uma:
+
+- **nunca publicada** (gravação de casa, de sessão): base nenhuma tem, só a
+  transcrição resolve;
+- **publicada e mal etiquetada**: todas as bases têm — nós é que procuramos
+  pelo nome errado.
+
+A etapa 2 é a única capaz de resolver a segunda, porque ignora as etiquetas e
+pergunta ao som. Por isso existe um **modo de conferência**: uma varredura em
+que o filtro de completude não se aplica e a fase A roda em todo mundo. É
+trabalho distinto de "completar o que falta", com custo distinto, disparado de
+propósito — não é o padrão.
+
+Divergência entre o som e uma etiqueta REAL é **conflito**: mostra os dois
+lados, não pré-marca nada, nunca corrige sozinha.
 
 ### 2. A chave do Vagalume passa a ser NOSSA
 
@@ -71,7 +119,7 @@ e uma origem só para explicar na tela.
 
 | acessório | tamanho | quando |
 |---|---|---|
-| `fpcalc` (Chromaprint) | ~2 MB | ao ligar a etapa 4 |
+| `fpcalc` (Chromaprint) | 3-5 MB | ao ligar a etapa 2 |
 | `whisper-cli` (whisper.cpp) | ~1-30 MB | ao ligar a etapa 5 |
 | modelo `small` quantizado (q5_1) | ~180 MB | ao ligar a etapa 5 |
 
@@ -110,10 +158,13 @@ resumo acústico, não o áudio.
 
 **v0.9.0 — a máquina de acessórios, provada no barato**
 - infraestrutura de download verificado, cache, progresso, cancelamento
-- etapa 4 (impressão digital) usando `fpcalc` (~2 MB)
-- o retorno 4b
+- etapa 2 (impressão digital) usando `fpcalc` (3-5 MB), antes das etapas de letra
+- o modo de conferência (achar etiqueta errada) e as linhas de conflito
 - chave do Vagalume nossa
 - passe de redução da copy
+- a estimativa passa a depender de QUAIS etapas estão ligadas (medido em campo:
+  16 músicas em ~2 min com as etapas 1 e 3 apenas — 7 s/música, que era a
+  previsão; a etapa 2 e a 4 mudam essa conta)
 
 Provar a máquina nova com 2 MB antes de confiar nela com 180 MB é o ponto: o
 risco desta fase está no downloader, não no `fpcalc`.
