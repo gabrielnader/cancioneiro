@@ -332,3 +332,119 @@ opção mais simples que passa nos Acceptance Checks do PRD.
     no Rust e recarregava a página no meio do E2E — falha diferente a cada
     rodada, que é o que ensina uma equipe a ignorar a suíte. Snapshot para o
     Rust, `fixtures/` fora do watcher do Vite.
+
+## V8/F18 fase 1 — o funil dentro do app, e o que o QA achou nele
+
+78. **A curadoria mudou de dono**: são ~40 pessoas curando cada uma o seu
+    acervo, na própria máquina, e há acervos que o dono do produto não pode
+    nem olhar. Isso não é detalhe de distribuição, é o que decide o projeto:
+    o terminal precisa desaparecer por completo, e toda mensagem passa a ser
+    a única explicação que alguém vai receber, porque não existe suporte a
+    quem perguntar. O funil saiu do `tools/curadoria.py` e entrou em
+    Configurações; o ✎ saiu da lateral, que é caminho do dia a dia.
+79. **Letra que já existe não se apaga sozinha** (CRÍTICO do QA): uma música
+    com tag "AudioTrack 03" e uma transcrição corrigida à mão entrava na
+    varredura pelo nome placeholder, casava no LRCLIB pela duração e saía
+    ALTA — e ALTA chega pré-marcada (decisão 49). Um clique destruía a
+    transcrição e a marca de procedência. A proposta passa a carregar
+    `has_lyrics` e `letra_origem`, a revisão avisa, e substituir letra é uma
+    **segunda marcação, separada, desmarcada por padrão, que o "Marcar todas"
+    não toca**. É isso que devolve segurança à pré-marcação de ALTA: ela
+    aplica só nomes. O backend recusa a gravação sem consentimento explícito
+    — o caminho normal nunca chega lá, e é justamente por isso que a recusa
+    precisa existir. Porte tardio da decisão 55, que a linha de comando tinha
+    desde sempre e o app nunca teve.
+80. **Regra duplicada em duas linguagens diverge, e a divergência escolhe o
+    pior momento para aparecer**: a contagem de candidatas em TypeScript
+    afirmava espelhar a do Rust, não espelhava em três casos, e como ela
+    desabilitava o botão, o único ponto de entrada do produto ficava cinza
+    dizendo "não há nada para procurar" — a frase que a decisão 60 foi
+    escrita para proibir — justamente nos acervos que mais precisavam:
+    CD ripado com "Faixa 01…12"/"Artista Desconhecido", e pastas de
+    instrumentais sem artista. A contagem virou comando (`enrich_count`)
+    sobre a MESMA função da varredura. Contagem pendente ou falha nunca
+    bloqueia o disparo.
+81. **Quem clicou sabe o que quer**: o funil individual ignorava o que a
+    pessoa tinha acabado de digitar (procurava por "Faixa 03" enquanto ela
+    escrevera o nome certo) e, para música julgada completa, devolvia vazio
+    sem tocar a rede — e a tela dizia "não achamos esta música nos sites de
+    letra". Nada tinha sido procurado. O portão de completude saiu do
+    individual, o título e o artista do formulário vão para a busca, e o
+    vazio passa a significar uma coisa só. O curto-circuito de instrumental
+    **fica**: ele não é filtro de completude, é integridade — instrumental
+    casa com a versão cantada da mesma peça e gravaria a letra de outra
+    gravação.
+82. **Procedência é do dado, não do caminho**: letra do Vagalume aceita pelo
+    editor era gravada sem `TXXX:LETRA_ORIGEM`, enquanto o lote e o
+    `tools/curadoria.py` gravavam `vagalume` para a mesma letra — mesmo
+    acervo, três caminhos, dois arquivos diferentes no disco. O editor passa
+    a levar a procedência, e a **apaga assim que a pessoa edita a letra à
+    mão**: a marca descreve o texto que está lá.
+83. **"Sem conexão" não pode ser o nome de todo erro**: qualquer status HTTP
+    que não fosse 404 virava "sem conexão" — 429, 500, e a chave do Vagalume
+    digitada errada. A pessoa terminava com 95 linhas culpando a internet
+    dela, que estava ótima, sem ninguém a quem perguntar. Mensagens
+    distintas, e **chave recusada desliga a etapa 3 pelo resto da varredura**
+    em vez de repetir a mesma acusação música após música.
+84. **A chave do Vagalume É guardada em disco, e agora o texto diz isso**:
+    quatro lugares no código juravam que não. Mandar 40 pessoas sem suporte
+    redigitar uma chave de API a cada sessão é pior que o risco de uma chave
+    gratuita de letras ficar nas preferências locais. O que mudou foi a
+    verdade da copy: fica neste computador, não entra no banco de músicas,
+    não é escrita nos MP3, não vai a lugar nenhum além do próprio Vagalume.
+    **Documentação que mente sobre credencial é defeito, mesmo quando o
+    comportamento é o certo.**
+85. **Estimativa errada por ordem de grandeza é pior que estimativa
+    ausente**, porque o PRD a promoveu a parte do fluxo: 2 s por música
+    contra 6-8 s reais dizia "3 minutos" para uma busca de 11. O número
+    passou a ser derivado no comentário, e a copy admite que internet lenta
+    faz demorar bem mais — de novo a lição da decisão 72, agora numa
+    estimativa em vez de numa duração.
+86. **Nenhum texto pode afirmar completude que o programa não conhece**:
+    "todas já têm título, artista e letra" era falso para instrumental, que
+    fica fora de "incompleta" **por não ter letra**; a biblioteca vazia era
+    descrita como completa; e o total vinha de `progress?.total ?? 0`, que
+    transformava falha silenciosa da assinatura de progresso em "sua pasta
+    está completa". Agora "não sabemos" é um estado, e não conta ninguém.
+87. **Motivo de bloqueio é conteúdo, não `title=`**: botão desabilitado não
+    recebe foco e `title` não é anunciado de forma confiável — num estado o
+    motivo não existia em lugar nenhum. E a varredura de contraste, que a
+    decisão 76 dizia varrer tudo, só rodava num dos quatro estados: só é
+    verdade sobre a tela o que o teste visitou.
+88. **Mock que discorda do backend certifica o contrato errado**: o mock
+    trazia a regra antiga do instrumental, o portão do Vagalume invertido
+    (consultando quando falta artista, e propondo nome novo — exatamente a
+    falha "Lampejo × Roberto Carlos" da decisão 63) e comparação de
+    obsolescência sem aparar espaço. O E2E passava exercitando chamadas que
+    o backend real nunca faria. Predicado único no mock, portado do Rust —
+    e o caso em que as três implementações discordavam, instrumental sem
+    artista, não tinha teste em lugar nenhum e agora tem.
+89. **Porte parcial é porte errado, e o pedaço que falta é sempre o que
+    ninguém testou**: `unescape_html` tinha 13 entidades e nenhuma das que
+    importam em português — `Cora&ccedil;&atilde;o` entrava literal na letra
+    e no índice de busca; `is_placeholder` não tinha a regra de trecho nem a
+    marca de ripador, então "04 Faixa 4 Artista Desconheci" passava por
+    etiqueta real e a música sumia da curadoria para sempre. Ao completar o
+    porte apareceu o oposto: o Rust marcava **"Pista" sozinha** como
+    placeholder, e "Pista" é título real no repertório — o incidente do
+    `_RUIDO_DE_ARQUIVO` reencenado num canto onde ninguém tinha olhado.
+90. **Worktree compartilhado entre agentes paralelos precisa de commit cedo,
+    não de disciplina**: um `git reset --hard` e um `git stash` apagaram o
+    trabalho das duas frentes no meio da rodada, pela segunda vez no projeto.
+    Regra nova: cada frente commita assim que sua suíte fecha, mesmo que a
+    árvore inteira ainda não compile, e commits de salvaguarda são juntados
+    antes de empurrar.
+91. **Título que o indexador inventou não é etiqueta**: `indexer.rs` copia o
+    nome do arquivo para o `title` quando o MP3 não tem TIT2, e o funil lia
+    isso como etiqueta REAL e a preferia ao palpite limpo — a proposta saía
+    igual ao que já estava lá e o no-op a derrubava. A etapa que se chama
+    "nome do arquivo" não entregava nada justamente para quem não tem tag
+    nenhuma, que é a metade pior etiquetada de um acervo de verdade; e um
+    "Falamansa - Oh! Chuva.mp3" sem tags chegava a propor o texto inteiro
+    como título E "Falamansa" como artista, duplicando o artista dentro do
+    título. Achado ao investigar por que o mock e o Rust discordavam: **os
+    dois lados de uma divergência merecem suspeita, e desta vez quem estava
+    errado era o backend.** Fica de fora desta rodada a versão mais funda do
+    mesmo defeito — título assim, com artista real e letra, ainda é julgado
+    "completo" e some da curadoria —, porque mexer nisso muda a contagem de
+    candidatas e o gasto de rede de toda varredura: é trabalho da fase 2.

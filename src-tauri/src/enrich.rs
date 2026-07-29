@@ -546,7 +546,18 @@ fn proposta_baixa(
         .into_iter()
         .next()
         .unwrap_or_default();
-    if !titulo_tag.is_empty() {
+    // Título que é LITERALMENTE o nome do arquivo não é etiqueta: é o
+    // indexador falando. `indexer.rs` copia o nome quando o MP3 não tem TIT2,
+    // e preferi-lo ao palpite limpo fazia a proposta sair igual ao que já
+    // estava lá — o `e_no_op` a derrubava e a etapa que se chama "nome do
+    // arquivo" não entregava nada justamente para quem não tem tag nenhuma.
+    // Um "Falamansa - Oh! Chuva.mp3" sem tags chegava a propor esse texto
+    // inteiro como TÍTULO e ainda "Falamansa" como artista, duplicando o
+    // artista dentro do próprio título.
+    //
+    // O arquivo BEM nomeado não sofre com isso: o palpite limpo dá o mesmo
+    // valor que a etiqueta, e a proposta cai por no-op como sempre caiu.
+    if !titulo_tag.is_empty() && !titulo_e_o_nome_do_arquivo(titulo_tag, nome) {
         titulo_prop = titulo_tag.to_string();
     }
     if !artista_tag.is_empty() {
@@ -571,6 +582,21 @@ fn proposta_baixa(
         letra_origem: song.letra_origem.clone(),
         error,
     }
+}
+
+/// True quando o texto do título é o próprio nome do arquivo (sem extensão).
+/// Serve a uma pergunta só: este título foi ESCRITO por alguém, ou o indexador
+/// o inventou a partir do nome do arquivo por falta de TIT2?
+///
+/// A resposta não é perfeita — um arquivo bem nomeado pode ter uma etiqueta
+/// idêntica ao nome — e não precisa ser: nesse caso o palpite limpo dá o mesmo
+/// valor e a proposta cai por no-op de qualquer jeito.
+fn titulo_e_o_nome_do_arquivo(titulo: &str, nome: &str) -> bool {
+    let stem = Path::new(nome)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    titulo.trim() == stem.trim()
 }
 
 /// Acrescenta a proposta ao lote, a menos que ela não mude nada (`e_no_op`).

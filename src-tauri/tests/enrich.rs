@@ -211,13 +211,16 @@ fn enrich_scan_selects_only_incomplete_songs_under_prefix() {
         "proposta que não mudaria nada não é produzida"
     );
 
-    // BAIXA com título real: preserva o título no palpite (nunca propõe
-    // apagar) e acrescenta o artista que o nome do arquivo revela
+    // Arquivo SEM tag nenhuma: o `title` do banco é invenção do indexador
+    // (indexer.rs copia o nome do arquivo quando não há TIT2), então a etapa 1
+    // divide o nome em título e artista em vez de repetir o nome cru. Antes
+    // daqui saía título "Falamansa - Oh! Chuva" COM artista "Falamansa" — o
+    // artista duplicado dentro do próprio título.
     let chuva = props
         .iter()
         .find(|p| p.file_path.ends_with("Oh! Chuva.mp3"))
         .unwrap();
-    assert_eq!(chuva.proposed_title, "Falamansa - Oh! Chuva");
+    assert_eq!(chuva.proposed_title, "Oh! Chuva");
     assert_eq!(chuva.proposed_artist.as_deref(), Some("Falamansa"));
 
     // prefixo de pasta: só a da subpasta
@@ -2917,4 +2920,63 @@ fn scan_song_is_cancellable_like_the_batch() {
     .unwrap();
     assert!(r.is_none());
     assert_eq!(*chamadas.borrow(), 0, "cancelada antes de começar: zero rede");
+}
+
+// ---------------------------------------------------------------------------
+// A etapa 1 e o título que o INDEXADOR inventou (QA da F18 fase 1)
+// ---------------------------------------------------------------------------
+
+/// Arquivo sem tag nenhuma e sem " - " no nome: a limpeza do nome (underscore,
+/// prefixo de faixa) é a única coisa que a etapa 1 tem a oferecer, e era
+/// exatamente ela que se perdia.
+///
+/// `indexer.rs` copia o nome do arquivo para o `title` quando o MP3 não tem
+/// TIT2. O funil lia esse título como ETIQUETA REAL e o preferia ao palpite
+/// limpo, então a proposta saía igual ao que já estava lá e o `e_no_op` a
+/// derrubava: a etapa que se chama "nome do arquivo" não entregava nada
+/// justamente para quem não tem tag nenhuma — a metade pior etiquetada de um
+/// acervo de verdade.
+#[test]
+fn a_title_invented_by_the_indexer_is_cleaned_instead_of_repeated() {
+    let (_dir, conn, _folder_id) = setup_with(&[("sem_tags.mp3", "01_Asa_Branca.mp3")]);
+
+    let props = scan_props(&conn, "", |_: &str| Ok("[]".into()));
+
+    let p = props
+        .iter()
+        .find(|p| p.file_path.ends_with("01_Asa_Branca.mp3"))
+        .expect("a limpeza do nome do arquivo É a proposta");
+    assert_eq!(p.fonte, "nome do arquivo");
+    assert_eq!(p.confidence, "baixa");
+    assert_eq!(p.proposed_title, "Asa Branca");
+    assert_eq!(
+        p.current_title, "01_Asa_Branca",
+        "o 'atual' continua sendo o que o banco tem — é o eco que o apply confere"
+    );
+}
+
+/// O contrapeso: título que é igual ao nome do arquivo porque o arquivo está
+/// BEM nomeado não vira proposta nenhuma. Sem esta metade, todo acervo bem
+/// etiquetado ganharia uma linha de revisão propondo o que já está lá.
+#[test]
+fn a_well_named_file_whose_title_matches_it_proposes_nothing() {
+    let (_dir, conn, _folder_id) = setup_with(&[("sem_letra.mp3", "Asa Branca.mp3")]);
+    let song = song_by_suffix(&conn, "Asa Branca.mp3");
+    writer::write_tags(
+        &conn,
+        song.id,
+        "Asa Branca",
+        Some("Luiz Gonzaga"),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    let props = scan_props(&conn, "", |_: &str| Ok("[]".into()));
+
+    assert!(
+        props.iter().all(|p| !p.file_path.ends_with("Asa Branca.mp3")),
+        "nada a propor: o título já é o nome certo"
+    );
 }
