@@ -157,8 +157,11 @@ fn remedir_os_78_por_cento_com_o_whisper_cpp() {
             }
             Ok(None) => unreachable!("este arnês nunca cancela"),
             Ok(Some(s)) => {
-                if s.duracao > 0.0 {
-                    audio_total += s.duracao;
+                // só o áudio comprovadamente ouvido até o fim entra na
+                // medição — dividir o relógio por um pedaço da música daria
+                // uma razão inflada, e é ela que vira a frase da tela
+                if s.duracao.provada() {
+                    audio_total += s.duracao.medida;
                     relogio_total += gasto;
                 }
                 transcricao::decidir(&s.texto, s.duracao, 0.0)
@@ -254,6 +257,7 @@ fn contrato_com_o_frontend() {
             sem_perguntar_ao_som: 0,
             sem_letra_no_fim: vec![12, 47],
             segundos_de_transcricao: 10_800,
+            estimativa_medida_nesta_maquina: true,
         })
         .unwrap(),
     );
@@ -262,6 +266,7 @@ fn contrato_com_o_frontend() {
         serde_json::to_value(enrich::TranscricaoResultado {
             propostas: vec![],
             razao_medida: Some(1.37),
+            razao_desta_maquina: 1.37,
         })
         .unwrap(),
     );

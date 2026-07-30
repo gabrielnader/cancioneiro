@@ -121,6 +121,24 @@ CREATE TABLE IF NOT EXISTS playlist_items (
 );
 
 CREATE INDEX IF NOT EXISTS idx_playlist_items ON playlist_items(playlist_id, position);
+
+-- V10 — o que ESTA MÁQUINA mediu sobre si mesma, para as estimativas de tempo
+-- deixarem de ser declaradas (DECISIONS #106 e #112). Não é preferência de
+-- usuário e não é dado do acervo: é medição, e ela mora com o resto do que o
+-- aplicativo sabe, no banco, porque a conta inteira mora no Rust — a cópia em
+-- TypeScript já divergiu uma vez e foi o botão do produto que ficou cinza
+-- (DECISIONS #80).
+--
+-- Reconstruível: apagar o banco só devolve a estimativa de referência, e a
+-- primeira transcrição mede de novo.
+CREATE TABLE IF NOT EXISTS medicoes_da_maquina (
+    chave TEXT PRIMARY KEY,
+    -- somatórios, não a razão pronta: uma razão só é uma média sem memória, e
+    -- uma música de 30 s no fim do dia mandaria na estimativa de um acervo de
+    -- 150. Guardando os dois totais, cada transcrição PESA o que ela vale.
+    audio_segundos REAL NOT NULL DEFAULT 0,
+    relogio_segundos REAL NOT NULL DEFAULT 0
+);
 "#;
 
 /// DDL da FTS5 e seus triggers, separada do SCHEMA para a migração poder
@@ -421,6 +439,63 @@ pub fn get_lyrics(conn: &Connection, song_id: i64) -> Result<Option<String>> {
         None => Err(AppError(format!("música não encontrada: {song_id}"))),
         Some(l) => Ok(l),
     }
+}
+
+// ---------------------------------------------------------------------------
+// O que esta máquina mediu sobre si mesma (V10, QA A1)
+// ---------------------------------------------------------------------------
+
+/// Chave da medição da etapa 5: segundos de relógio por segundo de áudio.
+pub const MEDICAO_TRANSCRICAO: &str = "transcricao";
+
+/// Acumula mais uma amostra de medição.
+///
+/// Somatórios, e não a razão pronta: a razão de uma execução com uma música de
+/// 30 s vale menos que a de uma noite com 47, e substituir uma pela outra faria
+/// a estimativa oscilar de um extremo ao outro. Somando, cada transcrição pesa
+/// o áudio que ela realmente ouviu.
+pub fn somar_medicao(
+    conn: &Connection,
+    chave: &str,
+    audio_segundos: f64,
+    relogio_segundos: f64,
+) -> Result<()> {
+    if !(audio_segundos > 0.0 && relogio_segundos > 0.0) {
+        return Ok(()); // nada a medir; gravar zero só sujaria a conta
+    }
+    conn.execute(
+        "INSERT INTO medicoes_da_maquina (chave, audio_segundos, relogio_segundos)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(chave) DO UPDATE SET
+             audio_segundos = audio_segundos + excluded.audio_segundos,
+             relogio_segundos = relogio_segundos + excluded.relogio_segundos",
+        params![chave, audio_segundos, relogio_segundos],
+    )?;
+    Ok(())
+}
+
+/// A razão MEDIDA nesta máquina, ou `None` enquanto a amostra é curta demais
+/// para valer.
+///
+/// O piso existe pelo mesmo motivo que o `segundos_restantes` do download nasce
+/// nulo (DECISIONS #106): número medido sobre amostra minúscula é pior que
+/// número declarado, porque parece mais verdadeiro. Uma faixa curta, um
+/// cancelamento no meio, uma máquina que estava compilando outra coisa — abaixo
+/// do piso, vale a referência.
+pub fn razao_medida(conn: &Connection, chave: &str, piso_de_audio: f64) -> Result<Option<f64>> {
+    let medida: Option<(f64, f64)> = conn
+        .query_row(
+            "SELECT audio_segundos, relogio_segundos FROM medicoes_da_maquina WHERE chave = ?1",
+            params![chave],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    Ok(match medida {
+        Some((audio, relogio)) if audio >= piso_de_audio && audio > 0.0 && relogio > 0.0 => {
+            Some(relogio / audio)
+        }
+        _ => None,
+    })
 }
 
 // ---------------------------------------------------------------------------

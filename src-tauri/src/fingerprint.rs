@@ -41,8 +41,8 @@
 //!
 //! `option_env!("ACOUSTID_API_KEY")`, em tempo de build, a partir de um
 //! segredo do repositório. Build sem o segredo (desenvolvimento, fork)
-//! simplesmente não tem chave, e a etapa é pulada **em silêncio** — como o
-//! Vagalume sem chave. A chave aparece num lugar só, a query string da
+//! simplesmente não tem chave, e a etapa é pulada **em silêncio**. A chave
+//! aparece num lugar só, a query string da
 //! consulta: nenhuma mensagem deste módulo a interpola, e as mensagens são
 //! todas `&'static str`.
 //!
@@ -62,7 +62,7 @@ use std::io::Read;
 use std::path::Path;
 use std::time::Duration;
 
-/// Endereço da consulta. Com o LRCLIB e o Vagalume, um dos TRÊS destinos de
+/// Endereço da consulta. Com o LRCLIB e o `lyrics.ovh`, um dos TRÊS destinos de
 /// rede do funil (o quarto do produto é o GitHub, para atualização e
 /// acessórios) — `commands::funil_fetcher` recusa qualquer outro.
 pub const LOOKUP_URL: &str = "https://api.acoustid.org/v2/lookup";
@@ -135,7 +135,7 @@ pub const ERRO_FPCALC: &str = "não foi possível ler o som deste arquivo";
 /// ausente, sem bit de execução, de outra arquitetura, bloqueado pelo
 /// antivírus. Isto não é um defeito de um arquivo de música — vai acontecer
 /// em todos —, e é o ÚNICO veredito do som que desliga a etapa pelo resto da
-/// varredura, exatamente como o `vagalume::ERRO_CHAVE_RECUSADA` faz com a
+/// varredura, exatamente como o `ERRO_CHAVE_RECUSADA` do Vagalume fazia com a
 /// etapa 4 (DECISIONS #83).
 pub const ERRO_FPCALC_NAO_EXECUTA: &str =
     "o programa que reconhece o som não conseguiu ser executado neste computador";
@@ -283,7 +283,7 @@ pub fn impressao_digital(
 /// Consulta o `/v2/lookup` e devolve os resultados brutos (pontuação +
 /// gravações do MusicBrainz).
 ///
-/// Corpo fora de forma NÃO é erro: é "não temos" — a mesma regra do Vagalume,
+/// Corpo fora de forma NÃO é erro: é "não temos" — a mesma regra do lyrics.ovh,
 /// e pela mesma razão (uma página de manutenção não é motivo para marcar a
 /// música como falha). Erro DECLARADO pela API vira `Err` com texto fixo.
 pub fn consultar_acoustid<F>(
@@ -388,8 +388,13 @@ pub fn escolher_candidato(resultados: &[Value], duracao_mp3: f64) -> Option<Iden
                 .trim()
                 .to_string();
             let artista = artista_da_gravacao(gravacao);
-            // metadado de ripador no MusicBrainz é tão inútil quanto no MP3
-            if crate::enrich::is_placeholder(&titulo) || crate::enrich::is_placeholder(&artista) {
+            // metadado de ripador no MusicBrainz é tão inútil quanto no MP3 —
+            // e "Various Artists" no crédito de um lançamento de coletânea é
+            // o caso mais comum de todos, por isso o slot do ARTISTA leva a
+            // régua dele (`enrich::Campo`)
+            if crate::enrich::is_placeholder(crate::enrich::Campo::Titulo, &titulo)
+                || crate::enrich::is_placeholder(crate::enrich::Campo::Artista, &artista)
+            {
                 continue;
             }
             let duracao = gravacao.get("duration").and_then(Value::as_f64);
@@ -425,7 +430,9 @@ pub fn escolher_candidato(resultados: &[Value], duracao_mp3: f64) -> Option<Iden
 /// True quando uma etiqueta REAL existente CONTRADIZ o que o som identificou.
 ///
 /// Porte do `_discorda` do `tools/curadoria.py`. Campo vazio ou placeholder
-/// não contradiz nada — só espera ser preenchido. Variação de grafia também
+/// não contradiz nada — só espera ser preenchido. `campo` decide QUAL régua de
+/// placeholder vale: "Various Artists" no crédito não contradiz artista
+/// nenhum, mas "Diversos" no TÍTULO é um título e contradiz, sim. Variação de grafia também
 /// não: são a mesma coisa quando as chaves normalizadas são muito parecidas
 /// OU quando uma contém a outra ("Lampejo" dentro de "Adventício - Lampejo").
 /// Diferença de verdade continua conflito.
@@ -434,8 +441,10 @@ pub fn escolher_candidato(resultados: &[Value], duracao_mp3: f64) -> Option<Iden
 /// ela existe porque a DURAÇÃO confirma o casamento, e no AcoustID a duração
 /// confirma. Copiá-la para uma fonte sem duração foi o que gravou "Ponto de
 /// Ogum" dentro de "Ponto de Oxum".
-pub fn discorda(atual: &str, identificado: &str) -> bool {
-    if crate::enrich::is_placeholder(atual) || crate::enrich::is_placeholder(identificado) {
+pub fn discorda(campo: crate::enrich::Campo, atual: &str, identificado: &str) -> bool {
+    if crate::enrich::is_placeholder(campo, atual)
+        || crate::enrich::is_placeholder(campo, identificado)
+    {
         return false;
     }
     let (a, b) = (norm(atual), norm(identificado));
@@ -498,8 +507,10 @@ mod tests {
     // A chave: compilada, opcional, e NUNCA visível
     // -----------------------------------------------------------------------
 
-    /// Sem o segredo no build, a etapa é pulada em SILÊNCIO — o mesmo que já
-    /// acontece com o Vagalume sem chave. Nada falha, nada aparece na tela.
+    /// Sem o segredo no build, a etapa é pulada em SILÊNCIO. Nada falha, nada
+    /// aparece na tela — é a única etapa que ainda depende de chave, e ela é
+    /// NOSSA (DECISIONS #110: nenhuma etapa do funil exige credencial do
+    /// usuário).
     #[test]
     fn sem_chave_de_build_a_etapa_e_pulada_em_silencio() {
         // a suíte roda sem o segredo; se algum dia o CI a definir, o que
@@ -756,24 +767,44 @@ mod tests {
     #[test]
     fn discorda_reconhece_variacao_de_grafia_e_condena_musica_diferente() {
         // variação de grafia: mesma música
-        assert!(!discorda("Milionário & José Rico", "Milionário y José Rico"));
-        assert!(!discorda("Toinho do Alagoas", "Toinho de Alagoas"));
+        assert!(!discorda(crate::enrich::Campo::Titulo, "Milionário & José Rico", "Milionário y José Rico"));
+        assert!(!discorda(crate::enrich::Campo::Titulo, "Toinho do Alagoas", "Toinho de Alagoas"));
         // contenção: "Lampejo" dentro de "Adventício - Lampejo"
-        assert!(!discorda("Adventício - Lampejo", "Lampejo"));
-        assert!(!discorda(
+        assert!(!discorda(crate::enrich::Campo::Titulo, "Adventício - Lampejo", "Lampejo"));
+        assert!(!discorda(crate::enrich::Campo::Titulo, 
             "Marinheiro Só (dj mitsu remix)",
             "Marinheiro Só"
         ));
         // música diferente do mesmo artista: continua conflito
-        assert!(discorda("Satania", "Sabrina"));
-        assert!(discorda("Asa Branca", "Asa Morena"));
-        assert!(discorda("Tim Maia", "Tom Jobim"));
+        assert!(discorda(crate::enrich::Campo::Titulo, "Satania", "Sabrina"));
+        assert!(discorda(crate::enrich::Campo::Titulo, "Asa Branca", "Asa Morena"));
+        assert!(discorda(crate::enrich::Campo::Titulo, "Tim Maia", "Tom Jobim"));
         // contenção curta demais não absolve
-        assert!(discorda("Sol", "Sol Nascente"));
+        assert!(discorda(crate::enrich::Campo::Titulo, "Sol", "Sol Nascente"));
         // campo vazio ou placeholder não contradiz nada
-        assert!(!discorda("", "Asa Branca"));
-        assert!(!discorda("Faixa 05", "Asa Branca"));
-        assert!(!discorda("Asa Branca", ""));
+        assert!(!discorda(crate::enrich::Campo::Titulo, "", "Asa Branca"));
+        assert!(!discorda(crate::enrich::Campo::Titulo, "Faixa 05", "Asa Branca"));
+        assert!(!discorda(crate::enrich::Campo::Titulo, "Asa Branca", ""));
+    }
+
+    /// **O campo decide qual régua de placeholder vale.** "Various Artists"
+    /// no crédito é rótulo de ripador e não contradiz artista nenhum — é o
+    /// caso que a DECISIONS #105 existe para resolver. Mas "Diversos" no
+    /// TÍTULO é um título de verdade, e o som dizendo outra coisa CONTRADIZ:
+    /// tratar os dois com a mesma régua era o defeito que a emenda à #105
+    /// corrigiu.
+    #[test]
+    fn a_regua_de_placeholder_do_conflito_vale_por_slot() {
+        use crate::enrich::Campo;
+        assert!(
+            !discorda(Campo::Artista, "Various Artists", "Falamansa"),
+            "rótulo de coletânea no crédito só espera ser preenchido"
+        );
+        assert!(
+            discorda(Campo::Titulo, "Diversos", "Oh! Chuva"),
+            "um título de verdade que o som desmente é CONFLITO, e a pessoa \
+             precisa ver os dois lados antes de qualquer coisa mudar"
+        );
     }
 
     /// QA A1 — a troca de UM caractere em nome curto, que é o modo de falha
@@ -802,8 +833,8 @@ mod tests {
         for (a, b, difflib, dice) in PARES {
             assert!(*dice < LIMIAR_MESMA_GRAFIA, "{a:?}: o Dice condenava");
             assert!(*difflib >= LIMIAR_MESMA_GRAFIA, "{a:?}: o difflib absolve");
-            assert!(!discorda(a, b), "{a:?} x {b:?} não é contradição");
-            assert!(!discorda(b, a), "e a régua é simétrica");
+            assert!(!discorda(crate::enrich::Campo::Titulo, a, b), "{a:?} x {b:?} não é contradição");
+            assert!(!discorda(crate::enrich::Campo::Titulo, b, a), "e a régua é simétrica");
         }
     }
 
@@ -843,8 +874,8 @@ mod tests {
         assert_eq!(curta, poucos_caracteres_muitos_bytes);
 
         // e a contenção que o porte precisa continuar reconhecendo
-        assert!(!discorda("Adventício - Lampejo", "Lampejo"));
-        assert!(!discorda("Lampejo", "Adventício - Lampejo"));
+        assert!(!discorda(crate::enrich::Campo::Titulo, "Adventício - Lampejo", "Lampejo"));
+        assert!(!discorda(crate::enrich::Campo::Titulo, "Lampejo", "Adventício - Lampejo"));
     }
 
     // -----------------------------------------------------------------------

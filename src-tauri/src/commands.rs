@@ -158,11 +158,11 @@ pub struct ScanProgress {
 ///
 /// `etapa` (V8/F18) nomeia a etapa do funil em curso, já em pt-BR e pronta
 /// para exibir: `"preparando"`, `"lendo etiquetas e nome do arquivo"`,
-/// `"procurando no LRCLIB"`, `"procurando no Vagalume"` ou `"concluída"` (as
+/// `"procurando no LRCLIB"`, `"procurando no lyrics.ovh"` ou `"concluída"` (as
 /// constantes `enrich::ETAPA_*`). O PRD V8 pede status sempre visível "com
 /// contagem e barra, a etapa atual do funil e o arquivo do momento", e uma
 /// música sozinha leva segundos entre os palpites no LRCLIB e a consulta ao
-/// Vagalume. Só o evento `"concluída"` faz `done` crescer; os demais mudam o
+/// lyrics.ovh. Só o evento `"concluída"` faz `done` crescer; os demais mudam o
 /// texto sem mexer na barra.
 ///
 /// `scan_id` (QA M4) identifica a varredura que emitiu o evento: sem ele, uma
@@ -531,15 +531,19 @@ fn emissor_de_progresso(
     }
 }
 
-/// Passa as músicas incompletas sob `folder_prefix` (vazio = biblioteca
-/// inteira) pelo funil — etiquetas/nome do arquivo → LRCLIB → Vagalume — e
-/// devolve as propostas para a UI de revisão.
+/// Passa TODAS as músicas disponíveis sob `folder_prefix` (vazio = biblioteca
+/// inteira) pelo funil — etiquetas/nome do arquivo → som (AcoustID) → LRCLIB →
+/// lyrics.ovh — e devolve as propostas para a UI de revisão.
+///
+/// V10 — não há mais modo, e o portão de completude saiu da porta de entrada
+/// (DECISIONS #102): as etapas 1 e 2 rodam em todas, as de letra só em quem não
+/// tem letra. **Nenhum parâmetro de credencial**: o Vagalume, que era a única
+/// etapa a exigir chave do usuário, saiu (DECISIONS #110), e a do AcoustID é
+/// nossa e vem compilada. Há teste que falha se alguém acrescentar um.
 ///
 /// Ponto de rede EXPLÍCITO acionado pelo usuário (a seção de curadoria em
 /// Configurações); pausa de cortesia de 300 ms entre consultas, valendo para
-/// as duas fontes. `chave_vagalume` é a chave gratuita do usuário, guardada
-/// pelo frontend: ausente ou vazia, a etapa do Vagalume é pulada em silêncio
-/// e todo o resto funciona igual. Erro de rede por música vira proposta com
+/// todas as fontes. Erro de rede por música vira proposta com
 /// `error` — o lote nunca aborta. Usa conexão dedicada (scan_conn) para não
 /// travar busca/listagem durante a varredura, que dura minutos.
 ///

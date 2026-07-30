@@ -11,25 +11,33 @@
 //!
 //! O `lyrics.ovh` não pede chave nenhuma. Por isso ela vem ANTES: a etapa com
 //! chave é a que quase ninguém alcança, e pôr a sem-chave depois dela seria
-//! deixar a única fonte utilizável atrás de um pedágio. O Vagalume **não foi
-//! removido** — está testado e a chave pode aparecer um dia; ele desceu para
-//! extra opcional, atrás do campo de chave que já existe.
+//! deixar a única fonte utilizável atrás de um pedágio.
+//!
+//! **E então o Vagalume foi REMOVIDO** (DECISIONS #110): não desligado, não
+//! rebaixado a extra opcional — removido, porque código que nunca rodou contra
+//! a realidade é pior que código ausente, e existir custa mais que zero (um
+//! campo de chave numa tela para 40 pessoas leigas, um parágrafo explicando o
+//! campo, um destino a mais na lista, atrito em toda refatoração). O parágrafo
+//! que dizia o contrário sobreviveu à remoção e foi achado pelo QA na
+//! v0.10.0 — é a DECISIONS #84 outra vez: **documentação que mente é defeito,
+//! mesmo quando o comportamento é o certo.** O que ficou dele está em
+//! `casamento_estrito.rs`, e é o que importava.
 //!
 //! # Isto NÃO promete cobertura
 //!
 //! Medido no acervo real (94 arquivos de repertório brasileiro regional e
 //! devocional), o LRCLIB cobriu **~3%**. O `lyrics.ovh` não vai mudar essa
 //! ordem de grandeza: ele entra para **eliminar a exigência de chave**, não
-//! para achar mais letra. Quem resolve este repertório é a etapa 6, a
+//! para achar mais letra. Quem resolve este repertório é a etapa 5, a
 //! transcrição — e ela resolve ouvindo o áudio, não consultando base nenhuma.
 //!
-//! # Por que esta fonte é tão rígida quanto o Vagalume (DECISIONS #63)
+//! # Por que esta fonte é tão rígida quanto o Vagalume era (DECISIONS #63)
 //!
 //! O `lyrics.ovh` **não devolve duração**. A trava que sustenta o resto do
 //! funil (±3 s = ALTA, >15 s desqualifica) não existe aqui, exatamente como
-//! não existe no Vagalume. A única prova disponível é textual, e por isso vale
-//! a MESMA régua estrita — `vagalume::confere_estrito`, a função, não uma
-//! cópia dela: fonte sem duração é uma CATEGORIA, e foi a régua frouxa do
+//! não existia no Vagalume. A única prova disponível é textual, e por isso vale
+//! a MESMA régua estrita — `casamento_estrito::confere_estrito`, a função, não
+//! uma cópia dela: fonte sem duração é uma CATEGORIA, e foi a régua frouxa do
 //! LRCLIB reusada numa fonte sem duração que gravou a letra de "Ponto de Ogum"
 //! dentro de um arquivo "Ponto de Oxum".
 //!
@@ -45,8 +53,8 @@
 //! # A fraqueza desta fonte, escrita para não ser esquecida
 //!
 //! **O `lyrics.ovh` não devolve título nem artista.** Não há segundo lado para
-//! conferir: nem o `type: "exact"` do Vagalume, nem os nomes que ele devolve
-//! para o `confere_estrito` comparar. Se o serviço fizer casamento aproximado
+//! conferir: nem o `type: "exact"` que o Vagalume devolvia, nem nomes para o
+//! `confere_estrito` comparar. Se o serviço fizer casamento aproximado
 //! por dentro — e não há como saber daqui —, ele pode devolver a letra de
 //! "Ponto de Ogum" para um pedido de "Ponto de Oxum" **e o programa não tem
 //! como perceber**. Esta é a única etapa do funil cujo casamento não é
@@ -85,9 +93,11 @@ use crate::error::Result;
 use crate::lyrics_fetch::percent_encode;
 use crate::casamento_estrito::{letra_indisponivel, segmentos_do_traco, unescape_html};
 
-/// Endereço da consulta. Ponto de rede novo e ENUMERADO — com o LRCLIB, o
-/// Vagalume, o AcoustID e o GitHub, um dos cinco destinos de todo o produto.
-/// O `commands::funil_fetcher` recusa qualquer outro.
+/// Endereço da consulta. Ponto de rede ENUMERADO: com o LRCLIB e o AcoustID,
+/// um dos **três** destinos que o `commands::funil_fetcher` aceita (ver
+/// `commands::Destino`, que tem exatamente estes três). Fora do funil há um
+/// quarto endereço no produto inteiro, o GitHub do download de acessórios e da
+/// atualização, guardado por `destino_de_acessorio_permitido`.
 pub const SEARCH_URL: &str = "https://api.lyrics.ovh/v1/";
 
 /// Mensagem (pt-BR) quando o serviço respondeu com erro. Ela é PRODUZIDA pelo
@@ -148,8 +158,9 @@ fn letra_do_corpo(corpo: &str) -> Option<String> {
     let letra = unescape_html(bruta).replace("\r\n", "\n").replace('\r', "\n");
     let letra = letra.trim().to_string();
     // Recado da base no lugar da letra ("ainda não temos a letra") reusa a
-    // MESMA lista do Vagalume: é o mesmo tipo de conteúdo, e uma segunda lista
-    // divergiria (DECISIONS #80).
+    // MESMA lista do `casamento_estrito` (onde ela nasceu, no módulo do
+    // Vagalume): é o mesmo tipo de conteúdo, e uma segunda lista divergiria
+    // (DECISIONS #80).
     if letra.is_empty() || letra_indisponivel(&letra) {
         return None;
     }
@@ -162,9 +173,8 @@ fn letra_do_corpo(corpo: &str) -> Option<String> {
 /// `Ok(None)` é "não temos" — inclusive quando não há o que conferir. `Err` é
 /// só falha de rede, e o funil a transforma em erro POR MÚSICA.
 ///
-/// `keep(titulo, artista)` é o mesmo filtro de placeholder do LRCLIB e do
-/// Vagalume, aplicado ao PEDIDO: tag de ripador não vira consulta nem gasta
-/// rede.
+/// `keep(titulo, artista)` é o mesmo filtro de placeholder do LRCLIB, aplicado
+/// ao PEDIDO: tag de ripador não vira consulta nem gasta rede.
 pub fn fetch_lyrics_ovh<F, K>(
     title: &str,
     artist: &str,
@@ -228,7 +238,8 @@ mod tests {
 
     /// Filtro de placeholder igual ao do funil.
     fn manter(t: &str, a: &str) -> bool {
-        !crate::enrich::is_placeholder(t) && !crate::enrich::is_placeholder(a)
+        !crate::enrich::is_placeholder(crate::enrich::Campo::Titulo, t)
+            && !crate::enrich::is_placeholder(crate::enrich::Campo::Artista, a)
     }
 
     fn corpo(body: &'static str) -> impl Fn(&str) -> Result<String> {
@@ -386,8 +397,9 @@ mod tests {
         }
     }
 
-    /// Recado da base no lugar da letra reusa a MESMA lista do Vagalume — é o
-    /// mesmo tipo de conteúdo, e uma segunda lista divergiria (DECISIONS #80).
+    /// Recado da base no lugar da letra reusa a MESMA lista do
+    /// `casamento_estrito` — é o mesmo tipo de conteúdo, e uma segunda lista
+    /// divergiria (DECISIONS #80).
     #[test]
     fn recado_no_lugar_da_letra_nao_e_letra() {
         for recado in [
@@ -433,7 +445,7 @@ mod tests {
         assert!(!m.lyrics.contains('\r'));
     }
 
-    /// Entidade HTML é desescapada pela MESMA tabela do Vagalume: o mesmo
+    /// Entidade HTML é desescapada pela MESMA tabela do `casamento_estrito`: o mesmo
     /// texto passando por dois caminhos não pode chegar diferente ao arquivo
     /// (DECISIONS #89 — `Cora&ccedil;&atilde;o` entrava literal no índice).
     #[test]
@@ -554,7 +566,7 @@ mod tests {
     /// aqui como lembrete de qual é o risco.
     #[test]
     fn esta_fonte_nao_tem_como_conferir_o_casamento() {
-        // a régua do Vagalume condena o par...
+        // a régua estrita condena o par...
         assert!(!crate::casamento_estrito::confere_estrito(
             "Ponto de Oxum",
             "Ponto de Ogum"

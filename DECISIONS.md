@@ -701,3 +701,203 @@ opção mais simples que passa nos Acceptance Checks do PRD.
     como a referência contra a qual a régua foi conferida caso a caso; apagar o
     original transformaria cada um desses comentários numa afirmação que
     ninguém pode mais verificar.
+
+## V10 — correções do QA que reprovou a v0.10.0
+
+111. **A "duração PROVADA" era o cabeçalho do MP3 disfarçado, e a #108 está
+    corrigida** (CRÍTICO do QA). Aquela decisão comemorou o fechamento da #72
+    dizendo que a contagem de amostras é medição do áudio e passa ao topo da
+    ordem de autoridade. A contagem é medição — do pedaço que o decodificador
+    resolveu entregar. O `symphonia` liga `gapless` por padrão, e com ele o
+    `Track::num_frames`, que vem do contador de quadros do **Xing/Info**, vira
+    o fim do fluxo: tudo além dele é aparado até sobrar nada. Ou seja, o número
+    promovido ao topo derivava exatamente daquele que a #72 proíbe confiar.
+    O arquivo que expõe isso não é exótico: é o que `cat a.mp3 b.mp3 > set.mp3`
+    produz, e todo player toca inteiro. Medido nas fixtures deste repositório,
+    dez cópias emendadas (30,3 s de áudio) com o contador da primeira dizendo
+    116 quadros: **3,00 s**. Contador adulterado para 78: **2,04 s**. Contador
+    corrigido para 1160: **30,30 s**. Ponta a ponta os dois desfechos eram
+    PERMANENTES — `Instrumental` com o motivo "o áudio foi lido até o fim"
+    (falso; a marca vence até o `--forcar-tudo`) ou um toco de letra que faz
+    `etapas_de_letra_valem_a_pena` nunca mais deixar a música entrar em
+    varredura. E o `fpcalc` da etapa 2 decodifica até o EOF: o mesmo arquivo já
+    tinha duas "durações provadas" discordando por uma ordem de grandeza, sem
+    nada as confrontando — quando corroboração é justamente o que a #72 diz ser
+    a única proteção.
+    Três mudanças, e nenhuma é margem de segurança:
+    **(a) `gapless` desligado** — perde-se o corte de silêncio de codificação,
+    uns 12 ms nas pontas, e ganha-se ouvir o arquivo inteiro;
+    **(b) o cabeçalho virou PISO** — decodificar MUITO menos do que o arquivo
+    declara (menos de 90%) marca a leitura como incompleta; decodificar MAIS
+    não acusa nada, porque quem estava errado era o cabeçalho. É corroboração
+    usada só na direção em que ela é sólida;
+    **(c) o número que o motor anuncia corrobora do mesmo jeito** — se o
+    `whisper-cli` diz ter aberto muito menos áudio do que escrevemos no WAV,
+    ele não ouviu a música inteira. Só nessa direção: um número maior é padding
+    interno dele.
+    **E o `if` da #108 existe agora.** Aquela decisão disse que `Adiada` tinha
+    ficado inalcançável e que "o custo de manter é um `if`". `Duracao` passou a
+    carregar dois fatos — quantos segundos, e se o áudio foi lido até o fim —
+    porque **medir e ler até o fim são coisas diferentes, e um número sozinho
+    não sabe dizer se é o áudio inteiro ou o começo dele**. `Desfecho::
+    Instrumental` só sai com `duracao.provada()`; sem isso o produto ADIA. Há
+    teste varrendo a combinação inteira de textos × durações, e não os casos de
+    que o autor lembrou (#76).
+112. **A razão medida volta pelo BACKEND, e não pelo frontend** (ALTO do QA).
+    A #106 prometia em letra: "a primeira transcrição desta máquina devolve a
+    razão real, e é ela que passa a valer". Nunca passava — o número era
+    calculado, serializado, tipado e testado, o `enrichStore` o descartava, e
+    **nenhum consumidor existia no repositório inteiro**. A frase "leva cerca de
+    3 horas neste computador" saía de uma constante declarada de 1,0, num
+    produto cujo `whisper-cli` de macOS agora sai sem Metal e sem Accelerate — o
+    defeito da #85 (prometer menos do que leva), aqui permanente, porque o único
+    mecanismo de autocorreção previsto estava desligado.
+    O contrato que se cogitou — "o frontend guarda e reenvia" — foi recusado.
+    A #106 já dizia que a conta inteira mora no Rust porque a cópia em TS
+    divergiu uma vez e foi o botão do produto que ficou cinza (#80); pedir ao
+    frontend que seja o cofre do número que o backend usa é a mesma forma de
+    acoplamento, com um modo de falha silencioso — foi exatamente ele que
+    produziu este achado. **Um contrato que depende de o chamador lembrar já
+    falhou uma vez aqui.** Agora `transcricao_scan` grava a medição em
+    `medicoes_da_maquina` e `enrich_scan` a lê: o número entra e sai sem
+    atravessar processo nenhum.
+    Duas escolhas dentro disso. **Somatórios, não a razão pronta**: guardando
+    áudio e relógio acumulados, cada transcrição pesa o que ela vale, e uma
+    música de 30 s no fim do dia não manda na estimativa de um acervo de 150.
+    E **piso de 300 s de áudio** antes de a medida valer, que é a regra do
+    `segundos_restantes` do download (#106) aplicada aqui: número medido sobre
+    amostra minúscula é pior que número declarado, porque parece mais
+    verdadeiro. `razao_desta_maquina` sai no resultado para a tela poder dizer
+    QUAL das duas está mostrando — informação, não dever de guarda.
+113. **A etapa 5 parou de propor nome, e o comentário que jurava isso virou
+    verdade** (ALTO do QA). A #103 diz que "sem nome vindo daqui" é garantia de
+    CONSTRUÇÃO. O tipo de retorno realmente não tem onde pôr um nome — mas
+    `proposta_da_transcricao` partia de `proposta_baixa`, que é a proposta da
+    ETAPA 1, e a linha saía propondo o palpite do nome do arquivo sob o rótulo
+    da transcrição. Medido no Rust real: `AudioTrack 03` / None virava
+    `Oh! Chuva` / `Falamansa`. O teste que afirmava o contrário passava porque
+    usava música com etiqueta REAL, em que o palpite empata com a etiqueta — e
+    a música TÍPICA desta etapa é justamente a outra.
+    Escolhemos tirar o nome em vez de corrigir os textos, e por medição, não por
+    pureza: **esse palpite já foi entregue**. A varredura roda a etapa 1 em
+    TODAS as músicas da pasta (#102) e é dela que sai `sem_letra_no_fim`, então
+    toda música que chega à etapa 5 já ganhou a sua linha de "preencher o
+    branco", com o rótulo que a anuncia, na mesma revisão. Repetir aqui não é
+    valor novo: é a MESMA conta sobre o MESMO nome de arquivo, cobrando uma
+    segunda leitura de quem já vai conferir 47 letras de máquina. O que sai no
+    lugar é o ECO do que está no arquivo — nunca vazio, porque o `apply` grava
+    `ap.title` como veio e um título vazio apagaria a etiqueta de alguém.
+    A lição, que é maior que o caso: **garantia de construção que depende de
+    quem chama não é garantia de construção**, e teste que só visita o caso
+    fácil certifica o contrário do que o código faz (#76 outra vez).
+114. **EOF e falha de leitura são coisas diferentes** (ALTO do QA). O laço da
+    decodificação tinha `Err(_) => break`, com um comentário verdadeiro sobre
+    fluxo truncado no fim — que é comum em acervo de gravação de casa, e que o
+    `symphonia` já entrega como fim normal. O que aquele `break` engolia era
+    **falha de I/O**: HD externo que dorme, pen drive arrancado,
+    compartilhamento de rede que cai, setor ruim — normais em 40 máquinas
+    alheias. Resultado medido: 30,56 s de áudio viravam 8,05 s, sem erro e sem
+    aviso, e daí saíam duração parcial promovida a prova, letra parcial gravada
+    como completa e o arquivo fora da fila para sempre. Agora é `ERRO_AUDIO`,
+    que é erro de UMA música: a fila segue e o arquivo continua na fila.
+    O teste exigiu um encaixe: não dá para fazer um `File` de verdade falhar no
+    meio dentro de uma suíte, então a decodificação passou a ter um corpo que
+    recebe a fonte de bytes. **Encaixe que existe só para o teste vale o preço
+    quando o modo de falha é o mais comum do parque e nenhuma suíte o
+    alcançava** — é a lição da #92 escrita antes do incidente, e não depois.
+115. **A pergunta do fim só conta o que a etapa 5 consegue transcrever**
+    (MÉDIO do QA). Entrava em `sem_letra_no_fim` toda candidata sem letra,
+    inclusive aquela cujo arquivo sumiu do disco: a frase "sobraram 47
+    músicas… cerca de 3 horas" superestimava, inflava o tempo, e depois a etapa
+    5 gastava uma vaga da fila para produzir a única coisa possível com um
+    arquivo ausente — uma linha de erro. O predicado virou
+    `a_etapa_5_tem_o_que_fazer`, que espelha os portões que a própria etapa 5
+    aplica (uma regra, um lugar — #80).
+    **Erro de REDE continua contando, e é de propósito**: a etapa 5 não usa
+    rede. A música que ficou sem letra porque o LRCLIB não respondeu é
+    exatamente a que a transcrição resolve, e tirá-la da conta esconderia o
+    trabalho que o produto sabe fazer.
+116. **Disco cheio é veredito sobre a máquina, e o cabeçalho do WAV não dá a
+    volta** (BAIXOS do QA, os dois com a mesma forma).
+    `ERRO_TEMPORARIO` — a pasta de trabalho que não aceita escrita, que na
+    prática é disco cheio — passou a desligar a etapa pelo resto da fila, como
+    o binário que não sobe já fazia (#83 e a A2 da v0.9.0). Sem isso eram 47
+    linhas idênticas culpando 47 músicas inocentes. O que desliga guarda a
+    MENSAGEM e não um booleano: disco cheio acusando "o programa não conseguiu
+    ser executado" mandaria quarenta pessoas sem suporte procurar defeito no
+    lugar errado.
+    **Conferir espaço ANTES foi considerado e recusado**: o std do Rust não lê
+    espaço livre, seria dependência nova ou syscall por plataforma — e o número
+    corre atrás do próprio uso, porque outro programa pode encher o disco entre
+    a conferência e a escrita. A tentativa de escrever É a conferência honesta;
+    o que faltava era não repeti-la 47 vezes.
+    E o cabeçalho do WAV, cujos dois tamanhos são `u32`, recusa acima de ~37
+    horas de áudio num arquivo (`Wav::MAX_AMOSTRAS`) em vez de estourar. Em
+    `release` a soma daria a volta em silêncio e o motor receberia um WAV
+    anunciando dois segundos: **é o defeito 111 outra vez, por outra porta.**
+    37 horas num MP3 é raro e não é impossível — `cat` de acervo inteiro é
+    exatamente como estes arquivos nascem.
+117. **Documentação podre é dívida, e neste projeto ela é dívida grande**
+    (BAIXO do QA). O cabeçalho do `lyrics_ovh.rs` afirmava que "o Vagalume
+    **não foi removido**" — contra a #110 e contra o código —, chamava a
+    transcrição de "etapa 6", e dizia "um dos cinco destinos" onde
+    `destino_de` tem três. O `lyrics_fetch.rs` ainda falava em "dois destinos…
+    Vagalume". E o doc do `enrich_folder_scan` descrevia um parâmetro
+    `chave_vagalume` que o comando não tem mais.
+    Num projeto que trata comentário como oráculo — metade dos comentários do
+    Rust cita o Python como a referência conferida caso a caso — isto não é
+    higiene. É a #84 aplicada à documentação: **texto que mente é defeito,
+    mesmo quando o comportamento é o certo**, porque o próximo a mexer aqui
+    decide com base nele. As menções que sobraram estão no passado de
+    propósito: a régua estrita nasceu no Vagalume e a história explica por que
+    ela é rígida.
+
+118. **A régua de placeholder vale por SLOT, e generalizar de artista para os
+    dois campos apagava título** (emenda à #105, achado do agente de frontend
+    medido ponta a ponta). A #105 argumentou "só entram rótulos que NENHUMA
+    canção usa como nome" pensando no campo do ARTISTA, que é onde o ripador
+    escreve "Various Artists" — e escreveu a regra dentro do `is_placeholder`,
+    que roda nos dois campos.
+    Consequência: uma música intitulada **`Diversos`** (ou `Vários`,
+    `Coletânea`) passava a valer VAZIO. O palpite do nome do arquivo entrava por
+    cima; `substitui_nome_escrito` saía `false`, então a linha não recebia o
+    aviso de "isto troca um nome escrito" nem ficava fora da pré-marcação; e ela
+    caía no grupo dos preenchimentos — **dobrado, fechado e pré-marcado**, sob a
+    frase "N músicas SEM TÍTULO OU ARTISTA vão receber o nome que está no
+    arquivo". Para essa música a frase é FALSA: ela tem título, e a pessoa o vê
+    na biblioteca todo dia. Um clique em "Aplicar selecionadas" levava embora um
+    título que a revisão nunca mostrou — e é exatamente a condição "a frase
+    descreve exatamente o que o clique faz" que sustenta a pré-marcação daquele
+    grupo.
+    O conserto **não é uma segunda função**, é um parâmetro obrigatório:
+    `is_placeholder(Campo::{Titulo,Artista}, texto)`. Um predicado que não
+    pergunta o campo é um predicado que generaliza sozinho na próxima vez, e
+    manter um atalho sem slot seria deixar a armadilha montada. O compilador
+    passa a perguntar em cada uma das dez chamadas — inclusive nas do
+    `fingerprint::discorda`, onde a diferença é visível: "Various Artists" no
+    crédito não contradiz artista nenhum, mas "Diversos" no TÍTULO é um título
+    e o som dizendo outra coisa **é** conflito.
+    E a lição da #89 foi conferida nos dois sentidos antes de fechar: `Various
+    Artists`, `V.A.`, `VA` e `Diversos` continuam valendo vazio no ARTISTA (é o
+    caso que a #105 existe para resolver), "Vá" com acento sobrevive nos dois
+    campos, "VA" sem acento cai só no artista, e nenhum nome legítimo de uma
+    palavra — "Vai", "Vamos", "Valsa", "Variações", "Compilado", "Artista",
+    "Pista" — passou a cair em outra regra.
+    **O `tools/curadoria.py` tem o MESMO defeito** (`_eh_rotulo_de_coletanea`
+    dentro do `eh_placeholder`, sem slot) e ficou de fora desta rodada por
+    escopo. Ele é ferramenta de terminal do dono do produto e não vai para as 40
+    máquinas, mas o dano é o mesmo dentro do arquivo dele: **fica anotado como
+    dívida com dono, não como diferença deliberada.**
+119. **A tela precisa saber se a estimativa é medição ou palpite de fábrica.**
+    A #112 fechou o laço da razão medida por dentro e concluiu que "não há nada
+    a devolver". Faltava uma peça, e ela não é a conta — é um FATO sobre o
+    número. A pergunta do fim é desenhada a partir da varredura, não do retorno
+    da etapa 5, então a tela não tinha como saber qual dos dois números estava
+    mostrando, e teve de trocar "leva cerca de 3 horas **neste computador**"
+    por "leva cerca de 3 horas — pode levar mais nesta máquina": honesto e pior.
+    `EnrichScanResult.estimativa_medida_nesta_maquina` (booleano) devolve o
+    "neste computador" quando ele é verdade e mantém a ressalva quando é chute.
+    Booleano, e não a razão: a razão convidaria o TypeScript a multiplicar, que
+    é a divergência da #80 esperando para acontecer. É a #86 — nenhum texto
+    pode afirmar o que o programa não conhece — aplicada a uma estimativa: o
+    programa conhece a diferença, e agora ele a conta.

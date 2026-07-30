@@ -3963,7 +3963,7 @@ fn titulo_vindo_do_som_ainda_rende_um_palpite_so_e_teto_media() {
 // e sobretudo o que ele se recusa a fazer.
 // ===========================================================================
 
-use cancioneiro_lib::transcricao::{self, SaidaDoMotor};
+use cancioneiro_lib::transcricao::{self, Duracao, SaidaDoMotor};
 
 /// Nunca cancela, nunca reporta progresso.
 const SEM_PROGRESSO_5: fn(usize, usize, &str, u8) = |_, _, _, _| {};
@@ -3977,7 +3977,23 @@ fn motor(
         progresso(50);
         Ok(Some(SaidaDoMotor {
             texto: texto.to_string(),
-            duracao,
+            duracao: Duracao::completa(duracao),
+        }))
+    }
+}
+
+/// Um motor de mentira que também GASTA relógio — é o que torna a razão
+/// medida (segundos de máquina por segundo de áudio) diferente de zero.
+fn motor_lento(
+    texto: &'static str,
+    duracao: f64,
+    gasto: Duration,
+) -> impl Fn(&Path, &dyn Fn() -> bool, &dyn Fn(u8)) -> Result<Option<SaidaDoMotor>, AppError> {
+    move |_mp3, _cancelado, _progresso| {
+        std::thread::sleep(gasto);
+        Ok(Some(SaidaDoMotor {
+            texto: texto.to_string(),
+            duracao: Duracao::completa(duracao),
         }))
     }
 }
@@ -4081,7 +4097,7 @@ fn a_etapa_5_recusa_o_instrumental_e_a_musica_que_ja_tem_letra() {
             *chamadas.borrow_mut() += 1;
             Ok(Some(SaidaDoMotor {
                 texto: "letra que não deveria existir".into(),
-                duracao: 120.0,
+                duracao: Duracao::completa(120.0),
             }))
         },
         SEM_PROGRESSO_5,
@@ -4177,7 +4193,7 @@ fn cancelar_para_a_fila_da_transcricao_com_o_que_ja_tem() {
             *feitas.borrow_mut() += 1;
             Ok(Some(SaidaDoMotor {
                 texto: "uma letra qualquer bem comprida para não ser rala".into(),
-                duracao: 30.0,
+                duracao: Duracao::completa(30.0),
             }))
         },
         SEM_PROGRESSO_5,
@@ -4662,4 +4678,413 @@ fn a_ressalva_da_etapa_4_nao_aparece_nas_outras_fontes() {
     let p = props.iter().find(|p| p.song_id == song.id).expect("proposta");
     assert_eq!(p.fonte, enrich::FONTE_IMPRESSAO_DIGITAL);
     assert_eq!(p.aviso, None, "o som tem a régua do AcoustID");
+}
+
+// ===========================================================================
+// QA A2 — a etapa 5 não propõe NOME, e agora o teste diz a verdade
+// ===========================================================================
+
+/// **O teste que faltava.** `a_transcricao_propoe_letra_e_nunca_encosta_na
+/// _etiqueta` passava por usar música com etiqueta REAL: nesse caso o palpite
+/// da etapa 1 empata com a etiqueta e a linha sai igual. A música TÍPICA da
+/// etapa 5 é a outra — CD ripado, "AudioTrack 03", sem artista —, e nela o
+/// Rust propunha "Oh! Chuva" / "Falamansa" sob o rótulo da transcrição, num
+/// módulo cujo comentário jura que "não há nome vindo daqui".
+///
+/// Nada era destruído: o palpite preserva etiqueta escrita. O defeito era o
+/// rótulo — preenchimento de branco vindo do nome do arquivo, anunciado como
+/// letra escrita ouvindo o áudio. E era redundante: a etapa 1 roda em TODAS as
+/// músicas da pasta na MESMA varredura que produziu esta lista, então esse
+/// palpite já foi entregue, já está na revisão, e repeti-lo aqui só cobra uma
+/// segunda leitura de quem vai conferir 47 letras.
+#[test]
+fn a_etapa_5_nao_propoe_nome_nem_quando_o_campo_esta_em_branco() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "Falamansa - Oh! Chuva.mp3")]);
+    let song = song_by_suffix(&conn, "Oh! Chuva.mp3");
+    // a etiqueta do CD ripado: placeholder no título, nada no artista
+    writer::write_tags(&conn, song.id, "AudioTrack 03", None, None, None, None).unwrap();
+    let song = song_by_suffix(&conn, "Oh! Chuva.mp3");
+    assert_eq!(song.title, "AudioTrack 03");
+    assert_eq!(song.artist, None);
+
+    let r = transcrever(&conn, &[song.id], motor("uma letra bem comprida aqui", 120.0));
+    let p = &r.propostas[0];
+    assert_eq!(
+        p.proposed_title, "AudioTrack 03",
+        "a etapa 5 ecoa o que está no arquivo; quem propõe nome é a etapa 1"
+    );
+    assert_eq!(p.proposed_artist, None, "e muito menos inventa um artista");
+    assert!(!p.substitui_nome_escrito);
+
+    // e o mesmo arquivo, pela etapa 1, CONTINUA propondo o nome: o valor não
+    // se perdeu, ele só voltou para a linha que o anuncia
+    let props = scan_props(&conn, "", |_url: &str| Ok("[]".to_string()));
+    let etapa1 = props
+        .iter()
+        .find(|p| p.file_path.ends_with("Oh! Chuva.mp3"))
+        .expect("a etapa 1 propõe o nome do arquivo");
+    assert_eq!(etapa1.proposed_title, "Oh! Chuva");
+    assert_eq!(etapa1.proposed_artist.as_deref(), Some("Falamansa"));
+    assert_eq!(etapa1.fonte, enrich::FONTE_NOME_ARQUIVO, "e o rótulo diz de onde veio");
+}
+
+/// A marca de instrumental também não vem acompanhada de nome. Era o pior
+/// caso: `marcar_instrumental=true` com um título e um artista novos na mesma
+/// linha, sob a fonte "transcrição".
+#[test]
+fn a_proposta_de_instrumental_tambem_nao_carrega_nome() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "Falamansa - Oh! Chuva.mp3")]);
+    let song = song_by_suffix(&conn, "Oh! Chuva.mp3");
+    writer::write_tags(&conn, song.id, "AudioTrack 03", None, None, None, None).unwrap();
+    let song = song_by_suffix(&conn, "Oh! Chuva.mp3");
+
+    let p = &transcrever(&conn, &[song.id], motor("", 300.0)).propostas[0];
+    assert!(p.marcar_instrumental);
+    assert_eq!(p.proposed_title, "AudioTrack 03");
+    assert_eq!(p.proposed_artist, None);
+}
+
+// ===========================================================================
+// QA M3 — a pergunta do fim só conta quem a etapa 5 consegue transcrever
+// ===========================================================================
+
+/// Música cujo MP3 sumiu do disco não entra em `sem_letra_no_fim`.
+///
+/// Ela inflava a contagem e o tempo ("sobraram 47 músicas… cerca de 3 horas"),
+/// e depois gastava uma vaga da fila para produzir a única coisa que a etapa 5
+/// consegue fazer com um arquivo ausente: uma linha de erro.
+#[test]
+fn a_musica_que_sumiu_do_disco_nao_entra_na_pergunta_do_fim() {
+    let (dir, conn, _f) = setup_with(&[
+        ("sem_letra.mp3", "fica.mp3"),
+        ("sem_letra.mp3", "some.mp3"),
+    ]);
+    let fica = song_by_suffix(&conn, "fica.mp3");
+    let some = song_by_suffix(&conn, "some.mp3");
+    fs::remove_file(dir.path().join("some.mp3")).unwrap();
+
+    let r = enrich::enrich_scan(
+        &conn,
+        "",
+        |_url: &str| Ok("[]".to_string()),
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+
+    assert_eq!(r.sem_letra_no_fim, vec![fica.id]);
+    assert!(
+        !r.sem_letra_no_fim.contains(&some.id),
+        "arquivo ausente não é trabalho da etapa 5, é linha de erro"
+    );
+    assert!(r.segundos_de_transcricao > 0, "e a estimativa conta só quem sobrou");
+}
+
+/// **Erro de REDE continua contando.** A etapa 5 não usa rede: a música que
+/// ficou sem letra porque o LRCLIB não respondeu é exatamente a que a
+/// transcrição resolve, e tirá-la da conta seria esconder o trabalho que o
+/// produto sabe fazer.
+#[test]
+fn erro_de_rede_nao_tira_a_musica_da_pergunta_do_fim() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
+    let song = song_by_suffix(&conn, "sem_letra.mp3");
+    writer::write_tags(&conn, song.id, "Cantiga", Some("Dona Zica"), None, None, None).unwrap();
+
+    let r = enrich::enrich_scan(
+        &conn,
+        "",
+        |_url: &str| Err(AppError("sem conexão".into())),
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+    assert_eq!(r.sem_letra_no_fim, vec![song.id]);
+}
+
+// ===========================================================================
+// QA A1 — a razão MEDIDA volta e passa a valer, sem passar pelo frontend
+// ===========================================================================
+
+/// **A promessa da DECISIONS #106, agora executável.** Ela dizia: "a primeira
+/// transcrição desta máquina devolve a razão real, e é ela que passa a valer".
+/// O número era calculado, serializado, tipado e testado — e não tinha
+/// consumidor nenhum no repositório: a estimativa da tela usava sempre a
+/// constante declarada de 1,0.
+#[test]
+fn a_razao_medida_e_guardada_pelo_backend_e_manda_na_estimativa_seguinte() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
+    let song = song_by_suffix(&conn, "sem_letra.mp3");
+    // uma canção de 4 minutos, para a amostra passar do piso
+    conn.execute("UPDATE songs SET duration_seconds = 240 WHERE id = ?1", [song.id])
+        .unwrap();
+
+    // antes de qualquer transcrição: a estimativa é a DECLARADA
+    let antes = enrich::enrich_scan(
+        &conn,
+        "",
+        |_url: &str| Ok("[]".to_string()),
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+    assert_eq!(
+        antes.segundos_de_transcricao, 240,
+        "240 s de áudio a 1,0 (a razão de REFERÊNCIA)"
+    );
+
+    // uma execução da etapa 5 que gasta bem mais relógio do que áudio — é o
+    // caso real: máquina modesta, whisper.cpp sem Metal e sem Accelerate
+    let r = enrich::transcricao_scan(
+        &conn,
+        &[song.id],
+        motor_lento("uma letra bem comprida", 600.0, Duration::from_millis(60)),
+        SEM_PROGRESSO_5,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+    assert!(r.razao_medida.is_some());
+    assert!(
+        r.razao_desta_maquina > 0.0,
+        "e o resultado diz qual razão passa a valer daqui em diante"
+    );
+
+    // e a varredura SEGUINTE já usa a razão medida, sem o frontend guardar
+    // nem reenviar nada
+    let depois = enrich::enrich_scan(
+        &conn,
+        "",
+        |_url: &str| Ok("[]".to_string()),
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+    assert_ne!(
+        depois.segundos_de_transcricao, antes.segundos_de_transcricao,
+        "a medição desta máquina passou a valer"
+    );
+    let esperado = (240.0 * r.razao_desta_maquina).ceil() as u64;
+    assert_eq!(depois.segundos_de_transcricao, esperado);
+
+    // e a tela sabe QUAL dos dois números está mostrando: sem este fato, a
+    // frase honesta é sempre a pior das duas (DECISIONS #86)
+    assert!(!antes.estimativa_medida_nesta_maquina, "antes era de fábrica");
+    assert!(
+        depois.estimativa_medida_nesta_maquina,
+        "e agora é medição desta máquina — é o que autoriza o \"neste computador\""
+    );
+}
+
+/// **Amostra curta não vira estimativa.** É a mesma regra do
+/// `segundos_restantes` do download (DECISIONS #106): número medido sobre
+/// amostra minúscula é pior que número declarado, porque parece mais
+/// verdadeiro. Uma faixa de 30 s numa máquina que estava compilando outra
+/// coisa não manda na estimativa de um acervo inteiro.
+#[test]
+fn amostra_curta_demais_nao_troca_a_estimativa_declarada() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
+    let song = song_by_suffix(&conn, "sem_letra.mp3");
+    conn.execute("UPDATE songs SET duration_seconds = 240 WHERE id = ?1", [song.id])
+        .unwrap();
+
+    // 30 s de áudio: muito abaixo do piso de 300 s
+    let r = enrich::transcricao_scan(
+        &conn,
+        &[song.id],
+        motor_lento("uma letra bem comprida", 30.0, Duration::from_millis(60)),
+        SEM_PROGRESSO_5,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+    assert!(r.razao_medida.is_some(), "a execução mediu");
+    assert_eq!(
+        r.razao_desta_maquina,
+        transcricao::RAZAO_DE_REFERENCIA,
+        "mas a amostra ainda não vale: continua a de referência"
+    );
+
+    let depois = enrich::enrich_scan(
+        &conn,
+        "",
+        |_url: &str| Ok("[]".to_string()),
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+    assert_eq!(depois.segundos_de_transcricao, 240);
+    assert!(
+        !depois.estimativa_medida_nesta_maquina,
+        "e a tela continua com a ressalva, porque o número ainda é de fábrica"
+    );
+}
+
+/// A medição ACUMULA entre execuções, e é por isso que ela é guardada como
+/// dois somatórios e não como uma razão pronta: uma música de 30 s no fim do
+/// dia não pode mandar na estimativa de um acervo de 150.
+#[test]
+fn a_medicao_acumula_entre_execucoes() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
+    let song = song_by_suffix(&conn, "sem_letra.mp3");
+
+    for _ in 0..3 {
+        enrich::transcricao_scan(
+            &conn,
+            &[song.id],
+            motor_lento("uma letra bem comprida", 200.0, Duration::from_millis(40)),
+            SEM_PROGRESSO_5,
+            SEM_CANCELAMENTO,
+        )
+        .unwrap();
+    }
+    let razao = db::razao_medida(&conn, db::MEDICAO_TRANSCRICAO, 300.0)
+        .unwrap()
+        .expect("600 s acumulados passam do piso");
+    assert!(razao > 0.0);
+}
+
+// ===========================================================================
+// QA B4 — disco cheio é veredito sobre a máquina, não sobre 47 músicas
+// ===========================================================================
+
+/// O `ERRO_TEMPORARIO` (pasta de trabalho que não aceita escrita — na prática,
+/// disco cheio) desliga a etapa pelo resto da fila, como o binário que não
+/// sobe já fazia. Sem isto, um disco cheio produzia 47 linhas idênticas
+/// culpando 47 músicas inocentes, e 47 tentativas de escrever um WAV que não
+/// cabe.
+#[test]
+fn disco_cheio_desliga_a_fila_em_vez_de_acusar_cada_musica() {
+    let (_dir, conn, _f) = setup_with(&[
+        ("sem_letra.mp3", "a.mp3"),
+        ("sem_letra.mp3", "b.mp3"),
+        ("sem_letra.mp3", "c.mp3"),
+    ]);
+    let ids: Vec<i64> = ["a.mp3", "b.mp3", "c.mp3"]
+        .iter()
+        .map(|n| song_by_suffix(&conn, n).id)
+        .collect();
+
+    let tentativas = std::cell::Cell::new(0usize);
+    let r = enrich::transcricao_scan(
+        &conn,
+        &ids,
+        |_mp3: &Path, _c: &dyn Fn() -> bool, _p: &dyn Fn(u8)| {
+            tentativas.set(tentativas.get() + 1);
+            Err(AppError(transcricao::ERRO_TEMPORARIO.into()))
+        },
+        SEM_PROGRESSO_5,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+
+    assert_eq!(tentativas.get(), 1, "o disco cheio foi descoberto UMA vez");
+    assert_eq!(r.propostas.len(), 3, "e as três músicas continuam com a sua linha");
+    for p in &r.propostas {
+        assert_eq!(
+            p.error.as_deref(),
+            Some(transcricao::ERRO_TEMPORARIO),
+            "e a frase é a VERDADEIRA — disco cheio não acusa o programa de não executar"
+        );
+    }
+}
+
+// ===========================================================================
+// A regra de COLETÂNEA vale por SLOT — emenda à DECISIONS #105
+// ===========================================================================
+
+/// **`Diversos` no TÍTULO é um título, e a pessoa o vê todo dia.**
+///
+/// A #105 argumentou "rótulos que NENHUMA canção usa como nome" pensando no
+/// campo do ARTISTA — que é onde o ripador escreve "Various Artists". Só que a
+/// regra entrou no `is_placeholder`, que roda nos dois campos. Consequência:
+/// uma música intitulada "Diversos" passava a valer VAZIO, o palpite do nome
+/// do arquivo entrava por cima, `substitui_nome_escrito` saía `false` — sem o
+/// aviso de troca, sem ficar fora da pré-marcação — e a linha caía no grupo
+/// dobrado dos preenchimentos, pré-marcada, sob a frase "N músicas SEM TÍTULO
+/// OU ARTISTA vão receber o nome que está no arquivo".
+///
+/// Para essa música a frase é FALSA, e é ela que sustenta a pré-marcação do
+/// grupo: um clique em "Aplicar selecionadas" levava embora um título que a
+/// revisão nunca mostrou. É o pior modo de falha do projeto (DECISIONS #65 e
+/// #89), pela porta que a #105 abriu.
+#[test]
+fn rotulo_de_coletanea_no_titulo_continua_sendo_titulo() {
+    for texto in ["Diversos", "Vários", "Varias", "Coletânea", "Various", "VA"] {
+        assert!(
+            !enrich::is_placeholder(enrich::Campo::Titulo, texto),
+            "{texto:?} como TÍTULO é o nome que alguém vê na biblioteca"
+        );
+    }
+}
+
+/// E o inverso — a lição da DECISIONS #89, que é o que limita toda mudança
+/// nesta lista: ao restringir, o caso que a #105 existe para resolver tem de
+/// continuar resolvido.
+#[test]
+fn rotulo_de_coletanea_no_artista_continua_valendo_vazio() {
+    for texto in [
+        "Various Artists",
+        "[Various Artists]",
+        "V.A.",
+        "VA",
+        "Vários",
+        "Diversos",
+        "Coletânea",
+        "compilation",
+    ] {
+        assert!(
+            enrich::is_placeholder(enrich::Campo::Artista, texto),
+            "{texto:?} como ARTISTA é rótulo de ripador, não gente"
+        );
+    }
+    // "Vá" é o verbo, e o `norm` tira o acento: as duas chegariam à mesma
+    // chave. Nos DOIS campos ele sobrevive.
+    assert!(!enrich::is_placeholder(enrich::Campo::Artista, "Vá"));
+    assert!(!enrich::is_placeholder(enrich::Campo::Titulo, "Vá"));
+    // e nenhum nome real de uma palavra caiu em outra regra ao restringir
+    for texto in ["Vai", "Vamos", "Valsa", "Variações", "Compilado", "Artista", "Pista"] {
+        assert!(!enrich::is_placeholder(enrich::Campo::Artista, texto), "{texto:?}");
+        assert!(!enrich::is_placeholder(enrich::Campo::Titulo, texto), "{texto:?}");
+    }
+}
+
+/// Ponta a ponta: a música com título "Diversos" e artista "Various Artists"
+/// tem o ARTISTA preenchido e o TÍTULO preservado — e a proposta que trocaria
+/// o título aparece como TROCA, nunca como preenchimento de branco.
+#[test]
+fn titulo_diversos_sobrevive_a_varredura_e_o_artista_lixo_e_preenchido() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "Falamansa - Oh! Chuva.mp3")]);
+    let song = song_by_suffix(&conn, "Oh! Chuva.mp3");
+    writer::write_tags(
+        &conn,
+        song.id,
+        "Diversos",
+        Some("Various Artists"),
+        None,
+        None,
+        None,
+    )
+    .unwrap();
+
+    let props = scan_props(&conn, "", |_url: &str| Ok("[]".to_string()));
+    let p = props
+        .iter()
+        .find(|p| p.file_path.ends_with("Oh! Chuva.mp3"))
+        .expect("a música entra na varredura");
+    assert_eq!(
+        p.proposed_title, "Diversos",
+        "o título escrito é preservado; a etapa 1 nunca propõe apagar"
+    );
+    assert_eq!(
+        p.proposed_artist.as_deref(),
+        Some("Falamansa"),
+        "e o artista-lixo é preenchido, que é o que a #105 veio fazer"
+    );
+    assert!(
+        !p.substitui_nome_escrito,
+        "não troca nome escrito nenhum: o título fica e o artista estava vazio"
+    );
 }

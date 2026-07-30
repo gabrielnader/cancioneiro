@@ -30,6 +30,17 @@
 //! aplicar: não há nome vindo daqui, logo não há o que sobrescrever e não há
 //! CONFLITO possível. Há teste fixando isso.
 //!
+//! **Isto foi FALSO na v0.10.0, e o teste que o afirmava passava** (QA A2). O
+//! tipo de retorno realmente não tem onde pôr um nome — mas quem montava a
+//! proposta da etapa 5 partia da proposta da etapa 1, e assim a linha saía
+//! propondo o palpite do nome do arquivo sob o rótulo da transcrição. O teste
+//! só passava por usar música com etiqueta REAL, em que o palpite empata com a
+//! etiqueta; a música TÍPICA desta etapa é a de CD ripado, e nela a linha
+//! propunha "Oh! Chuva" / "Falamansa". A correção está em
+//! `enrich::proposta_da_transcricao`, e o teste passou a usar o caso que
+//! importa. **Garantia de construção que depende de quem chama não é garantia
+//! de construção.**
+//!
 //! O que o refrão continua fazendo é INFORMAR: `Desfecho::Transcrita` carrega
 //! o trecho mais repetido para a revisão mostrar em uma linha. Quem vai
 //! conferir 47 letras escritas por máquina precisa reconhecer a música de
@@ -171,11 +182,45 @@ pub const IDIOMA: &str = "pt";
 /// conservador. Estimativa que promete MENOS do que leva é o defeito da
 /// DECISIONS #85; folga não é. E a copy tem de dizer "cerca de".
 ///
-/// **Este número existe para ser substituído por medição.** A primeira
-/// transcrição desta máquina já devolve o valor real
-/// (`TranscricaoResultado::razao_medida`), e a remedição do arnês
-/// `tests/remedicao.rs` devolve o valor de referência novo.
+/// **Este número existe para ser substituído por medição, e agora ele é.**
+///
+/// A v0.10.0 calculava a razão real, serializava, tipava, testava — e jogava
+/// fora: nenhum consumidor no repositório inteiro (QA A1). A frase "leva cerca
+/// de 3 horas NESTE COMPUTADOR" saía de uma constante declarada, num produto
+/// cujo `whisper-cli` de macOS passou a sair sem Metal e sem Accelerate, o que
+/// a torna ainda mais otimista — e prometer menos do que leva é o defeito da
+/// DECISIONS #85.
+///
+/// O caminho de volta é `db::somar_medicao` / `db::razao_medida`: quem manda a
+/// medição de volta é o próprio backend, ao fim de cada execução da etapa 5, e
+/// quem a lê é a varredura que monta a pergunta do fim. Nada disso atravessa o
+/// frontend — ver a DECISIONS #112.
 pub const RAZAO_DE_REFERENCIA: f64 = 1.0;
+
+/// Áudio mínimo já transcrito nesta máquina para a razão MEDIDA valer.
+///
+/// Cinco minutos são umas duas ou três canções: o bastante para diluir a
+/// máquina que estava ocupada com outra coisa na primeira delas, e pouco o
+/// bastante para a segunda varredura do dia já usar o número real.
+pub const AUDIO_MINIMO_PARA_MEDIR: f64 = 300.0;
+
+/// A razão que vale AGORA nesta máquina: a medida, se já houver amostra que
+/// baste; a de referência, enquanto não houver.
+///
+/// Existe como função — e não como duas leituras espalhadas — porque a escolha
+/// entre número medido e número declarado é exatamente o tipo de regra que
+/// diverge quando está escrita em dois lugares (DECISIONS #80).
+pub fn razao_desta_maquina(conn: &rusqlite::Connection) -> f64 {
+    crate::db::razao_medida(
+        conn,
+        crate::db::MEDICAO_TRANSCRICAO,
+        AUDIO_MINIMO_PARA_MEDIR,
+    )
+    .ok()
+    .flatten()
+    .filter(|r| *r > 0.0)
+    .unwrap_or(RAZAO_DE_REFERENCIA)
+}
 
 /// Duração mínima e máxima consideradas ao ESTIMAR, em segundos.
 ///
@@ -240,6 +285,12 @@ pub const ERRO_TRAVOU: &str = "o programa que escreve a letra parou de responder
 /// neles seria mandá-la procurar no lugar errado.
 pub const ERRO_TEMPORARIO: &str =
     "não foi possível preparar o áudio neste computador — verifique o espaço em disco";
+
+/// O arquivo tem mais áudio do que a etapa 5 consegue preparar de uma vez
+/// (umas 37 horas; ver `Wav::MAX_AMOSTRAS`). Frase própria porque a pessoa não
+/// tem defeito nenhum a procurar: o arquivo está bom, ele é que é enorme.
+pub const ERRO_LONGO_DEMAIS: &str =
+    "este arquivo tem áudio demais para a letra ser escrita de uma vez só";
 
 /// Teto de SILÊNCIO do motor, não de duração total.
 ///
@@ -455,7 +506,12 @@ pub fn extrair_candidatos(texto: &str) -> Vec<String> {
     // chave normalizada -> (ocorrências, ordem de aparição, frase)
     let mut contagem: Vec<(String, usize, usize, String)> = Vec::new();
     for (ordem, frase) in frases.iter().enumerate() {
-        if candidato_fraco(frase) || crate::enrich::is_placeholder(frase) || eh_alucinacao(frase) {
+        // Campo::Titulo: um candidato a refrão é um nome de MÚSICA em
+        // potencial, e "Diversos" cantado numa letra é letra.
+        if candidato_fraco(frase)
+            || crate::enrich::is_placeholder(crate::enrich::Campo::Titulo, frase)
+            || eh_alucinacao(frase)
+        {
             continue;
         }
         let chave = norm(frase);
@@ -473,7 +529,7 @@ pub fn extrair_candidatos(texto: &str) -> Vec<String> {
     let mut candidatos: Vec<String> = repetidas.iter().map(|c| c.3.clone()).collect();
     let primeira = &frases[0];
     if primeira.split_whitespace().count() <= MAX_PALAVRAS_PRIMEIRA
-        && !crate::enrich::is_placeholder(primeira)
+        && !crate::enrich::is_placeholder(crate::enrich::Campo::Titulo, primeira)
         && !eh_alucinacao(primeira)
         && !candidato_fraco(primeira)
     {
@@ -525,6 +581,58 @@ pub fn sem_conteudo(texto: &str, duracao: f64, densidade_minima: f64) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// O que se SABE sobre a duração desta música (DECISIONS #72)
+// ---------------------------------------------------------------------------
+
+/// Duração medida do áudio, com a única informação que decide se ela é PROVA:
+/// o áudio foi lido até o fim?
+///
+/// # Por que dois campos, e não um número
+///
+/// A v0.10.0 usou "segundos > 0" como sinônimo de "duração provada", e o QA
+/// mostrou o buraco: a contagem de amostras vinha de um decodificador que
+/// **parava no número de quadros declarado no cabeçalho Xing/Info** — ou seja,
+/// derivava exatamente do número que a DECISIONS #72 proíbe confiar. O
+/// resultado era um número medido de verdade, de um pedaço do áudio, com cara
+/// de prova. Um `cat a.mp3 b.mp3 > set.mp3` bastava: 30 s de música, cabeçalho
+/// dizendo 2 s, e a etapa 5 afirmando "o áudio foi lido até o fim".
+///
+/// Medir e ler até o fim são fatos DIFERENTES, e quem decide precisa dos dois.
+/// Um número sozinho não sabe dizer se é o áudio inteiro ou o começo dele —
+/// e é essa diferença que separa "esta música não tem voz" (permanente) de
+/// "não ouvi tudo" (a tentar de novo).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Duracao {
+    /// Segundos MEDIDOS pela contagem de amostras. 0,0 = não houve medição.
+    pub medida: f64,
+    /// O áudio foi lido até o fim REAL do arquivo, sem falha de leitura e sem
+    /// ficar aquém do que o próprio arquivo declara.
+    pub ate_o_fim: bool,
+}
+
+impl Duracao {
+    /// Nada se sabe: nem quantos segundos, nem se o áudio acabou.
+    pub const DESCONHECIDA: Duracao = Duracao {
+        medida: 0.0,
+        ate_o_fim: false,
+    };
+
+    /// Medição de um áudio que se leu INTEIRO — a única coisa que autoriza um
+    /// veredito permanente sobre esta música.
+    pub fn completa(segundos: f64) -> Duracao {
+        Duracao {
+            medida: segundos,
+            ate_o_fim: segundos > 0.0,
+        }
+    }
+
+    /// É prova? Há medição E ela cobre o áudio inteiro.
+    pub fn provada(&self) -> bool {
+        self.medida > 0.0 && self.ate_o_fim
+    }
+}
+
+// ---------------------------------------------------------------------------
 // O desfecho de UMA música
 // ---------------------------------------------------------------------------
 
@@ -537,28 +645,42 @@ pub enum Desfecho {
         letra: String,
         /// Trecho mais repetido, para a revisão mostrar. Só informação.
         refrao: Option<String>,
-        /// Segundos de áudio que o MOTOR decodificou; 0,0 = não informou.
-        duracao: f64,
+        /// O que se sabe sobre a duração do áudio ouvido.
+        duracao: Duracao,
     },
-    /// Áudio LEGÍVEL e transcrição sem conteúdo: música sem voz (V7/F16).
-    /// Áudio ilegível é `Erro`, e são coisas diferentes.
+    /// Áudio lido ATÉ O FIM e transcrição sem conteúdo: música sem voz
+    /// (V7/F16). Áudio ilegível é `Erro`, e áudio lido pela metade é `Adiada`
+    /// — as três coisas são diferentes, e confundi-las tira o arquivo da fila
+    /// de letra para sempre.
     Instrumental { motivo: String },
-    /// Transcrição rala e duração NÃO provada: nada é decidido e nada é
-    /// gravado (DECISIONS #72).
+    /// Duração NÃO comprovadamente completa: nada é decidido e nada é gravado
+    /// (DECISIONS #72 e #111).
     Adiada { motivo: String },
     /// Falha desta música. A fila segue.
     Erro { mensagem: String },
 }
 
+/// Frase única do adiamento por duração não comprovada. Uma só, porque a
+/// pessoa que lê não tem a quem perguntar: o que ela precisa saber é que nada
+/// foi gravado e o que fazer se a música realmente não tem voz.
+fn motivo_de_adiar(detalhe: &str) -> String {
+    format!(
+        "{detalhe}, e não foi possível confirmar que o áudio deste arquivo foi ouvido até o \
+         fim. Nada foi gravado, e a música continua na fila. Se ela não tem voz, marque como \
+         instrumental no editor"
+    )
+}
+
 /// Decide o desfecho a partir do que o motor devolveu — porte do laço de
 /// decisão do `cmd_transcrever`.
 ///
-/// # A ordem de autoridade da duração (DECISIONS #72, atualizada na V10)
+/// # A ordem de autoridade da duração (DECISIONS #72, corrigida na #111)
 ///
-/// `duracao_provada` é a duração MEDIDA do áudio, e desde a V10 ela vem da
-/// nossa própria decodificação: contagem exata de amostras dividida por
-/// 16 000. É o topo da ordem, acima do número que o motor informa no stderr
-/// (que hoje só corrobora) e muito acima do cabeçalho do MP3.
+/// `duracao` é a medição da nossa própria decodificação — contagem exata de
+/// amostras dividida por 16 000 —, acompanhada do fato que decide se ela vale
+/// como PROVA: o áudio foi lido até o fim. Os dois juntos ficam acima do número
+/// que o motor informa no stderr (que só corrobora) e muito acima do cabeçalho
+/// do MP3.
 ///
 /// `duracao_do_cabecalho` entra em UM lugar só — decidir se a transcrição rala
 /// vira `Adiada` —, e nunca decide sozinha. Ela é o número que já mentiu por
@@ -566,24 +688,22 @@ pub enum Desfecho {
 /// marcada instrumental para sempre. Margem de segurança não protege contra
 /// erro de ordem de grandeza; só corroboração protege.
 ///
-/// **`Adiada` ficou inalcançável pelo caminho real**, e é de propósito que ela
-/// não foi removida: se um dia alguém acrescentar uma porta que chegue aqui
-/// sem prova de duração, o produto ADIA em vez de marcar instrumental por
-/// engano. O custo de manter é um `if`; o custo de remover seria descobrir o
-/// contrário dentro do arquivo de alguém.
-pub fn decidir(bruto: &str, duracao_provada: f64, duracao_do_cabecalho: f64) -> Desfecho {
-    decidir_com_densidade(
-        bruto,
-        duracao_provada,
-        duracao_do_cabecalho,
-        DENSIDADE_MINIMA_LETRA,
-    )
+/// # O `if` que a DECISIONS #108 prometeu, e que agora existe
+///
+/// Aquela decisão dizia que `Adiada` tinha ficado inalcançável pelo caminho
+/// real e que o custo de mantê-la era um `if`. A hora chegou, e por um motivo
+/// que a decisão não previa: a contagem de amostras podia vir de um áudio lido
+/// pela METADE, e ninguém sabia. **`Instrumental` só sai com
+/// `duracao.provada()`** — sem isso o produto ADIA, porque marcar tira o
+/// arquivo da fila de letra para sempre e desfazer é trabalho de gente.
+pub fn decidir(bruto: &str, duracao: Duracao, duracao_do_cabecalho: f64) -> Desfecho {
+    decidir_com_densidade(bruto, duracao, duracao_do_cabecalho, DENSIDADE_MINIMA_LETRA)
 }
 
 /// O `decidir` com o piso de densidade explícito — a porta que os testes usam.
 pub fn decidir_com_densidade(
     bruto: &str,
-    duracao_provada: f64,
+    duracao: Duracao,
     duracao_do_cabecalho: f64,
     densidade_minima: f64,
 ) -> Desfecho {
@@ -596,46 +716,59 @@ pub fn decidir_com_densidade(
     // faixa de 15 minutos pode ser um refrão repetido cinquenta vezes. O que
     // se quer medir é quanto o MOTOR ouviu.
     let caracteres = conteudo.trim().chars().count();
-    let prova = duracao_provada > 0.0;
-    let rala_com_prova = prova && sem_conteudo(conteudo, duracao_provada, densidade_minima);
+    let prova = duracao.provada();
 
-    if caracteres > 0
-        && !prova
-        && sem_conteudo(conteudo, duracao_do_cabecalho, densidade_minima)
-    {
-        // A ÚNICA coisa que acusaria "instrumental" aqui é a duração do
-        // cabeçalho — e ela não é medição. Marcar tira o arquivo da fila para
-        // sempre, e desfazer é trabalho de gente: errar para este lado é
-        // destruir dado de quem não tem a quem recorrer.
-        return Desfecho::Adiada {
-            motivo: format!(
-                "a transcrição saiu curta ({caracteres} caracteres), mas não foi possível \
-                 confirmar a duração deste áudio. Nada foi gravado. Se a música não tem voz, \
-                 marque como instrumental no editor"
-            ),
+    if caracteres == 0 {
+        // Vazio com o áudio LIDO ATÉ O FIM é música sem voz. Vazio com o áudio
+        // lido pela metade é uma pergunta em aberto — e era exatamente aqui
+        // que a v0.10.0 gravava a frase "o áudio foi lido até o fim" sobre um
+        // arquivo cujos 28 dos 30 segundos nunca foram abertos.
+        return if prova {
+            Desfecho::Instrumental {
+                motivo: "a transcrição voltou vazia e o áudio foi lido até o fim".to_string(),
+            }
+        } else {
+            Desfecho::Adiada {
+                motivo: motivo_de_adiar("a transcrição voltou vazia"),
+            }
         };
     }
-    if caracteres == 0 || rala_com_prova {
-        // O áudio foi LIDO até o fim (ilegível teria virado erro antes):
-        // voltar vazio — ou quase — daqui é música SEM VOZ, não defeito.
-        let motivo = if caracteres == 0 {
-            "a transcrição voltou vazia e o áudio foi lido até o fim".to_string()
+    if !prova {
+        // Sem prova de duração não há densidade que valha: a ÚNICA coisa que
+        // acusaria "instrumental" aqui é o cabeçalho, e ele não é medição.
+        return if sem_conteudo(conteudo, duracao_do_cabecalho, densidade_minima) {
+            Desfecho::Adiada {
+                motivo: motivo_de_adiar(&format!(
+                    "a transcrição saiu curta ({caracteres} caracteres)"
+                )),
+            }
         } else {
-            let densidade = caracteres as f64 / duracao_provada;
-            format!(
+            // Texto de sobra: é letra, e letra se propõe sem depender de saber
+            // a duração. O que NÃO se faz sem prova é o veredito permanente.
+            let letra = limpar_transcricao(conteudo);
+            Desfecho::Transcrita {
+                refrao: refrao(&letra),
+                letra,
+                duracao,
+            }
+        };
+    }
+    if sem_conteudo(conteudo, duracao.medida, densidade_minima) {
+        let densidade = caracteres as f64 / duracao.medida;
+        return Desfecho::Instrumental {
+            motivo: format!(
                 "{caracteres} caracteres em {} de áudio dão {}, abaixo do mínimo de {}",
-                duracao_em_pt_br(duracao_provada),
+                duracao_em_pt_br(duracao.medida),
                 decimal_pt_br(densidade),
                 decimal_pt_br(densidade_minima)
-            )
+            ),
         };
-        return Desfecho::Instrumental { motivo };
     }
     let letra = limpar_transcricao(conteudo);
     Desfecho::Transcrita {
         refrao: refrao(&letra),
         letra,
-        duracao: duracao_provada,
+        duracao,
     }
 }
 
@@ -668,17 +801,40 @@ fn decimal_pt_br(valor: f64) -> String {
 // Então o aplicativo **não depende do formato de entrada do binário**: ele
 // decodifica aqui dentro, em Rust puro, e entrega o que o motor sabe ler.
 //
-// # A boa notícia: a duração deixa de ser um problema
+// # A duração medida — e o buraco que quase passou (DECISIONS #111)
 //
-// Decodificar dá a CONTAGEM EXATA DE AMOSTRAS. Isso é duração medida do
-// áudio — o topo da ordem de autoridade da DECISIONS #72, acima do número que
-// o motor informa e muito acima do cabeçalho do MP3.
+// Decodificar dá a CONTAGEM EXATA DE AMOSTRAS, e isso é medição do áudio.
+// Mas a v0.10.0 quase publicou essa medição como prova sem reparar em COMO o
+// decodificador decide onde parar.
 //
-// É a resposta ao incidente que criou aquela decisão: sem cabeçalho Xing, 300
-// segundos reais foram lidos como 2365, e uma música CANTADA foi marcada
-// instrumental para sempre. Com a contagem de amostras, 355 caracteres em 300
-// s dão 1,18 c/s (letra) em vez de 0,15 c/s (instrumental). A regra da F17
-// não mudou; o que mudou é que ela passou a receber o número certo.
+// O `symphonia` liga `gapless` por padrão. Com ele, o `Track::num_frames` —
+// que vem do contador de quadros do cabeçalho **Xing/Info** — vira o fim do
+// fluxo, e todo pacote além dele é aparado até sobrar nada. Ou seja: a
+// contagem de amostras derivava exatamente do número que a DECISIONS #72
+// proíbe confiar, com cara de medição. O arquivo que expõe isso não é exótico
+// — é o que `cat a.mp3 b.mp3 > set.mp3` produz, e todo player toca inteiro:
+// 30 s de música, o contador da primeira cópia dizendo 2 s, e a etapa 5
+// afirmando "o áudio foi lido até o fim".
+//
+// Duas coisas mudaram, e nenhuma é margem de segurança:
+//
+// 1. **`gapless` desligado.** O corte de silêncio de codificação (uns 12 ms
+//    nas pontas) não vale um decodificador que obedece a um contador que
+//    ninguém verificou. Sem ele o laço só para no EOF de verdade.
+// 2. **O cabeçalho virou PISO, nunca autoridade.** Se decodificamos MUITO
+//    menos do que o próprio arquivo declara, a leitura ficou incompleta e a
+//    duração **não é prova** — é o que pega o arquivo cortado no meio, que
+//    antes virava "8 s de áudio" em silêncio. Decodificar MAIS do que o
+//    declarado é o caso normal do arquivo emendado, e não acusa nada: o
+//    cabeçalho é que estava errado.
+//
+// É corroboração, que é o que a DECISIONS #72 diz ser a única proteção contra
+// erro de ordem de grandeza — e ela é usada na única direção em que é sólida.
+//
+// O incidente original continua resolvido: sem cabeçalho Xing, 300 segundos
+// reais eram lidos como 2365, e uma música CANTADA foi marcada instrumental
+// para sempre. Com a contagem de amostras, 355 caracteres em 300 s dão
+// 1,18 c/s (letra) em vez de 0,15 c/s (instrumental).
 //
 // # Onde o temporário NÃO vai
 //
@@ -816,24 +972,69 @@ impl Drop for Temporario {
     }
 }
 
+/// Fração do que o cabeçalho DECLARA abaixo da qual a leitura é considerada
+/// incompleta.
+///
+/// O número é frouxo de propósito. Ele não existe para pegar diferença fina —
+/// existe para pegar erro de ORDEM DE GRANDEZA, que é o modo de falha real: 8 s
+/// de um arquivo que declara 30, 2 s de um arquivo que declara 30. Apertá-lo
+/// custaria caro na direção errada: quando não há Xing/Info, o `symphonia`
+/// ESTIMA o total pelo tamanho do arquivo e pela taxa do primeiro quadro, e
+/// num VBR essa estimativa erra por alguns pontos percentuais sem que nada
+/// esteja errado. Errar aqui para o lado apertado transformaria música normal
+/// em `Adiada` para sempre.
+const FRACAO_MINIMA_DO_DECLARADO: f64 = 0.9;
+
 /// O que a decodificação produziu.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Decodificado {
     /// Amostras de 16 kHz mono escritas no WAV.
     pub amostras: u64,
-    /// Duração em segundos, MEDIDA (amostras / taxa). É a prova de duração.
+    /// Duração em segundos, MEDIDA (amostras / taxa).
     pub duracao: f64,
+    /// O áudio foi lido até o EOF real, sem falha de leitura, e sem ficar
+    /// aquém do que o próprio arquivo declara. **Só com isto a duração é
+    /// prova** — ver `Duracao` e a DECISIONS #111.
+    pub completa: bool,
+}
+
+impl Decodificado {
+    /// O que esta decodificação PROVA sobre a duração.
+    pub fn prova(&self) -> Duracao {
+        Duracao {
+            medida: self.duracao,
+            ate_o_fim: self.completa,
+        }
+    }
 }
 
 /// Decodifica o MP3 e grava um WAV 16 kHz mono em `destino`.
 ///
 /// `Ok(None)` é cancelamento. `Err(ERRO_AUDIO)` é o áudio que não pôde ser
-/// lido — arquivo danificado, formato que não é MP3, faixa vazia —, e é erro
-/// de UMA música: a fila segue.
+/// lido — arquivo danificado, formato que não é MP3, faixa vazia, **ou falha
+/// de leitura no meio** —, e é erro de UMA música: a fila segue.
 ///
 /// Nada é lido nem escrito ao lado do MP3: a única escrita é em `destino`.
 pub fn decodificar_para_wav(
     mp3: &Path,
+    destino: &Path,
+    cancelado: &dyn Fn() -> bool,
+) -> Result<Option<Decodificado>> {
+    let arquivo = std::fs::File::open(mp3).map_err(|_| AppError(ERRO_AUDIO.into()))?;
+    decodificar_fonte(Box::new(arquivo), destino, cancelado)
+}
+
+/// O corpo da decodificação, sobre uma fonte de bytes qualquer.
+///
+/// Existe separado do `decodificar_para_wav` por uma razão de teste que vale o
+/// preço: **é o único jeito de provar que uma FALHA DE LEITURA no meio do
+/// arquivo vira erro, e não áudio curto.** Não dá para fazer um `File` de
+/// verdade falhar no meio dentro de uma suíte, e o modo de falha é dos mais
+/// comuns nas 40 máquinas do produto — HD externo que dorme, pen drive,
+/// compartilhamento de rede, setor ruim. Sem o encaixe, a correção do QA A3
+/// seria uma linha de código sem prova nenhuma.
+fn decodificar_fonte(
+    fonte: Box<dyn symphonia::core::io::MediaSource>,
     destino: &Path,
     cancelado: &dyn Fn() -> bool,
 ) -> Result<Option<Decodificado>> {
@@ -844,8 +1045,7 @@ pub fn decodificar_para_wav(
     use symphonia::core::io::MediaSourceStream;
     use symphonia::core::meta::MetadataOptions;
 
-    let arquivo = std::fs::File::open(mp3).map_err(|_| AppError(ERRO_AUDIO.into()))?;
-    let fluxo = MediaSourceStream::new(Box::new(arquivo), Default::default());
+    let fluxo = MediaSourceStream::new(fonte, Default::default());
     let mut hint = Hint::new();
     hint.with_extension("mp3");
     let mut formato = symphonia::default::get_probe()
@@ -857,14 +1057,26 @@ pub fn decodificar_para_wav(
         .find(|t| t.codec_params.as_ref().is_some_and(|p| p.audio().is_some()))
         .ok_or_else(|| AppError(ERRO_AUDIO.into()))?;
     let id_da_faixa = faixa.id;
+    // O que o ARQUIVO declara ter, em quadros PCM na taxa dele. Vem do
+    // Xing/Info, do VBRI, ou de uma estimativa pelo tamanho — nenhum dos três
+    // é medição, e por isso o número entra aqui como PISO a corroborar, nunca
+    // como autoridade (DECISIONS #72).
+    let declarado = faixa.num_frames;
     let parametros = faixa
         .codec_params
         .as_ref()
         .and_then(|p| p.audio())
         .ok_or_else(|| AppError(ERRO_AUDIO.into()))?
         .clone();
+    // **`gapless` DESLIGADO, e é o coração da correção do C1.** Ligado (o
+    // padrão), ele apara todo quadro que passe do fim declarado no cabeçalho
+    // Xing/Info — e assim a "contagem de amostras" que a DECISIONS #108
+    // promoveu ao topo da ordem de autoridade era, na verdade, o cabeçalho
+    // disfarçado. O que se perde é o corte de silêncio de codificação, uns
+    // 12 ms nas pontas; o que se ganha é ouvir o arquivo inteiro.
+    let opcoes = AudioDecoderOptions::default().gapless(false);
     let mut decodificador = symphonia::default::get_codecs()
-        .make_audio_decoder(&parametros, &AudioDecoderOptions::default())
+        .make_audio_decoder(&parametros, &opcoes)
         .map_err(|_| AppError(ERRO_AUDIO.into()))?;
 
     let mut wav = Wav::criar(destino)?;
@@ -873,6 +1085,14 @@ pub fn decodificar_para_wav(
     let mut entrelacado: Vec<f32> = Vec::new();
     let mut pcm: Vec<i16> = Vec::new();
     let mut pacotes = 0usize;
+    // Quadros PCM (na taxa do ARQUIVO) que realmente saíram do decodificador.
+    // É este número que se confronta com o declarado.
+    let mut quadros_lidos: u64 = 0;
+    // Não nasce em `false`: o único jeito de sair do laço para cá é o EOF.
+    // Todo o resto — cancelamento, falha de leitura, fluxo quebrado — sai por
+    // `return`, e é isso que garante que "ouvi até o fim" nunca seja o valor
+    // padrão de nada.
+    let chegou_ao_fim;
 
     loop {
         // O cancelamento é consultado DURANTE a decodificação: uma faixa longa
@@ -885,10 +1105,21 @@ pub fn decodificar_para_wav(
         }
         let pacote = match formato.next_packet() {
             Ok(Some(p)) => p,
-            Ok(None) => break,
-            // fluxo truncado no fim é comum em acervo de gravação de casa, e
-            // o que já veio continua valendo
-            Err(_) => break,
+            // EOF do fluxo MPEG: o arquivo acabou. É a ÚNICA saída normal do
+            // laço, e a única que autoriza dizer "ouvi até o fim".
+            Ok(None) => {
+                chegou_ao_fim = true;
+                break;
+            }
+            // **QA A3.** Aqui morava um `break` que engolia tudo. Fluxo
+            // truncado no fim é comum em acervo de gravação de casa — e o
+            // `symphonia` já o entrega como `Ok(None)` acima. O que sobra
+            // nesta perna é FALHA DE LEITURA: HD externo que dormiu, pen drive
+            // arrancado, compartilhamento de rede que caiu, setor ruim. São
+            // normais em 40 máquinas alheias, e tratá-las como "o áudio é
+            // curto" promovia duração parcial a prova, gravava letra parcial
+            // como completa e tirava o arquivo da fila para sempre.
+            Err(_) => return Err(AppError(ERRO_AUDIO.into())),
         };
         if pacote.track_id != id_da_faixa {
             continue;
@@ -896,8 +1127,10 @@ pub fn decodificar_para_wav(
         let quadro = match decodificador.decode_ref(&pacote.as_packet_ref()) {
             Ok(q) => q,
             Err(symphonia::core::errors::Error::DecodeError(_)) => continue, // quadro ruim: pula
-            Err(_) => break,
+            // o que não é quadro ruim é o fluxo quebrando: erro, não fim
+            Err(_) => return Err(AppError(ERRO_AUDIO.into())),
         };
+        quadros_lidos += quadro.frames() as u64;
         let taxa = quadro.spec().rate();
         let canais = quadro.num_planes().max(1);
         if taxa == 0 {
@@ -935,9 +1168,21 @@ pub fn decodificar_para_wav(
         // não pôde ser lido — e as duas coisas são diferentes (V7/F16)
         return Err(AppError(ERRO_AUDIO.into()));
     }
+    // A CORROBORAÇÃO (DECISIONS #72): o que o arquivo declara vale como piso, e
+    // só como piso. Ficar MUITO abaixo dele é leitura incompleta — o arquivo
+    // cortado no meio, que antes virava "8 s de áudio" em silêncio. Ficar acima
+    // é o arquivo emendado, e não acusa nada: quem estava errado era o
+    // cabeçalho.
+    let bate_com_o_declarado = match declarado {
+        Some(d) if d > 0 => quadros_lidos as f64 >= d as f64 * FRACAO_MINIMA_DO_DECLARADO,
+        // sem declaração não há o que corroborar: o que se mediu é o que o
+        // arquivo tem, e dizer "não sei" aqui adiaria todo MP3 sem cabeçalho
+        _ => true,
+    };
     Ok(Some(Decodificado {
         amostras,
         duracao: amostras as f64 / TAXA_DO_MOTOR as f64,
+        completa: chegou_ao_fim && bate_com_o_declarado,
     }))
 }
 
@@ -951,6 +1196,18 @@ struct Wav {
 
 impl Wav {
     const CABECALHO: usize = 44;
+
+    /// Teto de amostras que um WAV consegue DESCREVER.
+    ///
+    /// **QA B3.** Os dois tamanhos do cabeçalho são `u32`, e o do RIFF é
+    /// `36 + bytes_de_audio`: a soma estoura a partir de umas 37 horas num
+    /// arquivo só. Em `release` ela daria a volta em silêncio, e o `whisper-cli`
+    /// receberia um WAV que anuncia dois segundos de áudio — a etapa 5
+    /// escreveria a letra dos dois primeiros segundos de um set de dois dias e
+    /// diria que ouviu tudo, que é o mesmo defeito do C1 por outra porta.
+    /// 37 horas num MP3 é raro e não é impossível: `cat` de acervo inteiro é
+    /// exatamente como estes arquivos nascem.
+    const MAX_AMOSTRAS: u64 = ((u32::MAX as u64) - Self::CABECALHO as u64) / 2;
 
     fn criar(destino: &Path) -> Result<Self> {
         if let Some(pasta) = destino.parent() {
@@ -990,6 +1247,13 @@ impl Wav {
 
     fn escrever(&mut self, pcm: &[i16]) -> Result<()> {
         use std::io::Write;
+        if self.amostras + pcm.len() as u64 > Self::MAX_AMOSTRAS {
+            // Recusar é a única saída honesta: escrever um cabeçalho que dá a
+            // volta faria o motor ouvir um pedaço e o produto afirmar que
+            // ouviu tudo. Erro de UMA música — a fila segue, e o arquivo
+            // continua na fila em vez de sair dela com um veredito falso.
+            return Err(AppError(ERRO_LONGO_DEMAIS.into()));
+        }
         let mut bytes = Vec::with_capacity(pcm.len() * 2);
         for a in pcm {
             bytes.extend_from_slice(&a.to_le_bytes());
@@ -1008,11 +1272,12 @@ impl Wav {
         self.arquivo
             .flush()
             .map_err(|_| AppError(ERRO_TEMPORARIO.into()))?;
-        let bytes_de_audio = (self.amostras * 2).min(u32::MAX as u64) as u32;
+        let bytes_de_audio = (self.amostras * 2).min(Self::MAX_AMOSTRAS * 2) as u32;
         let mut arquivo = self
             .arquivo
             .into_inner()
             .map_err(|_| AppError(ERRO_TEMPORARIO.into()))?;
+        debug_assert!(self.amostras <= Self::MAX_AMOSTRAS);
         arquivo
             .seek(SeekFrom::Start(0))
             .map_err(|_| AppError(ERRO_TEMPORARIO.into()))?;
@@ -1046,9 +1311,8 @@ fn caminho_temporario(pasta: &Path) -> PathBuf {
 pub struct SaidaDoMotor {
     /// A transcrição crua, uma linha por segmento.
     pub texto: String,
-    /// Segundos de ÁUDIO que o motor decodificou, do próprio motor. 0,0
-    /// significa "não informou" — e aí não há prova de duração nenhuma.
-    pub duracao: f64,
+    /// O que se sabe sobre a duração do áudio que o motor ouviu.
+    pub duracao: Duracao,
 }
 
 /// Uma notícia vinda do stderr do motor.
@@ -1211,9 +1475,9 @@ pub fn transcrever(
     });
 
     // A duração que o MOTOR anuncia é lida, mas não é a que sai daqui: ela
-    // serve de corroboração e de diagnóstico. Quem manda é a contagem de
-    // amostras da decodificação — ver a ordem de autoridade no cabeçalho da
-    // seção de decodificação.
+    // CORROBORA (ver o fim desta função). Quem manda é a contagem de amostras
+    // da decodificação — ver a ordem de autoridade no cabeçalho da seção de
+    // decodificação.
     let mut duracao_do_motor = 0.0f64;
     let mut ultimo_sinal = Instant::now();
     let status = loop {
@@ -1279,16 +1543,22 @@ pub fn transcrever(
     if !status.success() {
         return Err(AppError(ERRO_AUDIO.into()));
     }
+    // A segunda corroboração, de graça: o motor anuncia quanto áudio ABRIU no
+    // WAV que nós escrevemos. Se ele diz ter aberto MUITO MENOS do que
+    // escrevemos, ele não ouviu a música inteira — e a transcrição que voltou
+    // fala de um pedaço. Só nesta direção: um número maior é padding interno
+    // do motor e não acusa nada. É a mesma disciplina do cabeçalho — o outro
+    // número entra como piso, nunca como autoridade.
+    let mut prova = decodificado.prova();
+    if duracao_do_motor > 0.0
+        && prova.medida > 0.0
+        && duracao_do_motor < prova.medida * FRACAO_MINIMA_DO_DECLARADO
+    {
+        prova.ate_o_fim = false;
+    }
     Ok(Some(SaidaDoMotor {
         texto: String::from_utf8_lossy(&saida).trim().to_string(),
-        // a contagem de amostras é MEDIÇÃO; o número do motor só entra se, um
-        // dia, a decodificação deixar de informar a sua (hoje ela sempre
-        // informa, e há teste fixando a precedência)
-        duracao: if decodificado.duracao > 0.0 {
-            decodificado.duracao
-        } else {
-            duracao_do_motor
-        },
+        duracao: prova,
     }))
 }
 
@@ -1409,7 +1679,7 @@ mod tests {
     /// o arquivo "ter letra": ele sumiria da fila para sempre (DECISIONS #70).
     #[test]
     fn transcricao_so_de_alucinacao_nao_vira_letra() {
-        let desfecho = decidir("Música\nObrigado\nTchau", 300.0, 300.0);
+        let desfecho = decidir("Música\nObrigado\nTchau", Duracao::completa(300.0), 300.0);
         assert!(
             matches!(desfecho, Desfecho::Instrumental { .. }),
             "{desfecho:?}"
@@ -1463,7 +1733,7 @@ mod tests {
     #[test]
     fn nenhum_desfecho_carrega_titulo_ou_artista() {
         let letra = "Na beira do mar sagrado\nNa beira do mar sagrado\nEu vi Iemanjá";
-        match decidir(letra, 60.0, 60.0) {
+        match decidir(letra, Duracao::completa(60.0), 60.0) {
             Desfecho::Transcrita { refrao, letra: l, .. } => {
                 assert_eq!(refrao.as_deref(), Some("na beira do mar sagrado"));
                 assert_eq!(l, letra, "a letra sai como veio, sem laço a colapsar");
@@ -1491,17 +1761,61 @@ mod tests {
         assert!(!sem_conteudo("abc", 0.0, d));
     }
 
-    /// Transcrição vazia com áudio LEGÍVEL marca instrumental (V7/F16). Áudio
-    /// ilegível é erro, e são coisas diferentes — quem produz o erro é o
-    /// `transcrever`, não esta função.
+    /// Transcrição vazia com o áudio lido ATÉ O FIM marca instrumental
+    /// (V7/F16). Áudio ilegível é erro, e são coisas diferentes — quem produz
+    /// o erro é o `transcrever`, não esta função.
     #[test]
-    fn transcricao_vazia_com_audio_legivel_marca_instrumental() {
+    fn transcricao_vazia_com_audio_lido_ate_o_fim_marca_instrumental() {
         assert!(matches!(
-            decidir("", 300.0, 300.0),
+            decidir("", Duracao::completa(300.0), 300.0),
             Desfecho::Instrumental { .. }
         ));
-        // e sem duração nenhuma: vazio não depende de duração
-        assert!(matches!(decidir("", 0.0, 0.0), Desfecho::Instrumental { .. }));
+    }
+
+    /// **O `if` da DECISIONS #108, agora existindo (QA C1).**
+    ///
+    /// Aquela decisão escreveu que `Adiada` tinha ficado inalcançável pelo
+    /// caminho real e que "o custo de manter é um `if`". O QA mostrou por que o
+    /// `if` precisava existir de verdade: a contagem de amostras vinha de um
+    /// decodificador que parava no contador do cabeçalho, e um `cat a.mp3
+    /// b.mp3` bastava para a etapa 5 afirmar "o áudio foi lido até o fim"
+    /// sobre 2 dos 30 segundos.
+    ///
+    /// **Vazio sem prova de leitura completa NÃO é instrumental.** A marca
+    /// tira o arquivo da fila de letra para sempre (ela vence até o
+    /// `--forcar-tudo`), e o motivo gravado seria uma afirmação falsa.
+    #[test]
+    fn vazio_sem_prova_de_leitura_completa_e_adiado_e_nunca_instrumental() {
+        for duracao in [
+            Duracao::DESCONHECIDA,
+            // medido, mas de um áudio que não se leu até o fim: é exatamente o
+            // que o cabeçalho mentiroso produzia
+            Duracao {
+                medida: 2.0,
+                ate_o_fim: false,
+            },
+        ] {
+            match decidir("", duracao, 30.0) {
+                Desfecho::Adiada { motivo } => {
+                    assert!(motivo.contains("Nada foi gravado"), "{motivo}");
+                }
+                outro => panic!("{duracao:?} não podia dar {outro:?}"),
+            }
+        }
+    }
+
+    /// E a frase do instrumental só é dita quando ela é VERDADE.
+    #[test]
+    fn a_frase_do_audio_lido_ate_o_fim_so_sai_quando_e_verdade() {
+        let dita = |d| match decidir("", d, 30.0) {
+            Desfecho::Instrumental { motivo } => motivo.contains("lido até o fim"),
+            _ => false,
+        };
+        assert!(dita(Duracao::completa(30.0)));
+        assert!(!dita(Duracao {
+            medida: 2.0,
+            ate_o_fim: false
+        }));
     }
 
     /// **Sem prova de duração, ADIADA — e nada é gravado.**
@@ -1516,31 +1830,90 @@ mod tests {
         // 13 caracteres para 300 s de cabeçalho seriam 0,04 c/s
         let ralo = "la la la la";
         assert!(matches!(
-            decidir(ralo, 0.0, 300.0),
+            decidir(ralo, Duracao::DESCONHECIDA, 300.0),
             Desfecho::Adiada { .. }
         ));
-        // com a duração PROVADA pelo motor, aí sim marca
+        // com a duração PROVADA, aí sim marca
         assert!(matches!(
-            decidir(ralo, 300.0, 300.0),
+            decidir(ralo, Duracao::completa(300.0), 300.0),
             Desfecho::Instrumental { .. }
+        ));
+        // medida mas incompleta vale o mesmo que não medida: é o caso do
+        // arquivo emendado, em que 2 s de 30 tinham cara de medição
+        assert!(matches!(
+            decidir(
+                ralo,
+                Duracao {
+                    medida: 2.0,
+                    ate_o_fim: false
+                },
+                300.0
+            ),
+            Desfecho::Adiada { .. }
         ));
         // e o cabeçalho absurdo não decide nada sozinho: sem prova e sem
         // cabeçalho crível, a transcrição normal continua virando letra
         assert!(matches!(
-            decidir(&"palavra ".repeat(60), 0.0, 2365.0),
+            decidir(&"palavra ".repeat(60), Duracao::DESCONHECIDA, 2365.0),
             Desfecho::Adiada { .. }
         ));
         assert!(matches!(
-            decidir(&"palavra ".repeat(60), 0.0, 300.0),
+            decidir(&"palavra ".repeat(60), Duracao::DESCONHECIDA, 300.0),
             Desfecho::Transcrita { .. }
         ));
+    }
+
+    /// Letra farta continua sendo LETRA mesmo sem prova de duração: o que a
+    /// falta de prova proíbe é o veredito PERMANENTE (instrumental), não a
+    /// proposta que alguém vai ler antes de aceitar.
+    #[test]
+    fn sem_prova_de_duracao_a_letra_farta_continua_saindo() {
+        match decidir(&"palavra ".repeat(60), Duracao::DESCONHECIDA, 300.0) {
+            Desfecho::Transcrita { duracao, .. } => {
+                assert!(!duracao.provada(), "e a proposta CARREGA a falta de prova");
+            }
+            outro => panic!("{outro:?}"),
+        }
+    }
+
+    /// **Nenhum caminho produz `Instrumental` sem prova.** Varredura sobre a
+    /// combinação inteira, e não sobre os casos de que o autor lembrou
+    /// (DECISIONS #76): é a única forma de o `if` continuar existindo depois
+    /// que alguém acrescentar uma porta nova.
+    #[test]
+    fn instrumental_exige_duracao_comprovadamente_completa() {
+        let textos = ["", "la", "Música", "la la la la", &"palavra ".repeat(60)];
+        let duracoes = [
+            Duracao::DESCONHECIDA,
+            Duracao {
+                medida: 2.0,
+                ate_o_fim: false,
+            },
+            Duracao {
+                medida: 300.0,
+                ate_o_fim: false,
+            },
+            Duracao {
+                medida: 0.0,
+                ate_o_fim: true,
+            },
+        ];
+        for texto in textos {
+            for duracao in duracoes {
+                let desfecho = decidir(texto, duracao, 300.0);
+                assert!(
+                    !matches!(desfecho, Desfecho::Instrumental { .. }),
+                    "{texto:?} com {duracao:?} virou {desfecho:?}"
+                );
+            }
+        }
     }
 
     /// O motivo do instrumental DIZ a conta: quem cura precisa ver por que
     /// este arquivo saiu da fila de letra, e é a única explicação que existe.
     #[test]
     fn o_motivo_do_instrumental_diz_a_conta() {
-        match decidir(&"x".repeat(20), 300.0, 300.0) {
+        match decidir(&"x".repeat(20), Duracao::completa(300.0), 300.0) {
             Desfecho::Instrumental { motivo } => {
                 assert!(motivo.contains("20 caracteres"), "{motivo}");
                 assert!(motivo.contains("5m00s"), "{motivo}");
@@ -1837,6 +2210,147 @@ mod tests {
         );
         assert!(args.iter().any(|a| a.ends_with(".wav")));
         assert!(!args.iter().any(|a| a.ends_with(".mp3")));
+    }
+
+    // -----------------------------------------------------------------------
+    // QA A3 — EOF e FALHA DE LEITURA são coisas diferentes
+    // -----------------------------------------------------------------------
+
+    /// Um MP3 sintético: quadros MPEG-1 Layer III de silêncio, 128 kbps,
+    /// 44,1 kHz, mono. Serve para exercitar o CAMINHO da leitura sem depender
+    /// da fixture — e sobretudo para poder falhar no meio de propósito.
+    fn mp3_de_silencio(quadros: usize) -> Vec<u8> {
+        let mut q = vec![0u8; 417]; // 144 * 128000 / 44100
+        q[0] = 0xFF; // sincronismo
+        q[1] = 0xFB; // MPEG-1, Layer III, sem CRC
+        q[2] = 0x90; // 128 kbps, 44,1 kHz, sem padding
+        q[3] = 0xC0; // mono
+        q.repeat(quadros)
+    }
+
+    /// Uma fonte que entrega `ate` bytes e então **falha na leitura** — o HD
+    /// externo que dormiu, o pen drive arrancado, o compartilhamento de rede
+    /// que caiu, o setor ruim. Não dá para fazer um `File` de verdade fazer
+    /// isso dentro de uma suíte, e este é o modo de falha mais comum das 40
+    /// máquinas do produto.
+    struct FonteQueFalha {
+        bytes: Vec<u8>,
+        pos: usize,
+        /// Depois deste ponto a leitura ERRA. `None` = o arquivo inteiro
+        /// chega, e o fim é um EOF honesto.
+        falha_apos: Option<usize>,
+    }
+
+    impl FonteQueFalha {
+        fn inteira(bytes: Vec<u8>) -> Self {
+            FonteQueFalha { bytes, pos: 0, falha_apos: None }
+        }
+        fn que_falha_em(bytes: Vec<u8>, ponto: usize) -> Self {
+            FonteQueFalha { bytes, pos: 0, falha_apos: Some(ponto) }
+        }
+    }
+
+    impl std::io::Read for FonteQueFalha {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.falha_apos.is_some_and(|p| self.pos >= p) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "o disco sumiu no meio da leitura",
+                ));
+            }
+            let ate = self.falha_apos.unwrap_or(self.bytes.len());
+            let fim = (self.pos + buf.len()).min(ate).min(self.bytes.len());
+            let n = fim - self.pos;
+            buf[..n].copy_from_slice(&self.bytes[self.pos..fim]);
+            self.pos = fim;
+            Ok(n)
+        }
+    }
+
+    impl std::io::Seek for FonteQueFalha {
+        fn seek(&mut self, de: std::io::SeekFrom) -> std::io::Result<u64> {
+            let novo = match de {
+                std::io::SeekFrom::Start(n) => n as i64,
+                std::io::SeekFrom::Current(n) => self.pos as i64 + n,
+                std::io::SeekFrom::End(n) => self.bytes.len() as i64 + n,
+            };
+            self.pos = novo.max(0) as usize;
+            Ok(self.pos as u64)
+        }
+    }
+
+    impl symphonia::core::io::MediaSource for FonteQueFalha {
+        fn is_seekable(&self) -> bool {
+            true
+        }
+        fn byte_len(&self) -> Option<u64> {
+            Some(self.bytes.len() as u64)
+        }
+    }
+
+    /// **Falha de leitura no meio é ERRO, e nunca "áudio curto".**
+    ///
+    /// Aqui morava um `Err(_) => break` que engolia tudo. O comentário falava
+    /// de fluxo truncado no fim — que é comum em acervo de gravação de casa e
+    /// que o `symphonia` já entrega como fim normal —, mas o mesmo `break`
+    /// engolia falha de I/O. O resultado era duração parcial promovida a prova,
+    /// letra parcial gravada como completa, e o arquivo fora da fila de letra
+    /// para sempre, sem uma linha dizendo o que houve.
+    #[test]
+    fn falha_de_leitura_no_meio_e_erro_e_nunca_audio_curto() {
+        let dir = tempfile::tempdir().unwrap();
+        let bytes = mp3_de_silencio(400);
+        let destino = dir.path().join("saida.wav");
+
+        // o mesmo áudio, lido inteiro: decodifica e a duração é COMPLETA
+        {
+            let _t = Temporario(destino.clone());
+            let inteiro = decodificar_fonte(
+                Box::new(FonteQueFalha::inteira(bytes.clone())),
+                &destino,
+                SEGUE,
+            )
+            .expect("silêncio é áudio")
+            .expect("não cancelado");
+            assert!(inteiro.completa, "{inteiro:?}");
+            assert!(inteiro.duracao > 5.0, "{inteiro:?}");
+        }
+
+        // e agora o disco some no meio
+        {
+            let _t = Temporario(destino.clone());
+            let erro = decodificar_fonte(
+                Box::new(FonteQueFalha::que_falha_em(bytes.clone(), bytes.len() / 3)),
+                &destino,
+                SEGUE,
+            )
+            .expect_err("falha de leitura é erro, não áudio de um terço");
+            assert_eq!(erro.to_string(), ERRO_AUDIO);
+        }
+    }
+
+    /// **QA B3 — o cabeçalho do WAV não dá a volta em silêncio.**
+    ///
+    /// `36 + bytes_de_audio` é `u32`: a partir de umas 37 horas de áudio a
+    /// soma estoura. Em `release` ela daria a volta, o `whisper-cli` receberia
+    /// um WAV anunciando dois segundos, e a etapa 5 escreveria a letra do
+    /// comecinho afirmando ter ouvido tudo — o C1 de novo, por outra porta.
+    #[test]
+    fn wav_longo_demais_recusa_em_vez_de_dar_a_volta() {
+        let dir = tempfile::tempdir().unwrap();
+        let caminho = dir.path().join("gigante.wav");
+        let mut wav = Wav::criar(&caminho).unwrap();
+        // 37 horas a 16 kHz — o teto está logo acima
+        assert!(Wav::MAX_AMOSTRAS > 16_000 * 60 * 60 * 37);
+        assert!(Wav::MAX_AMOSTRAS < 16_000 * 60 * 60 * 38);
+        wav.amostras = Wav::MAX_AMOSTRAS - 1;
+        let erro = wav
+            .escrever(&[0i16, 0, 0])
+            .expect_err("passar do teto é recusa");
+        assert_eq!(erro.to_string(), ERRO_LONGO_DEMAIS);
+        // e a frase é sobre o ARQUIVO, não sobre um defeito a procurar
+        assert_ne!(ERRO_LONGO_DEMAIS, ERRO_AUDIO);
+        assert_ne!(ERRO_LONGO_DEMAIS, ERRO_TEMPORARIO);
     }
 
     /// O que sobrou numa pasta, em ordem — para provar que nada ficou para

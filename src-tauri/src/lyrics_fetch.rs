@@ -2,8 +2,8 @@
 //!
 //! O app é 100% offline em todos os fluxos, EXCETO as etapas de rede do funil
 //! de curadoria (`enrich_folder_scan` e `enrich_song_scan`), que injetam o
-//! fetcher `ureq` daqui e do `vagalume`. São os únicos pontos de rede do
-//! produto, todos acionados por clique explícito.
+//! `commands::funil_fetcher`. São os únicos pontos de rede do produto, todos
+//! acionados por clique explícito.
 //!
 //! V8/F18 — a porta antiga deste módulo (o comando "Buscar letra na
 //! internet", que consultava o LRCLIB fora do funil) SAIU junto com o botão
@@ -20,14 +20,14 @@ use crate::db::fold_pt;
 use crate::error::{AppError, Result};
 use std::collections::HashMap;
 
-/// Endereço da busca. Junto com o do Vagalume (V8/F18), é um dos DOIS únicos
-/// destinos de rede de todo o produto — `commands::funil_fetcher` recusa
-/// qualquer outro.
+/// Endereço da busca. Com o `lyrics_ovh` e o `fingerprint` (AcoustID), é um
+/// dos TRÊS destinos que o `commands::funil_fetcher` aceita — ele recusa
+/// qualquer outro. O Vagalume era o quarto e SAIU (DECISIONS #110).
 pub const SEARCH_URL: &str = "https://lrclib.net/api/search";
 
 /// Percent-encode de um valor de query string (RFC 3986: só unreserved
 /// passam sem escape) — evita depender de crate para meia dúzia de bytes.
-/// Compartilhado com o `vagalume` (V8/F18).
+/// Compartilhado com o `lyrics_ovh` (V10).
 pub(crate) fn percent_encode(s: &str) -> String {
     let mut out = String::with_capacity(s.len() * 3);
     for b in s.bytes() {
@@ -192,7 +192,7 @@ fn maior_bloco(
 /// `difflib.SequenceMatcher.ratio()` do `tools/curadoria.py`, 2·M/T sobre os
 /// caracteres casados. Ver o bloco acima para a medição que decidiu o porte.
 ///
-/// No Vagalume (V8/F18) ela NÃO decide se o casamento vale — lá a régua é a
+/// No `lyrics_ovh` (V10) ela NÃO decide se o casamento vale — lá a régua é a
 /// igualdade de palavras (`confere_estrito`) — e serve só de desempate entre
 /// entradas que já passaram por ela.
 pub(crate) fn similarity(a: &str, b: &str) -> f64 {

@@ -112,7 +112,7 @@ use std::time::Duration;
 /// de toda instalação nova. O comando de verdade passa uma implementação
 /// completa; a suíte exercita as duas.
 pub trait Fontes {
-    /// GET da URL. Só LRCLIB, Vagalume e AcoustID passam pelo fetcher real.
+    /// GET da URL. Só LRCLIB, lyrics.ovh e AcoustID passam pelo fetcher real.
     fn buscar(&self, url: &str) -> Result<String>;
 
     /// O acessório `fpcalc` está pronto nesta máquina? Consultado ANTES de
@@ -137,7 +137,7 @@ pub trait Fontes {
     }
 
     /// Chave do AcoustID compilada nesta build. Vazia = etapa 2 pulada em
-    /// silêncio, como o Vagalume sem chave.
+    /// silêncio.
     fn chave_acoustid(&self) -> &str {
         ""
     }
@@ -197,7 +197,7 @@ pub const FONTE_IMPRESSAO_DIGITAL: &str = "reconhecimento pelo som";
 pub const FONTE_LRCLIB: &str = "LRCLIB";
 /// `fonte` — etapa 4 (V10): lyrics.ovh, a fonte de letra SEM CHAVE. Também
 /// não tem duração para conferir, então vale a MESMA régua estrita do
-/// Vagalume e o MESMO teto de confiança MÉDIA.
+/// Vagalume tinha, e o MESMO teto de confiança MÉDIA.
 pub const FONTE_LYRICS_OVH: &str = "lyrics.ovh";
 /// `fonte` — etapa 5 (V10): a letra foi ESCRITA ouvindo o áudio. É letra de
 /// máquina, e a tela precisa dizer isso: ela vai para o MP3 com
@@ -369,13 +369,28 @@ pub struct EnrichScanResult {
     ///
     /// Vem em ids, e não em contagem, porque é exatamente o que
     /// `transcrever_musicas` recebe: a regra de quem sobrou é UMA, e mora
-    /// aqui (DECISIONS #80). Música marcada como instrumental não entra —
-    /// instrumental não é transcrito.
+    /// aqui (`a_etapa_5_tem_o_que_fazer`, DECISIONS #80). Não entram a marcada
+    /// como instrumental (não se transcreve música sem voz) nem a cujo arquivo
+    /// sumiu do disco (QA M3: a etapa 5 só teria uma linha de erro a dar).
     pub sem_letra_no_fim: Vec<i64>,
     /// Estimativa, em segundos, de transcrever essas músicas NESTA máquina.
-    /// Ver `transcricao::RAZAO_DE_REFERENCIA`: é número declarado enquanto
-    /// esta máquina não transcreveu nada, e a copy tem de dizer "cerca de".
+    ///
+    /// Usa a razão MEDIDA aqui quando já há amostra que baste, e a de
+    /// referência enquanto não há (`transcricao::razao_desta_maquina`). A copy
+    /// tem de dizer "cerca de" nos dois casos.
     pub segundos_de_transcricao: u64,
+    /// **A estimativa acima é MEDIÇÃO desta máquina, ou número de fábrica?**
+    ///
+    /// Existe para a tela poder dizer a verdade, e só para isso: com `true`
+    /// ela devolve o "neste computador" que o PRD escreveu; com `false` ela
+    /// mantém a ressalva de que pode levar mais. Sem este campo a frase
+    /// honesta é sempre a pior das duas, porque a tela não tem como saber qual
+    /// dos dois números está mostrando — é a DECISIONS #86 ("nenhum texto pode
+    /// afirmar o que o programa não conhece") aplicada a uma estimativa.
+    ///
+    /// A conta NÃO volta para o TypeScript: nada aqui se multiplica do outro
+    /// lado (DECISIONS #80 e #112). É um fato sobre o número, não o número.
+    pub estimativa_medida_nesta_maquina: bool,
 }
 
 /// Proposta de enriquecimento para uma música incompleta. A letra achada vem
@@ -629,7 +644,29 @@ const MARCA_DE_RIPADOR: &[&str] = &[
     "untitled",
 ];
 
-/// V10 — `Various Artists` NÃO é artista.
+/// Em qual CAMPO o texto está. A régua de placeholder não é a mesma nos dois,
+/// e descobrir isso custou um achado de perda de dado.
+///
+/// O parâmetro é obrigatório de propósito: **não existe `is_placeholder` sem
+/// slot.** A #105 acrescentou os rótulos de coletânea pensando no artista,
+/// escreveu a regra dentro de um predicado que roda nos dois campos, e assim
+/// uma música intitulada "Diversos" passou a valer VAZIO — com o palpite do
+/// nome do arquivo entrando por cima, sem aviso de troca, pré-marcada num
+/// grupo dobrado cuja frase diz "músicas SEM TÍTULO OU ARTISTA". Um predicado
+/// que não pergunta o campo é um predicado que generaliza sozinho na próxima
+/// vez; a resposta é o compilador perguntar em cada chamada.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Campo {
+    /// O nome da MÚSICA. Régua conservadora: uma palavra sozinha é título,
+    /// sempre.
+    Titulo,
+    /// Quem CANTA. Aceita, além de tudo o que vale para o título, os rótulos
+    /// de coletânea — que são nome de ninguém.
+    Artista,
+}
+
+/// V10 — `Various Artists` NÃO é artista. **E só vale no campo do artista**
+/// (`Campo::Artista`).
 ///
 /// É o rótulo que o ripador escreve no lugar do artista quando o CD é uma
 /// coletânea, e é dos mais comuns que existem. Não estava em lista nenhuma —
@@ -647,6 +684,11 @@ const MARCA_DE_RIPADOR: &[&str] = &[
 /// projeto. Por isso só entram rótulos que NENHUMA canção usa como nome —
 /// "Vai", "Vamos", "Valsa", "Variações", "Compilado" e "Artista" ficam de
 /// fora, com teste fixando cada um.
+///
+/// **E a mesma lição obrigou a segunda correção**: "NENHUMA canção usa como
+/// nome" é falso para o campo do TÍTULO. "Diversos", "Vários" e "Coletânea"
+/// são títulos que existem, e a régua que os condenava rodava nos dois campos
+/// — ver `Campo`.
 const ROTULOS_DE_COLETANEA: &[&str] = &[
     "various artists",
     "various artist",
@@ -757,7 +799,7 @@ fn placeholder_faixa(chave: &str) -> bool {
 /// regras que o acervo real obrigou a existir lá: a de SUBSTRING (etiqueta
 /// truncada pelo limite do ID3, "04 Faixa 4 Artista Desconheci") e a do ruído
 /// de arquivo com marca de máquina ("1-2010 22-17-23)_converted").
-pub fn is_placeholder(texto: &str) -> bool {
+pub fn is_placeholder(campo: Campo, texto: &str) -> bool {
     let chave = lyrics_fetch::norm(texto);
     if chave.is_empty() || chave.chars().all(|c| c.is_ascii_digit()) {
         return true; // vazio, só pontuação/# ou só dígitos
@@ -765,7 +807,10 @@ pub fn is_placeholder(texto: &str) -> bool {
     if PLACEHOLDERS_EXATOS.contains(&chave.as_str()) {
         return true;
     }
-    if e_rotulo_de_coletanea(&chave, texto) {
+    // Rótulo de coletânea é nome de NINGUÉM, e por isso vale só onde se espera
+    // gente. No título ele é um título — e tratá-lo como campo vazio apagava,
+    // pré-marcado e sem aviso, o nome que a pessoa vê na biblioteca.
+    if campo == Campo::Artista && e_rotulo_de_coletanea(&chave, texto) {
         return true;
     }
     if placeholder_faixa(&chave) {
@@ -789,8 +834,8 @@ pub fn is_placeholder(texto: &str) -> bool {
 
 /// Tag placeholder é tratada como campo VAZIO em todos os pontos: não vira
 /// palpite, não bloqueia proposta BAIXA, não marca a música como completa.
-fn sem_placeholder(texto: &str) -> &str {
-    if is_placeholder(texto) {
+fn sem_placeholder(campo: Campo, texto: &str) -> &str {
+    if is_placeholder(campo, texto) {
         ""
     } else {
         texto
@@ -805,8 +850,8 @@ fn sem_placeholder(texto: &str) -> &str {
 /// "placeholder atual + palpite também placeholder" de passar por mudança:
 /// tag "AudioTrack 17" com arquivo "17 Faixa.mp3" proporia "Faixa" — texto
 /// diferente, valor igual a nada. Os dois viram "" e a proposta cai.
-fn campo_efetivo(texto: &str) -> &str {
-    sem_placeholder(texto.trim())
+fn campo_efetivo(campo: Campo, texto: &str) -> &str {
+    sem_placeholder(campo, texto.trim())
 }
 
 /// True se a proposta não muda NADA e portanto não deve nem ser produzida:
@@ -829,9 +874,10 @@ fn e_no_op(p: &EnrichProposal) -> bool {
     p.error.is_none()
         && p.conflito.is_none()
         && p.lyrics.is_none()
-        && campo_efetivo(&p.proposed_title) == campo_efetivo(&p.current_title)
-        && campo_efetivo(p.proposed_artist.as_deref().unwrap_or(""))
-            == campo_efetivo(p.current_artist.as_deref().unwrap_or(""))
+        && campo_efetivo(Campo::Titulo, &p.proposed_title)
+            == campo_efetivo(Campo::Titulo, &p.current_title)
+        && campo_efetivo(Campo::Artista, p.proposed_artist.as_deref().unwrap_or(""))
+            == campo_efetivo(Campo::Artista, p.current_artist.as_deref().unwrap_or(""))
 }
 
 // ---------------------------------------------------------------------------
@@ -927,8 +973,8 @@ pub(crate) fn gerar_palpites(
     titulo: &str,
     artista: &str,
 ) -> Vec<(String, String)> {
-    let titulo = sem_placeholder(titulo);
-    let artista = sem_placeholder(artista);
+    let titulo = sem_placeholder(Campo::Titulo, titulo);
+    let artista = sem_placeholder(Campo::Artista, artista);
     let mut palpites: Vec<(String, String)> = Vec::new();
     if !titulo.is_empty() {
         palpites.push((titulo.to_string(), artista.to_string()));
@@ -1070,7 +1116,7 @@ fn registrar(propostas: &mut Vec<EnrichProposal>, proposta: EnrichProposal) {
 /// Cortesia de rede COMPARTILHADA pelas duas fontes: uma pausa antes de cada
 /// consulta, exceto a primeira de toda a varredura. Compartilhada de
 /// propósito — a pausa existe para não atropelar servidor alheio, e uma
-/// varredura que alterna LRCLIB e Vagalume sem pausa entre eles dispararia
+/// varredura que alterna LRCLIB e lyrics.ovh sem pausa entre eles dispararia
 /// duas consultas coladas por música.
 struct Cortesia {
     pausa: Duration,
@@ -1150,15 +1196,19 @@ impl Candidata {
 /// escrever "Asa Branca" no formulário. Passam pelo mesmo `sem_placeholder`
 /// das etiquetas — texto digitado também pode ser lixo de ripador colado.
 fn montar_candidata(song: Song, titulo: Option<&str>, artista: Option<&str>) -> Candidata {
-    fn efetivo(digitado: Option<&str>, do_banco: &str) -> String {
+    fn efetivo(campo: Campo, digitado: Option<&str>, do_banco: &str) -> String {
         let bruto = digitado
             .map(str::trim)
             .filter(|t| !t.is_empty())
             .unwrap_or(do_banco);
-        sem_placeholder(bruto).to_string()
+        sem_placeholder(campo, bruto).to_string()
     }
-    let titulo_tag = efetivo(titulo, &song.title);
-    let artista_tag = efetivo(artista, song.artist.as_deref().unwrap_or(""));
+    let titulo_tag = efetivo(Campo::Titulo, titulo, &song.title);
+    let artista_tag = efetivo(
+        Campo::Artista,
+        artista,
+        song.artist.as_deref().unwrap_or(""),
+    );
     let nome = Path::new(&song.file_path)
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
@@ -1193,7 +1243,7 @@ fn candidata(song: Song) -> Option<Candidata> {
     song.available.then(|| montar_candidata(song, None, None))
 }
 
-/// As etapas 3 e 4 (LRCLIB, Vagalume) valem a pena para esta música?
+/// As etapas 3 e 4 (LRCLIB, lyrics.ovh) valem a pena para esta música?
 ///
 /// Não faz sentido buscar letra para quem já tem — e para o INSTRUMENTAL a
 /// letra sai da conta (V8/F17): música sem voz não tem letra a buscar, em
@@ -1205,6 +1255,26 @@ fn candidata(song: Song) -> Option<Candidata> {
 /// mesmo com nomes prontos — é assim que ela ganha a letra que lhe falta.
 fn etapas_de_letra_valem_a_pena(song: &Song) -> bool {
     !song.has_lyrics && !song.instrumental
+}
+
+/// A etapa 5 teria o que fazer com esta música?
+///
+/// É o predicado da pergunta do fim ("sobraram 47 músicas… cerca de 3 horas"),
+/// e ele espelha exatamente os portões que o `transcricao_scan` aplica antes de
+/// gastar minutos de CPU. **Uma regra só, num lugar só** — é a DECISIONS #80,
+/// que nasceu de uma contagem em TypeScript afirmando espelhar a do Rust e não
+/// espelhando.
+///
+/// **QA M3**: faltava o arquivo existir. A música cujo MP3 sumiu do disco
+/// entrava na conta, inflava o total e o tempo estimado, e depois gastava uma
+/// vaga da fila para produzir uma linha de erro — a única coisa que a etapa 5
+/// consegue fazer com um arquivo que não está lá.
+///
+/// Erro de REDE não tira ninguém daqui, e é de propósito: a etapa 5 não usa
+/// rede. A música que ficou sem letra porque o LRCLIB não respondeu é
+/// exatamente a que a transcrição resolve.
+fn a_etapa_5_tem_o_que_fazer(song: &Song) -> bool {
+    etapas_de_letra_valem_a_pena(song) && Path::new(&song.file_path).is_file()
 }
 
 /// Entrada da varredura de UMA música: quem clicou sabe o que quer.
@@ -1305,14 +1375,21 @@ where
 /// não conta como troca — o `apply` preserva o valor atual nesse caso, então
 /// avisar seria avisar de uma substituição que não aconteceria.
 fn substitui_nome_escrito(cand: &Candidata, p: &EnrichProposal) -> bool {
-    fn trocaria(escrito: &str, proposto: &str) -> bool {
-        let (escrito, proposto) = (campo_efetivo(escrito), campo_efetivo(proposto));
+    fn trocaria(campo: Campo, escrito: &str, proposto: &str) -> bool {
+        let (escrito, proposto) = (
+            campo_efetivo(campo, escrito),
+            campo_efetivo(campo, proposto),
+        );
         !escrito.is_empty() && !proposto.is_empty() && proposto != escrito
     }
     // `titulo_escrito` já descarta placeholder e a invenção do indexador;
     // `artista_tag` já descarta placeholder (o indexador não inventa artista)
-    trocaria(cand.titulo_escrito(), &p.proposed_title)
-        || trocaria(&cand.artista_tag, p.proposed_artist.as_deref().unwrap_or(""))
+    trocaria(Campo::Titulo, cand.titulo_escrito(), &p.proposed_title)
+        || trocaria(
+            Campo::Artista,
+            &cand.artista_tag,
+            p.proposed_artist.as_deref().unwrap_or(""),
+        )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1487,7 +1564,7 @@ where
         }
         cortesia.esperar();
         match lyrics_fetch::query_best(&titulo, &artista, duracao, &|url| fontes.buscar(url), |t, a| {
-            !is_placeholder(t) && !is_placeholder(a)
+            !is_placeholder(Campo::Titulo, t) && !is_placeholder(Campo::Artista, a)
         }) {
             Ok(Some(cand_lrclib)) => {
                 if best.as_ref().is_none_or(|b| cand_lrclib.score > b.score) {
@@ -1574,13 +1651,15 @@ where
 
     // --- etapa 4: lyrics.ovh, SEM CHAVE -----------------------------------
     //
-    // Ela vem ANTES do Vagalume porque não pede chave: a etapa com chave é a
-    // que quase ninguém alcança (a API do Vagalume está descontinuada e o dono
-    // do produto nunca conseguiu a chave), e pôr a única fonte utilizável
-    // atrás de um pedágio é o mesmo que não tê-la.
+    // Ela entrou no lugar do Vagalume porque não pede chave: a etapa com chave
+    // é a que quase ninguém alcança (a API do Vagalume está descontinuada e o
+    // dono do produto nunca conseguiu a chave), e pôr a única fonte utilizável
+    // atrás de um pedágio é o mesmo que não tê-la. O Vagalume acabou REMOVIDO
+    // (DECISIONS #110): nenhuma etapa do funil exige credencial do usuário.
     //
-    // Confiança MÉDIA, nunca ALTA, pelo MESMO motivo do Vagalume: sem duração
-    // não há confirmação independente, e ALTA chega PRÉ-MARCADA (DECISIONS #49).
+    // Confiança MÉDIA, nunca ALTA, pelo MESMO motivo que valia para o
+    // Vagalume: sem duração não há confirmação independente, e ALTA chega
+    // PRÉ-MARCADA (DECISIONS #49).
     if sem_letra_do_lrclib && tem_o_que_conferir {
         if cancelled() {
             return None;
@@ -1591,7 +1670,7 @@ where
             &titulo_consulta,
             &artista_consulta,
             &|url| fontes.buscar(url),
-            |t, a| !is_placeholder(t) && !is_placeholder(a),
+            |t, a| !is_placeholder(Campo::Titulo, t) && !is_placeholder(Campo::Artista, a),
         ) {
             Ok(Some(m)) => {
                 return Some(EnrichProposal {
@@ -1629,7 +1708,7 @@ where
             Err(e) => {
                 // Este serviço cai com frequência, e a falha dele é erro DESTA
                 // MÚSICA — nunca desligamento da etapa (a mesma correção do QA
-                // A2 no `fpcalc`). E ela também NÃO derruba o Vagalume:
+                // A2 no `fpcalc`). E ela também NÃO derruba a etapa seguinte:
                 // "lyrics.ovh fora do ar" não diz nada sobre outro serviço, e
                 // encadeá-los faria a queda de um cancelar o outro.
                 erro = Some(e.to_string());
@@ -1647,8 +1726,8 @@ where
 /// Porte da noção de CONFLITO do subcomando `identificar` do
 /// `tools/curadoria.py`, inclusive no que ele decide NÃO aplicar.
 fn conflito_com_a_etiqueta(cand: &Candidata, id: &Identificacao) -> Option<Conflito> {
-    let discorda = fingerprint::discorda(cand.titulo_escrito(), &id.titulo)
-        || fingerprint::discorda(&cand.artista_tag, &id.artista);
+    let discorda = fingerprint::discorda(Campo::Titulo, cand.titulo_escrito(), &id.titulo)
+        || fingerprint::discorda(Campo::Artista, &cand.artista_tag, &id.artista);
     discorda.then(|| Conflito {
         titulo: id.titulo.clone(),
         artista: id.artista.clone(),
@@ -1757,8 +1836,10 @@ fn proposta_da_identidade(
         // efetivo que o resto do módulo usa; senão o `e_no_op` a derruba de
         // qualquer jeito e a confiança alta só faria a linha aparecer
         // pré-marcada sem ter o que aplicar.
-        let mudou = campo_efetivo(&titulo) != campo_efetivo(&p.current_title)
-            || campo_efetivo(&artista) != campo_efetivo(p.current_artist.as_deref().unwrap_or(""));
+        let mudou = campo_efetivo(Campo::Titulo, &titulo)
+            != campo_efetivo(Campo::Titulo, &p.current_title)
+            || campo_efetivo(Campo::Artista, &artista)
+                != campo_efetivo(Campo::Artista, p.current_artist.as_deref().unwrap_or(""));
         if mudou {
             p.proposed_title = titulo;
             p.proposed_artist = (!artista.is_empty()).then_some(artista);
@@ -1780,14 +1861,13 @@ fn proposta_da_identidade(
 /// **V10 — uma varredura só, sem modo.** Etapas 1 e 2 (etiquetas/nome e som)
 /// rodam em todas: é o único jeito de etiqueta ERRADA aparecer sem a pessoa
 /// precisar adivinhar que existe um recurso para isso. Etapas 3 e 4 (LRCLIB,
-/// Vagalume) rodam só em quem não tem letra. A etapa 5 (transcrição) **não
+/// lyrics.ovh) rodam só em quem não tem letra. A etapa 5 (transcrição) **não
 /// roda aqui**: ela custa minutos por música e é perguntada no fim, com o
 /// número de músicas que sobraram e a estimativa de tempo — ver
 /// `EnrichScanResult::sem_letra_no_fim` e o comando `transcrever_musicas`.
 ///
-/// `chave_vagalume` é a chave do Vagalume já resolvida pelo comando (a
-/// pessoal do usuário tem precedência sobre a nossa, compilada). Vazia, a
-/// etapa 4 é pulada em silêncio e todo o resto funciona igual.
+/// **Nenhuma fonte pede credencial do usuário** (DECISIONS #110): o Vagalume,
+/// que era a única, saiu; a chave do AcoustID é nossa e vem compilada.
 ///
 /// `pausa` é a cortesia entre consultas, de TODAS as fontes (300 ms no
 /// comando real, com piso próprio de 340 ms para o AcoustID; zero nos
@@ -1801,7 +1881,7 @@ fn proposta_da_identidade(
 ///   qualquer processamento, para a UI já mostrar o total;
 /// - dentro de cada música sai um evento ao ENTRAR em cada etapa do funil,
 ///   com o MESMO `done` (a barra não anda, o texto muda): uma música chega a
-///   levar segundos entre quatro palpites no LRCLIB e a consulta ao Vagalume,
+///   levar segundos entre quatro palpites no LRCLIB e a consulta ao lyrics.ovh,
 ///   e o PRD V8 pede "a etapa atual do funil e o arquivo do momento" visíveis
 ///   o tempo todo. `done` só cresce no evento `etapa = "concluída"`, um por
 ///   música — quem só quer a barra pode ignorar os demais.
@@ -1839,15 +1919,26 @@ where
     // AQUI, música a música, e não deduzida das propostas: uma proposta pode
     // ter sido descartada por no-op e a música continuar sem letra.
     let sobraram: Cell<Vec<(i64, f64)>> = Cell::new(Vec::new());
+    // A razão é lida UMA vez por varredura, e não por fechamento: ela não muda
+    // no meio, e é dela que saem os dois campos que a tela usa para dizer se o
+    // número é medido ou de fábrica.
+    let razao = crate::transcricao::razao_desta_maquina(conn);
+    let medida = razao != crate::transcricao::RAZAO_DE_REFERENCIA;
     let fechar = |propostas: Vec<EnrichProposal>| {
         let restantes = sobraram.take();
         EnrichScanResult {
             propostas,
             sem_perguntar_ao_som: estado.sem_perguntar_ao_som.get(),
+            // QA A1 — a razão MEDIDA nesta máquina, quando ela já existe. Era
+            // aqui que a `RAZAO_DE_REFERENCIA` declarada entrava e nunca saía,
+            // e é esta linha que faz a promessa da DECISIONS #106 ("a primeira
+            // transcrição desta máquina devolve a razão real, e é ela que passa
+            // a valer") deixar de ser só uma frase.
             segundos_de_transcricao: crate::transcricao::segundos_para_transcrever(
                 restantes.iter().map(|(_, d)| *d),
-                crate::transcricao::RAZAO_DE_REFERENCIA,
+                razao,
             ),
+            estimativa_medida_nesta_maquina: medida,
             sem_letra_no_fim: restantes.into_iter().map(|(id, _)| id).collect(),
         }
     };
@@ -1889,7 +1980,7 @@ where
         // tudo o que esta varredura achou. Instrumental não entra: música sem
         // voz não é transcrita, e insistir era a pendência eterna que a marca
         // veio resolver (V8/F17).
-        if etapas_de_letra_valem_a_pena(&cand.song) && proposta.lyrics.is_none() {
+        if a_etapa_5_tem_o_que_fazer(&cand.song) && proposta.lyrics.is_none() {
             let mut lista = sobraram.take();
             lista.push((cand.song.id, cand.song.duration_seconds.unwrap_or(0) as f64));
             sobraram.set(lista);
@@ -1939,7 +2030,11 @@ where
     // (DECISIONS #72 aplicada a uma estimativa).
     let mut audio_medido = 0.0f64;
     let mut relogio_medido = 0.0f64;
-    let mut desligado = false;
+    // O veredito que desligou a etapa, se houve. Guarda a MENSAGEM, e não um
+    // booleano, porque a frase das músicas restantes tem de ser a verdadeira:
+    // disco cheio acusando "o programa não conseguiu ser executado" mandaria
+    // quarenta pessoas sem suporte procurar defeito no lugar errado.
+    let mut desligado: Option<String> = None;
 
     on_progress(0, total, "", 0);
     for (feitas, id) in song_ids.iter().enumerate() {
@@ -1953,9 +2048,9 @@ where
         let nome = cand.nome.clone();
         on_progress(feitas, total, &nome, 0);
 
-        let desfecho = if desligado {
+        let desfecho = if let Some(veredito) = &desligado {
             Desfecho::Erro {
-                mensagem: transcricao::ERRO_NAO_EXECUTA.into(),
+                mensagem: veredito.clone(),
             }
         } else if cand.song.instrumental {
             // Instrumental NÃO é transcrito, e a linha diz por quê: a marca é
@@ -1986,8 +2081,12 @@ where
             match saida {
                 Ok(None) => break, // cancelado no meio desta música
                 Ok(Some(s)) => {
-                    if s.duracao > 0.0 {
-                        audio_medido += s.duracao;
+                    // Só entra na medição o áudio que se sabe ter sido ouvido
+                    // INTEIRO: dividir o relógio de uma música por um pedaço
+                    // da duração dela daria uma razão inflada, e a estimativa
+                    // "leva cerca de N horas" nasceria errada por um fator.
+                    if s.duracao.provada() {
+                        audio_medido += s.duracao.medida;
                         relogio_medido += comeco.elapsed().as_secs_f64();
                     }
                     transcricao::decidir(
@@ -1998,14 +2097,19 @@ where
                 }
                 Err(e) => {
                     let mensagem = e.to_string();
-                    // Binário que não sobe é veredito sobre a MÁQUINA, não
-                    // sobre este arquivo: desliga a etapa pelo resto da fila,
-                    // em vez de repetir a mesma acusação 47 vezes (a mesma
-                    // regra da etapa 2, QA A2).
+                    // Veredito sobre a MÁQUINA desliga a etapa pelo resto da
+                    // fila, em vez de repetir a mesma acusação 47 vezes (a
+                    // mesma regra da etapa 2, QA A2). São três, e todos falam
+                    // do computador, não deste arquivo: o programa que não
+                    // sobe, o modelo que não está lá e — QA B4 — a pasta de
+                    // trabalho que não aceita escrita, que na prática é disco
+                    // cheio. Sem isto, disco cheio produzia 47 linhas
+                    // idênticas culpando 47 músicas inocentes.
                     if mensagem == transcricao::ERRO_NAO_EXECUTA
                         || mensagem == transcricao::ERRO_SEM_MODELO
+                        || mensagem == transcricao::ERRO_TEMPORARIO
                     {
-                        desligado = true;
+                        desligado = Some(mensagem.clone());
                     }
                     Desfecho::Erro { mensagem }
                 }
@@ -2015,9 +2119,19 @@ where
         on_progress(feitas + 1, total, &nome, 100);
     }
 
+    // QA A1 — a medição VOLTA, e volta por dentro. O frontend não precisa
+    // guardar nada nem lembrar de reenviar: a próxima varredura lê daqui.
+    db::somar_medicao(
+        conn,
+        db::MEDICAO_TRANSCRICAO,
+        audio_medido,
+        relogio_medido,
+    )?;
+
     Ok(TranscricaoResultado {
         propostas,
         razao_medida: (audio_medido > 0.0).then(|| relogio_medido / audio_medido),
+        razao_desta_maquina: crate::transcricao::razao_desta_maquina(conn),
     })
 }
 
@@ -2025,10 +2139,21 @@ where
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct TranscricaoResultado {
     pub propostas: Vec<EnrichProposal>,
-    /// Segundos de CPU por segundo de ÁUDIO medidos NESTA máquina, quando
-    /// houve o que medir. É o número que troca a estimativa declarada pela
-    /// verdadeira nas próximas vezes — guarde-o e mande-o de volta.
+    /// Segundos de relógio por segundo de ÁUDIO medidos NESTA execução, quando
+    /// houve o que medir.
+    ///
+    /// **Puramente informativo, e a mudança está aqui** (QA A1): a v0.10.0
+    /// pedia ao frontend que guardasse este número e o mandasse de volta, e o
+    /// frontend o descartava — sem consumidor nenhum no repositório, a
+    /// DECISIONS #106 prometia em letra uma autocorreção que estava desligada.
+    /// Quem guarda agora é o backend, no banco, ao fim desta função. Não há
+    /// nada a devolver.
     pub razao_medida: Option<f64>,
+    /// A razão que passa a valer nas próximas estimativas — a acumulada desta
+    /// máquina, ou a de referência enquanto a amostra é curta. É o número que
+    /// a próxima varredura vai usar, exposto para a tela poder dizer a verdade
+    /// sobre qual dos dois está mostrando (DECISIONS #106).
+    pub razao_desta_maquina: f64,
 }
 
 /// Mensagem (pt-BR) de quem não é transcrito por já ter sido julgado sem voz.
@@ -2046,14 +2171,39 @@ pub const AVISO_JA_TEM_LETRA: &str =
 /// Converte o desfecho da etapa 5 numa proposta da MESMA forma que o resto do
 /// funil: a revisão é uma só.
 ///
-/// Note o que NUNCA muda aqui: `proposed_title` e `proposed_artist` são o que
-/// já está no arquivo. A transcrição não identifica música nenhuma, então não
-/// há nome para propor — e portanto não há como ela sobrescrever etiqueta
-/// real, em confiança nenhuma. Isto é garantia de construção, não regra a
-/// lembrar.
+/// # A etapa 5 não propõe nome — e agora isso é verdade (QA A2)
+///
+/// O módulo da transcrição diz, e a DECISIONS #103 promete, que "não há nome
+/// vindo daqui" é **garantia de construção**. Não era: esta função montava a
+/// linha com `proposta_baixa`, que é a proposta da ETAPA 1 — palpite tirado do
+/// nome do arquivo. Uma música típica da etapa 5, com etiqueta "AudioTrack 03"
+/// e sem artista, saía daqui propondo "Oh! Chuva" / "Falamansa" sob o rótulo
+/// da transcrição. Nada era destruído (o palpite preserva etiqueta REAL), mas
+/// o teste e o comentário afirmavam o contrário do que o código fazia, e o
+/// único teste que cobria isso passava porque usava música com etiqueta.
+///
+/// A escolha foi tirar o nome, e não corrigir os textos, por medição e não por
+/// pureza: **esse palpite já foi entregue**. A varredura roda a etapa 1 em
+/// TODAS as músicas da pasta (DECISIONS #102) antes de perguntar sobre a
+/// transcrição, e `sem_letra_no_fim` sai dessa mesma varredura — de modo que
+/// toda música que chega aqui já ganhou a sua linha de "preencher o branco",
+/// na mesma revisão. Repeti-la aqui não é valor novo: é a MESMA conta sobre o
+/// MESMO nome de arquivo, numa segunda linha, cobrando uma segunda leitura de
+/// quem já vai conferir 47 letras escritas por máquina.
+///
+/// O que sai no lugar é o ECO do que está no arquivo. Não pode ser vazio: o
+/// `apply` grava `ap.title` como veio, e uma proposta de título vazio apagaria
+/// a etiqueta de alguém.
 fn proposta_da_transcricao(cand: &Candidata, desfecho: crate::transcricao::Desfecho) -> EnrichProposal {
     use crate::transcricao::Desfecho;
     let mut p = proposta_baixa(cand, None);
+    if !cand.song.title.trim().is_empty() {
+        // o palpite da etapa 1 só sobrevive quando não há NADA a ecoar — sem
+        // isso a linha chegaria ao `apply` com título vazio, e apagar etiqueta
+        // é o oposto do que esta etapa faz
+        p.proposed_title = cand.song.title.clone();
+    }
+    p.proposed_artist = cand.song.artist.clone();
     match desfecho {
         Desfecho::Transcrita { letra, refrao, .. } => {
             p.lyrics = Some(letra);
@@ -2310,7 +2460,12 @@ mod tests {
             "Artista Desconhecido", "artista desconhecido", "artist",
             "no title", "Sem Título", "sem titulo", "untitled", "Unknown",
         ] {
-            assert!(is_placeholder(texto), "{texto:?} deveria ser placeholder");
+            for campo in [Campo::Titulo, Campo::Artista] {
+                assert!(
+                    is_placeholder(campo, texto),
+                    "{texto:?} deveria ser placeholder em {campo:?}"
+                );
+            }
         }
     }
 
@@ -2321,7 +2476,12 @@ mod tests {
             "Faixa de Gaza", "12 Horas", "Música Espírita", "O Artista",
             "Princesa Goiana", "É cedo ainda",
         ] {
-            assert!(!is_placeholder(texto), "{texto:?} não é placeholder");
+            for campo in [Campo::Titulo, Campo::Artista] {
+                assert!(
+                    !is_placeholder(campo, texto),
+                    "{texto:?} não é placeholder em {campo:?}"
+                );
+            }
         }
     }
 
@@ -2377,11 +2537,13 @@ mod tests {
             ("12 Horas", false),
         ];
         for (texto, esperado) in CASOS {
-            assert_eq!(
-                is_placeholder(texto),
-                *esperado,
-                "{texto:?} — o Python decide {esperado}"
-            );
+            for campo in [Campo::Titulo, Campo::Artista] {
+                assert_eq!(
+                    is_placeholder(campo, texto),
+                    *esperado,
+                    "{texto:?} em {campo:?} — o Python decide {esperado}"
+                );
+            }
         }
     }
 
@@ -2421,8 +2583,41 @@ mod tests {
             "Coletânea",
             "coletanea",
             "Coletâneas",
+            "Various Artists",
+            "Diversos",
+            "Vários",
         ] {
-            assert!(is_placeholder(texto), "{texto:?} é rótulo de coletânea");
+            assert!(
+                is_placeholder(Campo::Artista, texto),
+                "{texto:?} é rótulo de coletânea"
+            );
+        }
+    }
+
+    /// **E a regra vale só no slot do ARTISTA.** Ela foi escrita para o campo
+    /// onde o ripador põe "Various Artists", e entrou num predicado que roda
+    /// nos DOIS: assim uma música intitulada "Diversos" passava a valer VAZIO,
+    /// o palpite do nome do arquivo entrava por cima, e a linha caía
+    /// PRÉ-MARCADA no grupo dos preenchimentos — cuja frase promete tratar de
+    /// "músicas sem título ou artista". O clique levava embora um título que a
+    /// revisão nunca mostrou. É a lição da DECISIONS #89 pela porta que a #105
+    /// abriu: **a régua de placeholder vale por SLOT.**
+    #[test]
+    fn rotulo_de_coletanea_no_titulo_e_titulo() {
+        for texto in [
+            "Diversos",
+            "Vários",
+            "Varias",
+            "Coletânea",
+            "Various",
+            "Various Artists",
+            "VA",
+            "Compilation",
+        ] {
+            assert!(
+                !is_placeholder(Campo::Titulo, texto),
+                "{texto:?} como TÍTULO é o nome que alguém vê na biblioteca"
+            );
         }
     }
 
@@ -2452,7 +2647,12 @@ mod tests {
             "Artistas",
             "Compilado",
         ] {
-            assert!(!is_placeholder(texto), "{texto:?} é título de verdade");
+            for campo in [Campo::Titulo, Campo::Artista] {
+                assert!(
+                    !is_placeholder(campo, texto),
+                    "{texto:?} é título de verdade, e não muda com {campo:?}"
+                );
+            }
         }
     }
 
@@ -2462,12 +2662,16 @@ mod tests {
     /// mais nada: a única prova disponível é o acento do texto original.
     #[test]
     fn va_sem_acento_e_rotulo_e_va_com_acento_e_titulo() {
-        assert!(is_placeholder("VA"));
-        assert!(is_placeholder("va"));
-        assert!(!is_placeholder("Vá"));
-        assert!(!is_placeholder("vá"));
+        assert!(is_placeholder(Campo::Artista, "VA"));
+        assert!(is_placeholder(Campo::Artista, "va"));
+        assert!(!is_placeholder(Campo::Artista, "Vá"));
+        assert!(!is_placeholder(Campo::Artista, "vá"));
         // e nas duas formas Unicode: o macOS entrega NFD
-        assert!(!is_placeholder("va\u{0301}"));
+        assert!(!is_placeholder(Campo::Artista, "va\u{0301}"));
+        // no TÍTULO nenhuma das quatro é placeholder
+        for texto in ["VA", "va", "Vá", "vá"] {
+            assert!(!is_placeholder(Campo::Titulo, texto), "{texto:?}");
+        }
     }
 
     #[test]

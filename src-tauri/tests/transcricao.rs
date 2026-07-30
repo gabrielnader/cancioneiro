@@ -101,8 +101,8 @@ echo "E aqui dentro canta o coração"
 
     assert_eq!(saida.texto, "Chove lá fora\nE aqui dentro canta o coração");
     assert!(
-        saida.duracao > 0.0 && saida.duracao < 10.0,
-        "a duração é a MEDIDA na decodificação ({}), e não os 300 s que o \
+        saida.duracao.medida > 0.0 && saida.duracao.medida < 10.0,
+        "a duração é a MEDIDA na decodificação ({:?}), e não os 300 s que o \
          motor anunciou no stderr",
         saida.duracao
     );
@@ -217,7 +217,11 @@ fn a_duracao_vem_da_decodificacao_e_nao_do_stderr_do_motor() {
     let saida = transcrever(&whisper, &modelo, &mp3, dir.path(), IDIOMA, SEGUE, SEM_PROGRESSO)
         .unwrap()
         .unwrap();
-    assert!(saida.duracao > 0.0, "o motor calou e a duração continua provada");
+    assert!(
+        saida.duracao.provada(),
+        "o motor calou e a duração continua provada: {:?}",
+        saida.duracao
+    );
     assert!(
         !matches!(
             decidir(&saida.texto, saida.duracao, 300.0),
@@ -245,10 +249,14 @@ fn o_numero_que_o_motor_anuncia_nao_ganha_da_contagem_de_amostras() {
         .unwrap()
         .unwrap();
     assert!(
-        saida.duracao < 100.0,
-        "o motor mentiu 3000 s e a medição valeu: {}",
+        saida.duracao.medida < 100.0,
+        "o motor mentiu 3000 s e a medição valeu: {:?}",
         saida.duracao
     );
+    // e mentir para MAIS não derruba a prova: a corroboração pelo número do
+    // motor só olha para o lado que acusa — ele ter ouvido MENOS do que nós
+    // escrevemos no WAV
+    assert!(saida.duracao.provada(), "{:?}", saida.duracao);
 }
 
 /// **Nada é criado dentro do acervo.** O WAV vai para a pasta que quem chama
@@ -406,4 +414,178 @@ fn arquivo_que_nao_e_audio_e_erro_e_nunca_instrumental() {
     let sumido = dir.path().join("nao-existe.mp3");
     let erro = decodificar_para_wav(&sumido, &destino, SEGUE).expect_err("arquivo ausente");
     assert_eq!(erro.to_string(), ERRO_AUDIO);
+}
+
+// ===========================================================================
+// C1 — o contador do cabeçalho `Info` NÃO é medição, e não pode virar prova
+// ===========================================================================
+//
+// O achado do QA na v0.10.0: o `symphonia` para de entregar áudio no número de
+// quadros declarado no cabeçalho Xing/Info (é o que a opção `gapless` faz — ela
+// apara tudo o que passa do fim DECLARADO). Logo a "contagem de amostras" que a
+// DECISIONS #108 promoveu ao topo da ordem de autoridade derivava, sem que
+// ninguém percebesse, exatamente do número que a DECISIONS #72 proíbe confiar.
+//
+// O arquivo que expõe isso não é exótico: é o que `cat a.mp3 b.mp3 > set.mp3`
+// produz, e todo player toca inteiro. O contador da PRIMEIRA cópia fala pelo
+// arquivo todo.
+
+/// Onde mora o contador de quadros do Xing/Info, e quanto ele diz.
+fn contador_do_cabecalho(bytes: &[u8]) -> Option<(usize, u32)> {
+    for i in 0..bytes.len().saturating_sub(12) {
+        if &bytes[i..i + 4] == b"Info" || &bytes[i..i + 4] == b"Xing" {
+            let flags = u32::from_be_bytes([bytes[i + 4], bytes[i + 5], bytes[i + 6], bytes[i + 7]]);
+            if flags & 1 == 1 {
+                let n =
+                    u32::from_be_bytes([bytes[i + 8], bytes[i + 9], bytes[i + 10], bytes[i + 11]]);
+                return Some((i + 8, n));
+            }
+        }
+    }
+    None
+}
+
+/// Os bytes de `copias` fixtures emendadas — o `cat a.mp3 b.mp3 > set.mp3` do
+/// acervo real, com uma tag ID3 e um cabeçalho `Info` no meio do caminho.
+fn emendado(dir: &Path, copias: usize) -> Vec<u8> {
+    let uma = dir.join("uma.mp3");
+    copy_fixture("com_letra.mp3", &uma);
+    let base = std::fs::read(&uma).unwrap();
+    std::fs::remove_file(&uma).unwrap();
+    let mut bytes = Vec::with_capacity(base.len() * copias);
+    for _ in 0..copias {
+        bytes.extend_from_slice(&base);
+    }
+    bytes
+}
+
+fn escrever(dir: &Path, nome: &str, bytes: &[u8]) -> PathBuf {
+    let p = dir.join(nome);
+    std::fs::write(&p, bytes).unwrap();
+    p
+}
+
+fn decodificar(dir: &Path, mp3: &Path, nome: &str) -> cancioneiro_lib::transcricao::Decodificado {
+    let wav = Temporario(dir.join(nome));
+    decodificar_para_wav(mp3, &wav.0, SEGUE)
+        .expect("decodifica")
+        .expect("não foi cancelado")
+}
+
+/// **A prova de que o C1 morreu.** Mesmíssimos bytes de áudio; só os 4 bytes
+/// do contador do `Info` mudam. A duração medida tem de ser a MESMA nos três,
+/// porque a duração é do ÁUDIO — o contador é só uma afirmação de quem
+/// escreveu o arquivo.
+///
+/// Antes da correção, com a fixture deste repositório:
+///
+/// ```text
+/// Info diz 78    → amostras=32601   duracao=2,04
+/// Info diz 116   → amostras=48000   duracao=3,00   (o que o `cat` deixa)
+/// Info diz 1160  → amostras=484833  duracao=30,30  (o número verdadeiro)
+/// ```
+#[test]
+fn o_contador_do_cabecalho_info_nao_decide_quanto_audio_existe() {
+    let dir = tempfile::tempdir().unwrap();
+    let bytes = emendado(dir.path(), 10);
+    let (pos, declarado) = contador_do_cabecalho(&bytes).expect("a fixture tem cabeçalho Info");
+    assert_eq!(declarado, 116, "uma cópia declara 116 quadros");
+
+    // 1) como o `cat` deixa: o contador da primeira cópia, um décimo do total
+    let como_o_cat = decodificar(dir.path(), &escrever(dir.path(), "set.mp3", &bytes), "a.wav");
+
+    // 2) o contador ADULTERADO para 78 quadros (os 2 s do relatório do QA)
+    let mut mentiroso = bytes.clone();
+    mentiroso[pos..pos + 4].copy_from_slice(&78u32.to_be_bytes());
+    let mentiroso =
+        decodificar(dir.path(), &escrever(dir.path(), "mentiroso.mp3", &mentiroso), "b.wav");
+
+    // 3) o contador CORRIGIDO para o total verdadeiro
+    let mut honesto = bytes.clone();
+    honesto[pos..pos + 4].copy_from_slice(&1160u32.to_be_bytes());
+    let honesto =
+        decodificar(dir.path(), &escrever(dir.path(), "honesto.mp3", &honesto), "c.wav");
+
+    assert_eq!(
+        (como_o_cat.amostras, mentiroso.amostras),
+        (honesto.amostras, honesto.amostras),
+        "o contador do cabeçalho mudou a duração medida: 78 → {:.2}s, 116 → {:.2}s, \
+         1160 → {:.2}s",
+        mentiroso.duracao,
+        como_o_cat.duracao,
+        honesto.duracao
+    );
+    assert!(
+        honesto.duracao > 25.0,
+        "dez cópias de ~3 s são ~30 s de áudio, e é isso que um player toca: {:.2}s",
+        honesto.duracao
+    );
+    // e os três são duração COMPROVADAMENTE completa: o áudio foi lido até o
+    // fim do arquivo, e é só isso que autoriza um veredito de instrumental
+    for d in [como_o_cat, mentiroso, honesto] {
+        assert!(d.completa, "{d:?}");
+    }
+}
+
+/// **A2 do C1: um cabeçalho mentiroso não pode marcar instrumental.**
+///
+/// Ponta a ponta, com o motor ouvindo só o comecinho — os dois desfechos que o
+/// QA reproduziu eram PERMANENTES: o instrumental tira o arquivo da fila de
+/// letra para sempre (a marca vence até o `--forcar-tudo`), e o toco de letra
+/// faz `etapas_de_letra_valem_a_pena` nunca mais deixar a música entrar em
+/// varredura.
+#[cfg(unix)]
+#[test]
+fn cabecalho_mentiroso_nao_marca_instrumental_ponta_a_ponta() {
+    let dir = tempfile::tempdir().unwrap();
+    let bytes = emendado(dir.path(), 10);
+    let (pos, _) = contador_do_cabecalho(&bytes).unwrap();
+    let mut mentiroso = bytes.clone();
+    mentiroso[pos..pos + 4].copy_from_slice(&78u32.to_be_bytes());
+    let mp3 = escrever(dir.path(), "trinta-segundos.mp3", &mentiroso);
+
+    // o motor não ouve voz nos primeiros segundos: sem a correção, isto virava
+    // "a transcrição voltou vazia e o áudio foi lido até o fim" — uma
+    // afirmação FALSA, e permanente
+    let whisper = script(dir.path(), "echo ''\n");
+    let modelo = modelo_falso(dir.path());
+    let saida = transcrever(&whisper, &modelo, &mp3, dir.path(), IDIOMA, SEGUE, SEM_PROGRESSO)
+        .unwrap()
+        .unwrap();
+    assert!(
+        saida.duracao.medida > 25.0,
+        "o áudio tem ~30 s e o cabeçalho dizia 2: {:?}",
+        saida.duracao
+    );
+    assert!(saida.duracao.provada(), "{:?}", saida.duracao);
+}
+
+// ===========================================================================
+// A3 — EOF e FALHA DE LEITURA são coisas diferentes
+// ===========================================================================
+
+/// Arquivo cortado no meio: o que veio NÃO é promovido a prova.
+///
+/// O cabeçalho declara 1160 quadros e só 290 chegaram. Isso não decide que o
+/// áudio é curto — decide que **não sabemos** quanto áudio existe, e sem saber
+/// não se marca instrumental. O cabeçalho aqui é PISO, nunca autoridade: é a
+/// corroboração da DECISIONS #72, na única direção em que ela é sólida.
+#[test]
+fn arquivo_cortado_no_meio_nao_promove_duracao_parcial_a_prova() {
+    let dir = tempfile::tempdir().unwrap();
+    let bytes = emendado(dir.path(), 10);
+    let (pos, _) = contador_do_cabecalho(&bytes).unwrap();
+    let mut inteiro = bytes.clone();
+    inteiro[pos..pos + 4].copy_from_slice(&1160u32.to_be_bytes());
+
+    let completo = decodificar(dir.path(), &escrever(dir.path(), "int.mp3", &inteiro), "i.wav");
+    assert!(completo.completa);
+
+    let cortado = &inteiro[..inteiro.len() / 4];
+    let d = decodificar(dir.path(), &escrever(dir.path(), "cort.mp3", cortado), "t.wav");
+    assert!(d.amostras > 0, "o que veio foi decodificado");
+    assert!(
+        !d.completa,
+        "8 s de um arquivo que declara 30 não é áudio curto, é leitura incompleta: {d:?}"
+    );
 }
