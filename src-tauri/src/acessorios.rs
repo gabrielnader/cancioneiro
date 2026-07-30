@@ -112,23 +112,22 @@ pub const CATALOGO: &[Acessorio] = &[
     // --- etapa 5 (V10): SOMAS E TAMANHOS PENDENTES -------------------------
     //
     // O whisper.cpp é CONSTRUÍDO por nós (`BUILD_SHARED_LIBS=OFF`, para o
-    // acessório ser UM arquivo conferível por UM SHA-256), e não sai
-    // universal como o Chromaprint: são DOIS arquivos de macOS, um por
-    // processador.
+    // acessório ser UM arquivo conferível por UM SHA-256). O macOS sai
+    // universal, como o Chromaprint — ver o comentário da entrada dele.
     Acessorio {
         nome: WHISPER_CLI,
         plataforma: "windows-x86_64",
         arquivo: "whisper-cli-windows-x86_64.exe",
-        sha256: SHA256_PENDENTE,
-        tamanho_bytes: 2_000_000, // aproximado — preencher com a soma
+        sha256: "6fa0be8580b27c163746ebe30cc3974c0f0bdfc425525766f7cf4828f1f529c5",
+        tamanho_bytes: 965_632,
         executavel: true,
     },
     Acessorio {
         nome: WHISPER_CLI,
         plataforma: "linux-x86_64",
         arquivo: "whisper-cli-linux-x86_64",
-        sha256: SHA256_PENDENTE,
-        tamanho_bytes: 2_000_000, // aproximado — preencher com a soma
+        sha256: "8f294425975183614989e8ae428e4d0ecbdc3eb80769c489a3076647c6953344",
+        tamanho_bytes: 1_635_784,
         executavel: true,
     },
     Acessorio {
@@ -141,8 +140,8 @@ pub const CATALOGO: &[Acessorio] = &[
         // para explicar na tela.
         plataforma: "macos",
         arquivo: "whisper-cli-macos-universal",
-        sha256: SHA256_PENDENTE,
-        tamanho_bytes: 2_000_000, // aproximado — preencher com a soma
+        sha256: "6bc9670accbb2d5c9c1f8799c03bf65ab37d63f288c467f01da35f8bfbe1272c",
+        tamanho_bytes: 2_830_456,
         executavel: true,
     },
     Acessorio {
@@ -151,8 +150,8 @@ pub const CATALOGO: &[Acessorio] = &[
         // não recebe o bit de execução.
         plataforma: QUALQUER_PLATAFORMA,
         arquivo: "ggml-small-q5_1.bin",
-        sha256: SHA256_PENDENTE,
-        tamanho_bytes: 181_000_000, // aproximado — preencher com a soma
+        sha256: "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
+        tamanho_bytes: 190_085_487,
         executavel: false,
     },
 ];
@@ -730,14 +729,19 @@ mod tests {
     /// etapa 2 de todo mundo, e um tamanho zerado faria a tela prometer um
     /// download de 0 byte antes de baixar 5 MB.
     ///
-    /// A etapa 5 ainda não está publicada: o fluxo
-    /// `acessorio-transcritor.yml` é que produz as somas dela. Enquanto isso,
-    /// as entradas ficam `SHA256_PENDENTE` e o produto as trata como
-    /// `Indisponivel` — que é exatamente o que elas são (DECISIONS #97).
-    /// **Nenhum teste desta suíte depende dos valores reais.**
+    /// Desde a V10 o catálogo INTEIRO está publicado — `fpcalc`, os três
+    /// `whisper-cli` e o modelo —, então a guarda vale para todas as
+    /// entradas, sem filtro. O filtro por `FPCALC` existia enquanto a etapa 5
+    /// esperava o fluxo `acessorio-transcritor.yml`; mantê-lo agora deixaria
+    /// justamente as entradas novas fora da rede que as protege.
+    ///
+    /// `SHA256_PENDENTE` continua existindo para o PRÓXIMO acessório: uma
+    /// entrada pendente é tratada como `Indisponivel`, que é exatamente o que
+    /// ela é (DECISIONS #97). **Nenhum teste desta suíte depende dos valores
+    /// reais.**
     #[test]
     fn o_que_ja_foi_publicado_nao_tem_nada_pendente() {
-        for a in CATALOGO.iter().filter(|a| a.nome == FPCALC) {
+        for a in CATALOGO.iter() {
             assert_ne!(a.sha256, SHA256_PENDENTE, "{}: soma pendente", a.arquivo);
             assert!(a.tamanho_bytes > 0, "{}: tamanho pendente", a.arquivo);
         }
