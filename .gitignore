@@ -34,3 +34,4 @@ test-results/
 
 # Demo em página única (Artifact)
 dist-artifact
+test-results-anterior/

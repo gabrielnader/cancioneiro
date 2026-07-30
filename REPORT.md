@@ -273,6 +273,30 @@ ao ponto do funil que depende dela.
 > propósito** — a busca é a função central do produto, e mexer nela na mesma
 > versão que vai para os beta testers é risco que não se justifica.
 
+>
+> **Uma instabilidade de teste, registrada com nome e contagem.** O E2E
+> `BUG v0.4: tema digitado SEM Enter é salvo ao clicar em Salvar` falhou **1 vez
+> em 8 execuções completas** da suíte. Sozinho passa em 6 s. Duas hipóteses
+> foram levantadas e **as duas caíram**: disputa de CPU (reproduzi a carga que
+> existia na execução que falhou — cargo e vitest em laço — e a suíte passou em
+> 2,2 min, a mesma duração da que quebrou) e resposta assíncrona fora de ordem
+> na ficha da música (a guarda de corrida existe). Nenhum mecanismo identificado.
+>
+> A parte mais útil deste registro é o erro que **não** foi capturado. O
+> `playwright.config.ts` já pedia `trace: "retain-on-failure"`, então o rastro
+> completo daquela falha existiu no disco — e a execução seguinte, disparada
+> para saber se reproduzia, o apagou antes de alguém olhar (o Playwright limpa
+> `test-results/` ao começar). A resposta virou "1 em 8, sem mecanismo" quando
+> podia ter sido a linha exata. Virou mecanismo: `pretest:e2e` arquiva o rastro
+> anterior antes de cada execução. Lembrança não é mecanismo — de novo.
+>
+> Junto disso, duas falhas de instrumentação minhas no mesmo dia, pela mesma
+> causa: um vigia de lançamento que reportou "20 min sem publicar" quando batia
+> numa API que o proxy recusa (o lançamento estava publicado havia 19 minutos),
+> e um `grep -c` cujo código de saída 1 para zero ocorrências foi lido como
+> falha da verificação. **Ferramenta que confunde "não consegui olhar" com "não
+> aconteceu" é o mesmo defeito que o produto tinha na mensagem que culpava o
+> disco sem ter olhado para disco nenhum.**
 ---
 
 > **Atualização V10.7/V10.8 (0.10.4):** a versão que vai para os beta testers, e
