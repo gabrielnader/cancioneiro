@@ -558,6 +558,21 @@ export interface Backend {
    */
   transcricaoPendentes(folderPrefix: string): Promise<PendentesDaTranscricao>;
   /**
+   * **A mesma pergunta, para UMA música** (V10.9) — a ficha do editor.
+   *
+   * O funil individual roda as etapas 1 a 4 e para ali; com 3% de cobertura
+   * medida, "não achamos nada" é o desfecho TÍPICO daquele clique, e a etapa 5
+   * é a única coisa que resolve AQUELA música. Ela ficava a duas telas de
+   * distância, numa fila que é a pasta inteira.
+   *
+   * Devolve o MESMO `PendentesDaTranscricao` da porta da pasta, de propósito: a
+   * tela lê a oferta de um jeito só, e `transcreverMusicas` recebe a fila do
+   * mesmo campo — com um item. `musicas` vem VAZIO (e não é erro) quando a
+   * música tem letra, é instrumental, o arquivo sumiu do disco, ou o id já não
+   * existe no banco: os portões são os do Rust, e a ficha não reescreve nenhum.
+   */
+  transcricaoPendentesDaMusica(songId: number): Promise<PendentesDaTranscricao>;
+  /**
    * A etapa 5 (V10): escreve a letra ouvindo o áudio das músicas pedidas.
    *
    * `songIds` é o `sem_letra_no_fim` da varredura ou o `musicas` da porta
@@ -751,6 +766,12 @@ function tauriBackend(): Backend {
       const { invoke } = await import("@tauri-apps/api/core");
       return invoke<PendentesDaTranscricao>("transcricao_pendentes", {
         folderPrefix,
+      });
+    },
+    async transcricaoPendentesDaMusica(songId) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<PendentesDaTranscricao>("transcricao_pendentes_da_musica", {
+        songId,
       });
     },
     async transcreverMusicas(songIds, scanId) {

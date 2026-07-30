@@ -5452,3 +5452,129 @@ fn a_porta_permanente_responde_o_agora_e_a_pergunta_do_fim_desconta_o_que_achou(
     );
     assert_eq!(depois.segundos_estimados, 0);
 }
+
+// ===========================================================================
+// V10.9 — a etapa 5 na porta de UMA música.
+//
+// O funil individual do editor (`enrich_scan_song`) roda as etapas 1 a 4 e para
+// ali. A etapa 5 custa minutos e vive em comando próprio, e por isso não
+// entrava — mas com 3% de cobertura medida, "as quatro etapas não acharam
+// nada" é o desfecho TÍPICO daquele clique, e a única coisa que resolveria
+// aquela música ficava a duas telas de distância, numa fila que é a pasta
+// inteira.
+//
+// A porta nova é a `pendentes_da_transcricao` num escopo diferente: MESMO
+// struct, MESMO predicado (`a_etapa_5_tem_o_que_fazer`) e MESMA estimativa
+// (`transcricao::estimativa_da_transcricao`). Uma segunda conta daria dois
+// tempos para a mesma música na mesma tela, e ninguém saberia qual acreditar
+// (DECISIONS #80).
+// ===========================================================================
+
+/// A porta de uma música devolve a linha DELA, e o mesmo número que a porta da
+/// pasta daria para ela sozinha.
+///
+/// Este é o teste que impede as duas de divergirem: um portão a mais em uma
+/// delas, ou uma segunda conta de tempo, e os números param de bater.
+#[test]
+fn a_porta_de_uma_musica_diz_o_mesmo_que_a_porta_da_pasta_diria_dela() {
+    let (_dir, conn, _f) = setup_with(&[
+        ("sem_letra.mp3", "Pasta/sem_letra.mp3"),
+        ("sem_tags.mp3", "Pasta/Falamansa - Oh! Chuva.mp3"),
+    ]);
+    let alvo = song_by_suffix(&conn, "sem_letra.mp3");
+    let modelo = transcricao::modelo_oferecido();
+
+    let uma =
+        enrich::pendentes_da_transcricao_da_musica(&conn, alvo.id, modelo, true).unwrap();
+    assert_eq!(
+        uma.musicas,
+        vec![alvo.id],
+        "a fila é de um item, e é o que o `transcrever_musicas` recebe"
+    );
+    assert!(uma.disponivel, "o que a máquina pode fazer viaja junto");
+
+    // a mesma música, medida pela porta da pasta: a estimativa é de uma conta
+    // só, e a duração é a mesma
+    let duracao = alvo.duration_seconds.expect("a fixture tem duração") as f64;
+    let (segundos, medida) =
+        transcricao::estimativa_da_transcricao(&conn, modelo, [duracao].into_iter());
+    assert_eq!(uma.segundos_estimados, segundos);
+    assert_eq!(uma.estimativa_medida_nesta_maquina, medida);
+
+    // e o total da pasta é MAIOR: a porta de uma música não é a da pasta com
+    // outro nome
+    let pasta =
+        enrich::pendentes_da_transcricao(&conn, "", modelo, true).unwrap();
+    assert_eq!(pasta.musicas.len(), 2);
+    assert!(pasta.segundos_estimados > uma.segundos_estimados);
+}
+
+/// Os portões da etapa 5 valem aqui INTEIROS, e não pela metade — os MESMOS da
+/// porta da pasta e da pergunta do fim.
+///
+/// Note o que isto decide na tela: o funil de UMA música consulta de propósito
+/// quem já tem letra (QA ALTO-3b — quem apertou o botão quer uma segunda
+/// opinião), mas a etapa 5 não. Quem responde "esta música tem o que
+/// transcrever?" continua sendo uma regra só, num lugar só, e a ficha do editor
+/// não reescreve nenhuma delas.
+#[test]
+fn a_porta_de_uma_musica_aplica_os_mesmos_portoes_da_etapa_5() {
+    let (dir, conn, _f) = setup_with(&[
+        ("sem_letra.mp3", "fica.mp3"),
+        ("sem_letra.mp3", "some.mp3"),
+        ("sem_letra.mp3", "instrumental.mp3"),
+        ("com_letra.mp3", "com_letra.mp3"),
+    ]);
+    let modelo = transcricao::modelo_oferecido();
+    let fica = song_by_suffix(&conn, "fica.mp3");
+    let some = song_by_suffix(&conn, "some.mp3");
+    let instrumental = song_by_suffix(&conn, "instrumental.mp3");
+    let com_letra = song_by_suffix(&conn, "com_letra.mp3");
+    fs::remove_file(dir.path().join("some.mp3")).unwrap();
+    writer::write_tags(
+        &conn,
+        instrumental.id,
+        "Chorinho",
+        Some("Regional"),
+        None,
+        None,
+        Some(true),
+    )
+    .unwrap();
+
+    let pendentes = |id: i64| {
+        enrich::pendentes_da_transcricao_da_musica(&conn, id, modelo, true).unwrap()
+    };
+
+    assert_eq!(pendentes(fica.id).musicas, vec![fica.id]);
+    for (id, porque) in [
+        (some.id, "o arquivo sumiu do disco: não é trabalho, é linha de erro"),
+        (instrumental.id, "instrumental não é transcrito (V8/F17)"),
+        (com_letra.id, "quem já tem letra não entra"),
+    ] {
+        let p = pendentes(id);
+        assert!(p.musicas.is_empty(), "{porque}");
+        assert_eq!(p.segundos_estimados, 0, "e sem fila não há tempo a anunciar");
+    }
+}
+
+/// Id que não existe no banco não é erro: é uma música sem nada a transcrever.
+///
+/// A ficha pode ter sido aberta sobre uma música que saiu do acervo entre o
+/// clique e a resposta. Devolver erro faria a tela mostrar uma falha por um
+/// fato normal, e num produto sem suporte uma falha inventada é pior que o
+/// silêncio.
+#[test]
+fn id_que_nao_existe_devolve_fila_vazia_em_vez_de_erro() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
+    let p = enrich::pendentes_da_transcricao_da_musica(
+        &conn,
+        999_999,
+        transcricao::modelo_oferecido(),
+        true,
+    )
+    .unwrap();
+    assert!(p.musicas.is_empty());
+    assert_eq!(p.segundos_estimados, 0);
+    assert!(p.disponivel, "o fato sobre a MÁQUINA não depende da música");
+}

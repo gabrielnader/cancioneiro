@@ -85,6 +85,13 @@ function fakeBackend(overrides: Partial<Backend> = {}): Backend {
       estimativa_medida_nesta_maquina: false,
       disponivel: false,
     })),
+    // V10.9 — a mesma porta, para UMA música (a ficha do editor)
+    transcricaoPendentesDaMusica: vi.fn(async () => ({
+      musicas: [],
+      segundos_estimados: 0,
+      estimativa_medida_nesta_maquina: false,
+      disponivel: false,
+    })),
     transcreverMusicas: vi.fn(async () => ({
       propostas: [],
       razao_medida: null,

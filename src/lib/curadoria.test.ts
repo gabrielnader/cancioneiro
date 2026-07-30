@@ -24,6 +24,7 @@ import {
   SEM_RESULTADO_INSTRUMENTAL,
   TRANSCRICAO_NO_FIM,
   agruparPorRisco,
+  avisoDeFalhasDeGravacao,
   avisoDeTranscricaoPendente,
   avisoLetraExistente,
   avisoSemPerguntarAoSom,
@@ -43,6 +44,7 @@ import {
   rotuloDoRefrao,
   textoAplicado,
   textoDaOfertaDeTranscricao,
+  textoDaOfertaDestaMusica,
   textoDaTranscricaoIndisponivel,
   textoDoAcessorioAusente,
   textoDoBlocoDeTranscricao,
@@ -218,6 +220,28 @@ describe("a régua da copy (DECISIONS #100)", () => {
     ],
     ["aviso de transcrição pendente", avisoDeTranscricaoPendente(27)!],
     ["linha gravada", ROTULO_DA_LINHA_GRAVADA],
+    // V10.9 — a terceira porta da etapa 5 e o aviso das falhas de gravação
+    // entram na MESMA régua. A da ficha aparece dentro de um formulário já
+    // cheio de campos, que é o pior lugar possível para um parágrafo.
+    [
+      "oferta da etapa 5 nesta música",
+      textoDaOfertaDestaMusica({
+        segundos: 240,
+        medidaNestaMaquina: false,
+        disponivel: true,
+        download: null,
+      }),
+    ],
+    [
+      "oferta da etapa 5 nesta música, sem os acessórios",
+      textoDaOfertaDestaMusica({
+        segundos: 240,
+        medidaNestaMaquina: false,
+        disponivel: false,
+        download: { bytes: 1_533_763_059, segundos: 512 },
+      }),
+    ],
+    ["aviso de falhas de gravação", avisoDeFalhasDeGravacao(7)!],
   ];
 
   for (const [nome, texto] of desfechos) {
@@ -1891,5 +1915,172 @@ describe("a linha já gravada (V10.6)", () => {
   it("não fala em erro nem pede ação nenhuma", () => {
     expect(ROTULO_DA_LINHA_GRAVADA.toLowerCase()).not.toContain("erro");
     expect(ROTULO_DA_LINHA_GRAVADA.toLowerCase()).not.toContain("confira");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V10.9 — a etapa 5 na porta de UMA música
+// ---------------------------------------------------------------------------
+//
+// O buraco que esta seção fecha: a pessoa abre uma música, clica em "Buscar
+// dados na internet", as quatro etapas não acham nada — que é o caso TÍPICO
+// deste repertório, com 3% de cobertura medida — e a única coisa que resolveria
+// AQUELA música não é oferecida ali. É o mesmo erro de projeto que a V10.6
+// consertou na outra porta: a etapa 5 morava onde a VARREDURA termina, e não
+// onde a PESSOA está.
+
+describe("a oferta da etapa 5 na ficha de uma música (V10.9)", () => {
+  const PRONTA = {
+    segundos: 240,
+    medidaNestaMaquina: false,
+    disponivel: true,
+    download: null,
+  };
+
+  /*
+    A abertura é a ÚNICA coisa que muda entre as três portas, e ela muda porque
+    "sobraram" só é verdade logo depois de uma varredura, e "47 músicas da
+    biblioteca" só é verdade numa tela permanente. Aqui a pessoa está olhando
+    UMA ficha, e o que ela acabou de ler é que a busca não trouxe letra.
+  */
+  it("abre falando DESTA música, e não de uma lista", () => {
+    const t = textoDaOfertaDestaMusica(PRONTA);
+    expect(t).toContain("Esta música continua sem letra.");
+    expect(t.toLowerCase()).not.toContain("sobrar");
+    expect(t.toLowerCase()).not.toContain("biblioteca");
+  });
+
+  it("a SEGUNDA frase é a MESMA das outras duas portas, letra por letra", () => {
+    const segunda =
+      "Escrever a letra ouvindo o áudio leva cerca de 4 minutos — pode levar" +
+      " mais nesta máquina.";
+    expect(textoDaOfertaDestaMusica(PRONTA)).toContain(segunda);
+    expect(textoDaOfertaDeTranscricao(1, 240, false)).toContain(segunda);
+    expect(
+      textoDoBlocoDeTranscricao({
+        quantas: 1,
+        segundos: 240,
+        medidaNestaMaquina: false,
+        disponivel: true,
+        download: null,
+        todaABiblioteca: true,
+      }),
+    ).toContain(segunda);
+  });
+
+  // A procedência do número tem a MESMA regra das outras portas: só a medição
+  // desta máquina autoriza o "neste computador" (DECISIONS #86 e #112).
+  it("com a estimativa medida, o 'neste computador' vale aqui também", () => {
+    const t = textoDaOfertaDestaMusica({ ...PRONTA, medidaNestaMaquina: true });
+    expect(t).toBe(
+      "Esta música continua sem letra. Escrever a letra ouvindo o áudio leva" +
+        " cerca de 4 minutos neste computador.",
+    );
+  });
+
+  it("não afirma uma medição que não houve", () => {
+    for (const segundos of [30, 240, 10_800]) {
+      const t = textoDaOfertaDestaMusica({ ...PRONTA, segundos });
+      expect(t, t).not.toContain("neste computador");
+      expect(t, t).toContain("pode levar mais nesta máquina");
+    }
+  });
+
+  it("tempo curto não vira 'cerca de menos de'", () => {
+    const t = textoDaOfertaDestaMusica({ ...PRONTA, segundos: 30 });
+    expect(t).toContain("leva menos de 1 minuto");
+    expect(t).not.toContain("cerca de menos");
+  });
+
+  /*
+    Sem os acessórios a saída aponta para CONFIGURAÇÕES, com tamanho e tempo —
+    e é o padrão da pergunta do fim, não o do bloco permanente. A diferença é
+    onde a pessoa está: o bloco permanente diz "acima" porque já estamos em
+    Configurações, e o editor não está lá.
+  */
+  it("sem os acessórios, manda para Configurações com tamanho e tempo", () => {
+    const t = textoDaOfertaDestaMusica({
+      ...PRONTA,
+      disponivel: false,
+      download: { bytes: 1_533_763_059, segundos: 512 },
+    });
+    expect(t).toContain("Esta música continua sem letra.");
+    expect(t).toContain("1,4 GB");
+    expect(t).toContain("cerca de 9 minutos");
+    expect(t).toContain("em Configurações");
+    // e não repete o tempo da transcrição: quem não pode transcrever ainda não
+    // tem o que decidir sobre minutos de CPU
+    expect(t).not.toContain("ouvindo o áudio leva");
+  });
+
+  it("a frase do download é a MESMA da pergunta do fim, letra por letra", () => {
+    const download = { bytes: 1_533_763_059, segundos: 512 };
+    const segunda =
+      "Para escrever a letra ouvindo o áudio, baixe 1,4 GB em Configurações —" +
+      " cerca de 9 minutos.";
+    expect(
+      textoDaOfertaDestaMusica({ ...PRONTA, disponivel: false, download }),
+    ).toContain(segunda);
+    expect(textoDaTranscricaoIndisponivel(47, download)).toContain(segunda);
+  });
+
+  it("sem saber o tamanho, não inventa número (DECISIONS #86)", () => {
+    const t = textoDaOfertaDestaMusica({ ...PRONTA, disponivel: false });
+    expect(t).toContain("Esta música continua sem letra.");
+    expect(t).toContain("Configurações");
+    expect(t).not.toMatch(/\d+(,\d)? (kB|MB|GB)/);
+  });
+});
+
+describe("fechar a revisão com falhas de gravação na tela (V10.9)", () => {
+  /*
+    Relato de campo, verbatim: *"não sei quais são as duas outras músicas… pq
+    fechei a tela em seguida"*. É a mesma família do defeito que a V10.6
+    consertou — a lista que a pessoa precisa para agir depois evapora ao fechar
+    a caixa —, e é PIOR que a oferta de transcrição, porque para as falhas de
+    gravação não existe porta permanente.
+  */
+  it("diz quantas falharam e o que fazer para vê-las de novo", () => {
+    expect(avisoDeFalhasDeGravacao(2)).toBe(
+      "2 músicas não puderam ser gravadas no arquivo. Esta lista não fica" +
+        " guardada: para vê-la de novo, repita a busca desta pasta.",
+    );
+  });
+
+  it("singular", () => {
+    expect(avisoDeFalhasDeGravacao(1)).toContain(
+      "1 música não pôde ser gravada no arquivo",
+    );
+  });
+
+  it("zero não avisa nada: nenhuma linha falhou", () => {
+    expect(avisoDeFalhasDeGravacao(0)).toBeNull();
+  });
+
+  /*
+    O vocabulário é o MESMO do cabeçalho do grupo (`nao-gravadas`), e isso não é
+    economia de texto: quem leu "2 músicas não puderam ser gravadas no arquivo"
+    na tela precisa reconhecer a mesma frase no aviso, ou vai achar que são duas
+    coisas diferentes (a #139 pelo avesso).
+  */
+  it("usa o mesmo vocabulário do cabeçalho do grupo que ela descreve", () => {
+    for (const n of [1, 2, 7]) {
+      const aviso = avisoDeFalhasDeGravacao(n)!;
+      const titulo = tituloDoGrupo("nao-gravadas", n);
+      // o título acrescenta "— o motivo está…", que só faz sentido com as
+      // linhas na tela; o começo é o mesmo texto
+      const comeco = titulo.split(" —")[0];
+      expect(aviso.startsWith(comeco), `${aviso} × ${comeco}`).toBe(true);
+    }
+  });
+
+  // Ela não promete um clique que não existe: a linha que falhou continua sem
+  // "tentar de novo" (DECISIONS #144a), e o caminho honesto é resolver o que a
+  // linha diz e repetir a busca.
+  it("não promete tentar de novo, e não acusa quem fechou", () => {
+    const t = avisoDeFalhasDeGravacao(2)!;
+    expect(t.toLowerCase()).not.toContain("tentar de novo");
+    expect(t.toLowerCase()).not.toContain("perd");
+    expect(t.toLowerCase()).not.toContain("descart");
   });
 });

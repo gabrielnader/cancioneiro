@@ -687,18 +687,57 @@ pub fn transcricao_pendentes(
     state: State<'_, Db>,
     folder_prefix: String,
 ) -> Result<crate::enrich::PendentesDaTranscricao> {
-    // O modelo que vale AQUI, porque é dele que sai o tempo: o preferido que
-    // estiver pronto, e o oferecido enquanto nenhum está (V10.2). A mesma
-    // escolha do `fontes_do_funil`, que é quem monta a pergunta do fim.
-    let modelo = diretorio_de_cache(&app).map_or_else(
-        |_| crate::transcricao::modelo_oferecido(),
-        |cache| crate::transcricao::modelo_desta_maquina(&cache),
-    );
-    // e o "posso transcrever" sai da MESMA função que a contagem usa: combinar
-    // dois estados de acessório é regra, e regra duplicada diverge (#80)
     let disponivel = etapas_ligadas(&app).transcricao;
     let conn = state.scan_conn()?;
-    crate::enrich::pendentes_da_transcricao(&conn, &folder_prefix, modelo, disponivel)
+    crate::enrich::pendentes_da_transcricao(
+        &conn,
+        &folder_prefix,
+        modelo_para_a_estimativa(&app),
+        disponivel,
+    )
+}
+
+/// **A terceira porta da etapa 5**: o que ela tem para fazer com UMA música —
+/// a ficha do editor (V10.9).
+///
+/// O funil individual (`enrich_song_scan`) roda as etapas 1 a 4 e para ali, e
+/// com 3% de cobertura medida "as quatro etapas não acharam nada" é o desfecho
+/// TÍPICO daquele clique. A etapa 5 é a única coisa que resolve aquela música, e
+/// ficava a duas telas de distância, numa fila que é a pasta inteira — o mesmo
+/// erro de projeto que a V10.6 consertou na outra porta.
+///
+/// Devolve o MESMO struct de `transcricao_pendentes`: a tela lê a oferta de um
+/// jeito só, e o `transcrever_musicas` recebe a fila do mesmo campo. Sem rede e
+/// sem gravação, como as outras duas; `(async)` e com conexão dedicada pelo
+/// mesmo motivo delas (QA B5), ainda que esta leia uma linha só — o lock
+/// compartilhado é o do `enrich_apply` gravando dezenas de MP3s, e o custo de
+/// esperá-lo não depende do tamanho da leitura (DECISIONS #92).
+#[tauri::command(async)]
+pub fn transcricao_pendentes_da_musica(
+    app: AppHandle,
+    state: State<'_, Db>,
+    song_id: i64,
+) -> Result<crate::enrich::PendentesDaTranscricao> {
+    let disponivel = etapas_ligadas(&app).transcricao;
+    let conn = state.scan_conn()?;
+    crate::enrich::pendentes_da_transcricao_da_musica(
+        &conn,
+        song_id,
+        modelo_para_a_estimativa(&app),
+        disponivel,
+    )
+}
+
+/// O modelo de que sai o TEMPO anunciado: o preferido que estiver pronto, e o
+/// oferecido enquanto nenhum está (V10.2). É a mesma escolha do
+/// `fontes_do_funil`, que é quem monta a pergunta do fim — e mora numa função
+/// porque as portas da etapa 5 são três, e três cópias divergiriam num tempo
+/// anunciado (DECISIONS #80).
+fn modelo_para_a_estimativa(app: &AppHandle) -> &'static crate::transcricao::Modelo {
+    diretorio_de_cache(app).map_or_else(
+        |_| crate::transcricao::modelo_oferecido(),
+        |cache| crate::transcricao::modelo_desta_maquina(&cache),
+    )
 }
 
 /// Quais etapas realmente rodam NESTA máquina, nesta build.
@@ -2074,6 +2113,7 @@ mod tests {
             "pub fn enrich_folder_scan(",
             "pub fn enrich_song_scan(",
             "pub fn transcricao_pendentes(",
+            "pub fn transcricao_pendentes_da_musica(",
             "pub fn transcrever_musicas(",
         ] {
             let i = fonte.find(comando).expect(comando);

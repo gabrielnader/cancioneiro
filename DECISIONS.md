@@ -1913,3 +1913,174 @@ opção mais simples que passa nos Acceptance Checks do PRD.
     documentação, que passou a dizer que a sobra tem conserto no produto e quais
     duas sobras continuam sem. Texto que mente sobre o próprio produto é defeito
     mesmo quando quem lê é o próximo programador (#144d).
+
+## V10.9 — a etapa 5 na porta de UMA música, e a lista de falhas que sumia ao fechar
+
+153. **A etapa 5 passou a ser oferecida na ficha de UMA música, e o gatilho é a
+    busca ter terminado sem trazer letra.**
+    O botão "Buscar dados na internet" do editor roda as etapas 1 a 4
+    (`enrich_song_scan`, `Origem::UmaMusica` — o funil de rede inteiro, inclusive
+    para música que já tem letra, #81). A etapa 5 não entrava: ela custa minutos
+    e vive em comando próprio, oferecida no fim da varredura e, desde a V10.6, no
+    bloco permanente de Configurações.
+    O buraco: a pessoa abre uma música, clica em buscar, as quatro etapas não
+    acham nada — que é o caso **típico** neste repertório, com 3% de cobertura
+    medida — e a única coisa que resolveria aquela música não é oferecida ali.
+    Ela tinha de sair, ir a Configurações, e lá a fila é a pasta inteira.
+    **É o mesmo erro de projeto que a V10.6 consertou na outra porta**: a etapa 5
+    morava onde a VARREDURA termina, e não onde a PESSOA está. E aqui ela é mais
+    usável do que em qualquer outra porta — uma música são minutos, não horas.
+154. **Quando a oferta aparece, e por que não é "sempre".**
+    Ela aparece **depois da busca**, e **não** quando a busca trouxe letra.
+    **(a) Nunca antes do clique.** Naquele segundo a pergunta é se a internet tem
+    esta música, e ela custa segundos contra os minutos da etapa 5. Oferecer as
+    duas ao mesmo tempo é a escolha às cegas que a V8 recusou quando havia dois
+    botões dizendo "buscar na internet" — e aqui a escolha errada custa minutos
+    de CPU por algo que uma consulta resolveria. Um bloco permanente na ficha
+    seria, ainda, uma terceira porta permanente dentro de um formulário; a régua
+    da #100 diz que o resto da tela só existe se responder a uma pergunta que a
+    pessoa faria NAQUELE momento.
+    **(b) Achou letra, não oferece.** É a mesma razão pela qual a pergunta do fim
+    desconta quem acabou de ganhar proposta de letra na varredura (#136): cobrar
+    minutos de CPU por uma letra que está ali na tela, esperando um clique, é
+    cobrar caro por algo que o clique resolve.
+    **(c) A busca que FALHOU por falta de internet oferece.** A etapa 5 não usa
+    rede, e a música que ficou sem letra porque o LRCLIB não respondeu é
+    exatamente a que a transcrição resolve — está escrito nesses termos no
+    `a_etapa_5_tem_o_que_fazer`. Proposta que só corrige o nome também oferece:
+    nome corrigido não põe letra nenhuma no arquivo.
+    **(d) O funil consultar quem já tem letra (#81) não contradiz nada disto.**
+    Aquilo é sobre a CONSULTA — quem apertou o botão quer uma segunda opinião. O
+    que a etapa 5 transcreve continua sendo decidido pelo backend, e música com
+    letra volta com a fila vazia.
+    **A única condição LOCAL é a caixa "esta música é instrumental"**, e ela não
+    duplica regra do backend: descreve o FORMULÁRIO, que é mais atual que o banco.
+    Quem acabou de declarar que não há voz no áudio não pode receber uma oferta de
+    escrever a letra ouvindo o áudio — é a mesma razão pela qual o
+    `SEM_RESULTADO_INSTRUMENTAL` existe. Pelo mesmo motivo a oferta some quando o
+    campo de letra tem texto: a primeira frase dela diz "esta música continua sem
+    letra", e a tela em volta a desmentiria.
+155. **A porta nova é a mesma porta, num escopo menor —
+    `transcricao_pendentes_da_musica(song_id)`.**
+    Devolve o **mesmo** `PendentesDaTranscricao` das outras duas, aplica os
+    **mesmos** portões (`a_etapa_5_tem_o_que_fazer`) e usa a **mesma** conta
+    (`transcricao::estimativa_da_transcricao`). No Rust as três portas passaram a
+    dividir um miolo (`pendentes_entre`); no mock, o mesmo (`pendentesEntre`).
+    Três cópias dariam três tempos para a MESMA música, um por tela, e ninguém
+    saberia qual acreditar (#80). Há teste nos dois lados do par da #88 somando o
+    tempo de cada música e exigindo que dê o tempo da pasta.
+    **Id que não existe devolve fila VAZIA, e não erro**: a ficha pode estar
+    aberta sobre uma música que saiu do acervo entre o clique e a resposta, e uma
+    falha inventada por nós é pior que o silêncio.
+    **A escolha do modelo saiu de uma função** (`modelo_para_a_estimativa`) pelo
+    mesmo motivo: as portas viraram três, e três cópias divergiriam num tempo
+    anunciado.
+    **Nenhum segundo caminho na tela.** `startTranscricao(musicas?)` recebe a fila
+    por parâmetro desde a V10.6, e uma lista de um item era tudo o que faltava —
+    mesma barra, mesmo cancelamento, mesma revisão no fim. A lista vem da PORTA, e
+    não de um `[song.id]` montado no componente: montar o id na tela seria a tela
+    decidindo o que a etapa 5 transcreve.
+156. **A frase, e a procedência do número.**
+    Com os acessórios prontos: *"Esta música continua sem letra. Escrever a letra
+    ouvindo o áudio leva cerca de 4 minutos — pode levar mais nesta máquina."* —
+    e "neste computador" no lugar da ressalva quando
+    `estimativa_medida_nesta_maquina` autoriza (#86 e #112).
+    **A segunda frase é literalmente a mesma das outras duas portas**
+    (`fraseDoTempoDaTranscricao`), com a ressalva inclusive. Só a abertura muda, e
+    ela muda porque as três descrevem escopos diferentes: "sobraram" só é verdade
+    logo depois de uma varredura, "47 músicas da biblioteca" só numa tela
+    permanente, e aqui a pessoa está olhando UMA ficha.
+    **Não há caso de zero**, ao contrário do bloco permanente: sem fila, a ficha
+    não desenha nada. Um "esta música já tem letra" dentro de um formulário que
+    MOSTRA a letra seria responder uma pergunta que ninguém fez.
+157. **Sem os acessórios, a saída é a da PERGUNTA DO FIM, e não a do bloco
+    permanente — e a diferença é onde a pessoa está.**
+    *"Esta música continua sem letra. Para escrever a letra ouvindo o áudio, baixe
+    1,4 GB em Configurações — cerca de 9 minutos."*
+    O bloco permanente aponta para CIMA porque já está em Configurações, com os
+    cartões a poucos pixels acima (#136); o editor não está lá, e para ele a saída
+    é o nome do lugar. A segunda frase saiu de uma função só
+    (`fraseDoDownloadDaTranscricao`, extraída da `textoDaTranscricaoIndisponivel`)
+    pela mesma razão da frase do tempo: duas cópias são duas telas que amanhã
+    anunciam tamanhos diferentes para o mesmo download.
+    O tamanho vem da MESMA leitura de acessórios que as outras portas usam
+    (`downloadParaTranscrever`), e ela só é feita quando `disponivel` é falso —
+    numa máquina pronta ela não responderia nada que a frase use. Sem a lista, não
+    se inventa número: fica *"ligue o recurso em Configurações"* (#86). Sem
+    `disponivel`, também **não há botão**: um botão que não faria nada é pior que
+    a frase que diz o que fazer.
+158. **O conserto que vem junto com a porta nova: o campo de letra vazio deixou
+    de poder apagar a letra que a transcrição acabou de gravar.**
+    A oferta manda a fila para a MESMA revisão, e é lá que a letra é gravada. Só
+    que a ficha continua aberta ATRÁS da revisão, com o campo de letra vazio — e
+    "Salvar no arquivo" com o campo vazio REMOVE o frame USLT (`writer.rs`). Um
+    clique de hábito destruiria o trabalho de minutos que o programa acabou de
+    fazer. O caminho já existia (bastava deixar o editor aberto e curar pela
+    tela de Configurações), mas esta versão o põe a um clique de distância.
+    O campo é preenchido **só quando está vazio**. Nada digitado é sobrescrito: a
+    pessoa pode ter corrigido o título e começado a escrever a letra à mão antes
+    de mandar transcrever, e trocar um estrago por outro não é conserto. Vazio é
+    exatamente o caso em que não há o que perder — e o único em que o arquivo pode
+    ter ganhado letra sem ela.
+    **Fechar o editor ao disparar a transcrição foi recusado**: descartaria em
+    silêncio a correção de nome que ela pode ter acabado de digitar.
+159. **O motivo do bloqueio dos botões da ficha passou a dizer QUAL trabalho está
+    rodando.**
+    O `loteRodando` do editor sempre foi `scanning || scanInFlight`, e a etapa 5
+    também segura o `scanInFlight` — então os dois botões já paravam durante a
+    transcrição, com uma frase na tela dizendo *"A busca desta pasta está
+    rodando"*, que naquele momento era falsa. Texto que mente sobre o próprio
+    produto é defeito (#100), e este ficou alcançável em um clique: é exatamente
+    onde fica quem manda transcrever daqui e volta da revisão. Agora a frase da
+    etapa 5 é *"As letras estão sendo escritas — espere elas terminarem para o
+    computador não fazer dois trabalhos pesados ao mesmo tempo."*
+160. **Fechar a revisão com linhas que FALHARAM AO GRAVAR passou a avisar.**
+    Relato de campo, verbatim, sobre uma revisão em que músicas recusaram a
+    gravação: *"não sei quais são as duas outras músicas… pq fechei a tela em
+    seguida"*.
+    É a MESMA família do defeito que a V10.6 consertou — a lista de que a pessoa
+    precisa para agir depois evapora ao fechar a caixa — e é **pior que a oferta
+    de transcrição**: para a oferta existe uma porta permanente em Configurações,
+    e para as falhas não existe nenhuma.
+    A frase, na régua da #100: *"2 músicas não puderam ser gravadas no arquivo.
+    Esta lista não fica guardada: para vê-la de novo, repita a busca desta
+    pasta."*
+    Ela abre com o **mesmo vocabulário do cabeçalho do grupo** que descreve
+    (`tituloDoGrupo("nao-gravadas")`, #139): quem acabou de ler aquela frase na
+    tela tem de reconhecê-la no aviso, ou vai contar duas coisas diferentes. A
+    segunda frase diz o que a da oferta não precisa dizer — que a lista **não**
+    fica guardada. Prometer que ela volta seria mentira; calar seria repetir o
+    defeito com um toast por cima. E o caminho que ela oferece é o único honesto
+    (#144a): a linha que falhou continua sem "tentar de novo", porque o motivo é
+    quase sempre de fora do aplicativo.
+    **Informativo, tom `warning`, e não uma confirmação** — o mesmo desenho da
+    #137, e não um quarto tom de toast.
+    O gatilho é o `applyErrors`, e não o `p.error`: falha de CONSULTA não é
+    notícia nova ali (não havia proposta, e repetir o clique não muda nada —
+    #140), enquanto a falha de GRAVAÇÃO é consequência direta do clique que a
+    pessoa acabou de dar.
+161. **Dois avisos numa tela só, não — e quem vence é a falha de gravação.**
+    As duas condições valem juntas no caso mais comum de todos: a varredura
+    trouxe propostas, a pessoa aplicou, algumas recusaram, e ainda sobraram
+    músicas sem letra. **Empilhar dois toasts é ensinar a fechar toast sem ler**,
+    que é o mesmo argumento pelo qual a #137 recusou a confirmação bloqueante.
+    Juntar as duas frases numa só estouraria a régua da #100 e misturaria dois
+    assuntos que a pessoa resolve em lugares diferentes.
+    A falha vence por um critério só: **ela é a única informação que some de
+    verdade**. A oferta de transcrição continua inteira no bloco permanente de
+    Configurações (V10.6); a lista das que não gravaram não continua em lugar
+    nenhum.
+162. **O que NÃO se fez, e fica escrito.**
+    **(a) Nenhuma porta permanente para as falhas de gravação.** Guardar a lista
+    entre sessões é outra decisão — precisaria decidir onde ela mora, quando
+    envelhece e o que fazer com o arquivo que mudou desde então. O escopo desta
+    rodada é avisar que ela sai da tela.
+    **(b) A linha que falhou continua sem "tentar de novo"** — a #144(a) e a
+    #152(c) valem inteiras.
+    **(c) A ficha não ganhou bloco permanente da etapa 5**, e o motivo está na
+    #154(a): antes do clique não há pergunta a responder ali.
+    **(d) A oferta da ficha não é reperguntada ao backend depois de nada.** Ela é
+    a resposta de UM instante — o do fim daquela busca —, e a ficha não é uma tela
+    permanente. Quem quer o fato de agora tem o bloco de Configurações.
+    **(e) O `aviso` da gravação continua sem chegar ao editor** (#152b): esta
+    rodada não mexeu no retorno do `writeTags`.

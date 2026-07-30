@@ -7,6 +7,7 @@ import {
   type TranscricaoProgresso,
 } from "../lib/api";
 import {
+  avisoDeFalhasDeGravacao,
   avisoDeTranscricaoPendente,
   textoSemPropostas,
   type DownloadPendente,
@@ -509,7 +510,41 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
       há oferta ainda, e a frase falaria de uma lista que nem terminou de ser
       montada.
     */
-    if (
+    /*
+      V10.9 — E FECHAR COM LINHAS QUE FALHARAM AO GRAVAR TAMBÉM AVISA.
+
+      Relato de campo, verbatim: *"não sei quais são as duas outras músicas… pq
+      fechei a tela em seguida"*. É a mesma família do defeito acima — a lista
+      de que a pessoa precisa para agir depois evapora ao fechar a caixa —, e é
+      PIOR: a oferta de transcrição continua inteira no bloco permanente de
+      Configurações, e a lista das que não gravaram não continua em lugar
+      nenhum. Nada aqui a guarda entre sessões; guardá-la é outra decisão, e o
+      escopo desta é avisar.
+
+      É `applyErrors`, e não `p.error`: falha de CONSULTA não é notícia nova
+      nesta tela (não havia proposta, e repetir o clique não muda nada — a
+      #140), enquanto a falha de GRAVAÇÃO é consequência direta do clique que a
+      pessoa acabou de dar.
+
+      DOIS AVISOS NUMA TELA SÓ, NÃO. As duas condições valem juntas no caso mais
+      comum de todos: a varredura trouxe propostas, a pessoa aplicou, algumas
+      recusaram, e ainda sobraram músicas sem letra. Empilhar dois toasts é
+      ensinar a fechar toast sem ler, que é o mesmo argumento pelo qual a #137
+      recusou a confirmação bloqueante. Juntar as duas frases numa só estouraria
+      a régua da #100 e misturaria dois assuntos que a pessoa resolve em lugares
+      diferentes.
+
+      A FALHA VENCE, e por um critério só: ela é a única informação que some de
+      verdade.
+    */
+    const naoGravadas = Object.keys(anterior.applyErrors).length;
+    const avisoDeFalhas =
+      status === "review" ? avisoDeFalhasDeGravacao(naoGravadas) : null;
+    if (avisoDeFalhas !== null) {
+      // "warning" pelo mesmo motivo do aviso de baixo: é um aviso, do mesmo
+      // peso do da etapa 2 que parou no meio, e não um quarto tom de toast.
+      useToastStore.getState().push(avisoDeFalhas, "warning");
+    } else if (
       status === "review" &&
       anterior.transcricao.disponivel &&
       !anterior.transcricaoDispensada

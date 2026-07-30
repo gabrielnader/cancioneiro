@@ -7,7 +7,11 @@ import {
   type EnrichScanResult,
   type TranscricaoProgresso,
 } from "../lib/api";
-import { avisoDeTranscricaoPendente, textoSemPropostas } from "../lib/curadoria";
+import {
+  avisoDeFalhasDeGravacao,
+  avisoDeTranscricaoPendente,
+  textoSemPropostas,
+} from "../lib/curadoria";
 import { useEnrichStore } from "./enrichStore";
 import { useToastStore } from "./toastStore";
 
@@ -1096,6 +1100,100 @@ describe("enrichStore (V5 — F13)", () => {
       await useEnrichStore.getState().startScan("");
       useEnrichStore.getState().close();
       expect(useToastStore.getState().toasts).toHaveLength(0);
+    });
+
+    /*
+      V10.9 — FECHAR COM LINHAS QUE FALHARAM AO GRAVAR TAMBÉM AVISA.
+
+      Relato de campo, verbatim: *"não sei quais são as duas outras músicas… pq
+      fechei a tela em seguida"*. É a mesma família do defeito da V10.6 — a
+      lista de que a pessoa precisa para agir depois evapora ao fechar a caixa —
+      e é PIOR que a oferta de transcrição, porque para as falhas de gravação
+      não existe porta permanente nenhuma.
+    */
+    it("fechar com falhas de gravação na tela avisa quantas foram", async () => {
+      setBackendForTests({
+        enrichFolderScan: vi.fn(async () => scanResult([proposal()])),
+      } as unknown as Backend);
+      await useEnrichStore.getState().startScan("");
+      useEnrichStore.getState().registrarAplicacao(
+        [0],
+        [{ song_id: 1, song: null, aviso: null, error: "arquivo em uso" }],
+      );
+
+      useEnrichStore.getState().close();
+
+      const toasts = useToastStore.getState().toasts;
+      expect(toasts).toHaveLength(1);
+      expect(toasts[0].message).toBe(avisoDeFalhasDeGravacao(1));
+      // informativo, e do mesmo peso do aviso da oferta: um quarto tom de toast
+      // para uma frase seria vocabulário visual novo sem pergunta nova
+      expect(toasts[0].kind).toBe("warning");
+    });
+
+    it("sem falha nenhuma, gravar e fechar não avisa nada", async () => {
+      setBackendForTests({
+        enrichFolderScan: vi.fn(async () => scanResult([proposal()])),
+      } as unknown as Backend);
+      await useEnrichStore.getState().startScan("");
+      useEnrichStore.getState().registrarAplicacao(
+        [0],
+        [
+          {
+            song_id: 1,
+            song: {
+              id: 1,
+              folder_id: 1,
+              file_path: "/acervo/a.mp3",
+              title: "A Canção",
+              artist: "Artista",
+              album: null,
+              duration_seconds: 200,
+              has_lyrics: true,
+              temas: null,
+              letra_origem: null,
+              instrumental: false,
+              available: true,
+            },
+            aviso: null,
+            error: null,
+          },
+        ],
+      );
+      useEnrichStore.getState().close();
+      expect(useToastStore.getState().toasts).toHaveLength(0);
+    });
+
+    /*
+      DOIS AVISOS NUMA TELA SÓ, NÃO — e quem vence é a falha de gravação.
+
+      As duas condições valem juntas no caso mais comum de todos: a varredura
+      trouxe propostas, a pessoa aplicou, algumas recusaram, e ainda sobraram
+      músicas sem letra. Empilhar dois toasts é ensinar a fechar toast sem ler,
+      que é o argumento que a #137 usou para a oferta não virar confirmação.
+
+      A falha vence porque é a única informação que some DE VERDADE: a oferta de
+      transcrição continua inteira no bloco permanente de Configurações (V10.6),
+      e a lista das que não gravaram não continua em lugar nenhum.
+    */
+    it("com as duas condições, avisa UMA vez — e é a falha que sobrevive", async () => {
+      setBackendForTests({
+        enrichFolderScan: vi.fn(async () => comSobra()),
+      } as unknown as Backend);
+      await useEnrichStore.getState().startScan("", {
+        disponivel: true,
+        download: null,
+      });
+      useEnrichStore.getState().registrarAplicacao(
+        [0],
+        [{ song_id: 1, song: null, aviso: null, error: "arquivo em uso" }],
+      );
+
+      useEnrichStore.getState().close();
+
+      const toasts = useToastStore.getState().toasts;
+      expect(toasts).toHaveLength(1);
+      expect(toasts[0].message).toBe(avisoDeFalhasDeGravacao(1));
     });
 
     // Cancelar uma varredura ou uma transcrição EM CURSO não é fechar uma

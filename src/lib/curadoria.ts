@@ -921,11 +921,30 @@ export function textoDaTranscricaoIndisponivel(
     quantas === 1
       ? "Sobrou 1 música sem letra"
       : `Sobraram ${quantas} músicas sem letra`;
+  return `${sobraram}. ${fraseDoDownloadDaTranscricao(download)}`;
+}
+
+/**
+ * **A frase de quem não tem os acessórios, para as portas que NÃO estão em
+ * Configurações.** Uma só, pelo mesmo motivo da `fraseDoTempoDaTranscricao`
+ * (DECISIONS #80 aplicada a texto): duas cópias são duas telas que amanhã
+ * anunciam tamanhos diferentes para o mesmo download.
+ *
+ * O bloco permanente de Configurações NÃO usa esta frase, e é de propósito: lá
+ * a saída aponta para CIMA, porque os cartões de download estão a poucos pixels
+ * acima e mandar a pessoa para a tela em que ela já está seria um beco (V10.6).
+ * A pergunta do fim da varredura e a ficha de uma música (V10.9) estão nas duas
+ * outras telas, e para elas a saída é o nome do lugar.
+ *
+ * Sem saber o tamanho (a consulta aos acessórios não voltou), não inventa
+ * número nenhum: "não sabemos" é um estado (DECISIONS #86).
+ */
+function fraseDoDownloadDaTranscricao(download: DownloadPendente | null): string {
   if (download === null) {
-    return `${sobraram}. Para escrever a letra ouvindo o áudio, ligue o recurso em Configurações.`;
+    return "Para escrever a letra ouvindo o áudio, ligue o recurso em Configurações.";
   }
   return (
-    `${sobraram}. Para escrever a letra ouvindo o áudio, baixe` +
+    "Para escrever a letra ouvindo o áudio, baixe" +
     ` ${formatarTamanho(download.bytes)} em Configurações —` +
     ` ${cercaDe(download.segundos)}.`
   );
@@ -1013,6 +1032,63 @@ export function textoDoBlocoDeTranscricao({
   return `${quantasFrase}. ${fraseDoTempoDaTranscricao(segundos, medidaNestaMaquina)}`;
 }
 
+// ---------------------------------------------------------------------------
+// V10.9 — a etapa 5 na porta de UMA música
+// ---------------------------------------------------------------------------
+//
+// O funil de UMA música (`enrich_song_scan`) roda as etapas 1 a 4 e para ali. A
+// etapa 5 não entrava porque ela custa minutos e vive em comando próprio — e o
+// resultado era o beco que 3% de cobertura torna TÍPICO: a pessoa abre a
+// música, manda buscar, as quatro etapas não acham nada, e a única coisa que
+// resolveria AQUELA música não é oferecida ali. Para chegar nela era preciso
+// sair da ficha, ir a Configurações, e lá a fila é a pasta inteira.
+//
+// É o mesmo erro de projeto que a V10.6 consertou na outra porta — a etapa 5
+// morando onde a VARREDURA termina, e não onde a PESSOA está —, e aqui ela é
+// mais usável do que em qualquer outra porta: uma música são MINUTOS, não
+// horas.
+
+/** O que a oferta da ficha precisa saber para se descrever. */
+export interface OfertaDestaMusica {
+  /** Segundos estimados para transcrever ESTA música, como o backend contou. */
+  segundos: number;
+  /** O número acima é medição desta máquina, ou palpite de fábrica? */
+  medidaNestaMaquina: boolean;
+  /** A etapa 5 pode rodar nesta máquina (transcritor E modelo prontos)? */
+  disponivel: boolean;
+  /** O que falta baixar, quando falta e quando se sabe o tamanho. */
+  download: DownloadPendente | null;
+}
+
+/**
+ * A oferta da etapa 5 dentro da ficha de uma música.
+ *
+ * **A segunda frase é literalmente a mesma das outras duas portas** — a
+ * `fraseDoTempoDaTranscricao`, com a ressalva de procedência do número
+ * inclusive. Só a abertura muda, e ela muda porque as três portas descrevem
+ * escopos diferentes: "sobraram" só é verdade logo depois de uma varredura, "47
+ * músicas da biblioteca" só é verdade numa tela permanente, e aqui a pessoa
+ * está olhando UMA ficha, logo depois de ler que a busca não trouxe letra.
+ *
+ * Não há caso de zero, ao contrário do bloco permanente: quem decide se há
+ * oferta é o backend (`transcricao_pendentes_da_musica` devolve lista vazia
+ * para música com letra, instrumental ou com o arquivo fora do disco), e sem
+ * oferta a ficha não desenha nada. Um "esta música já tem letra" ali seria
+ * responder, dentro de um formulário que MOSTRA a letra, uma pergunta que
+ * ninguém fez.
+ */
+export function textoDaOfertaDestaMusica({
+  segundos,
+  medidaNestaMaquina,
+  disponivel,
+  download,
+}: OfertaDestaMusica): string {
+  const segunda = disponivel
+    ? fraseDoTempoDaTranscricao(segundos, medidaNestaMaquina)
+    : fraseDoDownloadDaTranscricao(download);
+  return `Esta música continua sem letra. ${segunda}`;
+}
+
 /**
  * O aviso de quem fecha a revisão com a oferta de transcrição na tela. `null`
  * quando não há oferta pendente — e zero é o caso normal.
@@ -1035,6 +1111,44 @@ export function avisoDeTranscricaoPendente(quantas: number): string | null {
   return (
     `${ainda}. Escrever a letra ouvindo o áudio continua em Configurações,` +
     " quando você quiser."
+  );
+}
+
+/**
+ * **O aviso de quem fecha a revisão com linhas que FALHARAM AO GRAVAR na
+ * tela.** `null` quando nenhuma falhou — e esse é o caso normal.
+ *
+ * Relato de campo, verbatim, sobre uma revisão em que sete músicas recusaram a
+ * gravação: *"não sei quais são as duas outras músicas… pq fechei a tela em
+ * seguida"*. É a MESMA família do defeito que a V10.6 consertou — a lista de que
+ * a pessoa precisa para agir depois evapora ao fechar a caixa —, e é **pior que
+ * a oferta de transcrição**: para a oferta existe uma porta permanente em
+ * Configurações, e para as falhas não existe nenhuma.
+ *
+ * Por isso a segunda frase diz o que a da oferta não precisa dizer: que a lista
+ * NÃO fica guardada. Prometer que ela volta seria mentira, e calar seria repetir
+ * o defeito com um toast por cima.
+ *
+ * **O caminho que ela oferece é o único honesto** (DECISIONS #144a): a linha que
+ * falhou continua sem "tentar de novo", porque o motivo da recusa é quase sempre
+ * de fora do aplicativo — arquivo aberto em outro programa, disco cheio, pasta
+ * sincronizada com a nuvem. Resolver o que a linha diz e repetir a busca é o que
+ * existe, e é o que a frase manda fazer.
+ *
+ * O texto abre com o MESMO vocabulário do cabeçalho do grupo que ele descreve
+ * (`tituloDoGrupo("nao-gravadas")`). Quem acabou de ler "2 músicas não puderam
+ * ser gravadas no arquivo" na tela tem de reconhecer a mesma frase no aviso, ou
+ * vai contar duas coisas diferentes — é a DECISIONS #139 pelo avesso.
+ */
+export function avisoDeFalhasDeGravacao(quantas: number): string | null {
+  if (quantas <= 0) return null;
+  const naoGravadas =
+    quantas === 1
+      ? "1 música não pôde ser gravada no arquivo"
+      : `${quantas} músicas não puderam ser gravadas no arquivo`;
+  return (
+    `${naoGravadas}. Esta lista não fica guardada: para vê-la de novo, repita` +
+    " a busca desta pasta."
   );
 }
 

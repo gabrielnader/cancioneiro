@@ -1414,9 +1414,61 @@ pub fn pendentes_da_transcricao(
     modelo: &crate::transcricao::Modelo,
     disponivel: bool,
 ) -> Result<PendentesDaTranscricao> {
-    let pendentes: Vec<(i64, f64)> = db::list_songs(conn)?
+    let songs = db::list_songs(conn)?
         .into_iter()
         .filter(|s| under_prefix(&s.file_path, folder_prefix))
+        .collect();
+    Ok(pendentes_entre(conn, songs, modelo, disponivel))
+}
+
+/// A MESMA porta, num escopo de UMA música — a ficha do editor (V10.9).
+///
+/// **O funil individual roda as etapas 1 a 4 e para ali**, e com 3% de cobertura
+/// medida "as quatro etapas não acharam nada" é o desfecho TÍPICO daquele
+/// clique. A etapa 5 é a única coisa que resolve aquela música, e ela ficava a
+/// duas telas de distância, numa fila que é a pasta inteira: é o mesmo erro de
+/// projeto que a V10.6 consertou na outra porta — a etapa 5 morando onde a
+/// VARREDURA termina, e não onde a PESSOA está.
+///
+/// Devolve o MESMO struct das outras duas portas, de propósito: a tela lê a
+/// oferta de um jeito só, venha ela de onde vier, e o `transcrever_musicas`
+/// recebe a fila do mesmo campo (aqui, com um item).
+///
+/// **Os portões são os mesmos, e isto decide uma coisa que a ficha poderia
+/// querer reescrever**: o funil de uma música consulta de propósito quem já tem
+/// letra (QA ALTO-3b — quem apertou o botão quer uma segunda opinião), mas a
+/// etapa 5 não transcreve quem tem letra, nem instrumental, nem arquivo que
+/// sumiu do disco. Quem responde "esta música tem o que transcrever?" continua
+/// sendo `a_etapa_5_tem_o_que_fazer`, uma regra só, num lugar só.
+///
+/// Id que não existe no banco devolve fila VAZIA, e não erro: a ficha pode
+/// estar aberta sobre uma música que saiu do acervo entre o clique e a
+/// resposta, e uma falha inventada por nós é pior que o silêncio para quem não
+/// tem a quem perguntar.
+pub fn pendentes_da_transcricao_da_musica(
+    conn: &Connection,
+    song_id: i64,
+    modelo: &crate::transcricao::Modelo,
+    disponivel: bool,
+) -> Result<PendentesDaTranscricao> {
+    let songs = db::get_song(conn, song_id)?.into_iter().collect();
+    Ok(pendentes_entre(conn, songs, modelo, disponivel))
+}
+
+/// O miolo das duas portas acima: filtra pelos portões da etapa 5 e mede.
+///
+/// Existe para as duas não terem cada uma a sua cópia do predicado e da conta —
+/// é a DECISIONS #80, e aqui ela tem consequência visível: duas contas dariam
+/// dois tempos para a MESMA música, um na ficha e outro em Configurações, e
+/// ninguém saberia qual acreditar.
+fn pendentes_entre(
+    conn: &Connection,
+    songs: Vec<Song>,
+    modelo: &crate::transcricao::Modelo,
+    disponivel: bool,
+) -> PendentesDaTranscricao {
+    let pendentes: Vec<(i64, f64)> = songs
+        .into_iter()
         .filter_map(candidata)
         .filter(|c| a_etapa_5_tem_o_que_fazer(&c.song))
         .map(|c| (c.song.id, c.song.duration_seconds.unwrap_or(0) as f64))
@@ -1427,12 +1479,12 @@ pub fn pendentes_da_transcricao(
             modelo,
             pendentes.iter().map(|(_, d)| *d),
         );
-    Ok(PendentesDaTranscricao {
+    PendentesDaTranscricao {
         musicas: pendentes.into_iter().map(|(id, _)| id).collect(),
         segundos_estimados,
         estimativa_medida_nesta_maquina,
         disponivel,
-    })
+    }
 }
 
 /// Passa UMA música pelo funil e devolve a proposta. `None` significa

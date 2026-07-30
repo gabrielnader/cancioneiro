@@ -1397,6 +1397,28 @@ export function createMockBackend(): MockBackend {
   }
 
   /**
+   * O miolo das TRÊS portas da etapa 5 — porte do `enrich::pendentes_entre`.
+   *
+   * As portas diferem só no escopo que entregam aqui (a pasta, a biblioteca
+   * inteira, uma música); os portões e a conta de tempo são estes, e são únicos.
+   * Três cópias dariam três tempos para a mesma música, um por tela, e ninguém
+   * saberia qual acreditar (DECISIONS #80).
+   */
+  function pendentesEntre(songs: SongRecord[]): PendentesDaTranscricao {
+    const pendentes = songs.filter(aEtapa5TemOQueFazer);
+    const razao = razaoDestaMaquina();
+    return {
+      musicas: pendentes.map((s) => s.id),
+      segundos_estimados: segundosParaTranscrever(
+        pendentes.map((s) => s.duration_seconds ?? 0),
+        razao,
+      ),
+      estimativa_medida_nesta_maquina: razao !== RAZAO_DE_REFERENCIA,
+      disponivel: transcricaoPronta(),
+    };
+  }
+
+  /**
    * A razão que vale AGORA nesta máquina — porte do
    * `transcricao::razao_desta_maquina`: a medida, se já houver amostra que
    * baste; a de referência, enquanto não houver.
@@ -2243,19 +2265,27 @@ export function createMockBackend(): MockBackend {
     async transcricaoPendentes(
       folderPrefix: string,
     ): Promise<PendentesDaTranscricao> {
-      const pendentes = state.songs
-        .filter((song) => candidataDoFunil(song, folderPrefix))
-        .filter(aEtapa5TemOQueFazer);
-      const razao = razaoDestaMaquina();
-      return {
-        musicas: pendentes.map((s) => s.id),
-        segundos_estimados: segundosParaTranscrever(
-          pendentes.map((s) => s.duration_seconds ?? 0),
-          razao,
-        ),
-        estimativa_medida_nesta_maquina: razao !== RAZAO_DE_REFERENCIA,
-        disponivel: transcricaoPronta(),
-      };
+      return pendentesEntre(
+        state.songs.filter((song) => candidataDoFunil(song, folderPrefix)),
+      );
+    },
+
+    /**
+     * **A terceira porta da etapa 5** (V10.9) — porte do
+     * `enrich::pendentes_da_transcricao_da_musica`.
+     *
+     * A MESMA porta acima, num escopo de uma música: o funil individual do
+     * editor roda as etapas 1 a 4 e para ali, e com 3% de cobertura medida "não
+     * achamos nada" é o desfecho típico daquele clique.
+     *
+     * Id que não existe devolve fila VAZIA, e não erro: a ficha pode estar
+     * aberta sobre uma música que saiu do acervo entre o clique e a resposta.
+     */
+    async transcricaoPendentesDaMusica(
+      songId: number,
+    ): Promise<PendentesDaTranscricao> {
+      const song = state.songs.find((s) => s.id === songId);
+      return pendentesEntre(song ? [song] : []);
     },
 
     /**

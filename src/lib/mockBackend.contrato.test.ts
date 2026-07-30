@@ -1065,6 +1065,106 @@ describe("contrato mock × Rust — a porta permanente da etapa 5 (V10.6)", () =
 });
 
 /*
+  V10.9 — A TERCEIRA PORTA DA ETAPA 5: uma música só, na ficha do editor.
+
+  O funil individual roda as etapas 1 a 4 e para ali. Com 3% de cobertura
+  medida, "as quatro etapas não acharam nada" é o desfecho TÍPICO daquele
+  clique — e a única coisa que resolveria aquela música ficava a duas telas de
+  distância, numa fila que é a pasta inteira.
+
+  O que este bloco guarda é a metade TypeScript do par da DECISIONS #88: a porta
+  de uma música não pode ser uma SEGUNDA regra sobre o que a etapa 5 transcreve.
+  A metade Rust está em `tests/enrich.rs`
+  (`a_porta_de_uma_musica_diz_o_mesmo_que_a_porta_da_pasta_diria_dela`).
+*/
+describe("contrato mock × Rust — a porta da etapa 5 numa música só (V10.9)", () => {
+  let backend: MockBackend;
+
+  beforeEach(() => {
+    localStorage.clear();
+    backend = createMockBackend();
+  });
+
+  it("é a porta da pasta, num escopo de uma música", async () => {
+    await backend.addFolder("/musicas/teste");
+    const daPasta = await backend.transcricaoPendentes("");
+    expect(daPasta.musicas.length).toBeGreaterThan(0);
+
+    // cada id que a porta da pasta lista é uma fila de UM item na porta da
+    // ficha, e a soma dos tempos é o tempo da pasta: uma conta só
+    let soma = 0;
+    for (const id of daPasta.musicas) {
+      const uma = await backend.transcricaoPendentesDaMusica(id);
+      expect(uma.musicas).toEqual([id]);
+      expect(uma.estimativa_medida_nesta_maquina).toBe(
+        daPasta.estimativa_medida_nesta_maquina,
+      );
+      expect(uma.disponivel).toBe(daPasta.disponivel);
+      soma += uma.segundos_estimados;
+    }
+    expect(soma).toBe(daPasta.segundos_estimados);
+  });
+
+  /*
+    Os portões valem inteiros, e isto é o que a ficha NÃO pode reescrever: o
+    funil de uma música consulta de propósito quem já tem letra (QA ALTO-3b),
+    mas a etapa 5 não transcreve quem tem letra, nem instrumental, nem arquivo
+    que sumiu do disco.
+  */
+  it("os portões são os mesmos, e a ficha não inventa nenhum", async () => {
+    await backend.addFolder("/musicas/teste");
+    const songs = await backend.listSongs();
+    const semLetra = songs.find(
+      (s) => s.file_path === "/musicas/teste/sem_letra.mp3",
+    )!;
+    const comLetra = songs.find((s) => s.has_lyrics)!;
+    const sumida = songs.find(
+      (s) => s.file_path === "/musicas/teste/sem_tags.mp3",
+    )!;
+    backend._removeFileFromDisk(sumida.file_path);
+
+    expect((await backend.transcricaoPendentesDaMusica(semLetra.id)).musicas).toEqual(
+      [semLetra.id],
+    );
+    for (const id of [comLetra.id, sumida.id]) {
+      const p = await backend.transcricaoPendentesDaMusica(id);
+      expect(p.musicas).toEqual([]);
+      expect(p.segundos_estimados).toBe(0);
+    }
+
+    // e a marca de instrumental tira a música da fila, como nas outras portas
+    await backend.writeTags(semLetra.id, "Chorinho", "Regional", null, null, true);
+    expect((await backend.transcricaoPendentesDaMusica(semLetra.id)).musicas).toEqual(
+      [],
+    );
+  });
+
+  // Id que saiu do acervo entre o clique e a resposta não é erro: é uma música
+  // sem nada a transcrever. Uma falha inventada por nós seria pior.
+  it("id que não existe devolve fila vazia, e não erro", async () => {
+    await backend.addFolder("/musicas/teste");
+    const p = await backend.transcricaoPendentesDaMusica(999_999);
+    expect(p.musicas).toEqual([]);
+    expect(p.segundos_estimados).toBe(0);
+  });
+
+  it("`disponivel` é o mesmo fato que as outras portas reportam", async () => {
+    await backend.addFolder("/musicas/teste");
+    const songs = await backend.listSongs();
+    const alvo = songs.find((s) => !s.has_lyrics)!;
+    expect((await backend.transcricaoPendentesDaMusica(alvo.id)).disponivel).toBe(
+      false,
+    );
+    backend._estadoDoAcessorio("whisper-cli", "pronto");
+    backend._estadoDoAcessorio("modelo-de-transcricao-grande", "pronto");
+    expect((await backend.transcricaoPendentesDaMusica(alvo.id)).disponivel).toBe(
+      true,
+    );
+    expect((await backend.enrichCount("")).transcricao_disponivel).toBe(true);
+  });
+});
+
+/*
   V10.8 — O DESFECHO QUE DIZ O QUE FOI FEITO.
 
   Sete arquivos de um acervo real recusavam toda gravação: a etiqueta ID3v2

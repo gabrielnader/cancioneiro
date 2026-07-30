@@ -1036,6 +1036,23 @@ test.describe("V5 — Completar dados em lote (F13)", () => {
     await expect(
       dialog.getByRole("heading", { level: 3, name: "1 música gravada no arquivo" }),
     ).toBeVisible();
+
+    /*
+      V10.9 — e FECHAR avisa que a lista das que não gravaram sai da tela.
+
+      Relato de campo, verbatim: *"não sei quais são as duas outras músicas… pq
+      fechei a tela em seguida"*. É a mesma família do defeito que a V10.6
+      consertou, e é pior: a oferta de transcrição continua em Configurações, e
+      esta lista não continua em lugar nenhum.
+    */
+    await dialog.getByRole("button", { name: "Fechar" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(
+      page.getByText(
+        "1 música não pôde ser gravada no arquivo. Esta lista não fica" +
+          " guardada: para vê-la de novo, repita a busca desta pasta.",
+      ),
+    ).toBeVisible();
   });
 
   test("progresso determinado, segundo plano e reabrir pelo indicador", async ({
@@ -2060,6 +2077,64 @@ test.describe("V10 — a etapa que resolve (F18 fase 3)", () => {
     // a porta permanente cobre TODAS as músicas sem letra da pasta — são duas
     // no acervo de teste, daí o `.first()`
     await expect(dialog.getByText("via transcrição do áudio").first()).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
+  // =========================================================================
+  // V10.9 — e a TERCEIRA porta: a etapa 5 na ficha de UMA música
+  // =========================================================================
+  //
+  // O funil da ficha roda as etapas 1 a 4 e para ali. Com 3% de cobertura
+  // medida, "as quatro etapas não acharam nada" é o desfecho TÍPICO daquele
+  // clique — e a única coisa que resolveria AQUELA música ficava a duas telas
+  // de distância, numa fila que é a pasta inteira.
+  test("a ficha de uma música oferece a etapa 5 quando as quatro etapas não acham letra", async ({
+    page,
+  }) => {
+    const errors = trackErrors(page);
+    await resetApp(page);
+    await addMockFolder(page);
+    await comTranscricao(page);
+
+    await page.getByText("sem_tags", { exact: true }).first().click();
+    const panel = page.getByLabel("Painel de letra");
+    await panel.getByRole("button", { name: "Editar" }).click();
+    await panel.getByRole("button", { name: "Buscar dados na internet" }).click();
+
+    // a oferta fala DESTA música, e traz o tempo DELA
+    await expect(
+      panel.getByText(
+        /Esta música continua sem letra\. Escrever a letra ouvindo o áudio leva/,
+      ),
+    ).toBeVisible();
+
+    await panel.getByRole("button", { name: "Começar agora" }).click();
+
+    // é a MESMA revisão das outras duas portas, com a fila de UM item
+    const dialog = page.getByRole("dialog", { name: "Completar dados" });
+    await expect(
+      dialog.getByText(
+        "Letra escrita pela máquina ouvindo o áudio — confira antes de aplicar.",
+      ),
+    ).toBeVisible();
+    await expect(dialog.getByText("via transcrição do áudio")).toHaveCount(1);
+
+    await dialog
+      .getByRole("checkbox", {
+        name: "Aplicar a letra escrita ouvindo o áudio: sem_tags",
+      })
+      .check();
+    await dialog.getByRole("button", { name: /Aplicar selecionadas/ }).click();
+    await dialog.getByRole("button", { name: "Fechar" }).click();
+
+    /*
+      E a ficha, que continuou aberta atrás da revisão, mostra a letra que
+      acabou de ir para o arquivo. Sem isto, "Salvar no arquivo" com o campo
+      vazio APAGARIA a letra que a transcrição levou minutos para escrever.
+    */
+    await expect(
+      panel.getByRole("textbox", { name: "Letra", exact: true }),
+    ).toHaveValue(/na beira do mar sagrado/);
     expect(errors).toEqual([]);
   });
 });
