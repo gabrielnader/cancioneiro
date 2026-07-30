@@ -732,28 +732,32 @@ export function textoDoCabecalho(propostas: number): string {
  * A pergunta do fim. As duas frases do PRD, e nada mais — a interrogação está
  * no botão, que é onde ela pode ser respondida.
  *
- * **QA A1 — a frase dizia "neste computador", e o número não é desta máquina.**
+ * **QA A1 — a frase dizia "neste computador" para um número de fábrica.**
  * A DECISIONS #106 separa as duas grandezas por nome: `RAZAO_DE_REFERENCIA` é
- * um palpite de fábrica (1,0, escolhido justamente por não haver medição), e a
- * razão MEDIDA é o que a primeira transcrição desta máquina devolve. Enquanto o
- * que chega aqui é o palpite, "neste computador" afirma uma medição que não
- * houve.
+ * um palpite (1,0, escolhido justamente por não haver medição), e a razão
+ * MEDIDA é o que a primeira transcrição desta máquina produz. A tela não tinha
+ * como saber qual dos dois estava mostrando, e afirmava sempre o segundo.
  *
- * E o erro tem sinal conhecido: o `whisper-cli` do macOS passou a sair do CI
- * como binário universal, sem Metal e sem Accelerate, então o palpite é
- * OTIMISTA. Por isso a frase não fica só neutra — ela diz que pode levar mais.
- * Prometer menos do que leva é a DECISIONS #85; o contrário faz alguém esperar
- * o triplo do anunciado e fechar o programa achando que travou.
+ * Agora o backend diz — `estimativa_medida_nesta_maquina`, um BOOLEANO e não a
+ * razão, para não convidar o TypeScript a multiplicar (DECISIONS #80 e #112).
+ * Com ele a frase é honesta nos dois estados, que é a DECISIONS #86 aplicada a
+ * uma estimativa:
  *
- * Quando o backend passar a devolver `segundos_de_transcricao` calculado com a
- * razão medida (o laço que a DECISIONS #106 promete fechar), é esta frase que
- * muda — e a mudança precisa ser explícita, com o backend dizendo QUAL número
- * mandou. A tela não tem como descobrir isso sozinha, e adivinhar aqui seria
- * inventar a medição de novo.
+ * - **medida**: "leva cerca de 3 horas neste computador" — a frase do PRD, e
+ *   agora ela é verdade;
+ * - **de fábrica**: "— pode levar mais nesta máquina". Não fica só neutra
+ *   porque o erro tem sinal conhecido: o `whisper-cli` do macOS sai do CI como
+ *   binário universal, sem Metal e sem Accelerate, então o palpite é OTIMISTA.
+ *   Prometer menos do que leva é a DECISIONS #85; o contrário faz alguém
+ *   esperar o triplo do anunciado e fechar o programa achando que travou.
+ *
+ * O padrão é a versão conservadora: quem esquecer de passar o fato recebe a
+ * frase que não afirma nada de errado.
  */
 export function textoDaOfertaDeTranscricao(
   quantas: number,
   segundos: number,
+  medidaNestaMaquina = false,
 ): string {
   const sobraram =
     quantas === 1
@@ -763,10 +767,10 @@ export function textoDaOfertaDeTranscricao(
     segundos < 60
       ? "leva menos de 1 minuto"
       : `leva ${cercaDe(segundos)}`;
-  return (
-    `${sobraram}. Escrever a letra ouvindo o áudio ${tempo}` +
-    ` — pode levar mais nesta máquina.`
-  );
+  const procedencia = medidaNestaMaquina
+    ? " neste computador."
+    : " — pode levar mais nesta máquina.";
+  return `${sobraram}. Escrever a letra ouvindo o áudio ${tempo}${procedencia}`;
 }
 
 /** O botão da pergunta do fim. */

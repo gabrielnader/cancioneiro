@@ -53,12 +53,19 @@ function scanResult(
    */
   semLetraNoFim: number[] = [],
   segundosDeTranscricao = 0,
+  /**
+   * QA A1 — a estimativa acima é medição desta máquina? O padrão é `false`
+   * porque é o estado de toda instalação nova: só a primeira fila da etapa 5
+   * produz amostra.
+   */
+  estimativaMedida = false,
 ): EnrichScanResult {
   return {
     propostas,
     sem_perguntar_ao_som: semPerguntarAoSom,
     sem_letra_no_fim: semLetraNoFim,
     segundos_de_transcricao: segundosDeTranscricao,
+    estimativa_medida_nesta_maquina: estimativaMedida,
   };
 }
 
@@ -76,9 +83,7 @@ describe("enrichStore (V5 — F13)", () => {
       scanInFlight: false,
       semLetraNoFim: [],
       segundosDeTranscricao: 0,
-      // a medição é da MÁQUINA e sobrevive ao `close()` de propósito (QA A1):
-      // aqui ela precisa ser zerada à mão, ou um teste mede o vizinho
-      razaoMedida: null,
+      estimativaMedidaNestaMaquina: false,
       transcricao: { disponivel: false, download: null },
       transcricaoProgress: null,
       transcricaoDispensada: false,
@@ -852,6 +857,7 @@ describe("enrichStore (V5 — F13)", () => {
         transcreverMusicas: vi.fn(async () => ({
           propostas: [proposal({ song_id: 10, fonte: "transcrição do áudio" })],
           razao_medida: 1.2,
+          razao_desta_maquina: 1.2,
         })),
         onTranscricaoProgresso: vi.fn(async () => () => {}),
         ...over,
@@ -910,67 +916,64 @@ describe("enrichStore (V5 — F13)", () => {
     });
 
     /*
-      QA A1 — a razão MEDIDA era destruída na chegada.
+      QA A1 — o laço fecha no BACKEND, e a tela não guarda cópia.
 
-      O `startTranscricao` fazia `const { propostas } = ...` e o outro campo do
-      contrato caía no chão. A DECISIONS #106 promete que "a primeira
-      transcrição desta máquina devolve a razão real, e é ela que passa a
-      valer" — e o único jeito de passar a valer é ela sobreviver ao retorno.
+      A v0.10.0 pedia ao frontend que guardasse `razao_medida` e a mandasse de
+      volta; o `startTranscricao` fazia `const { propostas } = ...` e o campo
+      caía no chão, então a promessa da DECISIONS #106 ficou desligada sem
+      ninguém notar — não havia consumidor que reclamasse.
 
-      A conta continua sendo do Rust (DECISIONS #106 e #80): a tela não
-      multiplica nada com este número. Ela o GUARDA, para poder devolvê-lo
-      quando o backend publicar por onde recebê-lo. Guardar é a metade que dá
-      para fazer sem inventar contrato — e inventar contrato aqui é
-      exatamente o defeito A2 desta mesma rodada.
+      A saída não foi guardar melhor: foi tirar o dono duplicado. O backend
+      soma a medição no banco e usa a razão real na varredura seguinte; o que
+      chega aqui é INFORMATIVO, e guardá-lo seria uma segunda cópia de um
+      estado que já tem dono (DECISIONS #80).
     */
-    it("a razão medida sobrevive ao retorno da etapa 5", async () => {
+    it("a razão que a etapa 5 devolve não vira estado da tela", async () => {
       setBackendForTests(backendComTranscricao());
       await useEnrichStore.getState().startScan("", {
         disponivel: true,
         download: null,
       });
-      expect(useEnrichStore.getState().razaoMedida).toBeNull();
-
       await useEnrichStore.getState().startTranscricao();
 
-      expect(useEnrichStore.getState().razaoMedida).toBe(1.2);
+      // nenhum campo do store carrega a razão: quem a guarda é o backend
+      expect(Object.keys(useEnrichStore.getState())).not.toContain("razaoMedida");
+      expect(
+        JSON.stringify(useEnrichStore.getState()),
+        "a razão não pode estar escondida em campo nenhum",
+      ).not.toContain("1.2");
     });
 
-    // Fila que não mediu nada (só erros, ou cancelada antes da primeira
-    // música) devolve `null`, e `null` não pode virar zero: "0 vezes o áudio"
-    // é a estimativa de que a transcrição é instantânea.
-    it("fila sem medição nenhuma não inventa razão", async () => {
+    /*
+      E o que a tela USA é o FATO, não o número: `estimativa_medida_nesta_maquina`
+      vem da VARREDURA, porque é lá que a pergunta do fim é montada.
+    */
+    it("o fato sobre a estimativa vem da varredura e fica no store", async () => {
       setBackendForTests(
         backendComTranscricao({
-          transcreverMusicas: vi.fn(async () => ({
-            propostas: [],
-            razao_medida: null,
-          })),
+          enrichFolderScan: vi.fn(async () =>
+            scanResult([], 0, [10, 11], 600, true),
+          ),
         }),
       );
       await useEnrichStore.getState().startScan("", {
         disponivel: true,
         download: null,
       });
-      await useEnrichStore.getState().startTranscricao();
 
-      expect(useEnrichStore.getState().razaoMedida).toBeNull();
+      expect(useEnrichStore.getState().estimativaMedidaNestaMaquina).toBe(true);
     });
 
-    // A razão é da MÁQUINA, não da revisão: fechar a revisão joga fora as
-    // propostas, e jogar fora a medição junto obrigaria a próxima varredura a
-    // medir tudo de novo.
-    it("fechar a revisão não apaga a medição da máquina", async () => {
+    // Instalação nova: nunca se mediu nada, e a tela precisa saber disso para
+    // não afirmar "neste computador" sobre um número de fábrica.
+    it("sem medição, o fato é falso — e é o padrão", async () => {
       setBackendForTests(backendComTranscricao());
       await useEnrichStore.getState().startScan("", {
         disponivel: true,
         download: null,
       });
-      await useEnrichStore.getState().startTranscricao();
-      useEnrichStore.getState().close();
 
-      expect(useEnrichStore.getState().proposals).toEqual([]);
-      expect(useEnrichStore.getState().razaoMedida).toBe(1.2);
+      expect(useEnrichStore.getState().estimativaMedidaNestaMaquina).toBe(false);
     });
 
     it("o progresso do evento chega ao store, e o de outra fila é descartado", async () => {
@@ -1004,7 +1007,7 @@ describe("enrichStore (V5 — F13)", () => {
               scan_id: "fila-zumbi",
             });
             vistos.push(useEnrichStore.getState().transcricaoProgress);
-            return { propostas: [], razao_medida: null };
+            return { propostas: [], razao_medida: null, razao_desta_maquina: 1 };
           }),
         }),
       );

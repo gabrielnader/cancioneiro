@@ -74,30 +74,20 @@ interface EnrichState {
   /** Segundos estimados para transcrever essas músicas, como o backend contou. */
   segundosDeTranscricao: number;
   /**
-   * QA A1 — segundos de CPU por segundo de ÁUDIO **medidos nesta máquina** na
-   * última fila da etapa 5; `null` enquanto nunca se mediu nada.
+   * QA A1 — a estimativa acima é MEDIÇÃO desta máquina, ou palpite de fábrica?
    *
-   * Ela era descartada na chegada (`const { propostas } = ...`), e a
-   * DECISIONS #106 promete o contrário: "a primeira transcrição desta máquina
-   * devolve a razão real, e é ela que passa a valer". Só passa a valer o que
-   * sobrevive ao retorno.
+   * É um FATO sobre o número, e não o número: o backend fechou o laço por
+   * dentro (guarda a medição no banco e usa a razão real na varredura
+   * seguinte) e expõe um booleano de propósito, para não convidar o TypeScript
+   * a multiplicar (DECISIONS #80). Aqui ele decide UMA coisa: se a pergunta do
+   * fim pode dizer "neste computador" ou tem de manter a ressalva.
    *
-   * A tela NÃO calcula nada com este número — a conta é do Rust (DECISIONS
-   * #106), e a cópia em TypeScript já divergiu uma vez (DECISIONS #80). O que
-   * ela faz é PARAR DE JOGAR FORA um campo do contrato: foi o descarte, e não
-   * a falta de fórmula, que deixou a promessa da #106 desligada.
-   *
-   * Onde o laço se fecha é decisão do backend, e as duas saídas cabem aqui sem
-   * mudar esta linha: se ele publicar por onde receber a razão de volta, é
-   * daqui que ela sai; se ele passar a guardá-la sozinho, este valor vira o que
-   * a tela sabe sobre a máquina — e continua sendo mais do que zero. Inventar o
-   * parâmetro de envio antes de o contrato existir seria o defeito A2 desta
-   * mesma rodada, do outro lado.
-   *
-   * Ela também NÃO é limpa pelo `close()`: é medição da MÁQUINA, e não desta
-   * revisão.
+   * A `razao_medida` que a etapa 5 devolve é informativa e **não é guardada**:
+   * a v0.10.0 pedia ao frontend que a guardasse e a reenviasse, e o frontend a
+   * descartava — a promessa da DECISIONS #106 ficou desligada porque não havia
+   * consumidor. Agora não há o que reenviar.
    */
-  razaoMedida: number | null;
+  estimativaMedidaNestaMaquina: boolean;
   /** O que esta máquina pode fazer quanto à etapa 5 (vem do disparo). */
   transcricao: EstadoDaTranscricao;
   /** Último evento `transcricao:progresso`; null = nenhum ainda. */
@@ -187,7 +177,7 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
   semPerguntarAoSom: 0,
   semLetraNoFim: [],
   segundosDeTranscricao: 0,
-  razaoMedida: null,
+  estimativaMedidaNestaMaquina: false,
   transcricao: SEM_TRANSCRICAO,
   transcricaoProgress: null,
   transcricaoDispensada: false,
@@ -211,6 +201,8 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
       semPerguntarAoSom: 0,
       semLetraNoFim: [],
       segundosDeTranscricao: 0,
+      // o fato acompanha a estimativa: sem número, não há o que qualificar
+      estimativaMedidaNestaMaquina: false,
       transcricao,
       transcricaoProgress: null,
       transcricaoDispensada: false,
@@ -249,6 +241,7 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
         sem_perguntar_ao_som: semPerguntarAoSom,
         sem_letra_no_fim: semLetraNoFim,
         segundos_de_transcricao: segundosDeTranscricao,
+        estimativa_medida_nesta_maquina: estimativaMedida,
       } = await getBackend().enrichFolderScan(folderPrefix, scanId);
       if (seq !== scanSeq) return; // cancelado durante a busca: descarta
       // quantas candidatas foram efetivamente conferidas (A6); null quando o
@@ -272,6 +265,7 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
           semPerguntarAoSom,
           semLetraNoFim: [],
           segundosDeTranscricao: 0,
+          estimativaMedidaNestaMaquina: estimativaMedida ?? false,
         });
         useToastStore
           .getState()
@@ -293,6 +287,7 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
         semPerguntarAoSom,
         semLetraNoFim: semLetraNoFim ?? [],
         segundosDeTranscricao: segundosDeTranscricao ?? 0,
+        estimativaMedidaNestaMaquina: estimativaMedida ?? false,
       });
       if (emSegundoPlano && propostas.length > 0) {
         // o toast desta base não carrega ação de clique: quem leva de volta à
@@ -362,18 +357,17 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
     await subscribing;
 
     try {
-      // QA A1 — `razao_medida` vem no contrato e era jogada fora aqui. Ela é o
-      // que a DECISIONS #106 chama de "razão real desta máquina"; sem guardá-la
-      // não há laço a fechar.
-      const { propostas, razao_medida: razaoMedida } =
-        await getBackend().transcreverMusicas(semLetraNoFim, scanId);
+      // QA A1 — `razao_medida` e `razao_desta_maquina` vêm no retorno e são
+      // INFORMATIVAS. Quem guarda a medição é o backend, e quem diz à tela o
+      // que ela pode afirmar é o booleano da PRÓXIMA varredura: guardar aqui
+      // seria uma segunda cópia de um estado que já tem dono (DECISIONS #80).
+      const { propostas } = await getBackend().transcreverMusicas(
+        semLetraNoFim,
+        scanId,
+      );
       if (seq !== scanSeq) return; // cancelado no meio: descarta
       set((s) => ({
         status: "review",
-        // `null` = esta fila não mediu nada (só erros, ou cancelada antes da
-        // primeira música). Não sobrescreve uma medição anterior, e nunca vira
-        // zero: "0 vezes o áudio" anunciaria transcrição instantânea.
-        razaoMedida: razaoMedida ?? s.razaoMedida,
         // ACRESCENTA: a varredura pode ter deixado propostas que a pessoa
         // ainda não aplicou, e jogá-las fora seria perder trabalho dela
         proposals: [...s.proposals, ...propostas],
@@ -382,6 +376,7 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
         // a fila foi consumida: a pergunta do fim não se repete
         semLetraNoFim: [],
         segundosDeTranscricao: 0,
+        estimativaMedidaNestaMaquina: false,
       }));
       if (!get().overlayOpen && propostas.length > 0) {
         useToastStore.getState().push(textoEncontrado(propostas.length), "success");
@@ -424,6 +419,8 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
       semPerguntarAoSom: 0,
       semLetraNoFim: [],
       segundosDeTranscricao: 0,
+      // o fato acompanha a estimativa: sem número, não há o que qualificar
+      estimativaMedidaNestaMaquina: false,
       transcricaoProgress: null,
       applyErrors: {},
     });

@@ -167,6 +167,8 @@ function renderReview(
     segundosDeTranscricao?: number;
     disponivel?: boolean;
     download?: { bytes: number; segundos: number } | null;
+    /** QA A1 — a estimativa é medição desta máquina, ou palpite de fábrica? */
+    medida?: boolean;
   } = {},
 ) {
   useEnrichStore.setState({
@@ -179,6 +181,7 @@ function renderReview(
     semPerguntarAoSom,
     semLetraNoFim: fim.semLetraNoFim ?? [],
     segundosDeTranscricao: fim.segundosDeTranscricao ?? 0,
+    estimativaMedidaNestaMaquina: fim.medida ?? false,
     transcricao: {
       disponivel: fim.disponivel ?? false,
       download: fim.download ?? null,
@@ -1808,11 +1811,12 @@ describe("EnrichReview (V5 — F13)", () => {
       ).toBeEnabled();
     });
 
-    // QA A2 — o caso medido rodando o Rust: BANCO "AudioTrack 03" / sem
-    // artista, PROPOSTO "Oh! Chuva" / "Falamansa", marcar_instrumental=true.
-    // Quem enxerga vê o "atual → proposto" na linha; quem chega pela caixa
-    // recebia só "Marcar como instrumental" e decidia sobre metade do clique.
-    it("a caixa da etapa 5 anuncia o nome que ela também grava", () => {
+    // QA A2 — a linha que grava DUAS coisas anuncia as duas. A etapa 5 do
+    // Rust deixou de propor nome (o palpite da etapa 1 já foi entregue na
+    // mesma revisão), mas o rótulo é DERIVADO da proposta e não de uma frase
+    // fixa: qualquer linha que marque instrumental E mude nome — hoje, o
+    // conflito resolvido à mão do editor — continua dizendo as duas.
+    it("a caixa que grava marca e nome anuncia as duas coisas", () => {
       renderReview([
         proposal({
           song_id: 42,
@@ -2189,6 +2193,38 @@ describe("EnrichReview (V5 — F13)", () => {
         );
       });
       expect(transcreverMusicas).toHaveBeenCalledWith([81, 82], expect.any(String));
+    });
+
+    /*
+      QA A1 — a mesma pergunta, com e sem medição.
+
+      A frase do PRD ("cerca de 3 horas neste computador") só pode ser dita
+      quando o número é desta máquina. Enquanto ele é de fábrica — e ele nasce
+      de fábrica em toda instalação — a tela mantém a ressalva, porque o erro
+      tem sinal conhecido: o transcritor do macOS sai sem Metal e sem
+      Accelerate, então o palpite é otimista (DECISIONS #85).
+    */
+    it("com a medição feita, a pergunta devolve o 'neste computador'", () => {
+      renderReview([ALTA], 50, 0, {
+        semLetraNoFim: [1, 2, 3],
+        segundosDeTranscricao: 10_800,
+        disponivel: true,
+        medida: true,
+      });
+      expect(
+        screen.getByText(textoDaOfertaDeTranscricao(3, 10_800, true)),
+      ).toBeVisible();
+      expect(screen.getByText(/neste computador/)).toBeVisible();
+    });
+
+    it("sem medição, a pergunta não afirma nada sobre esta máquina", () => {
+      renderReview([ALTA], 50, 0, {
+        semLetraNoFim: [1, 2, 3],
+        segundosDeTranscricao: 10_800,
+        disponivel: true,
+      });
+      expect(screen.queryByText(/neste computador/)).not.toBeInTheDocument();
+      expect(screen.getByText(/pode levar mais nesta máquina/)).toBeVisible();
     });
 
     it("sem ninguém sobrando, não pergunta nada", () => {

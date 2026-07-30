@@ -53,6 +53,13 @@ export interface MockBackend extends Backend {
    * testes e E2E produzem uma música instrumental.
    */
   _markAsInstrumental(filePath: string): void;
+  /**
+   * Título vazio no banco — o estado que só a indexação de um MP3 sem TIT2
+   * produz (o `writeTags` o recusa, e é bom que recuse). Existe para provar que
+   * o ECO da etapa 5 não devolve string vazia: o `apply` grava o título como
+   * veio, e vazio APAGARIA a etiqueta.
+   */
+  _forcarTituloVazio(filePath: string): void;
   /** Zera o estado em memória e a persistência. */
   _reset(): void;
   /** Valor devolvido pelo próximo pickFolder(). */
@@ -194,6 +201,13 @@ interface DbState {
   acessoriosEstado: Record<string, AcessorioInfo["estado"]>;
   /** O que a etapa 5 devolve por arquivo. Permanente, como o próprio áudio. */
   transcricoes: Record<string, SaidaDaTranscricao>;
+  /**
+   * QA A1 — o que esta máquina já mediu transcrevendo: segundos de áudio
+   * ouvidos e segundos de relógio gastos. Persistido, como a tabela de medição
+   * do Rust: a autocorreção da estimativa não pode recomeçar do zero a cada
+   * abertura do aplicativo.
+   */
+  medicaoDaTranscricao?: { audio: number; relogio: number } | null;
   /** O que o som responde, por arquivo. Permanente, como o próprio áudio. */
   somDiz: Record<string, SomDiz>;
   /**
@@ -218,6 +232,7 @@ function freshState(): DbState {
     nextItemId: 1,
     acessoriosEstado: {},
     transcricoes: {},
+    medicaoDaTranscricao: null,
     somDiz: {},
     somFalha: {},
   };
@@ -500,6 +515,14 @@ const SEGUNDOS_ETAPA_LYRICS_OVH = 2;
  * seria a DECISIONS #72 aplicada a uma estimativa.
  */
 const RAZAO_DE_REFERENCIA = 1.0;
+
+/**
+ * Áudio (em segundos) que precisa ter sido transcrito antes de a medição valer
+ * — porte do `transcricao::AUDIO_MINIMO_PARA_MEDIR`. Uma música só não é
+ * amostra: a primeira faixa é justamente a que paga o custo de o motor subir.
+ */
+const AUDIO_MINIMO_PARA_MEDIR = 300;
+
 const DURACAO_MINIMA_ESTIMADA = 30;
 const DURACAO_MAXIMA_ESTIMADA = 900;
 const DURACAO_TIPICA = 240;
@@ -723,14 +746,32 @@ function placeholderFaixa(chave: string): boolean {
 }
 
 /**
+ * Em qual CAMPO o texto está — porte do `enrich::Campo`.
+ *
+ * A régua de placeholder NÃO é a mesma nos dois, e descobrir isso custou um
+ * achado de perda de dado (QA B2). O parâmetro é obrigatório de propósito:
+ * **não existe pergunta de placeholder sem slot.** A #105 acrescentou os
+ * rótulos de coletânea pensando no artista, escreveu a regra dentro de um
+ * predicado que roda nos dois campos, e assim uma música intitulada "Diversos"
+ * passou a valer VAZIO. Um predicado que não pergunta o campo generaliza
+ * sozinho na próxima vez; no Rust quem cobra em cada chamada é o compilador, e
+ * aqui é o `tsc`.
+ */
+export type Campo = "titulo" | "artista";
+
+/**
  * Os rótulos de COLETÂNEA — porte do `ROTULOS_DE_COLETANEA` do Rust
- * (DECISIONS #105). Faltavam inteiros aqui: o mock não tinha regra nenhuma
- * para eles, então a suíte e o E2E nunca exercitaram a decisão 105 no lado
- * TypeScript. É a mesma família de defeito do QA A2 — o mock certificando um
- * contrato diferente do backend —, só que por OMISSÃO.
+ * (DECISIONS #105), e **só valem em `Campo::Artista`**.
+ *
+ * Faltavam inteiros aqui: o mock não tinha regra nenhuma para eles, então a
+ * suíte e o E2E nunca exercitaram a decisão 105 no lado TypeScript — a mesma
+ * família de defeito do QA A2, por OMISSÃO, que é a forma que não quebra teste
+ * nenhum.
  *
  * O que limita a lista é a lição da DECISIONS #89: só entram rótulos que
- * NENHUMA canção usa como nome.
+ * NENHUMA canção usa como nome — e "nenhuma canção usa como nome" é falso no
+ * campo do TÍTULO, onde "Diversos", "Vários" e "Coletânea" são títulos que
+ * existem. Daí o slot.
  */
 const ROTULOS_DE_COLETANEA = new Set([
   "various artists", "various artist", "various",
@@ -766,11 +807,14 @@ function eRotuloDeColetanea(chave: string, bruto: string): boolean {
  * da V9 dependem dele e porque o contrato com o Rust é testado caso a caso
  * em `mockBackend.contrato.test.ts` (DECISIONS #88).
  */
-export function isPlaceholder(texto: string): boolean {
+export function isPlaceholder(campo: Campo, texto: string): boolean {
   const chave = chaveDeTag(texto);
   if (chave === "" || soDigitos(chave)) return true;
   if (PLACEHOLDERS_EXATOS.has(chave)) return true;
-  if (eRotuloDeColetanea(chave, texto)) return true;
+  // Rótulo de coletânea é nome de NINGUÉM, e por isso vale só onde se espera
+  // gente. No título ele é um título — e tratá-lo como campo vazio apagava,
+  // pré-marcado e sem aviso, o nome que a pessoa vê na biblioteca (QA B2).
+  if (campo === "artista" && eRotuloDeColetanea(chave, texto)) return true;
   if (placeholderFaixa(chave)) return true;
   if (PLACEHOLDERS_TRECHO.some((m) => chave.includes(m))) return true;
   // Só números e palavras de maquinário E com marca de ripador junto: não
@@ -820,10 +864,14 @@ function origemDaFonte(fonte: string | null | undefined): string | null {
   return null;
 }
 
-/** A tag como o funil a enxerga: placeholder vira string vazia. */
-function tagReal(texto: string | null | undefined): string {
+/**
+ * A tag como o funil a enxerga: placeholder vira string vazia. O SLOT viaja
+ * junto porque a régua difere entre os dois (QA B2) — "Various Artists" é
+ * campo vazio no artista e nome de música no título.
+ */
+function tagReal(campo: Campo, texto: string | null | undefined): string {
   const t = (texto ?? "").trim();
-  return isPlaceholder(t) ? "" : t;
+  return isPlaceholder(campo, t) ? "" : t;
 }
 
 /**
@@ -879,8 +927,8 @@ function etapaDaFonte(fonte: string): string {
  * placeholder tratado como VAZIO, dos DOIS lados da comparação. Sem isso,
  * "AudioTrack 17" contra o palpite "Faixa" passava por mudança.
  */
-function campoEfetivo(texto: string | null | undefined): string {
-  return tagReal(texto ?? "");
+function campoEfetivo(campo: Campo, texto: string | null | undefined): string {
+  return tagReal(campo, texto ?? "");
 }
 
 function propostaNoOp(p: EnrichProposal): boolean {
@@ -890,8 +938,10 @@ function propostaNoOp(p: EnrichProposal): boolean {
     // repete o atual, e é a divergência que precisa ser vista (V9)
     p.conflito === null &&
     p.lyrics === null &&
-    campoEfetivo(p.proposed_title) === campoEfetivo(p.current_title) &&
-    campoEfetivo(p.proposed_artist) === campoEfetivo(p.current_artist)
+    campoEfetivo("titulo", p.proposed_title) ===
+      campoEfetivo("titulo", p.current_title) &&
+    campoEfetivo("artista", p.proposed_artist) ===
+      campoEfetivo("artista", p.current_artist)
   );
 }
 
@@ -1037,8 +1087,17 @@ export function similaridadeDeNomes(bruto1: string, bruto2: string): number {
  *
  * Exportado para o teste de contrato com o Rust (DECISIONS #88).
  */
-export function discordaDoSom(atual: string, identificado: string): boolean {
-  if (isPlaceholder(atual) || isPlaceholder(identificado)) return false;
+export function discordaDoSom(
+  campo: Campo,
+  atual: string,
+  identificado: string,
+): boolean {
+  // Campo vazio não contradiz nada — só espera ser preenchido. É aqui que o
+  // slot muda um veredito: "Various Artists" no crédito é vazio e o som
+  // PREENCHE; "Diversos" no título é um título, e o som o CONTRADIZ (QA B2).
+  if (isPlaceholder(campo, atual) || isPlaceholder(campo, identificado)) {
+    return false;
+  }
   const a = chaveDeTag(atual);
   const b = chaveDeTag(identificado);
   if (a === b) return false;
@@ -1227,6 +1286,43 @@ export function createMockBackend(): MockBackend {
     return !song.has_lyrics && song.instrumental !== true;
   }
 
+  /**
+   * A etapa 5 teria o que fazer com esta música? Porte do
+   * `a_etapa_5_tem_o_que_fazer`, que é o predicado da PERGUNTA DO FIM.
+   *
+   * Ele espelha os portões que a fila aplica antes de gastar minutos de CPU —
+   * uma regra só, num lugar só (DECISIONS #80). QA M3: faltava o arquivo
+   * EXISTIR. A música cujo MP3 sumiu do disco inflava o total e o tempo da
+   * pergunta, e depois gastava uma vaga da fila para produzir uma linha de
+   * erro, que é a única coisa que a etapa 5 consegue fazer com um arquivo que
+   * não está lá.
+   *
+   * Erro de REDE não tira ninguém daqui, e é de propósito: a etapa 5 não usa
+   * rede. A música que ficou sem letra porque o LRCLIB não respondeu é
+   * exatamente a que a transcrição resolve.
+   */
+  function aEtapa5TemOQueFazer(song: SongRecord): boolean {
+    return (
+      etapasDeLetraValemAPena(song) && !state.deletedFiles.includes(song.file_path)
+    );
+  }
+
+  /**
+   * A razão que vale AGORA nesta máquina — porte do
+   * `transcricao::razao_desta_maquina`: a medida, se já houver amostra que
+   * baste; a de referência, enquanto não houver.
+   *
+   * Existe como função, e não como duas leituras espalhadas, porque a escolha
+   * entre número medido e número declarado é exatamente o tipo de regra que
+   * diverge quando está escrita em dois lugares (DECISIONS #80).
+   */
+  function razaoDestaMaquina(): number {
+    const m = state.medicaoDaTranscricao;
+    if (!m || m.audio < AUDIO_MINIMO_PARA_MEDIR) return RAZAO_DE_REFERENCIA;
+    const razao = m.relogio / m.audio;
+    return razao > 0 ? razao : RAZAO_DE_REFERENCIA;
+  }
+
   /** A etapa 2 existe nesta máquina? Só com o acessório conferido e pronto. */
   function somAtivo(): boolean {
     return backend._acessorio.publicado && estadoDe(ACESSORIO_FPCALC.nome) === "pronto";
@@ -1278,14 +1374,22 @@ export function createMockBackend(): MockBackend {
     digitado: { title?: string | null; artist?: string | null } | undefined,
     p: EnrichProposal,
   ): boolean {
-    const trocaria = (escrito: string, proposto: string | null): boolean => {
-      const a = campoEfetivo(escrito);
-      const b = campoEfetivo(proposto);
+    const trocaria = (
+      campo: Campo,
+      escrito: string,
+      proposto: string | null,
+    ): boolean => {
+      const a = campoEfetivo(campo, escrito);
+      const b = campoEfetivo(campo, proposto);
       return a !== "" && b !== "" && a !== b;
     };
     return (
-      trocaria(tituloEscrito(song, digitado?.title), p.proposed_title) ||
-      trocaria(tagReal(digitado?.artist ?? song.artist), p.proposed_artist)
+      trocaria("titulo", tituloEscrito(song, digitado?.title), p.proposed_title) ||
+      trocaria(
+        "artista",
+        tagReal("artista", digitado?.artist ?? song.artist),
+        p.proposed_artist,
+      )
     );
   }
 
@@ -1298,7 +1402,7 @@ export function createMockBackend(): MockBackend {
     digitado?: string | null,
   ): string {
     if (tituloEhDoIndexador(song.title, nomeArquivo(song))) return "";
-    return tagReal(digitado ?? song.title);
+    return tagReal("titulo", digitado ?? song.title);
   }
 
   /**
@@ -1318,7 +1422,7 @@ export function createMockBackend(): MockBackend {
     digitado: { title?: string | null; artist?: string | null } | undefined,
     error: string | null,
   ): EnrichProposal {
-    const artistaTag = tagReal(digitado?.artist ?? song.artist);
+    const artistaTag = tagReal("artista", digitado?.artist ?? song.artist);
     const bruto = nomeArquivo(song).replace(/\.[^.]+$/, "");
     const stem = bruto.replace(/_/g, " ").replace(/\s+/g, " ").trim();
     const divisor = stem.indexOf(" - ");
@@ -1363,8 +1467,8 @@ export function createMockBackend(): MockBackend {
     estado: EstadoDaVarredura,
     origem: "varredura" | "uma-musica",
   ): EnrichProposal {
-    const tituloTag = tagReal(digitado?.title ?? song.title);
-    const artistaTag = tagReal(digitado?.artist ?? song.artist);
+    const tituloTag = tagReal("titulo", digitado?.title ?? song.title);
+    const artistaTag = tagReal("artista", digitado?.artist ?? song.artist);
     const base = {
       song_id: song.id,
       file_path: song.file_path,
@@ -1416,8 +1520,8 @@ export function createMockBackend(): MockBackend {
       }
       if (diz) {
         if (
-          discordaDoSom(tituloEscrito(song, digitado?.title), diz.titulo) ||
-          discordaDoSom(artistaTag, diz.artista)
+          discordaDoSom("titulo", tituloEscrito(song, digitado?.title), diz.titulo) ||
+          discordaDoSom("artista", artistaTag, diz.artista)
         ) {
           // O som contradiz etiqueta REAL. A linha existe para INFORMAR, e o
           // funil PARA aqui: procurar letra sob um nome que o som acabou de
@@ -1449,8 +1553,10 @@ export function createMockBackend(): MockBackend {
       // identificação ao lado de "não deu" confundiria as duas coisas
       if (p.error !== null || identidade === null) return p;
       const mudou =
-        campoEfetivo(identidade.titulo) !== campoEfetivo(p.current_title) ||
-        campoEfetivo(identidade.artista) !== campoEfetivo(p.current_artist);
+        campoEfetivo("titulo", identidade.titulo) !==
+          campoEfetivo("titulo", p.current_title) ||
+        campoEfetivo("artista", identidade.artista) !==
+          campoEfetivo("artista", p.current_artist);
       if (mudou) {
         p.proposed_title = identidade.titulo;
         p.proposed_artist = identidade.artista || null;
@@ -1562,23 +1668,32 @@ export function createMockBackend(): MockBackend {
    * O desfecho da etapa 5 para UMA música, como proposta (porte do
    * `enrich::proposta_da_transcricao`).
    *
-   * Ela parte da MESMA `propostaBaixa` da etapa 1 — é o que o Rust faz —, e
-   * por isso a linha da etapa 5 **carrega uma proposta de NOME**: quando a
-   * etiqueta é placeholder ("AudioTrack 03" vale campo vazio, DECISIONS #65),
-   * o palpite do nome do arquivo entra no lugar dela. Etiqueta REAL continua
-   * intocada, e é daí que sai o `substitui_nome_escrito: false`.
+   * **A etapa 5 não propõe nome: ela ECOA o arquivo** (QA A2).
    *
-   * Aqui morava a afirmação contrária ("`proposed_*` são o que já está no
-   * arquivo… garantia de construção"). Ela era falsa desde sempre, e o QA a
-   * mediu rodando o Rust: `AudioTrack 03` / None saía como `Oh! Chuva` /
-   * `Falamansa`. Quem depende disso é o rótulo acessível da linha — ver
-   * `curadoria.rotuloDaMarcacao`.
+   * O caminho até aqui teve duas voltas. O mock devolvia `proposed_* = atual`
+   * chamando isso de "garantia de construção" e o Rust fazia o contrário —
+   * `proposta_baixa`, o palpite do NOME DO ARQUIVO —, de modo que `AudioTrack
+   * 03` / None saía `Oh! Chuva` / `Falamansa` sob o rótulo da transcrição. O
+   * backend resolveu tirando o nome, por medição e não por pureza: **o palpite
+   * já foi entregue**. A etapa 1 roda em TODAS as músicas da pasta (DECISIONS
+   * #102) e `sem_letra_no_fim` sai da mesma varredura, então toda música que
+   * chega aqui já tem a sua linha de "preencher o branco" na MESMA revisão.
+   * Repetir seria cobrar uma segunda leitura de quem vai conferir 47 letras de
+   * máquina.
+   *
+   * O eco NÃO pode ser vazio: o `apply` grava `ap.title` como veio, e título
+   * vazio apagaria a etiqueta de alguém — por isso o palpite da etapa 1
+   * sobrevive quando não há nada a ecoar.
    */
   function propostaDaTranscricao(song: SongRecord): EnrichProposal {
-    // `error: null` porque o palpite é o mesmo com ou sem desfecho; os ramos
+    // `error: null` porque o eco é o mesmo com ou sem desfecho; os ramos
     // abaixo trocam a `fonte` para `erro` junto com a mensagem, como no Rust.
+    const palpite = propostaBaixa(song, undefined, null);
     const base: EnrichProposal = {
-      ...propostaBaixa(song, undefined, null),
+      ...palpite,
+      // o palpite só sobrevive onde não há NADA a ecoar
+      proposed_title: song.title.trim() ? song.title : palpite.proposed_title,
+      proposed_artist: song.artist,
       fonte: FONTE_ERRO,
     };
     // A etapa 5 NÃO desfaz trabalho humano: marca de instrumental e letra
@@ -1953,8 +2068,12 @@ export function createMockBackend(): MockBackend {
         sem_letra_no_fim: sobraram.map((s) => s.id),
         segundos_de_transcricao: segundosParaTranscrever(
           sobraram.map((s) => s.duracao),
-          RAZAO_DE_REFERENCIA,
+          razaoDestaMaquina(),
         ),
+        // QA A1 — o FATO sobre o número, para a tela poder dizer a verdade.
+        // No mock a medição só existe depois de uma fila de transcrição ter
+        // rodado, que é exatamente quando ela passa a existir no Rust.
+        estimativa_medida_nesta_maquina: razaoDestaMaquina() !== RAZAO_DE_REFERENCIA,
       });
       // primeiro evento com done=0 antes de começar: só o total na tela
       // (mesmo contrato do Rust — `atual` vazio nesse evento)
@@ -1973,9 +2092,9 @@ export function createMockBackend(): MockBackend {
         }
         const proposta = propostaDoFunil(song, undefined, estado, "varredura");
         // Sobra para a etapa 5 quem continuaria SEM LETRA depois de aplicar
-        // tudo o que esta varredura achou. Instrumental não entra: música sem
-        // voz não é transcrita (V8/F17).
-        if (etapasDeLetraValemAPena(song) && proposta.lyrics === null) {
+        // tudo o que esta varredura achou. Instrumental não entra (música sem
+        // voz não é transcrita, V8/F17), e arquivo sumido também não (QA M3).
+        if (aEtapa5TemOQueFazer(song) && proposta.lyrics === null) {
           sobraram.push({ id: song.id, duracao: song.duration_seconds ?? 0 });
         }
         proposals.push(proposta);
@@ -2092,11 +2211,21 @@ export function createMockBackend(): MockBackend {
         );
       }
       enrichCancelled.delete(scanId);
+      // QA A1 — a medição VOLTA, e volta por DENTRO: quem a guarda é o
+      // backend, e a próxima varredura a lê daqui. Nada é pedido ao frontend.
+      if (audioMedido >= AUDIO_MINIMO_PARA_MEDIR) {
+        state.medicaoDaTranscricao = {
+          audio: (state.medicaoDaTranscricao?.audio ?? 0) + audioMedido,
+          relogio: (state.medicaoDaTranscricao?.relogio ?? 0) + relogioMedido,
+        };
+        save();
+      }
       return {
         propostas,
-        // a razão MEDIDA nesta máquina — é ela que troca a estimativa
-        // declarada pela verdadeira, e quem faz essa conta é o backend
+        // os dois são INFORMATIVOS: quem decide o que a tela diz é o booleano
+        // da varredura, e nada aqui se multiplica em TypeScript (DECISIONS #80)
         razao_medida: audioMedido > 0 ? relogioMedido / audioMedido : null,
+        razao_desta_maquina: razaoDestaMaquina(),
       };
     },
 
@@ -2432,6 +2561,13 @@ export function createMockBackend(): MockBackend {
 
     _ensinarTranscricao(filePath: string, saida: SaidaDaTranscricao): void {
       state.transcricoes[filePath] = saida;
+      save();
+    },
+
+    _forcarTituloVazio(filePath: string): void {
+      const song = state.songs.find((s) => s.file_path === filePath);
+      if (!song) return;
+      song.title = "";
       save();
     },
 

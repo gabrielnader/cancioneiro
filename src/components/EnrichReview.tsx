@@ -179,6 +179,9 @@ export function EnrichReview() {
   // V10 — a pergunta do fim
   const semLetraNoFim = useEnrichStore((s) => s.semLetraNoFim);
   const segundosDeTranscricao = useEnrichStore((s) => s.segundosDeTranscricao);
+  // QA A1 — o fato sobre a estimativa: só com ele a frase pode dizer "neste
+  // computador" sem afirmar uma medição que não houve (DECISIONS #86 e #106).
+  const estimativaMedida = useEnrichStore((s) => s.estimativaMedidaNestaMaquina);
   const transcricao = useEnrichStore((s) => s.transcricao);
   const transcricaoProgress = useEnrichStore((s) => s.transcricaoProgress);
   const transcricaoDispensada = useEnrichStore((s) => s.transcricaoDispensada);
@@ -1136,6 +1139,7 @@ export function EnrichReview() {
                     ? textoDaOfertaDeTranscricao(
                         semLetraNoFim.length,
                         segundosDeTranscricao,
+                        estimativaMedida,
                       )
                     : textoDaTranscricaoIndisponivel(
                         semLetraNoFim.length,

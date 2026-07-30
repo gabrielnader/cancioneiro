@@ -139,11 +139,23 @@ export interface EnrichScanResult {
    */
   sem_letra_no_fim: number[];
   /**
-   * Segundos estimados para transcrever essas músicas NESTA máquina. Enquanto
-   * a máquina não transcreveu nada é número DECLARADO (a razão de referência
-   * do Rust), e por isso a copy diz "cerca de" (DECISIONS #106).
+   * Segundos estimados para transcrever essas músicas nesta máquina. A conta é
+   * TODA do Rust (DECISIONS #80 e #106): ele usa a razão medida quando já há
+   * amostra que baste, e a de referência enquanto não há.
    */
   segundos_de_transcricao: number;
+  /**
+   * **O número acima é medição desta máquina, ou palpite de fábrica?**
+   *
+   * Existe para a tela poder dizer a verdade, e só para isso: com `true` a
+   * pergunta do fim devolve o "neste computador" que o PRD escreveu; com
+   * `false` ela mantém a ressalva de que pode levar mais. Sem este campo a
+   * frase honesta seria sempre a pior das duas (DECISIONS #86).
+   *
+   * É um FATO sobre o número, e não o número: a razão não volta para o
+   * TypeScript porque nada aqui se multiplica com ela (DECISIONS #80).
+   */
+  estimativa_medida_nesta_maquina: boolean;
 }
 
 /**
@@ -153,13 +165,23 @@ export interface EnrichScanResult {
 export interface TranscricaoResultado {
   propostas: EnrichProposal[];
   /**
-   * Segundos de CPU por segundo de ÁUDIO medidos nesta máquina, quando houve o
-   * que medir. Fica no contrato porque é o backend que troca a estimativa
-   * declarada pela verdadeira; o frontend NÃO refaz a conta com ela — cópia da
-   * regra em TypeScript é a DECISIONS #80, que neste projeto já deixou o único
-   * botão do produto cinza.
+   * Segundos de relógio por segundo de ÁUDIO medidos NESTA execução, quando
+   * houve o que medir.
+   *
+   * **Puramente informativo — não guarde e não recalcule** (QA A1). A v0.10.0
+   * pedia ao frontend que guardasse este número e o mandasse de volta, e o
+   * frontend o descartava: a promessa da DECISIONS #106 ficou desligada sem
+   * ninguém notar, porque não havia consumidor. Quem guarda agora é o backend,
+   * no banco, ao fim da fila — não há nada a devolver.
    */
   razao_medida: number | null;
+  /**
+   * A razão que passa a valer nas próximas estimativas: a acumulada desta
+   * máquina, ou a de referência enquanto a amostra é curta. Informativa pelo
+   * mesmo motivo — quem decide o que a tela DIZ é o booleano
+   * `estimativa_medida_nesta_maquina` da varredura, não este número.
+   */
+  razao_desta_maquina: number;
 }
 
 /**

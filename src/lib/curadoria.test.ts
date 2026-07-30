@@ -944,6 +944,40 @@ describe("a pergunta do fim (PRD V10)", () => {
   });
 
   /*
+    QA A1, segunda metade — com a medição feita, o "neste computador" VOLTA.
+
+    O backend fechou o laço por dentro (tabela própria somando áudio transcrito
+    e relógio gasto, com piso de amostra antes de valer) e expõe um BOOLEANO, e
+    não a razão: um número convidaria o TypeScript a multiplicar, que é a
+    DECISIONS #80. Com `true` a frase pode afirmar o que o programa conhece;
+    com `false` ela mantém a ressalva. É a DECISIONS #86 aplicada a uma
+    estimativa: nenhum texto afirma o que o programa não sabe — e nenhum
+    esconde o que ele sabe.
+  */
+  it("com a estimativa medida nesta máquina, a frase diz isso", () => {
+    expect(textoDaOfertaDeTranscricao(47, 10_800, true)).toBe(
+      "Sobraram 47 músicas sem letra. Escrever a letra ouvindo o áudio leva" +
+        " cerca de 3 horas neste computador.",
+    );
+  });
+
+  it("medida e curta: o 'cerca de' não volta pelo caminho de trás", () => {
+    const t = textoDaOfertaDeTranscricao(1, 30, true);
+    expect(t).toBe(
+      "Sobrou 1 música sem letra. Escrever a letra ouvindo o áudio leva menos" +
+        " de 1 minuto neste computador.",
+    );
+  });
+
+  // O padrão é a frase conservadora: quem esquecer de passar o fato recebe a
+  // versão que não afirma nada de errado.
+  it("sem dizer nada, vale a ressalva", () => {
+    expect(textoDaOfertaDeTranscricao(47, 10_800)).toBe(
+      textoDaOfertaDeTranscricao(47, 10_800, false),
+    );
+  });
+
+  /*
     QA A1 — o número é DECLARADO, e a frase dizia "neste computador".
 
     A DECISIONS #106 separa as duas coisas por nome: `RAZAO_DE_REFERENCIA` é um
@@ -956,7 +990,7 @@ describe("a pergunta do fim (PRD V10)", () => {
   */
   it("não afirma uma medição que não houve", () => {
     for (const segundos of [30, 240, 10_800]) {
-      const t = textoDaOfertaDeTranscricao(47, segundos);
+      const t = textoDaOfertaDeTranscricao(47, segundos, false);
       expect(t, t).not.toContain("neste computador");
       // e a estimativa se declara como piso, não como promessa
       expect(t, t).toContain("pode levar mais nesta máquina");
