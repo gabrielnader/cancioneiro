@@ -101,6 +101,13 @@ Para você não gastar tempo relatando o que a gente já conhece:
   programa não ter assinatura digital.
 - **A busca em sites de letra acha pouco** — cerca de 3% num acervo real. Não é
   defeito: é que boa parte desse repertório nunca foi publicada na internet.
+- **Alguns MP3 antigos não aceitam gravação.** O programa avisa e não altera nada;
+  a música continua tocando. Se aparecer, **diga quantas foram** — isso ajuda a
+  saber se é caso raro ou comum.
+- **A busca exige as palavras exatas.** Hoje, procurar "dormir" não acha uma letra
+  que diz "dormi" — uma letra de diferença. Se você procurar um trecho que **sabe**
+  que existe na música e não achar, isso é ouro para nós: diga o que digitou e qual
+  era a música.
 
 ---
 

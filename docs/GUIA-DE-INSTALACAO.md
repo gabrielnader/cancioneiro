@@ -257,6 +257,18 @@ sempre que você instalar uma versão nova.
 **Tela azul "O Windows protegeu o seu computador".**
 Clique em **Mais informações** e depois em **Executar assim mesmo** (passo **2.2**).
 
+**"O programa não entendeu como este MP3 está montado por dentro."**
+Não é erro seu e não é o seu disco. Alguns MP3 antigos foram montados de um jeito
+que o Cancioneiro não sabe regravar. **A música continua tocando normalmente** — só
+não dá para gravar letra ou título dentro dela. Nada foi alterado no arquivo.
+
+**"O programa corrigiu uma medida errada por dentro da etiqueta."**
+Isso é um aviso, não um erro: a gravação **deu certo**. Alguns arquivos têm um
+número errado na parte das etiquetas, e o Cancioneiro corrigiu esse número para
+conseguir gravar. **A música em si não foi alterada** — o programa confere isso
+depois de gravar, e desfaz tudo se o áudio tiver mudado. Aparece uma vez só por
+arquivo.
+
 **"Não encontrei minhas músicas."**
 O programa só enxerga as pastas que você mostrou para ele. Clique em
 **Configurações**, na coluna da esquerda, e veja se a pasta está na lista:

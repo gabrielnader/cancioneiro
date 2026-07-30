@@ -1,6 +1,6 @@
 # REPORT — Cancioneiro
 
-## Estado em 0.10.3 — o que o produto é, e o que ele custou aprender
+## Estado em 0.10.4 — o que o produto é, e o que ele custou aprender
 
 O Cancioneiro é um player de MP3 **offline** (Tauri 2 + Rust + React, SQLite com
 FTS5) que existe para resolver um problema só: **achar uma música pelo pedaço de
@@ -55,16 +55,16 @@ que *esta máquina* faz, não o que o produto sabe fazer.
 
 ### As suítes
 
-| suíte | 0.6.0 (início da janela) | 0.10.3 |
+| suíte | 0.6.0 (início da janela) | 0.10.4 |
 |---|---|---|
-| cargo test | 106 | **434** |
-| pytest | 557 | **750** |
-| vitest | 369 | **1108** |
-| Playwright E2E | 22 | **48** |
-| total | 1054 | **2340** |
+| cargo test | 106 | **452** |
+| pytest | 557 | **754** |
+| vitest | 369 | **1124** |
+| Playwright E2E | 22 | **50** |
+| total | 1054 | **2380** |
 
 `tsc` limpo, `cargo check` sem avisos, **0 warnings**. As decisões de projeto —
-**138** hoje, contra 30 ao fim da V1 — estão em
+**152** hoje, contra 30 ao fim da V1 — estão em
 [`DECISIONS.md`](./DECISIONS.md), cada uma com o motivo e, quando existe, o
 número que a sustenta.
 
@@ -216,6 +216,64 @@ ao ponto do funil que depende dela.
    que o Rust corrigiu (uma música chamada "Diversos" valeria vazio), e ficou de
    fora por escopo — ele é ferramenta de terminal do dono do produto e não vai
    para as 40 máquinas, mas o dano é o mesmo dentro do arquivo dele.
+
+---
+
+> **Atualização V10.7/V10.8 (0.10.4):** a versão que vai para os beta testers, e
+> ela saiu de **um relato de campo de sete linhas vermelhas**. Rodada a varredura,
+> aplicadas as letras, sete músicas recusaram a gravação — e a tela disse duas
+> coisas erradas ao mesmo tempo.
+>
+> **A primeira: o cabeçalho.** "7 músicas não puderam ser **consultadas**" — mas a
+> consulta funcionara, elas tinham proposta e selo MÉDIA. Um grupo servia a dois
+> desfechos e o título tinha de escolher uma das duas verdades; escolheu a errada
+> justamente para o caso que apareceu em campo. Agora são dois grupos, e o da
+> gravação usa o vocabulário do grupo das gravadas: são as duas metades do mesmo
+> clique.
+>
+> **A segunda: a frase culpava o disco.** Oito variantes de erro do lofty caíam em
+> "o arquivo pode estar danificado, ou o disco onde ele está pode ter sido
+> desconectado". As oito são falhas de **parse**, com o arquivo já lido com
+> sucesso — disco desconectado é `io::Error` e tem caminho próprio. A mensagem
+> mandava a pessoa mexer no cabo do HD por um problema que não era do cabo, o que
+> num produto sem suporte é o pior tipo de instrução: ela faz mexer no que está
+> certo. Três frases no lugar de uma, e a parte do HD ficou só onde conferir o
+> aparelho responde algo.
+>
+> **E a causa real, que a mensagem escondia.** Diagnóstico feito de fora, com um
+> script de leitura rodado no acervo do dono e depois reproduzido contra o lofty
+> 0.22 num projeto isolado: os arquivos têm uma região entre o **fim declarado da
+> etiqueta ID3v2** e o **primeiro quadro MPEG** — 1.251 bytes, 81% zeros. O
+> mecanismo exato está na fonte do lofty: `check_mpeg_or_aac` só procura o sync
+> dentro de `DEFAULT_MAX_JUNK_BYTES` = **1.024**. Daí o modelo passar a
+> **prever**: dos arquivos com sobra naquela pasta, os de 178, 220, 492 e 671
+> bytes gravam; os de 1.154 e 1.251 falham. A leitura funcionava só por causa da
+> extensão `.mp3` no nome — tirei a extensão e ela falhou também.
+>
+> **O conserto corrige o número, não o arquivo.** Dois a quatro bytes no campo de
+> tamanho; nenhum byte removido, nenhum movido. O gatilho é a **falha**, nunca a
+> suspeita: arquivo que grava normalmente não tem um byte examinado, o que torna
+> o falso positivo inalcançável — e isso importa porque o meu próprio script de
+> diagnóstico acusou de anomalia um arquivo **perfeito** (num MP3 do lame o
+> primeiro quadro carrega o cabeçalho Xing/Info, e o detector ingênuo acha o
+> segundo quadro). O áudio é **conferido, não prometido**: resumo SHA-256 antes,
+> conferência depois, e se mudar um byte o arquivo volta ao que era e a gravação
+> vira recusa. E o desfecho **diz** o que foi feito — sem pedágio antes, sem
+> segredo depois.
+>
+> A decisão de fazer o conserto junto com a gravação, sem linha separada e sem
+> clique a mais, é do dono do produto e contrariou a recomendação de quem
+> escreveu isto. Ele estava certo: a pessoa já decidiu "grave esta letra neste
+> arquivo", e perguntar "seu arquivo tem uma anomalia estrutural, posso corrigir
+> 2 bytes?" é pergunta técnica para quem não tem como responder — o pedágio que a
+> decisão 102 saiu para eliminar.
+>
+> **Uma dívida que virou fantasma, e sumiu.** Uma falha de teste vinha sendo
+> tratada como teste instável e consumiu 22 execuções sem reproduzir. O agente
+> desta rodada viu **duas** falhas juntas na linha de base, e duas ao mesmo tempo
+> aponta recurso compartilhado, não relógio: o disco estava cheio, e os testes de
+> `enrich.rs` copiam fixtures para um diretório temporário. Não era teste
+> instável. Era espaço em disco naquele instante.
 
 ---
 
