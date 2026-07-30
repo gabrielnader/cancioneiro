@@ -98,6 +98,27 @@ MARCAS_DA_SOBRA: list[tuple[bytes, str]] = [
 ]
 
 
+def sobra_e_inocente(sobra: bytes) -> str | None:
+    """A sobra tem explicação BENIGNA? Devolve o motivo, ou `None`.
+
+    Este script já mediu errado uma vez, e vale registrar como: num arquivo
+    feito com LAME o PRIMEIRO quadro de áudio carrega o cabeçalho Xing/Info,
+    com enchimento de `0x55` e a assinatura do codificador. O detector daqui
+    procura o primeiro `FF Fx` DEPOIS do fim da etiqueta; quando o quadro real
+    começa antes desse ponto, ele acha o SEGUNDO quadro e acusa uma sobra que
+    é, na verdade, o miolo do primeiro. O arquivo estava perfeito.
+
+    Ferramenta de diagnóstico que grita lobo é pior que nenhuma: ela manda a
+    pessoa (ou a mim) mexer no que está certo.
+    """
+    if b"LAME" in sobra or b"Xing" in sobra or b"Info" in sobra:
+        return "é o cabeçalho Xing/Info dentro do primeiro quadro (arquivo normal)"
+    # o enchimento de 0x55 é a marca do mesmo cabeçalho, mesmo sem a assinatura
+    if sobra.count(0x55) > len(sobra) // 4:
+        return "tem o enchimento 0x55 do cabeçalho do codificador (arquivo normal)"
+    return None
+
+
 def descreve_a_sobra(dados: bytes, inicio: int, sync: int) -> None:
     """Diz o que há entre o fim declarado da etiqueta e o primeiro quadro.
 
@@ -107,7 +128,11 @@ def descreve_a_sobra(dados: bytes, inicio: int, sync: int) -> None:
     uma frase diferente na tela de quem não tem a quem perguntar.
     """
     sobra = dados[inicio:sync]
-    print(f"    o que há na sobra ({len(sobra)} bytes):")
+    inocente = sobra_e_inocente(sobra)
+    if inocente is not None:
+        print(f"    a sobra é EXPLICADA: {inocente}")
+        return
+    print(f"    o que há na sobra ({len(sobra)} bytes) — sem explicação benigna:")
     for marca, o_que_e in MARCAS_DA_SOBRA:
         pos = sobra.find(marca)
         if pos != -1:
