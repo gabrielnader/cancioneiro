@@ -235,6 +235,12 @@ no fim da seção, o programa diz sempre quantas músicas daquela pasta estão s
 e quanto tempo levaria — e o botão está ali a qualquer momento. Se você fechar a caixa
 da busca, não perdeu nada: a lista não depende dela.
 
+**E para uma música só.** Abra a música, clique em **Editar** e depois em **Buscar
+dados**. Se a internet não tiver a letra — o que é comum —, o programa oferece ali
+mesmo escrevê-la ouvindo o áudio, dizendo quanto tempo leva **para aquela música**.
+São minutos, não horas: é a forma mais prática de resolver uma música que você quer
+achar hoje.
+
 Duas coisas para saber antes:
 
 - Na primeira vez ele precisa baixar um arquivo grande (a tela diz o tamanho e o

@@ -1,6 +1,6 @@
 # REPORT — Cancioneiro
 
-## Estado em 0.10.4 — o que o produto é, e o que ele custou aprender
+## Estado em 0.10.5 — o que o produto é, e o que ele custou aprender
 
 O Cancioneiro é um player de MP3 **offline** (Tauri 2 + Rust + React, SQLite com
 FTS5) que existe para resolver um problema só: **achar uma música pelo pedaço de
@@ -55,16 +55,16 @@ que *esta máquina* faz, não o que o produto sabe fazer.
 
 ### As suítes
 
-| suíte | 0.6.0 (início da janela) | 0.10.4 |
+| suíte | 0.6.0 (início da janela) | 0.10.5 |
 |---|---|---|
-| cargo test | 106 | **452** |
+| cargo test | 106 | **455** |
 | pytest | 557 | **754** |
-| vitest | 369 | **1124** |
-| Playwright E2E | 22 | **50** |
-| total | 1054 | **2380** |
+| vitest | 369 | **1163** |
+| Playwright E2E | 22 | **51** |
+| total | 1054 | **2423** |
 
 `tsc` limpo, `cargo check` sem avisos, **0 warnings**. As decisões de projeto —
-**152** hoje, contra 30 ao fim da V1 — estão em
+**154** hoje, contra 30 ao fim da V1 — estão em
 [`DECISIONS.md`](./DECISIONS.md), cada uma com o motivo e, quando existe, o
 número que a sustenta.
 
@@ -216,6 +216,62 @@ ao ponto do funil que depende dela.
    que o Rust corrigiu (uma música chamada "Diversos" valeria vazio), e ficou de
    fora por escopo — ele é ferramenta de terminal do dono do produto e não vai
    para as 40 máquinas, mas o dano é o mesmo dentro do arquivo dele.
+
+---
+
+> **Atualização V10.9 (0.10.5):** a etapa 5 passou a existir **onde a pessoa
+> está**, e não só onde a varredura termina.
+>
+> O buraco veio de uma pergunta do dono do produto — *"se eu buscar letra em uma
+> música específica ele passa pelo processo inteiro só pra essa música hoje?"*. A
+> resposta era: as etapas 1 a 4 sim, a 5 não. Então quem abria uma música, clicava
+> em "Buscar dados" e não achava nada — **o caso típico**, com 3% de cobertura
+> medida — ficava sem a única coisa que resolveria aquele arquivo, e tinha de sair
+> para Configurações, onde a fila é a pasta inteira. É o mesmo erro de projeto que
+> a V10.6 consertou na outra porta, e aqui a etapa 5 é mais usável do que em
+> qualquer lugar: uma música são **minutos**, não horas.
+>
+> As três portas dividem um miolo só (`pendentes_entre`), e a oferta da ficha
+> manda a fila de um item pelo `startTranscricao` que já existia — mesma barra,
+> mesmo cancelamento, mesma revisão. Um segundo caminho seria um segundo lugar
+> onde os três divergem.
+>
+> **O conserto que veio junto vale mais que a porta.** A ficha da música fica
+> aberta **atrás** da revisão, com o campo de letra vazio — e "Salvar no arquivo"
+> com o campo vazio **remove o USLT**. Seria o produto destruindo, num clique de
+> hábito, o trabalho de minutos que ele acabou de fazer. O campo passou a ser
+> preenchido quando está vazio, e só então: nada digitado é sobrescrito. Nenhuma
+> suíte apontava para isso; ele apareceu porque alguém foi olhar o que a porta
+> nova encostava.
+>
+> Junto, o aviso ao fechar a revisão com falhas de gravação na tela — que nasceu
+> de uma frase literal do campo: *"não sei quais são as duas outras músicas, pq
+> fechei a tela em seguida"*. A lista das músicas que não puderam ser gravadas é
+> o que a pessoa precisa para agir, e evaporava.
+>
+> **A medição da busca, feita nesta rodada e ainda NÃO aplicada.** 721 trechos de
+> cinco palavras tirados das letras conferidas ouvindo, procurados dentro das
+> transcrições de máquina:
+>
+> | busca | acha | é o 1º | traz errada | resultados |
+> |---|---|---|---|---|
+> | a de hoje (tudo exato) | 30% | 30% | — | — |
+> | tolerante por palavras soltas, 60% | 79% | 12% | 88% | **68** |
+> | tolerante por **sequência**, 60% | **54%** | 52% | 20% | **1,1** |
+> | tolerante por sequência, 80% | 43% | 43% | 0% | 0,4 |
+>
+> Os 79% são a armadilha: 68 resultados por busca e a música certa em primeiro em
+> 12% das vezes — parede de resultado errado é tão inútil quanto tela vazia, e
+> pior, porque parece que funcionou. O erro estava na modelagem, não no número:
+> pontuar **saco de palavras** quando o que alguém lembra é uma **sequência**.
+> Pontuando a sequência, 30% → 54% com 1,1 resultado.
+>
+> Fica com três ressalvas: os distratores são sintéticos (150 documentos
+> embaralhando o vocabulário das três letras); o teto não é 100%, porque boa parte
+> do que falta são versos que a transcrição perdeu inteiros; e a amostra é o
+> material mais difícil do acervo. **A mudança não entrou nesta versão de
+> propósito** — a busca é a função central do produto, e mexer nela na mesma
+> versão que vai para os beta testers é risco que não se justifica.
 
 ---
 
