@@ -472,17 +472,46 @@ const ACESSORIO_WHISPER = {
 
 const ACESSORIO_MODELO = {
   nome: "modelo-de-transcricao" as const,
-  para_que_serve: "entender o que é cantado — é o que o transcritor consulta",
+  para_que_serve:
+    "entender o que é cantado — este é o rápido, e às vezes deixa trechos" +
+    " de fora",
   arquivo: "ggml-small-q5_1.bin",
   // DADO, não programa: o mesmo arquivo serve as quatro máquinas, e ele não
   // recebe o bit de execução.
-  tamanho_bytes: 181_000_000,
+  tamanho_bytes: 190_085_487,
   executavel: false,
   origem: `${URL_BASE}/ggml-small-q5_1.bin`,
 };
 
+/**
+ * O segundo modelo (V10.2): maior, melhor e MUITO mais lento. Existe porque a
+ * medição no acervo real reprovou o pequeno — 37% de encontrabilidade contra
+ * os 78% do motor anterior, com estrofes inteiras engolidas como "[música]".
+ *
+ * Os dois convivem por UMA rodada, até o acervo real dizer qual fica. O mock
+ * precisa dos dois porque a regra que importa — o backend PREFERE o grande
+ * quando ele está pronto — só é exercitável com os dois no catálogo, e
+ * catálogo do mock menor que o do Rust foi como as três divergências
+ * anteriores começaram (decisão 88).
+ */
+const ACESSORIO_MODELO_GRANDE = {
+  nome: "modelo-de-transcricao-grande" as const,
+  para_que_serve:
+    "entender melhor o que é cantado — é bem mais lento, e o aplicativo usa" +
+    " este quando ele está aqui",
+  arquivo: "ggml-medium.bin",
+  tamanho_bytes: 1_533_763_059,
+  executavel: false,
+  origem: `${URL_BASE}/ggml-medium.bin`,
+};
+
 /** O catálogo desta "máquina", na ordem em que a tela o mostra. */
-const CATALOGO = [ACESSORIO_FPCALC, ACESSORIO_WHISPER, ACESSORIO_MODELO];
+const CATALOGO = [
+  ACESSORIO_FPCALC,
+  ACESSORIO_WHISPER,
+  ACESSORIO_MODELO,
+  ACESSORIO_MODELO_GRANDE,
+];
 
 /**
  * Banda de REFERÊNCIA do download, em bytes por segundo — espelha

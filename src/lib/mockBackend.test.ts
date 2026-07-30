@@ -2095,9 +2095,33 @@ describe("mockBackend", () => {
   // -------------------------------------------------------------------------
 
   describe("os acessórios da etapa 5 (V10)", () => {
-    it("o catálogo tem o transcritor e o modelo, além do som", async () => {
+    it("o catálogo tem o transcritor e OS DOIS modelos, além do som", async () => {
       const nomes = (await backend.acessoriosEstado()).map((a) => a.nome);
-      expect(nomes).toEqual(["fpcalc", "whisper-cli", "modelo-de-transcricao"]);
+      // Dois modelos por UMA rodada (V10.2): a medição no acervo real
+      // reprovou o pequeno — 37% de encontrabilidade contra os 78% do motor
+      // anterior —, e o grande está aqui para ser comparado. Quando o acervo
+      // decidir, um dos dois sai e esta lista volta a ter três nomes.
+      expect(nomes).toEqual([
+        "fpcalc",
+        "whisper-cli",
+        "modelo-de-transcricao",
+        "modelo-de-transcricao-grande",
+      ]);
+    });
+
+    it("os dois modelos são DADO, e o grande se explica sozinho", async () => {
+      const catalogo = await backend.acessoriosEstado();
+      const modelos = catalogo.filter((a) => a.nome.startsWith("modelo-"));
+      expect(modelos).toHaveLength(2);
+      for (const m of modelos) {
+        expect(m.executavel).toBe(false);
+      }
+      // quem vê dois cartões parecidos pergunta uma coisa só: qual roda?
+      const grande = modelos.find((m) => m.nome.endsWith("-grande"))!;
+      expect(grande.para_que_serve).toContain("usa este quando ele está aqui");
+      expect(grande.tamanho_bytes).toBeGreaterThan(
+        modelos.find((m) => !m.nome.endsWith("-grande"))!.tamanho_bytes,
+      );
     });
 
     // "um programa de 2 MB e um arquivo de 181 MB" é outra conversa que

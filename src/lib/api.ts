@@ -328,9 +328,21 @@ export interface EnrichApplyResult {
 export interface AcessorioInfo {
   /**
    * Identidade estável, e o que `acessorioBaixar` recebe. Eram um só até a
-   * v0.9.0; a V10 acrescenta o transcritor e o modelo que ele consulta.
+   * v0.9.0; a V10 acrescenta o transcritor e o modelo que ele consulta, e a
+   * V10.2 um segundo modelo — maior e melhor — que o backend PREFERE quando
+   * está baixado. Os dois convivem por uma rodada só, até a medição no acervo
+   * real dizer qual fica; um dos dois será removido.
+   *
+   * A tela não escolhe: ela desenha um cartão por item do catálogo, e quem
+   * decide qual modelo roda é o backend. Este tipo existe só para o
+   * `acessorioBaixar` não receber um nome inventado — quando ele descrever
+   * MENOS do que o backend devolve, é divergência nascendo (decisão 88).
    */
-  nome: "fpcalc" | "whisper-cli" | "modelo-de-transcricao";
+  nome:
+    | "fpcalc"
+    | "whisper-cli"
+    | "modelo-de-transcricao"
+    | "modelo-de-transcricao-grande";
   /**
    * Para que serve, em pt-BR e PRONTO PARA EXIBIR. Vem do backend de propósito:
    * quem cura não sabe o que é "impressão digital acústica", e a frase que
