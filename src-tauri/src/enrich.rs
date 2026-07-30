@@ -360,6 +360,111 @@ struct EstadoDaVarredura {
     /// as outras 149 sem nada, e conclui que o resto foi conferido — a
     /// DECISIONS #86 acontecendo por omissão de escopo.
     sem_perguntar_ao_som: Cell<usize>,
+    /// **V10.10 — alguma fonte RESPONDEU nesta varredura.** Responder é chegar
+    /// uma resposta HTTP, inclusive uma de erro: 429, 500 e chave recusada são
+    /// servidores vivos, e vivos provam que a internet desta máquina funciona.
+    alguma_fonte_respondeu: Cell<bool>,
+    /// As fontes que ficaram MUDAS (`FonteDeRede::bit`). É um conjunto, e não
+    /// uma contagem, porque o que faz evidência é a fonte ser OUTRA: dez
+    /// tentativas ao mesmo host caído dizem uma coisa só.
+    fontes_mudas: Cell<u8>,
+}
+
+/// De qual host se está falando. Existe para o `EstadoDaVarredura` poder contar
+/// fontes DIFERENTES sem ter de reconhecer URLs (o que duplicaria o
+/// `commands::destino_de` — DECISIONS #80): quem sabe com quem está falando é a
+/// etapa que faz a consulta.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FonteDeRede {
+    Som,
+    Lrclib,
+    LyricsOvh,
+}
+
+impl FonteDeRede {
+    fn bit(self) -> u8 {
+        match self {
+            FonteDeRede::Som => 1,
+            FonteDeRede::Lrclib => 2,
+            FonteDeRede::LyricsOvh => 4,
+        }
+    }
+}
+
+/// **A frase que o produto usa quando há razão para crer que a internet caiu.**
+///
+/// Ela NÃO é dita por uma etapa: uma etapa só sabe do próprio host, e "este
+/// servidor não respondeu" foi confundido com "a sua internet caiu" por três
+/// versões (V10.10, relato de campo). Quem a diz é a varredura, depois de ver
+/// duas fontes diferentes mudas e nenhuma respondendo.
+///
+/// A segunda metade é a EVIDÊNCIA, e ela está no texto de propósito: é o que
+/// permite a quem lê discordar do programa. Quem está com a internet boa e vê
+/// "nenhum site respondeu" sabe que o problema é de fora — um bloqueio do
+/// antivírus, um portal de wi-fi — em vez de reiniciar o roteador à toa.
+pub const ERRO_SEM_CONEXAO: &str =
+    "a internet parece estar fora do ar: nenhum site respondeu";
+
+/// Esta mensagem é a de um servidor que ficou MUDO?
+///
+/// A lista é a das três fontes do funil, e é o contrário exato do
+/// `commands::mensagem_de_transporte` — há teste no `commands` conferindo que
+/// toda frase que ele produz é reconhecida aqui. Uma quarta fonte que entre lá
+/// e não entre aqui não quebraria nada visível: ela só não contaria como
+/// evidência, e a varredura insistiria numa rede caída.
+pub fn conta_como_servidor_mudo(mensagem: &str) -> bool {
+    mensagem == fingerprint::ERRO_SEM_RESPOSTA
+        || mensagem == lyrics_fetch::ERRO_SEM_RESPOSTA
+        || mensagem == lyrics_ovh::ERRO_SEM_RESPOSTA
+}
+
+impl EstadoDaVarredura {
+    /// Passa a resposta de uma fonte adiante, anotando o que ela prova sobre a
+    /// REDE. Envolve a consulta em vez de ser chamada depois dela porque é o
+    /// único jeito de não haver um ponto de rede que esqueceu de anotar.
+    fn registrar(&self, fonte: FonteDeRede, resposta: Result<String>) -> Result<String> {
+        match &resposta {
+            // servidor mudo: uma fonte a menos, e nada provado sobre as outras
+            Err(e) if conta_como_servidor_mudo(&e.0) => {
+                self.fontes_mudas.set(self.fontes_mudas.get() | fonte.bit());
+            }
+            // resposta que chegou — inclusive a de erro — é internet funcionando
+            _ => self.alguma_fonte_respondeu.set(true),
+        }
+        resposta
+    }
+
+    /// **A evidência de rede caída: duas fontes DIFERENTES mudas, e nenhuma
+    /// respondendo.**
+    ///
+    /// Uma só não basta, e é esse o conserto: o funil abortava no primeiro erro
+    /// da etapa 2, então um AcoustID sem responder pulava o LRCLIB e o
+    /// lyrics.ovh — que provavelmente responderiam — e a tela dizia "sem
+    /// conexão" sobre duas etapas que nunca aconteceram.
+    ///
+    /// Duas bastam porque são hosts independentes, de provedores diferentes:
+    /// os dois calados ao mesmo tempo, com nada mais passando, é a melhor
+    /// evidência que este programa consegue ter sem inventar um teste de rede
+    /// próprio (que seria um quarto endereço, e nada do acervo sai da máquina).
+    fn rede_parece_caida(&self) -> bool {
+        !self.alguma_fonte_respondeu.get() && self.fontes_mudas.get().count_ones() >= 2
+    }
+
+    /// A frase que SOBRA na linha daquela música.
+    ///
+    /// Só aqui um "não respondeu" pode virar "a internet caiu", porque só aqui
+    /// se sabe o que as OUTRAS fontes fizeram. Mensagem de servidor que
+    /// respondeu (429, fora do ar, chave recusada) passa intacta: ela já é a
+    /// verdade, e a rodada da V9 existe para isso.
+    fn frase_do_erro(&self, erro: Option<String>) -> Option<String> {
+        erro.map(|msg| {
+            if conta_como_servidor_mudo(&msg) && self.rede_parece_caida() {
+                ERRO_SEM_CONEXAO.to_string()
+            } else {
+                msg
+            }
+        })
+    }
 }
 
 /// O que uma varredura em lote devolve.
@@ -1576,7 +1681,18 @@ where
         ));
     }
 
-    let mut erro: Option<String> = None;
+    /*
+      V10.10 — os erros passaram a ser DOIS, e a separação é o que permite ao
+      funil continuar depois de uma etapa que falhou.
+
+      Enquanto um erro qualquer abortava o funil, um `erro` só bastava: nada
+      rodava depois dele. Agora as etapas 3 e 4 rodam mesmo com a etapa 2 caída,
+      e um `erro` só faria duas coisas erradas, as duas silenciosas: o
+      `sem_letra_do_lrclib` pularia a etapa 4 por causa de uma falha do SOM, e o
+      `if let (None, Some(b), Some(conf))` jogaria fora uma letra que o LRCLIB
+      acabou de trazer, porque a etapa 2 tinha falhado antes.
+    */
+    let mut erro_do_som: Option<String> = None;
 
     // --- etapa 2: IDENTIDADE pelo som (AcoustID) --------------------------
     //
@@ -1625,7 +1741,7 @@ where
                 if msg == fingerprint::ERRO_FPCALC_NAO_EXECUTA {
                     estado.som_desligado.set(true);
                 }
-                erro = Some(msg);
+                erro_do_som = Some(msg);
             }
             Some(Ok(impressao)) => {
                 // A duração que o fpcalc mediu DECODIFICANDO o áudio é a
@@ -1638,7 +1754,9 @@ where
                 }
                 cortesia.esperar_ao_menos(fingerprint::PAUSA_ACOUSTID);
                 match fingerprint::identificar(&impressao, fontes.chave_acoustid(), &|url| {
-                    fontes.buscar(url)
+                    // V10.10 — toda ida à rede passa pelo `registrar`: é ele
+                    // que sabe, no fim, se alguma fonte respondeu.
+                    estado.registrar(FonteDeRede::Som, fontes.buscar(url))
                 }) {
                     Ok(Some(id)) => {
                         if let Some(conflito) = conflito_com_a_etiqueta(cand, &id) {
@@ -1662,7 +1780,7 @@ where
                         if msg == fingerprint::ERRO_CHAVE_RECUSADA {
                             estado.som_desligado.set(true);
                         }
-                        erro = Some(msg);
+                        erro_do_som = Some(msg);
                     }
                 }
             }
@@ -1680,7 +1798,11 @@ where
     // outra gravação dentro do arquivo. Nem "quem clicou sabe o que quer"
     // autoriza pôr letra de terceiro dentro de uma peça sem voz.
     if cand.song.instrumental {
-        return Some(proposta_da_identidade(cand, identidade, erro));
+        return Some(proposta_da_identidade(
+            cand,
+            identidade,
+            estado.frase_do_erro(erro_do_som),
+        ));
     }
 
     // V10 — na VARREDURA, as etapas de letra rodam só em quem não tem letra.
@@ -1697,14 +1819,55 @@ where
     // produto sabe fazer por aquele arquivo, inclusive uma segunda opinião
     // sobre a letra que já está lá (DECISIONS #81).
     if origem == Origem::Varredura && cand.song.has_lyrics {
-        return Some(proposta_da_identidade(cand, identidade, erro));
+        return Some(proposta_da_identidade(
+            cand,
+            identidade,
+            estado.frase_do_erro(erro_do_som),
+        ));
     }
 
-    // Rede caída derruba TODAS as fontes: insistir só gastaria o tempo de
-    // quem está esperando.
-    if erro.is_some() {
-        return Some(proposta_da_identidade(cand, identidade, erro));
+    /*
+      REDE CAÍDA derruba todas as fontes: insistir só gastaria o tempo de quem
+      está esperando. A intenção é a de sempre; o que mudou é o que autoriza
+      afirmá-la.
+
+      Até a V10.9 bastava `erro.is_some()` — qualquer erro da etapa 2. E o
+      relato de campo mostrou o que isso custa: o AcoustID sem responder (ou o
+      `fpcalc`, que falha em três de cada quatro arquivos do acervo real)
+      pulava as etapas 3 e 4, que muito provavelmente responderiam, e a linha
+      saía dizendo "sem conexão". Duas etapas puladas em silêncio, e a pessoa
+      lendo "a internet não tem a letra desta música".
+
+      Agora quem manda é a EVIDÊNCIA: duas fontes diferentes mudas e nenhuma
+      respondendo (`rede_parece_caida`). Ela não depende do erro DESTA música —
+      uma varredura que já provou que a rede caiu não gasta mais consulta
+      nenhuma, mesmo que esta música ainda não tenha falhado em nada.
+    */
+    if estado.rede_parece_caida() {
+        return Some(proposta_da_identidade(
+            cand,
+            identidade,
+            /*
+              E a linha SAI COM O MOTIVO, sempre. A música que não foi
+              consultada precisa aparecer na revisão dizendo por quê: proposta
+              sem erro e sem mudança é descartada como no-op, e a música
+              sumiria da lista em silêncio — que é exatamente o que a DECISIONS
+              #47 existe para impedir. Aqui o motivo é a varredura inteira, e
+              não esta música: nenhum site respondeu.
+            */
+            Some(ERRO_SEM_CONEXAO.to_string()),
+        ));
     }
+
+    /*
+      Os erros das etapas de LETRA, separados do da etapa 2. Eles vencem na
+      linha (`erro_da_letra.or(erro_do_som)`, lá embaixo) porque são os que
+      explicam o desfecho que a pessoa está olhando: ela abriu a busca atrás de
+      uma letra, e é a última etapa que tentou trazê-la que diz por que não
+      veio. Sem nenhum deles, sobra o do som — que explica o nome, e continua
+      sendo notícia.
+    */
+    let mut erro_da_letra: Option<String> = None;
 
     // --- etapa 3: LRCLIB (título/artista + duração) -----------------------
     etapa(ETAPA_LRCLIB);
@@ -1721,9 +1884,13 @@ where
             return None;
         }
         cortesia.esperar();
-        match lyrics_fetch::query_best(&titulo, &artista, duracao, &|url| fontes.buscar(url), |t, a| {
-            !is_placeholder(Campo::Titulo, t) && !is_placeholder(Campo::Artista, a)
-        }) {
+        match lyrics_fetch::query_best(
+            &titulo,
+            &artista,
+            duracao,
+            &|url| estado.registrar(FonteDeRede::Lrclib, fontes.buscar(url)),
+            |t, a| !is_placeholder(Campo::Titulo, t) && !is_placeholder(Campo::Artista, a),
+        ) {
             Ok(Some(cand_lrclib)) => {
                 if best.as_ref().is_none_or(|b| cand_lrclib.score > b.score) {
                     best = Some(cand_lrclib);
@@ -1747,7 +1914,7 @@ where
                     .and_then(|b| lyrics_fetch::classify(b.sim, b.dif))
                     .is_none()
                 {
-                    erro = Some(e.to_string());
+                    erro_da_letra = Some(e.to_string());
                 }
                 break;
             }
@@ -1757,7 +1924,7 @@ where
     let confianca = best
         .as_ref()
         .and_then(|b| lyrics_fetch::classify(b.sim, b.dif));
-    if let (None, Some(b), Some(conf)) = (&erro, &best, confianca) {
+    if let (None, Some(b), Some(conf)) = (&erro_da_letra, &best, confianca) {
         // Com identidade vinda do SOM, os NOMES propostos são os dela (já
         // filtrados pelo conflito e preenchendo só campo vazio), não os que o
         // LRCLIB devolveu: a autoridade sobre a identidade é a impressão
@@ -1804,7 +1971,21 @@ where
         Some(i) => (i.titulo.clone(), i.artista.clone()),
         None => (cand.titulo_tag.clone(), cand.artista_tag.clone()),
     };
-    let sem_letra_do_lrclib = erro.is_none() && confianca.is_none();
+    /*
+      V10.10 — "o LRCLIB não trouxe letra", e nada mais.
+
+      Isto era `erro.is_none() && confianca.is_none()`, e o `erro` embutia duas
+      afirmações que não são desta etapa: o LRCLIB que FALHOU cancelava a
+      consulta ao lyrics.ovh — outro host, outro provedor —, e uma falha da
+      etapa 2 cancelava as duas. É a mesma coisa que o comentário da etapa 4 já
+      dizia estar errada na direção contrária ("a queda de um não cancela o
+      outro"), e é o que o relato de campo encontrou: etapas puladas em
+      silêncio, com a tela acusando a internet de quem está olhando.
+
+      Quem impede a consulta inútil agora é a evidência de rede caída, conferida
+      logo abaixo: um host mudo não desliga nada, dois desligam tudo.
+    */
+    let sem_letra_do_lrclib = confianca.is_none();
     let tem_o_que_conferir = !titulo_consulta.is_empty() && !artista_consulta.is_empty();
 
     // --- etapa 4: lyrics.ovh, SEM CHAVE -----------------------------------
@@ -1818,7 +1999,7 @@ where
     // Confiança MÉDIA, nunca ALTA, pelo MESMO motivo que valia para o
     // Vagalume: sem duração não há confirmação independente, e ALTA chega
     // PRÉ-MARCADA (DECISIONS #49).
-    if sem_letra_do_lrclib && tem_o_que_conferir {
+    if sem_letra_do_lrclib && tem_o_que_conferir && !estado.rede_parece_caida() {
         if cancelled() {
             return None;
         }
@@ -1827,7 +2008,7 @@ where
         match lyrics_ovh::fetch_lyrics_ovh(
             &titulo_consulta,
             &artista_consulta,
-            &|url| fontes.buscar(url),
+            &|url| estado.registrar(FonteDeRede::LyricsOvh, fontes.buscar(url)),
             |t, a| !is_placeholder(Campo::Titulo, t) && !is_placeholder(Campo::Artista, a),
         ) {
             Ok(Some(m)) => {
@@ -1869,12 +2050,18 @@ where
                 // A2 no `fpcalc`). E ela também NÃO derruba a etapa seguinte:
                 // "lyrics.ovh fora do ar" não diz nada sobre outro serviço, e
                 // encadeá-los faria a queda de um cancelar o outro.
-                erro = Some(e.to_string());
+                erro_da_letra = Some(e.to_string());
             }
         }
     }
 
-    Some(proposta_da_identidade(cand, identidade, erro))
+    Some(proposta_da_identidade(
+        cand,
+        identidade,
+        // a falha da LETRA vence a do som: é ela que explica o desfecho que a
+        // pessoa está olhando (ver o comentário do `erro_da_letra`)
+        estado.frase_do_erro(erro_da_letra.or(erro_do_som)),
+    ))
 }
 
 /// True quando o que o SOM identificou CONTRADIZ uma etiqueta real do

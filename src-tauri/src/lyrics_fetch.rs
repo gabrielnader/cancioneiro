@@ -25,6 +25,16 @@ use std::collections::HashMap;
 /// qualquer outro. O Vagalume era o quarto e SAIU (DECISIONS #110).
 pub const SEARCH_URL: &str = "https://lrclib.net/api/search";
 
+/// **V10.10 — o LRCLIB não respondeu**: DNS que não resolveu, os 10 s
+/// esgotados, conexão recusada. Ramo de TRANSPORTE do `funil_fetcher`, que até
+/// esta versão dizia "sem conexão" para todo servidor mudo — mandando a pessoa
+/// procurar defeito na própria internet, que estava ótima.
+///
+/// A frase é "o site de letras" e não "o LRCLIB" pelo mesmo motivo das outras
+/// deste destino (`mensagem_de_status`): o nome do serviço não diz nada a quem
+/// não tem a quem perguntar.
+pub const ERRO_SEM_RESPOSTA: &str = "o site de letras não respondeu";
+
 /// Percent-encode de um valor de query string (RFC 3986: só unreserved
 /// passam sem escape) — evita depender de crate para meia dúzia de bytes.
 /// Compartilhado com o `lyrics_ovh` (V10).

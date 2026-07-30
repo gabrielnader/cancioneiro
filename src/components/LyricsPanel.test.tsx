@@ -1228,19 +1228,29 @@ describe("LyricsPanel — marca de instrumental (V8/F17)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// V10.9 — A ETAPA 5 NA PORTA DE UMA MÚSICA.
+// V10.9 → V10.10 — A ETAPA 5 NA PORTA DE UMA MÚSICA, E O BOTÃO QUE NÃO COBRA
+// O FUNIL INTEIRO ANTES.
 //
-// O funil da ficha roda as etapas 1 a 4 e para ali. Com 3% de cobertura medida,
-// "as quatro etapas não acharam nada" é o desfecho TÍPICO daquele clique — e a
-// única coisa que resolveria AQUELA música ficava a duas telas de distância,
-// numa fila que é a pasta inteira.
+// A V10.9 pôs a etapa 5 na ficha, mas pendurada no desfecho da busca: ela só
+// aparecia DEPOIS de "Buscar dados na internet" e só quando as quatro etapas
+// não achavam letra. Pedido do dono do produto, verbatim: *"No caso específico
+// de mexer música por música quero um botão separado pra fazer transcrição. Pra
+// não precisar rodar todo o fluxo pra depois só poder transcrever."*
+//
+// Com 3% de cobertura medida, quem já sabe que a música não está na internet
+// pagava segundos de rede e uma leitura de impressão digital para só então
+// poder transcrever.
 //
 // A oferta reusa a MESMA máquina das outras duas portas: `startTranscricao`
 // recebe a fila por parâmetro desde a V10.6, e uma lista de um item é tudo o
 // que falta. Um segundo caminho seria um segundo lugar onde a barra, o
 // cancelamento e a revisão podem divergir (a lição do M4).
 // ---------------------------------------------------------------------------
-describe("LyricsPanel — a etapa 5 na ficha de uma música (V10.9)", () => {
+describe("LyricsPanel — o botão direto da etapa 5 na ficha (V10.10)", () => {
+  /** O rótulo inteiro: o que o botão faz, e quanto custa. */
+  const BOTAO =
+    "Escrever a letra ouvindo o áudio (cerca de 4 minutos — pode levar mais" +
+    " nesta máquina)";
   const SEM_LETRA = "Esta música continua sem letra.";
   let startTranscricao: ReturnType<typeof vi.fn>;
   let transcricaoPendentesDaMusica: ReturnType<typeof vi.fn>;
@@ -1320,33 +1330,25 @@ describe("LyricsPanel — a etapa 5 na ficha de uma música (V10.9)", () => {
   });
 
   /*
-    A OFERTA SÓ APARECE DEPOIS DA BUSCA, e é decisão de projeto.
+    ESTE TESTE MUDOU DE PROPÓSITO na V10.10, e é o conserto inteiro num
+    assert.
 
-    Antes do clique ninguém está perguntando "escrever a letra ouvindo o áudio?":
-    a pergunta daquele segundo é se a internet tem esta música, e ela custa
-    segundos contra os minutos da etapa 5. Oferecer as duas ao mesmo tempo é a
-    escolha às cegas que a V8 recusou quando havia dois botões dizendo "buscar
-    na internet" — e a escolha errada aqui custa minutos de CPU por algo que uma
-    consulta resolveria.
+    Ele guardava o contrário: "antes de buscar, a ficha não oferece a etapa 5",
+    porque a V10.9 decidiu que naquele segundo a pergunta era outra (se a
+    internet tem esta música). O uso desmentiu a premissa — quem abre uma ficha
+    deste acervo em geral JÁ SABE que a internet não tem —, e o preço de estar
+    errado era o funil inteiro antes de poder transcrever.
+
+    A escolha às cegas que a V8 recusou continua recusada, e é por isso que o
+    tempo está no rótulo: os dois botões desta tela dizem coisas diferentes e
+    cada um traz o próprio custo.
   */
-  it("antes de buscar, a ficha não oferece a etapa 5", async () => {
+  it("o botão está na ficha ANTES de qualquer busca, com o tempo DESTA música", async () => {
     montar();
-    await screen.findByLabelText("Letra");
-    expect(screen.queryByText(SEM_LETRA)).not.toBeInTheDocument();
-    expect(transcricaoPendentesDaMusica).not.toHaveBeenCalled();
-  });
-
-  it("as quatro etapas sem achar nada: a oferta aparece, com o tempo DESTA música", async () => {
-    montar();
-    buscar();
-    expect(await screen.findByText(SEM_RESULTADO_INDIVIDUAL)).toBeInTheDocument();
-    expect(
-      await screen.findByText(
-        "Esta música continua sem letra. Escrever a letra ouvindo o áudio leva" +
-          " cerca de 4 minutos — pode levar mais nesta máquina.",
-      ),
-    ).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: BOTAO })).toBeInTheDocument();
     expect(transcricaoPendentesDaMusica).toHaveBeenCalledWith(2);
+    // e nada de rede: o funil não roda para a oferta existir
+    expect(enrichSongScan).not.toHaveBeenCalled();
   });
 
   /*
@@ -1355,20 +1357,47 @@ describe("LyricsPanel — a etapa 5 na ficha de uma música (V10.9)", () => {
     aplica os portões da etapa 5), e não de um `[song.id]` montado aqui — montar
     o id na tela seria a tela decidindo o que a etapa 5 transcreve.
   */
-  it("o botão manda a fila de um item pelo MESMO caminho", async () => {
+  it("o botão manda a fila de um item pelo MESMO caminho, sem passar pelo funil", async () => {
     montar();
-    buscar();
-    fireEvent.click(await screen.findByRole("button", { name: "Começar agora" }));
+    fireEvent.click(await screen.findByRole("button", { name: BOTAO }));
     expect(startTranscricao).toHaveBeenCalledWith([2]);
+    expect(enrichSongScan).not.toHaveBeenCalled();
   });
 
   /*
-    ACHOU LETRA, NÃO OFERECE. É a mesma razão pela qual a pergunta do fim
-    desconta quem acabou de ganhar uma proposta de letra na varredura (V10.6):
-    cobrar minutos de CPU por uma letra que está ali na tela, esperando um
-    clique, é cobrar caro por algo que o clique resolve.
+    A CONVIVÊNCIA DOS DOIS BOTÕES, RESOLVIDA: não há dois.
+
+    A oferta da V10.9 aparecia depois da busca com um "Começar agora" — a mesma
+    ação, num segundo botão, na mesma tela. É a duplicação que a V8 removeu
+    quando havia dois "buscar na internet". Quem sobrou foi o botão permanente,
+    porque ele responde antes e depois da busca; o "Começar agora" da ficha
+    deixou de existir.
   */
-  it("com letra encontrada, a oferta não aparece", async () => {
+  it("depois da busca que não achou letra, continua havendo UM botão só", async () => {
+    montar();
+    await screen.findByRole("button", { name: BOTAO });
+    buscar();
+    expect(await screen.findByText(SEM_RESULTADO_INDIVIDUAL)).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Começar agora" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getAllByRole("button", { name: /Escrever a letra ouvindo o áudio/ }),
+    ).toHaveLength(1);
+    // e a porta não é reperguntada por causa da busca (DECISIONS #162d)
+    expect(transcricaoPendentesDaMusica).toHaveBeenCalledTimes(1);
+  });
+
+  /*
+    O QUE O BOTÃO DESCREVE É O ARQUIVO E O FORMULÁRIO — nunca o resultado de uma
+    busca. Proposta não é fato: nada foi gravado, e a música continua sem letra
+    até alguém clicar. Um botão que some porque uma sugestão apareceu na tela é
+    um botão que a pessoa vai procurar e não achar.
+
+    Some, sim, quando a letra ENTRA no campo — aí a música deixou de estar sem
+    letra, e é essa a mudança que importa.
+  */
+  it("com letra encontrada o botão fica, e some quando ela entra no campo", async () => {
     enrichSongScan = vi.fn(async () => ({
       song_id: 2,
       file_path: "/m/2.mp3",
@@ -1390,46 +1419,18 @@ describe("LyricsPanel — a etapa 5 na ficha de uma música (V10.9)", () => {
     }));
     montar();
     buscar();
-    await screen.findByRole("button", { name: "Usar estes dados" });
-    expect(screen.queryByText(SEM_LETRA)).not.toBeInTheDocument();
-    expect(transcricaoPendentesDaMusica).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole("button", { name: "Usar estes dados" }));
+    expect(
+      screen.queryByRole("button", { name: /Escrever a letra ouvindo o áudio/ }),
+    ).not.toBeInTheDocument();
   });
 
   /*
-    PROPOSTA SEM LETRA (só nome) OFERECE. O nome corrigido não põe letra
-    nenhuma no arquivo, e a música continua exatamente onde estava.
+    A BUSCA QUE FALHOU POR FALTA DE INTERNET não muda nada aqui, e é de
+    propósito: a etapa 5 não usa rede. A música que ficou sem letra porque o
+    LRCLIB não respondeu é exatamente a que a transcrição resolve.
   */
-  it("proposta que só corrige o nome não tira a oferta", async () => {
-    enrichSongScan = vi.fn(async () => ({
-      song_id: 2,
-      file_path: "/m/2.mp3",
-      current_title: "Faixa 03",
-      current_artist: null,
-      proposed_title: "Cadê o Gato",
-      proposed_artist: "Grupo Fixture",
-      lyrics: null,
-      confidence: "media" as const,
-      fonte: "nome do arquivo",
-      has_lyrics: false,
-      letra_origem: null,
-      conflito: null,
-      substitui_nome_escrito: false,
-      marcar_instrumental: false,
-      refrao: null,
-      aviso: null,
-      error: null,
-    }));
-    montar();
-    buscar();
-    expect(await screen.findByText(SEM_LETRA, { exact: false })).toBeInTheDocument();
-  });
-
-  /*
-    SEM CONEXÃO TAMBÉM OFERECE, e é de propósito: a etapa 5 não usa rede. A
-    música que ficou sem letra porque o LRCLIB não respondeu é exatamente a que
-    a transcrição resolve — está escrito assim no `a_etapa_5_tem_o_que_fazer`.
-  */
-  it("a busca que falhou por falta de internet continua oferecendo a etapa 5", async () => {
+  it("a busca que falhou por falta de internet não tira o botão", async () => {
     enrichSongScan = vi.fn(async () => {
       throw new Error("sem conexão");
     });
@@ -1438,62 +1439,84 @@ describe("LyricsPanel — a etapa 5 na ficha de uma música (V10.9)", () => {
     expect(
       await screen.findByText("Sem conexão — a busca de dados precisa de internet."),
     ).toBeInTheDocument();
-    expect(await screen.findByText(SEM_LETRA, { exact: false })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: BOTAO })).toBeInTheDocument();
   });
 
   /*
     QUEM DECIDE SE HÁ O QUE TRANSCREVER É O BACKEND. Música com letra,
     instrumental ou com o arquivo fora do disco voltam com a fila vazia, e a
     ficha não desenha nada — reescrever o portão aqui seria a #80 outra vez.
+
+    A música que JÁ TEM LETRA cai neste caso, e é onde ela tem de cair: a etapa
+    5 produziria uma SUBSTITUIÇÃO, que o `apply` só grava com consentimento
+    explícito (DECISIONS #79) — minutos de CPU para chegar a uma caixa que a
+    pessoa não tinha como prever, num formulário que MOSTRA a letra que ela
+    pode corrigir à mão ali mesmo.
   */
-  it("fila vazia do backend: nada é oferecido e nada é afirmado", async () => {
+  it("fila vazia do backend: não há botão e nada é afirmado", async () => {
     transcricaoPendentesDaMusica = vi.fn(async () =>
       pendente({ musicas: [], segundos_estimados: 0 }),
     );
     montar();
-    buscar();
-    await screen.findByText(SEM_RESULTADO_INDIVIDUAL);
-    expect(screen.queryByText(SEM_LETRA)).not.toBeInTheDocument();
+    await waitFor(() => expect(transcricaoPendentesDaMusica).toHaveBeenCalled());
     expect(
-      screen.queryByRole("button", { name: "Começar agora" }),
+      screen.queryByRole("button", { name: /Escrever a letra ouvindo o áudio/ }),
     ).not.toBeInTheDocument();
+    expect(screen.queryByText(SEM_LETRA, { exact: false })).not.toBeInTheDocument();
   });
 
   // "Não sabemos" é um estado (DECISIONS #86): a porta que não respondeu não
-  // vira zero nem promessa — a ficha simplesmente não desenha a oferta.
+  // vira zero nem promessa — a ficha simplesmente não desenha o botão.
   it("porta que falhou não desenha nada", async () => {
     transcricaoPendentesDaMusica = vi.fn(async () => {
       throw new Error("banco ocupado");
     });
     montar();
-    buscar();
-    await screen.findByText(SEM_RESULTADO_INDIVIDUAL);
     await waitFor(() => expect(transcricaoPendentesDaMusica).toHaveBeenCalled());
-    expect(screen.queryByText(SEM_LETRA)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /Escrever a letra ouvindo o áudio/ }),
+    ).not.toBeInTheDocument();
   });
 
   /*
     O FORMULÁRIO É MAIS ATUAL QUE O BANCO. Quem acabou de marcar "esta música é
     instrumental" declarou que não há voz no áudio; oferecer escrever a letra
     ouvindo o áudio contradiria o que ela acabou de dizer. É a mesma razão do
-    `SEM_RESULTADO_INSTRUMENTAL`, que já existe por causa desta caixa.
+    `SEM_RESULTADO_INSTRUMENTAL`, que já existe por causa desta caixa — e o
+    mesmo padrão da V10.9, não um terceiro.
   */
-  it("marcada como instrumental no formulário, a oferta não aparece", async () => {
+  it("marcada como instrumental no formulário, o botão sai da tela", async () => {
     montar();
+    await screen.findByRole("button", { name: BOTAO });
     fireEvent.click(screen.getByLabelText("Esta música é instrumental"));
-    buscar();
-    expect(await screen.findByText(SEM_RESULTADO_INSTRUMENTAL)).toBeInTheDocument();
-    expect(screen.queryByText(SEM_LETRA)).not.toBeInTheDocument();
-    expect(transcricaoPendentesDaMusica).not.toHaveBeenCalled();
+    expect(
+      screen.queryByRole("button", { name: /Escrever a letra ouvindo o áudio/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  it("escrita a letra no campo, o botão sai da tela", async () => {
+    montar();
+    await screen.findByRole("button", { name: BOTAO });
+    fireEvent.change(screen.getByLabelText("Letra"), {
+      target: { value: "agora tem letra" },
+    });
+    expect(
+      screen.queryByRole("button", { name: /Escrever a letra ouvindo o áudio/ }),
+    ).not.toBeInTheDocument();
   });
 
   /*
-    SEM OS ACESSÓRIOS o texto é o do DOWNLOAD, com tamanho e tempo, e não há
-    botão nenhum: é o padrão da pergunta do fim (a outra porta que não está em
-    Configurações), e não o do bloco permanente, que aponta para cima porque já
-    está lá.
+    SEM OS ACESSÓRIOS NÃO HÁ BOTÃO: um botão que não faria nada é pior que a
+    frase que diz o que fazer (DECISIONS #157) — e o padrão é o da pergunta do
+    fim, a outra porta que não está em Configurações, com tamanho e tempo.
+
+    A FRASE continua saindo depois da busca, e não o tempo todo: ela é a
+    resposta ao beco que a busca acabou de produzir, e um parágrafo permanente
+    dentro de um formulário é o que a #154(a) recusou. O botão pode ser
+    permanente porque é uma AÇÃO que esta máquina executa; a frase manda a
+    pessoa para outra tela.
   */
-  it("sem os acessórios, oferece o download e não um botão que não faria nada", async () => {
+  it("sem os acessórios não há botão, e a saída aparece quando a busca não traz letra", async () => {
     transcricaoPendentesDaMusica = vi.fn(async () => pendente({ disponivel: false }));
     montar(semLetra(), {
       acessoriosEstado: vi.fn(async (): Promise<AcessorioInfo[]> => [
@@ -1501,6 +1524,12 @@ describe("LyricsPanel — a etapa 5 na ficha de uma música (V10.9)", () => {
         acessorio("modelo-de-transcricao-grande", 1_533_763_059, 511),
       ]),
     });
+    await waitFor(() => expect(transcricaoPendentesDaMusica).toHaveBeenCalled());
+    expect(
+      screen.queryByRole("button", { name: /Escrever a letra ouvindo o áudio/ }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText(SEM_LETRA, { exact: false })).not.toBeInTheDocument();
+
     buscar();
     expect(
       await screen.findByText(
@@ -1529,7 +1558,27 @@ describe("LyricsPanel — a etapa 5 na ficha de uma música (V10.9)", () => {
   });
 
   /*
-    O CONSERTO QUE VEM JUNTO COM A PORTA NOVA.
+    O botão novo entra na MESMA trava dos outros: enquanto uma varredura ou a
+    etapa 5 estão rodando, ele não dispara um segundo trabalho pesado — e o
+    motivo na tela diz QUAL trabalho está rodando (V10.9).
+  */
+  it("com a etapa 5 rodando, o botão para e o motivo fala da escrita", async () => {
+    montar();
+    await screen.findByRole("button", { name: BOTAO });
+    act(() =>
+      useEnrichStore.setState({ status: "transcribing", scanInFlight: true }),
+    );
+    const motivo = await screen.findByText(/espere elas terminarem/);
+    expect(motivo.textContent).toContain("As letras estão sendo escritas");
+    expect(screen.getByRole("button", { name: BOTAO })).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Buscar dados na internet" }),
+    ).toBeDisabled();
+  });
+
+  /*
+    O CONSERTO QUE VEIO JUNTO COM A PORTA NOVA (V10.9), e que a V10.10 deixa
+    ainda mais alcançável — agora dá para mandar transcrever sem nem buscar.
 
     Aplicada a letra na revisão, o arquivo passa a ter letra e a ficha continua
     aberta atrás, com o campo VAZIO — e "Salvar no arquivo" com o campo vazio
@@ -1570,66 +1619,6 @@ describe("LyricsPanel — a etapa 5 na ficha de uma música (V10.9)", () => {
     expect(screen.getByLabelText("Título")).toHaveValue("Cadê o Gato (corrigido)");
   });
 
-  /*
-    A PRIMEIRA FRASE DA OFERTA É "esta música continua sem letra", e ela tem de
-    continuar verdadeira enquanto estiver na tela. Escrita a letra no campo — à
-    mão, ou porque a revisão gravou a transcrição e o campo se preencheu —, a
-    frase passaria a ser desmentida pelo textarea logo acima dela.
-  */
-  it("escrita a letra no campo, a oferta sai da tela", async () => {
-    montar();
-    buscar();
-    await screen.findByText(SEM_LETRA, { exact: false });
-    fireEvent.change(screen.getByLabelText("Letra"), {
-      target: { value: "agora tem letra" },
-    });
-    expect(screen.queryByText(SEM_LETRA, { exact: false })).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Começar agora" }),
-    ).not.toBeInTheDocument();
-  });
-
-  /*
-    O motivo do bloqueio tem de dizer QUAL trabalho está rodando. Os dois botões
-    desta ficha param enquanto a etapa 5 escreve as letras (é o mesmo
-    `scanInFlight`), e a frase única falava de uma busca que naquele momento não
-    estava acontecendo — e este estado ficou alcançável em um clique: é onde
-    fica quem mandou transcrever daqui e voltou da revisão.
-  */
-  it("com a etapa 5 rodando, o motivo do bloqueio fala da escrita, não de busca", async () => {
-    montar();
-    act(() =>
-      useEnrichStore.setState({ status: "transcribing", scanInFlight: true }),
-    );
-    const motivo = await screen.findByText(/espere elas terminarem/);
-    expect(motivo.textContent).toContain("As letras estão sendo escritas");
-    expect(
-      screen.getByRole("button", { name: "Buscar dados na internet" }),
-    ).toBeDisabled();
-  });
-
-  // O produto é lido em tela de notebook, em sala mal iluminada (DECISIONS
-  // #69) — a oferta nova entra na mesma régua.
-  it("o texto da oferta passa em AA sobre o verde-água do bloco", async () => {
-    montar();
-    buscar();
-    await screen.findByText(SEM_LETRA, { exact: false });
-    const bloco = screen
-      .getAllByRole("status")
-      .find((el) => /bg-\[#F0FDFA\]/.test(el.className))!;
-    const comCor = [...bloco.querySelectorAll<HTMLElement>("*"), bloco].filter(
-      (el) => /text-\[#[0-9a-fA-F]{6}\]/.test(el.className),
-    );
-    expect(comCor.length).toBeGreaterThan(0);
-    for (const el of comCor) {
-      const proprio = /bg-\[(#[0-9a-fA-F]{6})\]/.exec(el.className);
-      expect(
-        contrastRatio(corDoTexto(el.className), proprio ? proprio[1] : "#F0FDFA"),
-        `"${el.textContent?.slice(0, 30)}"`,
-      ).toBeGreaterThanOrEqual(AA_TEXTO_NORMAL);
-    }
-  });
-
   it("campo com texto digitado NÃO é sobrescrito pelo arquivo", async () => {
     const s = semLetra();
     montar(s, { getLyrics: vi.fn(async () => null) });
@@ -1650,5 +1639,28 @@ describe("LyricsPanel — a etapa 5 na ficha de uma música (V10.9)", () => {
 
     await waitFor(() => expect(screen.getByLabelText("Letra")).toBeInTheDocument());
     expect(screen.getByLabelText("Letra")).toHaveValue("o que eu estava digitando");
+  });
+
+  // O produto é lido em tela de notebook, em sala mal iluminada (DECISIONS
+  // #69) — a saída sem acessórios entra na mesma régua.
+  it("o texto da saída sem acessórios passa em AA sobre o verde-água do bloco", async () => {
+    transcricaoPendentesDaMusica = vi.fn(async () => pendente({ disponivel: false }));
+    montar();
+    buscar();
+    await screen.findByText(SEM_LETRA, { exact: false });
+    const bloco = screen
+      .getAllByRole("status")
+      .find((el) => /bg-\[#F0FDFA\]/.test(el.className))!;
+    const comCor = [...bloco.querySelectorAll<HTMLElement>("*"), bloco].filter(
+      (el) => /text-\[#[0-9a-fA-F]{6}\]/.test(el.className),
+    );
+    expect(comCor.length).toBeGreaterThan(0);
+    for (const el of comCor) {
+      const proprio = /bg-\[(#[0-9a-fA-F]{6})\]/.exec(el.className);
+      expect(
+        contrastRatio(corDoTexto(el.className), proprio ? proprio[1] : "#F0FDFA"),
+        `"${el.textContent?.slice(0, 30)}"`,
+      ).toBeGreaterThanOrEqual(AA_TEXTO_NORMAL);
+    }
   });
 });

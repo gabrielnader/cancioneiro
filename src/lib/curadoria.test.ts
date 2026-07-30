@@ -44,6 +44,7 @@ import {
   rotuloDoRefrao,
   textoAplicado,
   textoDaOfertaDeTranscricao,
+  rotuloDeTranscreverEstaMusica,
   textoDaOfertaDestaMusica,
   textoDaTranscricaoIndisponivel,
   textoDoAcessorioAusente,
@@ -224,23 +225,14 @@ describe("a régua da copy (DECISIONS #100)", () => {
     // entram na MESMA régua. A da ficha aparece dentro de um formulário já
     // cheio de campos, que é o pior lugar possível para um parágrafo.
     [
-      "oferta da etapa 5 nesta música",
-      textoDaOfertaDestaMusica({
-        segundos: 240,
-        medidaNestaMaquina: false,
-        disponivel: true,
-        download: null,
-      }),
-    ],
-    [
       "oferta da etapa 5 nesta música, sem os acessórios",
-      textoDaOfertaDestaMusica({
-        segundos: 240,
-        medidaNestaMaquina: false,
-        disponivel: false,
-        download: { bytes: 1_533_763_059, segundos: 512 },
-      }),
+      textoDaOfertaDestaMusica({ bytes: 1_533_763_059, segundos: 512 }),
     ],
+    ["oferta da etapa 5 nesta música, sem saber o tamanho", textoDaOfertaDestaMusica(null)],
+    // V10.10 — o botão direto da ficha diz o CUSTO, e é a última coisa lida
+    // antes de um clique que gasta minutos de CPU: ele entra na mesma régua.
+    ["botão de transcrever esta música", rotuloDeTranscreverEstaMusica(240, false)],
+    ["botão de transcrever esta música, com medição", rotuloDeTranscreverEstaMusica(240, true)],
     ["aviso de falhas de gravação", avisoDeFalhasDeGravacao(7)!],
   ];
 
@@ -1929,13 +1921,102 @@ describe("a linha já gravada (V10.6)", () => {
 // consertou na outra porta: a etapa 5 morava onde a VARREDURA termina, e não
 // onde a PESSOA está.
 
-describe("a oferta da etapa 5 na ficha de uma música (V10.9)", () => {
-  const PRONTA = {
-    segundos: 240,
-    medidaNestaMaquina: false,
-    disponivel: true,
-    download: null,
-  };
+describe("o botão direto da etapa 5 na ficha de uma música (V10.10)", () => {
+  /*
+    O PEDIDO, verbatim: *"No caso específico de mexer música por música quero um
+    botão separado pra fazer transcrição. Pra não precisar rodar todo o fluxo pra
+    depois só poder transcrever."*
+
+    A V10.9 só oferecia a etapa 5 DEPOIS de "Buscar dados na internet", e só
+    quando as quatro etapas não achavam letra. Quem já sabe que a música não
+    está na internet — o caso comum neste acervo, 3% de cobertura medida — pagava
+    segundos de rede e uma leitura de impressão digital para só então poder
+    transcrever.
+
+    A V8 recusou dois botões dizendo "buscar na internet" porque a escolha era
+    ÀS CEGAS: a diferença entre eles era invisível. Aqui não é — um diz
+    "internet" e custa segundos, o outro diz "ouvindo o áudio" e traz os minutos
+    escritos nele. É o custo no rótulo que transforma a escolha em informada, e
+    é por isso que o tempo NÃO pode sair daqui.
+  */
+  it("o rótulo diz o que faz e quanto custa", () => {
+    expect(rotuloDeTranscreverEstaMusica(240, false)).toBe(
+      "Escrever a letra ouvindo o áudio (cerca de 4 minutos — pode levar mais" +
+        " nesta máquina)",
+    );
+  });
+
+  // A procedência do número tem a MESMA regra das outras portas: só a medição
+  // desta máquina autoriza o "neste computador" (DECISIONS #86 e #112).
+  it("com a estimativa medida, o 'neste computador' vale aqui também", () => {
+    expect(rotuloDeTranscreverEstaMusica(240, true)).toBe(
+      "Escrever a letra ouvindo o áudio (cerca de 4 minutos neste computador)",
+    );
+  });
+
+  it("não afirma uma medição que não houve", () => {
+    for (const segundos of [30, 240, 10_800]) {
+      const t = rotuloDeTranscreverEstaMusica(segundos, false);
+      expect(t, t).not.toContain("neste computador");
+      expect(t, t).toContain("pode levar mais nesta máquina");
+    }
+  });
+
+  it("tempo curto não vira 'cerca de menos de'", () => {
+    const t = rotuloDeTranscreverEstaMusica(30, false);
+    expect(t).toContain("menos de 1 minuto");
+    expect(t).not.toContain("cerca de menos");
+  });
+
+  /*
+    O TEMPO E A RESSALVA SÃO OS MESMOS DAS OUTRAS PORTAS, palavra por palavra.
+    Duas maneiras de dizer o mesmo número são duas telas que amanhã dizem coisas
+    diferentes sobre a mesma medição (DECISIONS #80 aplicada a texto) — e aqui
+    seria pior, porque as duas cabem na MESMA tela: o botão da ficha e a
+    pergunta do fim de uma varredura que a pessoa acabou de rodar.
+  */
+  it("o tempo é o MESMO texto que as outras duas portas usam", () => {
+    for (const medida of [false, true]) {
+      const dentroDoBotao = rotuloDeTranscreverEstaMusica(240, medida)
+        .replace("Escrever a letra ouvindo o áudio (", "")
+        .replace(")", "");
+      expect(textoDaOfertaDeTranscricao(1, 240, medida)).toContain(dentroDoBotao);
+      expect(
+        textoDoBlocoDeTranscricao({
+          quantas: 1,
+          segundos: 240,
+          medidaNestaMaquina: medida,
+          disponivel: true,
+          download: null,
+          todaABiblioteca: true,
+        }),
+      ).toContain(dentroDoBotao);
+    }
+  });
+
+  it("é rótulo de botão: uma frase, sem ponto final", () => {
+    const t = rotuloDeTranscreverEstaMusica(10_800, false);
+    expect(frases(t)).toBe(1);
+    expect(t.endsWith(".")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V10.9 → V10.10 — o que a ficha diz para quem NÃO pode transcrever aqui
+// ---------------------------------------------------------------------------
+//
+// Este texto MUDOU DE PROPÓSITO na V10.10, e é a metade que sobra do bloco da
+// V10.9. Antes ele descrevia a oferta inteira, com dois desfechos: com os
+// acessórios, o tempo e um botão "Começar agora"; sem eles, o download.
+//
+// Com o botão direto na ficha, o primeiro desfecho virou DUPLICAÇÃO — dois
+// botões para a mesma ação, que é o que a V8 removeu quando havia dois "buscar
+// na internet". Quem pode transcrever tem o botão, que já diz o tempo; o que
+// não cabe num botão é a saída de quem NÃO pode, porque ela não é um clique
+// daqui: é um download de 1,4 GB em outra tela. Sobrou só ela.
+
+describe("a saída da ficha para quem não tem os acessórios (V10.10)", () => {
+  const DOWNLOAD = { bytes: 1_533_763_059, segundos: 512 };
 
   /*
     A abertura é a ÚNICA coisa que muda entre as três portas, e ela muda porque
@@ -1944,88 +2025,38 @@ describe("a oferta da etapa 5 na ficha de uma música (V10.9)", () => {
     UMA ficha, e o que ela acabou de ler é que a busca não trouxe letra.
   */
   it("abre falando DESTA música, e não de uma lista", () => {
-    const t = textoDaOfertaDestaMusica(PRONTA);
+    const t = textoDaOfertaDestaMusica(DOWNLOAD);
     expect(t).toContain("Esta música continua sem letra.");
     expect(t.toLowerCase()).not.toContain("sobrar");
     expect(t.toLowerCase()).not.toContain("biblioteca");
   });
 
-  it("a SEGUNDA frase é a MESMA das outras duas portas, letra por letra", () => {
-    const segunda =
-      "Escrever a letra ouvindo o áudio leva cerca de 4 minutos — pode levar" +
-      " mais nesta máquina.";
-    expect(textoDaOfertaDestaMusica(PRONTA)).toContain(segunda);
-    expect(textoDaOfertaDeTranscricao(1, 240, false)).toContain(segunda);
-    expect(
-      textoDoBlocoDeTranscricao({
-        quantas: 1,
-        segundos: 240,
-        medidaNestaMaquina: false,
-        disponivel: true,
-        download: null,
-        todaABiblioteca: true,
-      }),
-    ).toContain(segunda);
-  });
-
-  // A procedência do número tem a MESMA regra das outras portas: só a medição
-  // desta máquina autoriza o "neste computador" (DECISIONS #86 e #112).
-  it("com a estimativa medida, o 'neste computador' vale aqui também", () => {
-    const t = textoDaOfertaDestaMusica({ ...PRONTA, medidaNestaMaquina: true });
-    expect(t).toBe(
-      "Esta música continua sem letra. Escrever a letra ouvindo o áudio leva" +
-        " cerca de 4 minutos neste computador.",
-    );
-  });
-
-  it("não afirma uma medição que não houve", () => {
-    for (const segundos of [30, 240, 10_800]) {
-      const t = textoDaOfertaDestaMusica({ ...PRONTA, segundos });
-      expect(t, t).not.toContain("neste computador");
-      expect(t, t).toContain("pode levar mais nesta máquina");
-    }
-  });
-
-  it("tempo curto não vira 'cerca de menos de'", () => {
-    const t = textoDaOfertaDestaMusica({ ...PRONTA, segundos: 30 });
-    expect(t).toContain("leva menos de 1 minuto");
-    expect(t).not.toContain("cerca de menos");
-  });
-
   /*
-    Sem os acessórios a saída aponta para CONFIGURAÇÕES, com tamanho e tempo —
-    e é o padrão da pergunta do fim, não o do bloco permanente. A diferença é
-    onde a pessoa está: o bloco permanente diz "acima" porque já estamos em
-    Configurações, e o editor não está lá.
+    A saída aponta para CONFIGURAÇÕES, com tamanho e tempo — é o padrão da
+    pergunta do fim, não o do bloco permanente. A diferença é onde a pessoa
+    está: o bloco permanente diz "acima" porque já estamos em Configurações, e
+    o editor não está lá.
   */
-  it("sem os acessórios, manda para Configurações com tamanho e tempo", () => {
-    const t = textoDaOfertaDestaMusica({
-      ...PRONTA,
-      disponivel: false,
-      download: { bytes: 1_533_763_059, segundos: 512 },
-    });
-    expect(t).toContain("Esta música continua sem letra.");
+  it("manda para Configurações com tamanho e tempo", () => {
+    const t = textoDaOfertaDestaMusica(DOWNLOAD);
     expect(t).toContain("1,4 GB");
     expect(t).toContain("cerca de 9 minutos");
     expect(t).toContain("em Configurações");
-    // e não repete o tempo da transcrição: quem não pode transcrever ainda não
+    // e não fala do tempo da transcrição: quem não pode transcrever ainda não
     // tem o que decidir sobre minutos de CPU
     expect(t).not.toContain("ouvindo o áudio leva");
   });
 
   it("a frase do download é a MESMA da pergunta do fim, letra por letra", () => {
-    const download = { bytes: 1_533_763_059, segundos: 512 };
     const segunda =
       "Para escrever a letra ouvindo o áudio, baixe 1,4 GB em Configurações —" +
       " cerca de 9 minutos.";
-    expect(
-      textoDaOfertaDestaMusica({ ...PRONTA, disponivel: false, download }),
-    ).toContain(segunda);
-    expect(textoDaTranscricaoIndisponivel(47, download)).toContain(segunda);
+    expect(textoDaOfertaDestaMusica(DOWNLOAD)).toContain(segunda);
+    expect(textoDaTranscricaoIndisponivel(47, DOWNLOAD)).toContain(segunda);
   });
 
   it("sem saber o tamanho, não inventa número (DECISIONS #86)", () => {
-    const t = textoDaOfertaDestaMusica({ ...PRONTA, disponivel: false });
+    const t = textoDaOfertaDestaMusica(null);
     expect(t).toContain("Esta música continua sem letra.");
     expect(t).toContain("Configurações");
     expect(t).not.toMatch(/\d+(,\d)? (kB|MB|GB)/);

@@ -453,16 +453,44 @@ pub(crate) fn funil_fetcher(url: &str) -> Result<String> {
         .user_agent("Cancioneiro/0.9")
         .build();
     match agent.get(url).call() {
+        // O corpo que não chegou inteiro é a conexão caindo no meio: para quem
+        // está olhando, este servidor não respondeu.
         Ok(resp) => resp
             .into_string()
-            .map_err(|_| AppError("sem conexão".into())),
+            .map_err(|_| AppError(mensagem_de_transporte(destino).into())),
         Err(ureq::Error::Status(404, _)) if destino == Destino::LyricsOvh => Ok(String::new()),
         Err(ureq::Error::Status(status, _)) => {
             Err(AppError(mensagem_de_status(status, destino).into()))
         }
         // transporte: DNS que não resolve, tempo esgotado, conexão recusada.
-        // Aqui "sem conexão" é a verdade, e continua sendo o texto.
-        Err(_) => Err(AppError("sem conexão".into())),
+        Err(_) => Err(AppError(mensagem_de_transporte(destino).into())),
+    }
+}
+
+/// **V10.10 — o que dizer quando o servidor NÃO respondeu.**
+///
+/// Este ramo dizia "sem conexão", e o relato de campo mostrou o estrago: o dono
+/// do produto clicou em "Buscar dados na internet" numa música, leu "sem
+/// conexão" em vermelho e tinha acabado de baixar 1,4 GB no mesmo aplicativo.
+/// A frase mentia por OMISSÃO — "este servidor não respondeu" virava "a sua
+/// internet caiu" —, e num produto sem suporte a acusação errada manda a pessoa
+/// procurar defeito onde não há.
+///
+/// **Só quem enxerga as três fontes pode falar da conexão**, e essa não é esta
+/// função: aqui se sabe de UM endereço, e o funil fala com até três hosts
+/// diferentes. Quem junta as evidências é o `enrich::EstadoDaVarredura`; se
+/// nenhuma fonte respondeu, é ele que troca a frase pelo
+/// `enrich::ERRO_SEM_CONEXAO`.
+///
+/// Cada destino fala de si, como no `mensagem_de_status`, e pelo mesmo motivo:
+/// chamar o AcoustID de "site de letras" manda procurar defeito no lugar
+/// errado. São TEXTO FIXO, sem interpolação — a chave nunca entra numa
+/// mensagem de erro.
+fn mensagem_de_transporte(destino: Destino) -> &'static str {
+    match destino {
+        Destino::Acoustid => crate::fingerprint::ERRO_SEM_RESPOSTA,
+        Destino::Lrclib => crate::lyrics_fetch::ERRO_SEM_RESPOSTA,
+        Destino::LyricsOvh => crate::lyrics_ovh::ERRO_SEM_RESPOSTA,
     }
 }
 
@@ -2057,6 +2085,57 @@ mod tests {
                 "o site de letras respondeu com erro",
                 "status {outro}"
             );
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // V10.10 — o servidor MUDO não é a internet da pessoa caindo.
+    //
+    // Relato de campo: "sem conexão" em vermelho, na ficha de uma música, com a
+    // internet funcionando (1,4 GB baixados no mesmo aplicativo, minutos antes).
+    // O ramo de transporte dizia isso para qualquer servidor que não
+    // respondesse — e o funil fala com três hosts diferentes.
+    // -----------------------------------------------------------------------
+
+    /// A frase do servidor mudo NOMEIA o servidor, e nunca acusa a conexão.
+    #[test]
+    fn o_servidor_que_nao_responde_nunca_acusa_a_internet_de_quem_esta_olhando() {
+        for destino in [Destino::Lrclib, Destino::LyricsOvh, Destino::Acoustid] {
+            let msg = mensagem_de_transporte(destino);
+            assert!(msg.contains("não respondeu"), "{destino:?}: {msg}");
+            assert!(!msg.contains("conexão"), "{destino:?}: {msg}");
+            assert!(!msg.contains("internet"), "{destino:?}: {msg}");
+            assert_ne!(msg, crate::enrich::ERRO_SEM_CONEXAO, "{destino:?}");
+        }
+        // e cada destino continua falando de si (o AcoustID não é site de letras)
+        assert!(!mensagem_de_transporte(Destino::Acoustid).contains("letras"));
+        assert!(mensagem_de_transporte(Destino::Acoustid).contains("som"));
+    }
+
+    /// **A guarda que liga as duas metades do conserto.**
+    ///
+    /// Quem produz a frase do servidor mudo é este arquivo; quem a reconhece
+    /// para decidir se a rede caiu é o `enrich::ficou_mudo`. Uma quarta fonte
+    /// que entre aqui e não entre lá não quebraria nada visível — ela só
+    /// deixaria de contar como evidência, e a varredura insistiria numa rede
+    /// caída, gastando o tempo de quem espera. É o modo de falha silencioso
+    /// que este teste existe para tornar barulhento.
+    #[test]
+    fn toda_frase_de_servidor_mudo_e_reconhecida_pelo_funil() {
+        for destino in [Destino::Lrclib, Destino::LyricsOvh, Destino::Acoustid] {
+            assert!(
+                crate::enrich::conta_como_servidor_mudo(mensagem_de_transporte(destino)),
+                "{destino:?}"
+            );
+        }
+        // e o contrário: servidor que RESPONDEU não é evidência de rede caída
+        for status in [400, 401, 403, 429, 500, 503] {
+            for destino in [Destino::Lrclib, Destino::LyricsOvh, Destino::Acoustid] {
+                assert!(
+                    !crate::enrich::conta_como_servidor_mudo(mensagem_de_status(status, destino)),
+                    "status {status}, destino {destino:?}"
+                );
+            }
         }
     }
 

@@ -1694,10 +1694,20 @@ export function createMockBackend(): MockBackend {
     // clique gravaria a letra de outra gravação no arquivo.
     if (song.instrumental === true) return propostaDaIdentidade();
 
-    // sem rede: o backend real NUNCA rejeita — o erro vem POR MÚSICA
-    // na proposta e a linha fica desabilitada (DECISIONS #47)
+    /*
+      Sem rede: o backend real NUNCA rejeita — o erro vem POR MÚSICA na proposta
+      e a linha fica desabilitada (DECISIONS #47).
+
+      V10.10 — e a FRASE mudou junto com a do Rust. Ela era "sem conexão", que o
+      funil dizia para todo servidor que não respondesse; agora "sem conexão" é
+      uma AFIRMAÇÃO sobre a rede, e o Rust só a faz quando duas fontes diferentes
+      ficaram mudas e nenhuma respondeu (`enrich::ERRO_SEM_CONEXAO`). O
+      `_offline` do mock é exatamente esse estado — tudo mudo —, então é essa a
+      frase que ele tem de produzir: mock e backend dizendo coisas diferentes
+      sobre o mesmo fato é a família de divergências da DECISIONS #88.
+    */
     if (backend._offline) {
-      erro = "sem conexão";
+      erro = "a internet parece estar fora do ar: nenhum site respondeu";
       return propostaDaIdentidade();
     }
 

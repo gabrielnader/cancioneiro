@@ -5,11 +5,11 @@ import {
   EXPLICACAO_DA_CONFIANCA_DO_SOM,
   LABEL_SOM_DIZ,
   LABEL_SUA_ETIQUETA_DIZ,
-  ROTULO_COMECAR_TRANSCRICAO,
   SEM_RESULTADO_INDIVIDUAL,
   SEM_RESULTADO_INSTRUMENTAL,
   confiancaDoSom,
   downloadParaTranscrever,
+  rotuloDeTranscreverEstaMusica,
   textoDaOfertaDestaMusica,
   type DownloadPendente,
 } from "../lib/curadoria";
@@ -59,6 +59,9 @@ type ResultadoBusca =
  * PORTA, e não de um `[song.id]` montado aqui: quem aplica os portões da etapa 5
  * (música com letra, instrumental, arquivo fora do disco) é o Rust, e montar o
  * id na tela seria a tela decidindo o que a etapa 5 transcreve (DECISIONS #80).
+ *
+ * V10.10 — e a pergunta passou a ser feita ao ABRIR a ficha, e não no fim de uma
+ * busca: é ela que decide se existe o botão direto.
  */
 interface OfertaDaEtapa5 {
   musicas: number[];
@@ -133,20 +136,26 @@ export function EditSongForm({
     null,
   );
   /**
-   * V10.9 — a oferta da etapa 5 desta música. `null` = não há oferta a desenhar,
-   * e é o estado de tudo o que não é uma resposta: antes da busca, quando a
-   * busca trouxe letra, quando o backend disse que não há o que transcrever, e
-   * quando a pergunta falhou ("não sabemos" é um estado — DECISIONS #86).
+   * A oferta da etapa 5 desta música, como a PORTA a respondeu ao abrir a ficha.
+   * `null` = não há nada a desenhar, e é o estado de tudo o que não é uma
+   * resposta: enquanto a pergunta não voltou, quando o backend disse que não há
+   * o que transcrever, e quando a pergunta falhou ("não sabemos" é um estado —
+   * DECISIONS #86).
    */
   const [oferta, setOferta] = useState<OfertaDaEtapa5 | null>(null);
+  /**
+   * V10.10 — a busca terminou SEM trazer letra.
+   *
+   * Só existe para o caso em que esta máquina NÃO pode transcrever: aí não há
+   * botão (um botão que não faria nada é pior que a frase que diz o que fazer —
+   * DECISIONS #157), e o que sobra é a frase que manda a pessoa a Configurações.
+   * Ela aparece depois da busca, e não o tempo todo, porque é a resposta ao beco
+   * que a busca acabou de produzir: parágrafo permanente dentro de um formulário
+   * é o que a DECISIONS #154(a) recusou.
+   */
+  const [buscaSemLetra, setBuscaSemLetra] = useState(false);
   /** Busca individual em curso — a chave do cancelamento (B1). */
   const buscaAtual = useRef<string | null>(null);
-  /**
-   * A busca cuja OFERTA ainda vale. É uma chave separada da `buscaAtual` porque
-   * a pergunta ao backend acontece depois de o funil ter respondido — e a
-   * `buscaAtual` já foi limpa por então, que é o que devolve o botão à pessoa.
-   */
-  const ofertaDaBusca = useRef<string | null>(null);
   /**
    * MÉDIO-15 — a varredura em lote e o funil individual têm cada um a SUA
    * pausa de cortesia; rodando juntos, dobram a taxa de consultas ao LRCLIB e
@@ -230,10 +239,11 @@ export function EditSongForm({
   async function handleBuscarDados() {
     const scanId = novoScanId();
     buscaAtual.current = scanId;
-    ofertaDaBusca.current = scanId;
     setFetchBusy(true);
     setResultado(null);
-    setOferta(null);
+    // a busca começou: o desfecho anterior não vale mais. A OFERTA da etapa 5
+    // não é mexida aqui — ela descreve o arquivo, e não esta busca.
+    setBuscaSemLetra(false);
     try {
       const proposta = await getBackend().enrichSongScan(
         song.id,
@@ -249,8 +259,7 @@ export function EditSongForm({
       // cancelada no meio: a resposta que chegar depois não é mais notícia
       if (buscaAtual.current !== scanId) return;
       setResultado(proposta ? { tipo: "proposta", proposta } : { tipo: "vazio" });
-      // a etapa 5 é a resposta para quem as quatro etapas não resolveram
-      void perguntarPelaEtapa5(scanId, proposta?.lyrics != null);
+      setBuscaSemLetra(proposta?.lyrics == null);
     } catch {
       if (buscaAtual.current !== scanId) return;
       // o resultado é inline: um toast some sozinho e esta é a única
@@ -260,12 +269,12 @@ export function EditSongForm({
         mensagem: "Sem conexão — a busca de dados precisa de internet.",
       });
       /*
-        E a oferta vale AQUI TAMBÉM, de propósito: a etapa 5 não usa rede. A
+        E a saída da etapa 5 vale AQUI TAMBÉM, de propósito: ela não usa rede. A
         música que ficou sem letra porque o LRCLIB não respondeu é exatamente a
         que a transcrição resolve — é o que o `a_etapa_5_tem_o_que_fazer` do
         Rust diz, com estas palavras.
       */
-      void perguntarPelaEtapa5(scanId, false);
+      setBuscaSemLetra(true);
     } finally {
       if (buscaAtual.current === scanId) {
         buscaAtual.current = null;
@@ -275,58 +284,59 @@ export function EditSongForm({
   }
 
   /**
-   * **V10.9 — a etapa 5, oferecida onde a pessoa está.**
+   * **A ETAPA 5, OFERECIDA ONDE A PESSOA ESTÁ — e sem cobrar o funil antes.**
    *
    * O funil da ficha roda as etapas 1 a 4 e para ali. Com 3% de cobertura
-   * medida, "não achamos nada" é o desfecho TÍPICO daquele clique, e a única
-   * coisa que resolveria AQUELA música ficava a duas telas de distância, numa
-   * fila que é a pasta inteira. É o mesmo erro de projeto que a V10.6
-   * consertou na outra porta — e aqui a etapa 5 é mais usável do que em
-   * qualquer outra: uma música são MINUTOS, não horas.
+   * medida, "não achamos nada" é o desfecho TÍPICO daquele clique, e até a
+   * V10.9 a etapa 5 só era oferecida DEPOIS dele. Pedido do dono do produto,
+   * verbatim: *"No caso específico de mexer música por música quero um botão
+   * separado pra fazer transcrição. Pra não precisar rodar todo o fluxo pra
+   * depois só poder transcrever."*
    *
-   * **A oferta só existe depois da busca**, e nunca antes: a pergunta daquele
-   * segundo é se a internet tem esta música, e ela custa segundos contra os
-   * minutos da etapa 5. Oferecer as duas ao mesmo tempo é a escolha às cegas que
-   * a V8 recusou quando havia dois botões dizendo "buscar na internet".
+   * **A pergunta é feita ao ABRIR a ficha**, e é barata: uma consulta ao banco e
+   * a estimativa: nada de rede, nada de ler áudio. É ela que decide se existe o
+   * botão — quem responde "o que a etapa 5 tem a fazer por esta música" é o
+   * backend, com os MESMOS portões das outras duas portas (música com letra,
+   * instrumental, arquivo que sumiu do disco voltam com a fila vazia).
    *
-   * **E não existe quando a busca ACHOU letra**: cobrar minutos de CPU por uma
-   * letra que está ali na tela, esperando um clique, é cobrar caro por algo que
-   * o clique resolve — a mesma razão pela qual a pergunta do fim desconta quem
-   * ganhou proposta de letra na varredura (DECISIONS #136).
-   *
-   * O resto dos portões é do BACKEND, e não é reescrito aqui: música com letra
-   * no arquivo, instrumental e arquivo que sumiu do disco voltam com a fila
-   * vazia. A única condição local é a caixa "esta música é instrumental" — o
-   * formulário é mais atual que o banco, e oferecer escrever a letra ouvindo o
-   * áudio de uma música que a pessoa acabou de declarar sem voz contradiria o
-   * que ela acabou de dizer (é a mesma razão do `SEM_RESULTADO_INSTRUMENTAL`).
+   * **Uma vez por ficha**, e não a cada busca (DECISIONS #162d): a resposta
+   * descreve o ARQUIVO, e o que muda no formulário — a caixa de instrumental, a
+   * letra digitada — é conferido na hora de desenhar, porque o formulário é mais
+   * atual que o banco.
    */
-  async function perguntarPelaEtapa5(scanId: string, achouLetra: boolean) {
-    if (achouLetra || instrumental) return;
-    try {
-      const p = await getBackend().transcricaoPendentesDaMusica(song.id);
-      if (ofertaDaBusca.current !== scanId) return;
-      if (p.musicas.length === 0) return;
-      /*
-        Sem os acessórios, a frase precisa do TAMANHO do download — para 1,4 GB
-        a dispensa do número não vale mais (DECISIONS #106). A leitura só
-        acontece nesse caso: numa máquina pronta ela não responderia nada que a
-        frase use.
-      */
-      const download = p.disponivel ? null : await downloadPendenteDaEtapa5();
-      if (ofertaDaBusca.current !== scanId) return;
-      setOferta({
-        musicas: p.musicas,
-        segundos: p.segundos_estimados,
-        medidaNestaMaquina: p.estimativa_medida_nesta_maquina,
-        disponivel: p.disponivel,
-        download,
-      });
-    } catch {
-      // "não sabemos" é um estado (DECISIONS #86): sem resposta, a ficha não
-      // desenha oferta nenhuma — nem promete, nem afirma zero.
-    }
-  }
+  useEffect(() => {
+    // a ficha pode ser trocada (ou fechada) antes de a resposta chegar: a
+    // guarda impede a resposta atrasada de desenhar oferta de outra música
+    let valida = true;
+    void (async () => {
+      try {
+        const p = await getBackend().transcricaoPendentesDaMusica(song.id);
+        if (!valida || p.musicas.length === 0) return;
+        /*
+          Sem os acessórios, a frase precisa do TAMANHO do download — para 1,4 GB
+          a dispensa do número não vale mais (DECISIONS #106). A leitura só
+          acontece nesse caso: numa máquina pronta ela não responderia nada que a
+          frase use.
+        */
+        const download = p.disponivel ? null : await downloadPendenteDaEtapa5();
+        if (!valida) return;
+        setOferta({
+          musicas: p.musicas,
+          segundos: p.segundos_estimados,
+          medidaNestaMaquina: p.estimativa_medida_nesta_maquina,
+          disponivel: p.disponivel,
+          download,
+        });
+      } catch {
+        // "não sabemos" é um estado (DECISIONS #86): sem resposta, a ficha não
+        // desenha nada — nem promete, nem afirma zero.
+      }
+    })();
+    return () => {
+      valida = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [song.id]);
 
   /** O que falta baixar, pela MESMA leitura que as outras duas portas usam. */
   async function downloadPendenteDaEtapa5(): Promise<DownloadPendente | null> {
@@ -346,8 +356,6 @@ export function EditSongForm({
   function cancelarBusca() {
     const scanId = buscaAtual.current;
     buscaAtual.current = null;
-    // e a oferta daquela busca também não é mais notícia
-    ofertaDaBusca.current = null;
     setFetchBusy(false);
     if (!scanId) return;
     try {
@@ -445,6 +453,23 @@ export function EditSongForm({
       setBusy(false);
     }
   }
+
+  /**
+   * **O que o FORMULÁRIO diz sobre a etapa 5 desta música.**
+   *
+   * Não duplica regra do backend — quem decide o que a etapa 5 transcreve
+   * continua sendo a porta (`transcricaoPendentesDaMusica`, com os portões de
+   * música com letra, instrumental e arquivo fora do disco). Isto descreve o
+   * que está na TELA agora, que é mais atual que o banco:
+   *
+   * - quem acabou de marcar "esta música é instrumental" declarou que não há voz
+   *   no áudio, e oferecer escrever a letra ouvindo o áudio contradiria o que ela
+   *   acabou de dizer (é a mesma razão do `SEM_RESULTADO_INSTRUMENTAL`);
+   * - com letra no campo, a música não está mais sem letra — e a frase da saída
+   *   sem acessórios, que abre com "esta música continua sem letra", seria
+   *   desmentida pelo textarea logo acima dela.
+   */
+  const podeTranscreverEstaMusica = !instrumental && !lyrics.trim();
 
   const inputClass = (error: boolean) =>
     `w-full rounded-md border bg-white px-3 py-2 text-[15px] text-[#111827] outline-none ${
@@ -720,51 +745,32 @@ export function EditSongForm({
       )}
 
       {/*
-        V10.9 — A ETAPA 5, OFERECIDA ONDE A PESSOA ESTÁ.
+        V10.10 — A SAÍDA DE QUEM NÃO PODE TRANSCREVER NESTA MÁQUINA.
 
-        Fica DEPOIS do resultado do funil porque é a resposta à pergunta que o
-        resultado acabou de deixar em aberto: "as quatro etapas não acharam
-        nada, e agora?". O vocabulário visual é o mesmo das outras duas portas
-        (o mesmo verde-água, o mesmo rótulo de botão): três desenhos diferentes
-        para a mesma oferta seriam três coisas para quem não tem a quem
-        perguntar.
+        É a metade que sobrou da oferta da V10.9. A outra metade — a frase com o
+        tempo e o botão "Começar agora" — virou o botão permanente lá embaixo, e
+        manter as duas seriam DOIS botões para a mesma ação, na mesma tela: a
+        duplicação que a V8 removeu quando havia dois "buscar na internet".
+
+        Esta fica porque não é um clique daqui: é um download de 1,4 GB, em outra
+        tela. E fica DEPOIS da busca porque é a resposta ao beco que ela acabou
+        de produzir — um parágrafo permanente dentro de um formulário é o que a
+        DECISIONS #154(a) recusou.
 
         As duas condições LOCAIS repetidas aqui não duplicam regra do backend —
-        elas descrevem o FORMULÁRIO, que é mais atual que o banco. Com a caixa
-        de instrumental marcada ou com letra no campo, a frase "esta música
-        continua sem letra" seria desmentida pela tela em volta dela: é a
-        primeira coisa que a pessoa lê, e ela estaria errada.
+        elas descrevem o FORMULÁRIO, que é mais atual que o banco. Com a caixa de
+        instrumental marcada ou com letra no campo, a frase "esta música continua
+        sem letra" seria desmentida pela tela em volta dela: é a primeira coisa
+        que a pessoa lê, e ela estaria errada.
       */}
-      {oferta && !instrumental && !lyrics.trim() && (
+      {oferta && !oferta.disponivel && buscaSemLetra && podeTranscreverEstaMusica && (
         <div
           role="status"
           className="shrink-0 rounded-md bg-[#F0FDFA] px-4 py-3"
         >
           <p className="text-[14px] leading-relaxed text-[#115E59]">
-            {textoDaOfertaDestaMusica({
-              segundos: oferta.segundos,
-              medidaNestaMaquina: oferta.medidaNestaMaquina,
-              disponivel: oferta.disponivel,
-              download: oferta.download,
-            })}
+            {textoDaOfertaDestaMusica(oferta.download)}
           </p>
-          {oferta.disponivel && (
-            <button
-              type="button"
-              /*
-                A MESMA máquina das outras portas, com uma fila de um item:
-                mesma barra, mesmo cancelamento, mesma revisão no fim. Um
-                segundo caminho seria um segundo lugar onde os três divergem (a
-                lição do M4, e o motivo de a V10.6 ter reusado este).
-              */
-              disabled={loteRodando}
-              aria-describedby={loteRodando ? "editor-busca-bloqueada" : undefined}
-              onClick={() => void startTranscricao(oferta.musicas)}
-              className="mt-2 rounded-md bg-[#0F766E] px-3 py-1.5 text-[14px] font-medium text-white hover:bg-[#115E59] disabled:cursor-not-allowed disabled:bg-[#9CA3AF]"
-            >
-              {ROTULO_COMECAR_TRANSCRICAO}
-            </button>
-          )}
         </div>
       )}
 
@@ -826,6 +832,46 @@ export function EditSongForm({
             className="rounded-md px-3 py-1.5 text-[14px] font-medium text-[#374151] hover:bg-[#F3F4F6]"
           >
             Cancelar busca
+          </button>
+        )}
+        {/*
+          V10.10 — O BOTÃO DIRETO DA ETAPA 5.
+
+          Ele fica AO LADO de "Buscar dados na internet", e não dentro de um
+          bloco de oferta, porque é o que ele é: a segunda coisa que se pode
+          mandar o programa fazer por este arquivo. A escolha entre os dois não é
+          às cegas — a que a V8 recusou —, porque cada rótulo traz o próprio
+          custo: um fala de internet e leva segundos, este traz os minutos
+          escritos nele.
+
+          É contorno e não preenchido de propósito: nesta barra o botão cheio é
+          "Salvar no arquivo", que é o único que ESCREVE. Transcrever não grava
+          nada — abre a mesma revisão das outras portas.
+
+          Sem `disponivel` não há botão: um botão que não faria nada é pior que a
+          frase que diz o que fazer (DECISIONS #157), e a frase está no bloco
+          acima.
+        */}
+        {oferta && oferta.disponivel && podeTranscreverEstaMusica && (
+          <button
+            type="button"
+            /*
+              A MESMA máquina das outras portas, com uma fila de um item: mesma
+              barra, mesmo cancelamento, mesma revisão no fim. Um segundo caminho
+              seria um segundo lugar onde os três divergem (a lição do M4, e o
+              motivo de a V10.6 ter reusado este). A lista vem da PORTA, e não de
+              um `[song.id]` montado aqui.
+            */
+            disabled={loteRodando}
+            aria-describedby={loteRodando ? "editor-busca-bloqueada" : undefined}
+            title="Escreve a letra ouvindo o áudio desta música, sem usar a internet. Nada é gravado sem você conferir."
+            onClick={() => void startTranscricao(oferta.musicas)}
+            className="rounded-md border border-[#0F766E] px-3 py-1.5 text-[14px] font-medium text-[#0F766E] hover:bg-[#F0FDFA] disabled:opacity-60"
+          >
+            {rotuloDeTranscreverEstaMusica(
+              oferta.segundos,
+              oferta.medidaNestaMaquina,
+            )}
           </button>
         )}
         <span className="ml-auto flex items-center gap-2">

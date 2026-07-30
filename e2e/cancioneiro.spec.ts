@@ -733,14 +733,17 @@ test.describe("V4", () => {
     await panel.getByRole("button", { name: "Salvar no arquivo" }).click();
     await expect(page.getByText("Alterações salvas em sem_letra.mp3.")).toBeVisible();
 
-    // sem conexão: o aviso fica na ficha, não some como um toast
+    // rede caída: o aviso fica na ficha, não some como um toast — e a frase só
+    // fala da internet porque NENHUMA fonte respondeu (V10.10)
     await page.evaluate(() => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (window as any).__CANCIONEIRO_MOCK__._offline = true;
     });
     await panel.getByRole("button", { name: "Editar" }).click();
     await panel.getByRole("button", { name: "Buscar dados na internet" }).click();
-    await expect(panel.getByText("sem conexão")).toBeVisible();
+    await expect(
+      panel.getByText("a internet parece estar fora do ar: nenhum site respondeu"),
+    ).toBeVisible();
     await expect(
       panel.getByRole("button", { name: "Usar estes dados" }),
     ).toHaveCount(0);
@@ -2088,7 +2091,12 @@ test.describe("V10 — a etapa que resolve (F18 fase 3)", () => {
   // medida, "as quatro etapas não acharam nada" é o desfecho TÍPICO daquele
   // clique — e a única coisa que resolveria AQUELA música ficava a duas telas
   // de distância, numa fila que é a pasta inteira.
-  test("a ficha de uma música oferece a etapa 5 quando as quatro etapas não acham letra", async ({
+  //
+  // V10.10 — E O BOTÃO DEIXOU DE COBRAR O FUNIL ANTES. Pedido do dono do
+  // produto, verbatim: *"No caso específico de mexer música por música quero um
+  // botão separado pra fazer transcrição. Pra não precisar rodar todo o fluxo
+  // pra depois só poder transcrever."*
+  test("a ficha de uma música transcreve direto, sem passar pelo funil", async ({
     page,
   }) => {
     const errors = trackErrors(page);
@@ -2099,16 +2107,18 @@ test.describe("V10 — a etapa que resolve (F18 fase 3)", () => {
     await page.getByText("sem_tags", { exact: true }).first().click();
     const panel = page.getByLabel("Painel de letra");
     await panel.getByRole("button", { name: "Editar" }).click();
-    await panel.getByRole("button", { name: "Buscar dados na internet" }).click();
 
-    // a oferta fala DESTA música, e traz o tempo DELA
+    // o botão está lá antes de qualquer busca, e traz o custo escrito nele
+    const transcrever = panel.getByRole("button", {
+      name: /^Escrever a letra ouvindo o áudio \(/,
+    });
+    await expect(transcrever).toBeVisible();
+    // e é UM botão para esta ação, nunca dois (a lição da V8)
     await expect(
-      panel.getByText(
-        /Esta música continua sem letra\. Escrever a letra ouvindo o áudio leva/,
-      ),
-    ).toBeVisible();
+      panel.getByRole("button", { name: "Começar agora" }),
+    ).toHaveCount(0);
 
-    await panel.getByRole("button", { name: "Começar agora" }).click();
+    await transcrever.click();
 
     // é a MESMA revisão das outras duas portas, com a fila de UM item
     const dialog = page.getByRole("dialog", { name: "Completar dados" });

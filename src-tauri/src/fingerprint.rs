@@ -121,6 +121,15 @@ pub const ERRO_CHAVE_RECUSADA: &str =
 /// vaza para a tela.
 pub const ERRO_RESPOSTA: &str = "o reconhecimento pelo som respondeu com erro";
 
+/// **V10.10 — o AcoustID não respondeu**: DNS que não resolveu, os 10 s
+/// esgotados, conexão recusada. É o par do `ERRO_RESPOSTA` acima — lá o
+/// servidor respondeu, e aqui ele ficou mudo —, e a distinção existe porque
+/// **só a segunda pode ser sintoma de rede caída**.
+///
+/// Ela não desliga a etapa 2: servidor mudo não é veredito sobre a varredura,
+/// e o único veredito deste destino continua sendo o `ERRO_CHAVE_RECUSADA`.
+pub const ERRO_SEM_RESPOSTA: &str = "o reconhecimento pelo som não respondeu";
+
 /// O `fpcalc` rodou e não conseguiu ler o som DESTE arquivo: faixa curta
 /// demais para render impressão, gravação silenciosa, MP3 danificado. Medido
 /// nas fixtures do projeto com o `fpcalc` de verdade — três dos quatro

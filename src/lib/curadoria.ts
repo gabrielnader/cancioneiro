@@ -889,11 +889,34 @@ function fraseDoTempoDaTranscricao(
   segundos: number,
   medidaNestaMaquina: boolean,
 ): string {
-  const tempo = segundos < 60 ? "leva menos de 1 minuto" : `leva ${cercaDe(segundos)}`;
-  const procedencia = medidaNestaMaquina
-    ? " neste computador."
-    : " — pode levar mais nesta máquina.";
-  return `Escrever a letra ouvindo o áudio ${tempo}${procedencia}`;
+  return `Escrever a letra ouvindo o áudio leva ${tempoDaTranscricao(
+    segundos,
+    medidaNestaMaquina,
+  )}.`;
+}
+
+/**
+ * **O tempo da etapa 5 com a PROCEDÊNCIA do número** — "cerca de 4 minutos
+ * neste computador" ou "cerca de 4 minutos — pode levar mais nesta máquina".
+ *
+ * Saiu de dentro da `fraseDoTempoDaTranscricao` na V10.10, quando o botão
+ * direto da ficha passou a precisar do MESMO tempo com a MESMA ressalva dentro
+ * de um rótulo, que não é uma frase. Escrever a ressalva duas vezes seria a
+ * DECISIONS #80 aplicada a texto — e aqui as duas versões caberiam na mesma
+ * tela, porque a pergunta do fim de uma varredura e a ficha de uma música
+ * convivem.
+ *
+ * A regra do "neste computador" é a das outras portas, e é a única coisa que o
+ * booleano decide (DECISIONS #86 e #112): só medição desta máquina autoriza a
+ * afirmação. Sem ela o erro tem sinal conhecido — o palpite de fábrica é
+ * OTIMISTA —, e a ressalva existe para ninguém esperar o triplo do anunciado e
+ * achar que o programa travou.
+ */
+function tempoDaTranscricao(segundos: number, medidaNestaMaquina: boolean): string {
+  const tempo = segundos < 60 ? "menos de 1 minuto" : cercaDe(segundos);
+  return medidaNestaMaquina
+    ? `${tempo} neste computador`
+    : `${tempo} — pode levar mais nesta máquina`;
 }
 
 /** O botão da pergunta do fim. */
@@ -1047,46 +1070,71 @@ export function textoDoBlocoDeTranscricao({
 // morando onde a VARREDURA termina, e não onde a PESSOA está —, e aqui ela é
 // mais usável do que em qualquer outra porta: uma música são MINUTOS, não
 // horas.
+//
+// **V10.10 — e a oferta deixou de depender da busca.** A V10.9 a pendurou no
+// desfecho do funil ("as quatro etapas não acharam letra"), e o dono do produto
+// mediu o custo disso no uso: quem já SABE que a música não está na internet
+// pagava a varredura inteira — segundos de rede e uma leitura de impressão
+// digital — para só então poder transcrever. Ficou um botão direto, com o custo
+// no rótulo, e a oferta antiga perdeu o botão dela para não haver dois botões
+// para a mesma ação (a lição da V8).
 
-/** O que a oferta da ficha precisa saber para se descrever. */
-export interface OfertaDestaMusica {
-  /** Segundos estimados para transcrever ESTA música, como o backend contou. */
-  segundos: number;
-  /** O número acima é medição desta máquina, ou palpite de fábrica? */
-  medidaNestaMaquina: boolean;
-  /** A etapa 5 pode rodar nesta máquina (transcritor E modelo prontos)? */
-  disponivel: boolean;
-  /** O que falta baixar, quando falta e quando se sabe o tamanho. */
-  download: DownloadPendente | null;
+/**
+ * **V10.10 — O BOTÃO DIRETO DA ETAPA 5, na ficha de uma música.**
+ *
+ * Pedido do dono do produto, verbatim: *"No caso específico de mexer música por
+ * música quero um botão separado pra fazer transcrição. Pra não precisar rodar
+ * todo o fluxo pra depois só poder transcrever."*
+ *
+ * Até a V10.9 a etapa 5 só era oferecida na ficha DEPOIS de "Buscar dados na
+ * internet", e só quando as quatro etapas não achavam letra. Quem já sabe que a
+ * música não está na internet — o caso comum neste acervo, com 3% de cobertura
+ * medida — pagava segundos de rede e uma leitura de impressão digital para
+ * então poder transcrever.
+ *
+ * **O tempo mora no RÓTULO, e é o que torna a escolha informada.** A V8 removeu
+ * dois botões que diziam "buscar na internet" porque a diferença entre eles era
+ * invisível, e a escolha errada era silenciosamente pior. Aqui os dois botões
+ * dizem coisas diferentes e cada um traz o próprio custo: um fala de internet e
+ * custa segundos, este fala de ouvir o áudio e traz os minutos escritos nele. É
+ * o mesmo motivo pelo qual o tamanho vai no botão do download
+ * (`rotuloBaixarAcessorio`): é a última coisa lida antes do clique.
+ *
+ * O tempo e a ressalva são os das outras duas portas, letra por letra
+ * (`tempoDaTranscricao`).
+ */
+export function rotuloDeTranscreverEstaMusica(
+  segundos: number,
+  medidaNestaMaquina: boolean,
+): string {
+  return `Escrever a letra ouvindo o áudio (${tempoDaTranscricao(
+    segundos,
+    medidaNestaMaquina,
+  )})`;
 }
 
 /**
- * A oferta da etapa 5 dentro da ficha de uma música.
+ * **O que a ficha diz a quem NÃO pode transcrever nesta máquina.**
  *
- * **A segunda frase é literalmente a mesma das outras duas portas** — a
- * `fraseDoTempoDaTranscricao`, com a ressalva de procedência do número
- * inclusive. Só a abertura muda, e ela muda porque as três portas descrevem
- * escopos diferentes: "sobraram" só é verdade logo depois de uma varredura, "47
- * músicas da biblioteca" só é verdade numa tela permanente, e aqui a pessoa
- * está olhando UMA ficha, logo depois de ler que a busca não trouxe letra.
+ * Era, na V10.9, o texto da oferta inteira — com dois desfechos, e um botão
+ * "Começar agora" no primeiro deles. A V10.10 lhe tirou essa metade: com o
+ * botão direto na ficha, oferecer o mesmo clique de novo depois de uma busca
+ * seriam dois botões para a mesma ação, que é exatamente o que a V8 removeu.
  *
- * Não há caso de zero, ao contrário do bloco permanente: quem decide se há
- * oferta é o backend (`transcricao_pendentes_da_musica` devolve lista vazia
- * para música com letra, instrumental ou com o arquivo fora do disco), e sem
- * oferta a ficha não desenha nada. Um "esta música já tem letra" ali seria
- * responder, dentro de um formulário que MOSTRA a letra, uma pergunta que
- * ninguém fez.
+ * **O que não cabe num botão é a saída de quem não tem os acessórios**, porque
+ * ela não é um clique daqui: é um download de 1,4 GB, em outra tela. Por isso
+ * este texto sobrou, e só ele.
+ *
+ * A saída aponta para CONFIGURAÇÕES, com tamanho e tempo — é o padrão da
+ * pergunta do fim (`fraseDoDownloadDaTranscricao`), e não o do bloco
+ * permanente, que aponta para cima porque já está lá (V10.6). A abertura é a
+ * desta porta: quem lê está olhando UMA ficha, logo depois de ler que a busca
+ * não trouxe letra.
+ *
+ * Sem saber o tamanho, não se inventa número nenhum (DECISIONS #86).
  */
-export function textoDaOfertaDestaMusica({
-  segundos,
-  medidaNestaMaquina,
-  disponivel,
-  download,
-}: OfertaDestaMusica): string {
-  const segunda = disponivel
-    ? fraseDoTempoDaTranscricao(segundos, medidaNestaMaquina)
-    : fraseDoDownloadDaTranscricao(download);
-  return `Esta música continua sem letra. ${segunda}`;
+export function textoDaOfertaDestaMusica(download: DownloadPendente | null): string {
+  return `Esta música continua sem letra. ${fraseDoDownloadDaTranscricao(download)}`;
 }
 
 /**

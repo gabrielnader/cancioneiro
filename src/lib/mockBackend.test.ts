@@ -1089,12 +1089,23 @@ describe("mockBackend", () => {
       expect(sumiu.lyrics).toBeNull();
     });
 
-    it("_offline = true NUNCA rejeita: cada proposta vem com error 'sem conexão' (DECISIONS #47)", async () => {
+    /*
+      V10.10 — a frase mudou junto com a do Rust, e o teste mudou de PROPÓSITO
+      com ela. "sem conexão" era o que o funil dizia para qualquer servidor que
+      não respondesse; agora é uma afirmação sobre a REDE, feita só com
+      evidência (duas fontes mudas, nenhuma respondendo). O `_offline` do mock é
+      esse estado, e por isso continua sendo ele que produz a frase.
+    */
+    it("_offline = true NUNCA rejeita: o erro vem POR MÚSICA e fala da rede (DECISIONS #47)", async () => {
       await backend.addFolder("/musicas/teste");
       backend._offline = true;
       const proposals = await varrer(backend, "", "s1");
       expect(proposals).toHaveLength(2);
-      expect(proposals.every((p) => p.error === "sem conexão")).toBe(true);
+      expect(
+        proposals.every(
+          (p) => p.error === "a internet parece estar fora do ar: nenhum site respondeu",
+        ),
+      ).toBe(true);
       expect(proposals.every((p) => p.lyrics === null)).toBe(true);
     });
 
@@ -1123,7 +1134,9 @@ describe("mockBackend", () => {
 
       const proposals = await varrer(backend, "", "s1");
       const noop = proposals.find((p) => p.song_id === semTags.id)!;
-      expect(noop.error).toBe("sem conexão");
+      expect(noop.error).toBe(
+        "a internet parece estar fora do ar: nenhum site respondeu",
+      );
       expect(noop.proposed_title).toBe(noop.current_title);
       expect(noop.proposed_artist).toBe(noop.current_artist);
       expect(noop.lyrics).toBeNull();
@@ -1488,12 +1501,14 @@ describe("mockBackend", () => {
       backend._enrichDelayMs = 0;
     });
 
-    it("sem conexão devolve a proposta com o erro, nunca rejeita", async () => {
+    it("rede caída devolve a proposta com o erro, nunca rejeita", async () => {
       await backend.addFolder("/musicas/teste");
       const songs = await backend.listSongs();
       backend._offline = true;
       const proposta = (await backend.enrichSongScan(songs[0].id))!;
-      expect(proposta.error).toBe("sem conexão");
+      expect(proposta.error).toBe(
+        "a internet parece estar fora do ar: nenhum site respondeu",
+      );
     });
 
     it("música que não existe devolve null", async () => {

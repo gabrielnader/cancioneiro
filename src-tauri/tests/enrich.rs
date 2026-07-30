@@ -5,7 +5,7 @@
 
 use cancioneiro_lib::enrich::{self, EnrichApply};
 use cancioneiro_lib::error::AppError;
-use cancioneiro_lib::{db, indexer, lyrics_ovh, writer};
+use cancioneiro_lib::{db, indexer, lyrics_fetch, lyrics_ovh, writer};
 use rusqlite::Connection;
 use std::cell::RefCell;
 use std::fs;
@@ -5577,4 +5577,192 @@ fn id_que_nao_existe_devolve_fila_vazia_em_vez_de_erro() {
     assert!(p.musicas.is_empty());
     assert_eq!(p.segundos_estimados, 0);
     assert!(p.disponivel, "o fato sobre a MÁQUINA não depende da música");
+}
+
+// ===========================================================================
+// V10.10 — "SEM CONEXÃO" MENTIA, E ESCONDIA QUE O FUNIL TINHA ABORTADO
+//
+// Relato de campo: o dono clicou em "Buscar dados na internet" numa música e
+// leu **"sem conexão"** em vermelho, com a internet dele funcionando — ele
+// tinha acabado de baixar 1,4 GB no mesmo aplicativo.
+//
+// Eram dois defeitos somados, e o segundo é o que dói:
+//
+// **(a)** o ramo de TRANSPORTE do `funil_fetcher` (DNS que não resolveu, 10 s
+// esgotados, conexão recusada) dizia "sem conexão" para todo servidor mudo. Um
+// servidor que não responde não é a internet da pessoa caindo, e o funil fala
+// com até TRÊS hosts diferentes: se outro respondeu na mesma varredura, a
+// acusação é comprovadamente falsa.
+//
+// **(b)** um erro qualquer na etapa 2 ABORTAVA o funil ("rede caída derruba
+// todas as fontes"). O argumento vale se a rede caiu; para um servidor só sem
+// responder — ou para o `fpcalc` que falha em três de cada quatro arquivos do
+// acervo real — ele não vale, e as etapas 3 e 4 nunca eram consultadas. A tela
+// dizia "sem conexão", e a pessoa lia "a internet não tem a letra".
+// ===========================================================================
+
+/// Um servidor mudo não impede os SEGUINTES de tentar.
+///
+/// É o coração do relato: o LRCLIB não respondeu, e o lyrics.ovh — outro host,
+/// outro provedor — tinha a letra. Abortar aqui é jogar fora a única fonte que
+/// resolveria a música.
+#[test]
+fn um_servidor_mudo_nao_impede_as_etapas_seguintes_de_tentar() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
+    let props = scan_props(&conn, "", |url: &str| {
+        if url.starts_with(lyrics_ovh::SEARCH_URL) {
+            Ok(corpo_ovh("a letra que o outro host tinha"))
+        } else {
+            Err(AppError(lyrics_fetch::ERRO_SEM_RESPOSTA.into()))
+        }
+    });
+
+    assert_eq!(props.len(), 1);
+    assert_eq!(
+        props[0].lyrics.as_deref(),
+        Some("a letra que o outro host tinha"),
+        "a etapa 4 tem de ter sido consultada mesmo com a etapa 3 muda"
+    );
+    assert!(props[0].error.is_none(), "achou letra: não há erro a mostrar");
+}
+
+/// Com outro host respondendo, a linha NOMEIA o servidor mudo e não acusa a
+/// internet de quem está olhando.
+#[test]
+fn com_outro_host_respondendo_a_linha_nao_acusa_a_internet() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
+    let props = scan_props(&conn, "", |url: &str| {
+        if url.starts_with(lyrics_ovh::SEARCH_URL) {
+            Ok(corpo_ovh("")) // respondeu, e não tinha a letra
+        } else {
+            Err(AppError(lyrics_fetch::ERRO_SEM_RESPOSTA.into()))
+        }
+    });
+
+    let erro = props[0].error.as_deref().expect("a falha continua sendo dita");
+    assert_eq!(erro, lyrics_fetch::ERRO_SEM_RESPOSTA);
+    assert_ne!(erro, enrich::ERRO_SEM_CONEXAO);
+    assert!(!erro.contains("internet"), "a internet dela está boa: {erro}");
+}
+
+/// Nenhum host respondeu: aí sim a frase fala da internet — e diz por que ela
+/// está afirmando isso.
+#[test]
+fn nenhum_host_respondeu_e_so_ai_a_linha_fala_da_internet() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
+    let props = scan_props(&conn, "", |url: &str| {
+        if url.starts_with(lyrics_ovh::SEARCH_URL) {
+            Err(AppError(lyrics_ovh::ERRO_SEM_RESPOSTA.into()))
+        } else {
+            Err(AppError(lyrics_fetch::ERRO_SEM_RESPOSTA.into()))
+        }
+    });
+
+    assert_eq!(props[0].error.as_deref(), Some(enrich::ERRO_SEM_CONEXAO));
+}
+
+/// A intenção original PRESERVADA: com a rede caída de verdade, a varredura
+/// para de gastar o tempo de quem está esperando.
+///
+/// A evidência custa as consultas de UMA música — dois hosts mudos e nenhum
+/// respondendo. Da segunda música em diante não sai mais nada pela rede.
+#[test]
+fn com_a_rede_caida_a_segunda_musica_nao_gasta_mais_consulta() {
+    let (_dir, conn, _f) = setup_with(&[
+        ("sem_letra.mp3", "a - um.mp3"),
+        ("sem_letra.mp3", "b - dois.mp3"),
+        ("sem_letra.mp3", "c - tres.mp3"),
+    ]);
+    let urls = RefCell::new(Vec::new());
+    let props = scan_props(&conn, "", |url: &str| {
+        urls.borrow_mut().push(url.to_string());
+        if url.starts_with(lyrics_ovh::SEARCH_URL) {
+            Err(AppError(lyrics_ovh::ERRO_SEM_RESPOSTA.into()))
+        } else {
+            Err(AppError(lyrics_fetch::ERRO_SEM_RESPOSTA.into()))
+        }
+    });
+
+    assert_eq!(props.len(), 3, "as três continuam na revisão (DECISIONS #47)");
+    assert_eq!(
+        urls.borrow().len(),
+        2,
+        "a evidência custou dois hosts, e nenhuma música depois dela gastou rede: {:?}",
+        urls.borrow()
+    );
+    for p in &props {
+        assert_eq!(
+            p.error.as_deref(),
+            Some(enrich::ERRO_SEM_CONEXAO),
+            "a mesma frase para todas: a rede caiu para a varredura inteira"
+        );
+    }
+}
+
+/// Servidor que RESPONDE com erro não é rede caída — e a rodada da V9 já
+/// separava esse caso por frase. Aqui ele é separado também pelo COMPORTAMENTO:
+/// nenhuma etapa é pulada, e ninguém acusa a internet.
+#[test]
+fn servidor_que_responde_com_erro_nao_e_evidencia_de_rede_caida() {
+    let (_dir, conn, _f) = setup_with(&[
+        ("sem_letra.mp3", "a - um.mp3"),
+        ("sem_letra.mp3", "b - dois.mp3"),
+    ]);
+    let urls = RefCell::new(Vec::new());
+    let props = scan_props(&conn, "", |url: &str| {
+        urls.borrow_mut().push(url.to_string());
+        Err(AppError("o site de letras pediu para esperar um pouco".into()))
+    });
+
+    assert_eq!(
+        urls.borrow().len(),
+        4,
+        "duas etapas em cada uma das duas músicas: {:?}",
+        urls.borrow()
+    );
+    for p in &props {
+        assert_eq!(
+            p.error.as_deref(),
+            Some("o site de letras pediu para esperar um pouco")
+        );
+    }
+}
+
+/// A etapa 2 que falha deixou de derrubar as etapas de LETRA.
+///
+/// Vale para o servidor mudo e vale para o `fpcalc`, que falha em três de cada
+/// quatro arquivos do acervo real (QA A2): a falha de um acessório local não
+/// diz nada sobre o LRCLIB, e abortar ali era pular as duas etapas que
+/// resolvem a música.
+#[test]
+fn a_falha_da_etapa_2_nao_derruba_mais_as_etapas_de_letra() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
+    let song = song_by_suffix(&conn, "sem_letra.mp3");
+    // a duração que vale é a PROVADA pelo fpcalc (180 s no falso), e não a do
+    // cabeçalho: quem lê o som manda no casamento do LRCLIB
+    let corpo = lrclib(&song.title, song.artist.as_deref().unwrap_or(""), 180.0, "a letra");
+
+    let urls = RefCell::new(Vec::new());
+    let fontes = ComSom::nova(
+        move |url: &str| {
+            urls.borrow_mut().push(url.to_string());
+            if url.starts_with(cancioneiro_lib::fingerprint::LOOKUP_URL) {
+                // o AcoustID não respondeu: um host mudo, e só
+                Err(AppError(cancioneiro_lib::fingerprint::ERRO_SEM_RESPOSTA.into()))
+            } else {
+                Ok(corpo.clone())
+            }
+        },
+        180.0,
+    );
+    let props = enrich::enrich_scan(&conn, "", fontes, ZERO, SEM_PROGRESSO, SEM_CANCELAMENTO)
+        .unwrap()
+        .propostas;
+
+    assert_eq!(
+        props[0].lyrics.as_deref(),
+        Some("a letra"),
+        "o LRCLIB tinha a letra, e o funil chegou até ele"
+    );
+    assert!(props[0].error.is_none());
 }

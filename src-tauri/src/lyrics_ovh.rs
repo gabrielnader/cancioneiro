@@ -110,6 +110,18 @@ pub const SEARCH_URL: &str = "https://api.lyrics.ovh/v1/";
 /// perguntar, e "502" não explica nada.
 pub const ERRO_FORA_DO_AR: &str = "o site de letras sem cadastro está fora do ar agora";
 
+/// **V10.10 — o serviço NÃO respondeu**: DNS que não resolveu, os 10 s
+/// esgotados, conexão recusada. É o ramo de TRANSPORTE do `funil_fetcher`, e
+/// até esta versão ele dizia "sem conexão" — acusando a internet de quem está
+/// olhando por um servidor que ficou mudo.
+///
+/// A diferença entre as duas frases é conferível, e é por isso que ela existe:
+/// o funil fala com até TRÊS hosts, e se outro respondeu na mesma varredura a
+/// acusação é comprovadamente falsa. Quem decide se a rede caiu é o
+/// `enrich::EstadoDaVarredura`, que vê todas as fontes; aqui a frase só diz o
+/// que esta sabe de si.
+pub const ERRO_SEM_RESPOSTA: &str = "o site de letras sem cadastro não respondeu";
+
 /// **A ressalva que TEM de chegar à tela.**
 ///
 /// Esta fonte não devolve título nem artista: não há segundo lado para
