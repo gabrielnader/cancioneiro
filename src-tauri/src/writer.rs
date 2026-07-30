@@ -21,6 +21,7 @@ use crate::db::{self, fold_pt, Song};
 use crate::error::{AppError, Result};
 use crate::indexer;
 use lofty::config::{ParseOptions, WriteOptions};
+use lofty::error::{ErrorKind, LoftyError};
 use lofty::file::AudioFile;
 use lofty::id3::v2::{Frame, FrameId, Id3v2Tag, UnsynchronizedTextFrame};
 use lofty::mpeg::MpegFile;
@@ -28,7 +29,7 @@ use lofty::tag::{Accessor, TagExt};
 use lofty::TextEncoding;
 use rusqlite::Connection;
 use std::borrow::Cow;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 /// Idioma do USLT — o mesmo que o embed_lyrics.py (mutagen) grava.
@@ -92,6 +93,256 @@ pub fn normalize_temas(raw: &str) -> Vec<String> {
 
 fn non_empty(s: Option<&str>) -> Option<&str> {
     s.map(str::trim).filter(|t| !t.is_empty())
+}
+
+// ---------------------------------------------------------------------------
+// V10.1 — o quadro com CAMPO DE IDIOMA INVÁLIDO, e por que ele é consertado
+// em vez de descartado.
+//
+// Relatado em campo: aplicar uma proposta falhava com "ID3v2: Invalid frame
+// language found: [0, 0, 0] (expected 3 ascii characters)", e a curadoria
+// daquela música ficava impossível PARA SEMPRE — toda tentativa falha igual, e
+// um arquivo que não pode ser gravado sai da curadoria em silêncio.
+//
+// O que foi MEDIDO na fonte do lofty 0.22.4 e conferido nas fixtures deste
+// repositório (tests/writer.rs), nos três modos de parsing:
+//
+// | ParsingMode | leitura | idioma lido | regravação                        |
+// |-------------|---------|-------------|-----------------------------------|
+// | Strict      | OK      | [0,0,0]     | FALHA (Invalid frame language)    |
+// | BestAttempt | OK      | [0,0,0]     | FALHA (idem)                      |
+// | Relaxed     | OK      | [0,0,0]     | FALHA (idem)                      |
+//
+// Ou seja: **`ParseOptions`/`ParsingMode` não tem nada a ver com este
+// defeito.** A validação mora em `LanguageFrame::create_bytes`, que roda na
+// ESCRITA (`as_bytes`), e ali não existe modo tolerante nenhum: o `?` aborta a
+// gravação do arquivo inteiro. Afrouxar a leitura não resolveria nada — e a
+// tolerância que existe na leitura (`Relaxed`) DESCARTA quadros, que é
+// justamente o que este produto não pode fazer.
+//
+// Daí o conserto. `und` é o código que o próprio ISO-639-2 (o vocabulário que
+// o ID3 usa neste campo) reserva para "idioma indeterminado": ele é a forma
+// PREVISTA de dizer "não sei", e não um valor inventado por nós. Consertar
+// preserva o conteúdo do quadro — que pode ser um COMM com a anotação de
+// alguém, ou um USLT com a letra inteira; descartar não preserva nada.
+//
+// Só COMM e USLT carregam idioma no lofty 0.22 (`Frame::Comment` e
+// `Frame::UnsynchronizedText` são os dois únicos braços de `Frame::as_bytes`
+// que podem devolver `InvalidLanguage`). Um SYLT, por exemplo, chega como
+// `Frame::Binary` e é regravado byte a byte, sem validação. Mesmo assim a
+// varredura abaixo é dirigida pela VARIANTE do quadro, e não por uma lista de
+// identificadores escrita à mão: se amanhã o lofty passar a entender outro
+// quadro com idioma, é aqui que a lista cresce, num lugar só (DECISIONS #80).
+
+/// ISO-639-2 para "idioma indeterminado" — o valor que o padrão prevê para
+/// "não sei qual é". É o que substitui um campo de idioma quebrado.
+const LANG_INDETERMINADO: [u8; 3] = *b"und";
+
+/// A régua do lofty: três caracteres ASCII alfabéticos, nem mais nem menos.
+fn idioma_valido(lang: [u8; 3]) -> bool {
+    lang.iter().all(u8::is_ascii_alphabetic)
+}
+
+/// (idioma, descrição) de um quadro que carrega idioma; `None` para os demais.
+///
+/// A dupla é a CHAVE de unicidade do lofty dentro de um mesmo identificador de
+/// quadro (`PartialEq` de `CommentFrame`/`UnsynchronizedTextFrame` compara
+/// exatamente isto) — é por ela que o conserto pode fazer dois quadros
+/// colidirem, e é por isso que ela é calculada antes de mexer em qualquer
+/// coisa.
+fn idioma_e_descricao<'a>(f: &'a Frame<'_>) -> Option<([u8; 3], &'a str)> {
+    match f {
+        Frame::Comment(c) => Some((c.language, c.description.as_str())),
+        Frame::UnsynchronizedText(u) => Some((u.language, u.description.as_str())),
+        _ => None,
+    }
+}
+
+/// Troca por `und` todo campo de idioma inválido dos quadros da tag, para que
+/// o arquivo possa ser gravado sem perder quadro nenhum.
+///
+/// Recusa (sem tocar em nada) o único caso em que o conserto custaria dado:
+/// dois quadros do mesmo tipo que, depois de consertados, teriam a MESMA
+/// chave (idioma + descrição). Medido: `Id3v2Tag::insert` devolve o quadro
+/// substituído e o conteúdo dele some. Recusar é ruim — a música continua sem
+/// poder ser curada —, mas apagar a anotação de alguém em silêncio é pior, e a
+/// regra inviolável do projeto é essa.
+///
+/// Nota do que NÃO dá para consertar aqui: quando dois quadros já chegam com a
+/// MESMA chave (mesmo idioma inválido e mesma descrição), o próprio LEITOR do
+/// lofty funde os dois antes de nos entregar a tag — `read.rs` insere quadro a
+/// quadro com `Id3v2Tag::insert`. Essa perda acontece em qualquer leitura,
+/// inclusive na do indexador, e está fora do alcance deste código.
+fn consertar_idiomas_invalidos(tag: &mut Id3v2Tag, caminho: &str) -> Result<()> {
+    // 1. quais identificadores de quadro têm idioma quebrado neste arquivo.
+    //    Arquivo sem defeito nenhum não passa por nada abaixo — nem a ordem
+    //    dos quadros muda.
+    let mut ids: Vec<FrameId<'static>> = Vec::new();
+    for f in &*tag {
+        if idioma_e_descricao(f).is_some_and(|(lang, _)| !idioma_valido(lang)) {
+            let id = FrameId::Valid(Cow::Owned(f.id_str().to_string()));
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+    }
+
+    for id in ids {
+        // 2. simula o conserto e confere que nenhuma chave colide.
+        let mut chaves: HashSet<([u8; 3], String)> = HashSet::new();
+        let cabem_todos = (&*tag)
+            .into_iter()
+            .filter(|f| f.id() == &id)
+            .filter_map(idioma_e_descricao)
+            .all(|(lang, desc)| {
+                let consertado = if idioma_valido(lang) { lang } else { LANG_INDETERMINADO };
+                chaves.insert((consertado, desc.to_string()))
+            });
+        if !cabem_todos {
+            return Err(AppError(format!(
+                "não foi possível salvar em {caminho}: {ERRO_ANOTACOES_INDISTINGUIVEIS}"
+            )));
+        }
+
+        // 3. conserta. O lofty não expõe acesso mutável aos quadros, então os
+        //    quadros deste identificador saem e voltam. A ORDEM deles no bloco
+        //    ID3v2 muda, e isso é indiferente: o padrão não dá significado à
+        //    ordem dos quadros.
+        let mut quadros: Vec<Frame<'static>> = tag.remove(&id).collect();
+        for f in &mut quadros {
+            match f {
+                Frame::Comment(c) if !idioma_valido(c.language) => c.language = LANG_INDETERMINADO,
+                Frame::UnsynchronizedText(u) if !idioma_valido(u.language) => {
+                    u.language = LANG_INDETERMINADO
+                }
+                _ => {}
+            }
+        }
+        for f in quadros {
+            // o passo 2 já provou que não há colisão: nada é substituído aqui
+            drop(tag.insert(f));
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// V10.1 — as falhas da GRAVAÇÃO falam pt-BR.
+//
+// É a mesma família do achado M4 do QA da v0.9.0 (erro de io em inglês
+// vazando para a tela), que foi corrigido só no caminho do download: o
+// caminho de gravação tinha o mesmo buraco, e era ele que estava aparecendo
+// em campo — "ID3v2: Invalid frame language found: [0, 0, 0] (expected 3
+// ascii characters)" na tela de quem não sabe o que é um quadro ID3v2 e não
+// tem a quem perguntar.
+//
+// Régua das frases (DECISIONS #100): a primeira parte diz o que aconteceu, e o
+// resto só existe para dizer o que fazer. O CAMINHO DO ARQUIVO fica sempre,
+// fora da frase: é a única forma de a pessoa saber de qual música se trata
+// quando a falha acontece no meio de um lote de 47.
+// ---------------------------------------------------------------------------
+
+pub const ERRO_DISCO_CHEIO: &str =
+    "não há espaço em disco para gravar as alterações — libere espaço e salve de novo";
+pub const ERRO_SEM_PERMISSAO: &str =
+    "o computador não deixou gravar neste arquivo — se a pasta estiver sincronizada com a nuvem \
+     ou protegida por antivírus, pause e tente de novo";
+pub const ERRO_ARQUIVO_EM_USO: &str =
+    "o arquivo está aberto em outro programa — feche esse programa e salve de novo";
+pub const ERRO_ARQUIVO_ILEGIVEL: &str =
+    "não foi possível ler este MP3 até o fim, e por isso nada foi gravado — o arquivo pode estar \
+     danificado, ou o disco onde ele está pode ter sido desconectado";
+pub const ERRO_ETIQUETAS_FORA_DO_PADRAO: &str =
+    "as etiquetas deste MP3 estão num formato que o programa não conseguiu regravar, e o arquivo \
+     não foi alterado";
+pub const ERRO_ANOTACOES_INDISTINGUIVEIS: &str =
+    "este MP3 tem duas anotações que ficariam idênticas ao serem consertadas, e gravar apagaria \
+     uma delas — nada foi alterado no arquivo";
+/// Depois da gravação bem-sucedida. A frase NÃO diz "não foi possível
+/// salvar" porque salvou: a mentira faria a pessoa refazer o trabalho.
+pub const ERRO_LISTA_DESATUALIZADA: &str =
+    "as alterações foram gravadas neste arquivo, mas a lista de músicas não pôde ser atualizada \
+     agora — feche e abra o aplicativo para vê-las";
+/// Desfecho de quem não tem tradução prevista. É uma frase em pt-BR que se
+/// explica sozinha, e NUNCA o repasse do texto original da biblioteca: quem lê
+/// não fala inglês e não tem a quem perguntar.
+pub const ERRO_GRAVACAO: &str =
+    "não foi possível gravar as alterações neste arquivo — tente de novo e, se continuar, \
+     confira se o arquivo ainda está no lugar";
+
+/// `ENOSPC` no Unix; `ERROR_HANDLE_DISK_FULL` e `ERROR_DISK_FULL` no Windows.
+/// Mesma lista do `acessorios.rs` — o código do sistema é o mesmo.
+#[cfg(unix)]
+const CODIGOS_DISCO_CHEIO: &[i32] = &[28];
+#[cfg(windows)]
+const CODIGOS_DISCO_CHEIO: &[i32] = &[39, 112];
+#[cfg(not(any(unix, windows)))]
+const CODIGOS_DISCO_CHEIO: &[i32] = &[];
+
+/// `ERROR_SHARING_VIOLATION` e `ERROR_LOCK_VIOLATION` do Windows: o arquivo
+/// está aberto por outro programa. É o caso real de quem deixou a música
+/// tocando em outro player e mandou salvar aqui — e o Rust não tem um
+/// `ErrorKind` estável para ele, só o número do sistema. No Unix não existe
+/// bloqueio obrigatório e a lista fica vazia.
+#[cfg(windows)]
+const CODIGOS_ARQUIVO_EM_USO: &[i32] = &[32, 33];
+#[cfg(not(windows))]
+const CODIGOS_ARQUIVO_EM_USO: &[i32] = &[];
+
+/// Traduz uma falha de sistema de arquivos para a frase em pt-BR.
+fn frase_de_io(e: &std::io::Error) -> &'static str {
+    if let Some(codigo) = e.raw_os_error() {
+        if CODIGOS_DISCO_CHEIO.contains(&codigo) {
+            return ERRO_DISCO_CHEIO;
+        }
+        if CODIGOS_ARQUIVO_EM_USO.contains(&codigo) {
+            return ERRO_ARQUIVO_EM_USO;
+        }
+    }
+    match e.kind() {
+        std::io::ErrorKind::PermissionDenied => ERRO_SEM_PERMISSAO,
+        // o arquivo sumiu entre a conferência e a abertura (pen drive
+        // arrancado, compartilhamento de rede que caiu)
+        std::io::ErrorKind::NotFound => ERRO_ARQUIVO_ILEGIVEL,
+        _ => ERRO_GRAVACAO,
+    }
+}
+
+/// Traduz uma falha do lofty para a frase em pt-BR correspondente.
+///
+/// O `_ =>` no fim é deliberado e é o ponto do achado: erro sem tradução
+/// prevista vira uma frase nossa que se explica, e não o texto em inglês da
+/// biblioteca. `ErrorKind` é `#[non_exhaustive]`, então a lista vai
+/// envelhecer sozinha — o desfecho padrão é o que garante que envelhecer não
+/// devolve inglês para a tela.
+fn frase_de_lofty(e: &LoftyError) -> &'static str {
+    match e.kind() {
+        ErrorKind::Io(io) => frase_de_io(io),
+        // o arquivo não é (mais) um MP3 legível
+        ErrorKind::UnknownFormat
+        | ErrorKind::FileDecoding(_)
+        | ErrorKind::SizeMismatch
+        | ErrorKind::TooMuchData
+        | ErrorKind::FakeTag
+        | ErrorKind::StringFromUtf8(_)
+        | ErrorKind::StrFromUtf8(_)
+        | ErrorKind::TextDecode(_) => ERRO_ARQUIVO_ILEGIVEL,
+        // o áudio está bom; são as etiquetas que o lofty recusa a regravar
+        ErrorKind::Id3v2(_)
+        | ErrorKind::FileEncoding(_)
+        | ErrorKind::UnsupportedTag
+        | ErrorKind::NotAPicture
+        | ErrorKind::UnsupportedPicture
+        | ErrorKind::BadTimestamp(_) => ERRO_ETIQUETAS_FORA_DO_PADRAO,
+        _ => ERRO_GRAVACAO,
+    }
+}
+
+/// Monta a mensagem que a pessoa vê: o caminho do arquivo (de qual música se
+/// trata) e uma frase em pt-BR que diz o que aconteceu e o que fazer.
+fn erro_de_gravacao(caminho: &str, frase: &str) -> AppError {
+    AppError(format!("não foi possível salvar em {caminho}: {frase}"))
 }
 
 /// Grava TIT2/TPE1/USLT/TXXX:TEMAS/TXXX:INSTRUMENTAL no MP3 da música
@@ -163,11 +414,20 @@ pub fn write_tags_com_origem(
     // Lê a tag ID3v2 existente (preserva os demais frames); MP3 sem tag ganha
     // uma nova. A leitura via MpegFile valida que há um stream MPEG real.
     let mut file = std::fs::File::open(path)
-        .map_err(|e| AppError(format!("não foi possível salvar em {}: {e}", song.file_path)))?;
+        .map_err(|e| erro_de_gravacao(&song.file_path, frase_de_io(&e)))?;
+    // `ParseOptions::new()` (BestAttempt) é a leitura de sempre, e continua
+    // sendo: os três modos leem este acervo igual — ver o bloco do
+    // `consertar_idiomas_invalidos`. Modo mais tolerante não conserta nada
+    // aqui e DESCARTA quadros, que é o que não podemos fazer.
     let mpeg = MpegFile::read_from(&mut file, ParseOptions::new())
-        .map_err(|e| AppError(format!("não foi possível salvar em {}: {e}", song.file_path)))?;
+        .map_err(|e| erro_de_gravacao(&song.file_path, frase_de_lofty(&e)))?;
     drop(file);
     let mut tag: Id3v2Tag = mpeg.id3v2().cloned().unwrap_or_default();
+
+    // Antes de qualquer alteração: um campo de idioma quebrado num quadro
+    // alheio faria a gravação inteira falhar lá embaixo, e a música sairia da
+    // curadoria para sempre. Consertar (e não descartar) preserva o conteúdo.
+    consertar_idiomas_invalidos(&mut tag, &song.file_path)?;
 
     // TIT2
     tag.set_title(title.to_string());
@@ -250,11 +510,18 @@ pub fn write_tags_com_origem(
     // save_to_path regrava SOMENTE o bloco ID3v2 (mesmo arquivo, mesmo nome);
     // ID3v2.4 é o default de escrita do lofty.
     tag.save_to_path(path, WriteOptions::default())
-        .map_err(|e| AppError(format!("não foi possível salvar em {}: {e}", song.file_path)))?;
+        .map_err(|e| erro_de_gravacao(&song.file_path, frase_de_lofty(&e)))?;
 
     // Re-stata mtime/size e upserta — banco/FTS em sincronia na hora, e o
     // próximo rescan não precisa reler o arquivo.
-    indexer::index_single_file(conn, song.folder_id, path)?;
+    //
+    // Daqui para baixo o ARQUIVO JÁ FOI GRAVADO, e é por isso que a falha tem
+    // frase própria: dizer "não foi possível salvar" seria mentira, e a pessoa
+    // gravaria tudo de novo achando que nada tinha sido feito. O que ficou
+    // para trás é só a lista na tela, e reabrir o aplicativo a refaz.
+    indexer::index_single_file(conn, song.folder_id, path).map_err(|_| {
+        AppError(format!("{}: {ERRO_LISTA_DESATUALIZADA}", song.file_path))
+    })?;
 
     db::get_song(conn, song_id)?
         .ok_or_else(|| AppError(format!("música não encontrada: {song_id}")))
@@ -262,7 +529,211 @@ pub fn write_tags_com_origem(
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_temas;
+    use super::*;
+
+    #[test]
+    fn idioma_valido_segue_a_regua_do_lofty() {
+        assert!(idioma_valido(*b"por"));
+        assert!(idioma_valido(*b"und"));
+        assert!(idioma_valido(*b"XXX")); // maiúsculas contam
+        assert!(!idioma_valido([0, 0, 0])); // o caso do campo
+        assert!(!idioma_valido(*b"p0r")); // dígito no meio
+        assert!(!idioma_valido(*b"po ")); // espaço de preenchimento
+        // o valor com que consertamos precisa passar na régua, senão o
+        // conserto trocaria uma recusa por outra
+        assert!(idioma_valido(LANG_INDETERMINADO));
+    }
+
+    /// Monta uma tag em memória com os quadros pedidos. Construir um quadro
+    /// com idioma inválido é possível (`CommentFrame::new` aceita três bytes
+    /// quaisquer) — quem valida é a ESCRITA, que é justamente o defeito.
+    fn tag_com(quadros: Vec<Frame<'static>>) -> Id3v2Tag {
+        let mut tag = Id3v2Tag::new();
+        for q in quadros {
+            drop(tag.insert(q));
+        }
+        tag
+    }
+
+    fn comentario(lang: [u8; 3], desc: &str, texto: &str) -> Frame<'static> {
+        Frame::Comment(lofty::id3::v2::CommentFrame::new(
+            TextEncoding::UTF8,
+            lang,
+            desc.to_string(),
+            texto.to_string(),
+        ))
+    }
+
+    fn letra(lang: [u8; 3], texto: &str) -> Frame<'static> {
+        Frame::UnsynchronizedText(UnsynchronizedTextFrame::new(
+            TextEncoding::UTF8,
+            lang,
+            String::new(),
+            texto.to_string(),
+        ))
+    }
+
+    /// O conserto troca só o que está quebrado, em COMM e em USLT, e não
+    /// perde quadro nenhum.
+    ///
+    /// O USLT precisa de teste AQUI porque o `write_tags` sempre remove e
+    /// regrava o USLT antes de salvar: pelo caminho de fora, um USLT quebrado
+    /// nunca chega à gravação, e um teste de integração passaria por outro
+    /// motivo que não o conserto (DECISIONS #113 — teste que só visita o caso
+    /// fácil certifica o contrário do que o código faz).
+    #[test]
+    fn o_conserto_troca_so_o_idioma_quebrado_e_nao_perde_quadro() {
+        let mut tag = tag_com(vec![
+            comentario([0, 0, 0], "anotacao", "anotação de alguém"),
+            comentario(*b"eng", "outra", "someone else's note"),
+            letra([0, 0, 0], "a letra inteira desta música"),
+        ]);
+
+        consertar_idiomas_invalidos(&mut tag, "/acervo/x.mp3").unwrap();
+
+        assert_eq!(tag.len(), 3, "nenhum quadro pode sumir no conserto");
+        // `Id3v2Tag::comments()` só devolve COMM de descrição vazia; aqui
+        // interessam TODOS, inclusive o de descrição preenchida.
+        let comms: BTreeMap<String, ([u8; 3], String)> = (&tag)
+            .into_iter()
+            .filter_map(|f| match f {
+                Frame::Comment(c) => {
+                    Some((c.description.clone(), (c.language, c.content.clone())))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            comms["anotacao"],
+            (*b"und", "anotação de alguém".to_string()),
+            "idioma quebrado vira `und` e o texto sobrevive"
+        );
+        assert_eq!(
+            comms["outra"],
+            (*b"eng", "someone else's note".to_string()),
+            "idioma válido não é mexido"
+        );
+        let uslt = tag.unsync_text().next().unwrap();
+        assert_eq!(&uslt.language, b"und");
+        assert_eq!(uslt.content, "a letra inteira desta música");
+    }
+
+    /// Arquivo sem defeito não passa por conserto nenhum — nem a ordem dos
+    /// quadros muda. É o caso de 100% do acervo bem gravado.
+    #[test]
+    fn o_conserto_nao_encosta_num_arquivo_sem_defeito() {
+        let quadros = vec![
+            comentario(*b"por", "a", "um"),
+            comentario(*b"eng", "b", "dois"),
+            letra(*b"por", "três"),
+        ];
+        let mut tag = tag_com(quadros.clone());
+        consertar_idiomas_invalidos(&mut tag, "/acervo/x.mp3").unwrap();
+        let depois: Vec<Frame<'static>> = tag.into_iter().collect();
+        assert_eq!(depois, quadros);
+    }
+
+    /// Dois quadros que o conserto tornaria indistinguíveis: recusa, e a tag
+    /// não é usada para gravar nada. Medido: sem esta guarda o
+    /// `Id3v2Tag::insert` devolve o quadro substituído e o texto some.
+    #[test]
+    fn o_conserto_recusa_quando_fundiria_dois_quadros() {
+        let mut tag = tag_com(vec![
+            comentario([0, 0, 0], "anotacao", "PRIMEIRA"),
+            comentario([0, 0, 1], "anotacao", "SEGUNDA"),
+        ]);
+
+        let err = consertar_idiomas_invalidos(&mut tag, "/acervo/x.mp3")
+            .expect_err("fundir dois quadros é apagar dado existente");
+        assert_eq!(
+            err.to_string(),
+            format!("não foi possível salvar em /acervo/x.mp3: {ERRO_ANOTACOES_INDISTINGUIVEIS}")
+        );
+
+        // ...e a recusa vale só para a colisão: as MESMAS duas anotações com
+        // descrições diferentes passam, porque as chaves seguem distintas
+        let mut tag = tag_com(vec![
+            comentario([0, 0, 0], "anotacao", "PRIMEIRA"),
+            comentario([0, 0, 1], "outra", "SEGUNDA"),
+        ]);
+        consertar_idiomas_invalidos(&mut tag, "/acervo/x.mp3").unwrap();
+        assert_eq!(tag.len(), 2);
+    }
+
+    /// Nenhuma falha do lofty pode chegar à tela em inglês: o desfecho padrão
+    /// é uma frase nossa. `ErrorKind` é `#[non_exhaustive]`, então esta é a
+    /// garantia que sobrevive à próxima versão da biblioteca.
+    #[test]
+    fn toda_falha_do_lofty_vira_frase_em_portugues() {
+        use lofty::error::{FileDecodingError, Id3v2Error, Id3v2ErrorKind};
+        use lofty::file::FileType;
+
+        let casos: Vec<(LoftyError, &str)> = vec![
+            (
+                // o defeito relatado em campo
+                LoftyError::from(Id3v2Error::new(Id3v2ErrorKind::InvalidLanguage([0, 0, 0]))),
+                ERRO_ETIQUETAS_FORA_DO_PADRAO,
+            ),
+            (
+                LoftyError::from(FileDecodingError::new(FileType::Mpeg, "qualquer coisa")),
+                ERRO_ARQUIVO_ILEGIVEL,
+            ),
+            (
+                LoftyError::new(ErrorKind::UnknownFormat),
+                ERRO_ARQUIVO_ILEGIVEL,
+            ),
+            (
+                LoftyError::from(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
+                ERRO_SEM_PERMISSAO,
+            ),
+            (
+                LoftyError::from(std::io::Error::from(std::io::ErrorKind::NotFound)),
+                ERRO_ARQUIVO_ILEGIVEL,
+            ),
+            (
+                // sem tradução prevista: cai no desfecho padrão, em pt-BR
+                LoftyError::new(ErrorKind::AtomMismatch),
+                ERRO_GRAVACAO,
+            ),
+        ];
+
+        for (erro, esperada) in casos {
+            let frase = frase_de_lofty(&erro);
+            assert_eq!(frase, esperada, "tradução errada para {erro}");
+            assert_ne!(
+                frase,
+                erro.to_string(),
+                "a frase não pode ser o repasse do texto da biblioteca"
+            );
+        }
+    }
+
+    /// Códigos do sistema que têm frase própria. "erro de gravação" genérico
+    /// mandaria a pessoa procurar defeito no lugar errado (DECISIONS #116).
+    #[test]
+    fn os_codigos_do_sistema_com_frase_propria() {
+        for codigo in CODIGOS_DISCO_CHEIO {
+            let e = std::io::Error::from_raw_os_error(*codigo);
+            assert_eq!(frase_de_io(&e), ERRO_DISCO_CHEIO, "código {codigo}");
+        }
+        for codigo in CODIGOS_ARQUIVO_EM_USO {
+            let e = std::io::Error::from_raw_os_error(*codigo);
+            assert_eq!(frase_de_io(&e), ERRO_ARQUIVO_EM_USO, "código {codigo}");
+        }
+        // e o que não está em lista nenhuma continua tendo frase em pt-BR
+        let outro = std::io::Error::from(std::io::ErrorKind::Other);
+        assert_eq!(frase_de_io(&outro), ERRO_GRAVACAO);
+    }
+
+    /// A mensagem que chega à tela carrega o CAMINHO do arquivo: sem ele, uma
+    /// falha no meio de um lote não diz de qual música se trata.
+    #[test]
+    fn a_mensagem_cita_o_arquivo() {
+        let caminho = "/Users/alguem/Downloads/musicas/Humor/Apologia ao jumento.mp3";
+        let e = erro_de_gravacao(caminho, ERRO_ARQUIVO_ILEGIVEL);
+        assert!(e.to_string().contains(caminho));
+        assert!(e.to_string().starts_with("não foi possível salvar em "));
+    }
 
     #[test]
     fn normalize_temas_matches_python_rules() {

@@ -901,3 +901,63 @@ opção mais simples que passa nos Acceptance Checks do PRD.
     é a divergência da #80 esperando para acontecer. É a #86 — nenhum texto
     pode afirmar o que o programa não conhece — aplicada a uma estimativa: o
     programa conhece a diferença, e agora ele a conta.
+
+## V10.1 — o arquivo que não podia ser gravado (teste em campo da v0.10.0)
+
+120. **`ParsingMode` não tinha nada a ver com o defeito, e a medição é que
+    disse isso.** Um MP3 do acervo real recusava toda gravação com
+    `ID3v2: Invalid frame language found: [0, 0, 0] (expected 3 ascii
+    characters)` — e como toda tentativa falha igual, aquela música saía da
+    curadoria **para sempre**, em silêncio.
+    A suspeita natural era a leitura, e ela estava errada. Medido nos três
+    modos, sobre um MP3 montado no teste com o campo zerado (`Strict`,
+    `BestAttempt`, `Relaxed`): **a leitura passa nos três, devolve o idioma
+    `[0,0,0]` intacto nos três, e a REGRAVAÇÃO falha nos três, com a mesma
+    frase.** A validação mora em `LanguageFrame::create_bytes`, que só roda na
+    escrita, e ali não existe modo tolerante: o `?` derruba a gravação do
+    arquivo inteiro. Afrouxar a leitura não consertaria nada — e o modo que
+    tolera mais (`Relaxed`) DESCARTA quadros, que é exatamente o que este
+    produto não pode fazer.
+    O conserto é a saída, e ele não inventa nada: `und` é o código que o
+    próprio ISO-639-2 — o vocabulário que o ID3 usa neste campo — reserva para
+    "idioma indeterminado". Consertar preserva o conteúdo do quadro (um `COMM`
+    com a anotação de alguém, um `USLT` com a letra inteira); descartar não
+    preserva nada. Idioma VÁLIDO não é tocado: normalizar o acervo para `und`
+    apagaria a informação que alguém gravou de propósito.
+    **Quem estava quebrado, no caso do campo, era um `COMM`** — e não o `USLT`,
+    que o `write_tags` já removia e regravava antes de salvar. Ou seja: o
+    defeito só existia nos quadros ALHEIOS, os que a decisão 41 promete
+    preservar. A promessa estava certa e era ela que travava o arquivo.
+    **Um caso não tem conserto, e ele recusa em vez de apagar.** Se dois
+    quadros do mesmo tipo ficam com a MESMA chave depois do conserto (idioma +
+    descrição — é assim que o lofty distingue um `COMM` de outro), guardar os
+    dois é impossível: medido, `Id3v2Tag::insert` devolve o substituído e o
+    texto some. Aí o produto **recusa a gravação**, em pt-BR, sem tocar no
+    arquivo. Recusar é ruim — a música continua sem poder ser curada —, mas
+    apagar a anotação de alguém em silêncio é pior, e é a regra inviolável.
+    Fica registrado o que está **fora do nosso alcance**: quando dois quadros
+    já chegam com a mesma chave, o próprio leitor do lofty funde os dois antes
+    de nos entregar a tag (`read.rs` insere quadro a quadro com o mesmo
+    `insert`). Essa perda acontece em toda leitura, inclusive na do indexador.
+121. **A mensagem da gravação era inglês cru de biblioteca, e é a mesma família
+    do M4 da v0.9.0.** Aquele achado — erro de io em inglês vazando para a tela
+    — foi corrigido só no caminho do download; o caminho de GRAVAÇÃO tinha o
+    mesmo buraco, e era ele que aparecia em campo. Agora `frase_de_io` e
+    `frase_de_lofty` traduzem: disco cheio, sem permissão, MP3 ilegível,
+    etiquetas fora do padrão. **O caminho do arquivo fica sempre**, fora da
+    frase: é a única forma de a pessoa saber de qual música se trata quando a
+    falha acontece no meio de um lote de 47.
+    Duas escolhas dentro disso. **O desfecho padrão é uma frase nossa, nunca o
+    repasse do texto original** — `ErrorKind` do lofty é `#[non_exhaustive]`, a
+    lista vai envelhecer sozinha, e é o `_ =>` que garante que envelhecer não
+    devolve inglês para a tela; há teste que compara a frase com o
+    `to_string()` do erro e falha se forem iguais. E **a falha DEPOIS da
+    gravação tem frase própria**: a reindexação que não roda deixa a lista
+    desatualizada, não o arquivo por gravar, e dizer "não foi possível salvar"
+    ali faria a pessoa refazer um trabalho que já está no disco — é a #86
+    aplicada a uma mensagem de erro.
+    Sem teste de integração para falta de permissão, e de propósito: tirar o
+    bit de escrita da pasta não impede nada quando a suíte roda como root (é o
+    caso no contêiner e no CI), e um teste que passa ou falha conforme quem o
+    rodou é a "falha fantasma" que a #77 saiu para acabar. A tradução tem teste
+    unitário por caso.

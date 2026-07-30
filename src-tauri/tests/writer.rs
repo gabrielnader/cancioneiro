@@ -993,3 +993,284 @@ fn a_marca_herdada_do_vagalume_sobrevive_a_gravacao_de_nome() {
     let relido = song_by_suffix(&conn, "com_letra.mp3");
     assert_eq!(relido.letra_origem.as_deref(), Some("vagalume"));
 }
+
+// ---------------------------------------------------------------------------
+// V10.1 — MP3 com CAMPO DE IDIOMA INVÁLIDO num quadro ID3v2 (defeito relatado
+// em campo).
+//
+// O acervo real tem arquivos gravados por programas que escreveram `[0,0,0]`
+// no campo de idioma de um COMM/USLT em vez de três letras. O lofty LÊ isso
+// sem reclamar (em qualquer ParsingMode) e RECUSA a gravação — o que tirava
+// aquela música da curadoria para sempre, porque toda tentativa falhava igual.
+//
+// A saída não é descartar o quadro (seria perder a anotação ou a letra de
+// alguém): é CONSERTAR o idioma para `und`, que é o valor previsto pelo
+// próprio padrão ID3 para "não sei qual é".
+// ---------------------------------------------------------------------------
+
+/// Bytes do ÁUDIO: tudo depois do bloco ID3v2 do começo do arquivo. É a prova
+/// forte de "o áudio não é tocado" — mais forte que comparar a duração, que
+/// sobreviveria a uma reescrita dos quadros MPEG.
+fn audio_bytes(path: &Path) -> Vec<u8> {
+    let bytes = fs::read(path).unwrap();
+    if bytes.len() < 10 || &bytes[..3] != b"ID3" {
+        return bytes;
+    }
+    // tamanho synchsafe: 4 bytes de 7 bits
+    let tamanho = ((bytes[6] as usize) << 21)
+        | ((bytes[7] as usize) << 14)
+        | ((bytes[8] as usize) << 7)
+        | (bytes[9] as usize);
+    bytes[10 + tamanho..].to_vec()
+}
+
+/// Escreve `valor` no campo de idioma do n-ésimo quadro `id` do bloco ID3v2.
+///
+/// É manipulação de bytes crua de propósito: nenhuma biblioteca aceita
+/// ESCREVER um idioma inválido (é justamente o que o lofty recusa), então a
+/// única forma de montar em teste o arquivo que veio do campo é editar o
+/// arquivo no lugar. Layout do quadro ID3v2.4: 4 bytes de identificador, 4 de
+/// tamanho, 2 de sinalizadores, 1 de codificação e então os 3 do idioma.
+fn por_idioma_no_quadro(path: &Path, id: &[u8; 4], nth: usize, valor: [u8; 3]) {
+    let mut bytes = fs::read(path).unwrap();
+    let mut achados = 0;
+    let mut i = 0;
+    while i + 14 < bytes.len() {
+        if &bytes[i..i + 4] == id {
+            if achados == nth {
+                let lang = i + 10 + 1;
+                bytes[lang..lang + 3].copy_from_slice(&valor);
+                fs::write(path, bytes).unwrap();
+                return;
+            }
+            achados += 1;
+            i += 14;
+        } else {
+            i += 1;
+        }
+    }
+    panic!("não achei o quadro {} nº {nth}", String::from_utf8_lossy(id));
+}
+
+/// Acrescenta ao arquivo um COMM — a anotação que alguém escreveu e que este
+/// produto não pode perder.
+fn anotar(path: &Path, lang: [u8; 3], desc: &str, texto: &str) {
+    use lofty::config::WriteOptions;
+    use lofty::id3::v2::{CommentFrame, Frame};
+    use lofty::tag::TagExt;
+    use lofty::TextEncoding;
+
+    let mut tag = id3_tag(path);
+    tag.insert(Frame::Comment(CommentFrame::new(
+        TextEncoding::UTF8,
+        lang,
+        desc.to_string(),
+        texto.to_string(),
+    )));
+    tag.save_to_path(path, WriteOptions::default()).unwrap();
+}
+
+/// (idioma, texto) do COMM de descrição `desc`, lido do arquivo.
+fn comentario(path: &Path, desc: &str) -> Option<([u8; 3], String)> {
+    use lofty::id3::v2::Frame;
+    (&id3_tag(path)).into_iter().find_map(|f| match f {
+        Frame::Comment(c) if c.description == desc => Some((c.language, c.content.clone())),
+        _ => None,
+    })
+}
+
+/// (idioma, texto) do primeiro USLT do arquivo.
+fn uslt(path: &Path) -> Option<([u8; 3], String)> {
+    id3_tag(path)
+        .unsync_text()
+        .next()
+        .map(|f| (f.language, f.content.clone()))
+}
+
+const ANOTACAO: &str = "não sei quem canta, perguntar ao Dona Alzira";
+
+/// O caso do campo: gravar num MP3 cujo COMM tem idioma `[0,0,0]` PASSA, o
+/// texto da anotação sobrevive inteiro (o quadro é consertado, não descartado)
+/// e o áudio não é tocado.
+#[test]
+fn write_tags_conserta_idioma_invalido_em_vez_de_recusar_o_arquivo() {
+    let (dir, conn, _folder_id) = setup();
+    let song = song_by_suffix(&conn, "com_letra.mp3");
+    let path = PathBuf::from(&song.file_path);
+    marcar_transcricao_com_capa(&path);
+    anotar(&path, *b"eng", "anotacao", ANOTACAO);
+    por_idioma_no_quadro(&path, b"COMM", 0, [0, 0, 0]);
+    assert_eq!(
+        comentario(&path, "anotacao").unwrap().0,
+        [0, 0, 0],
+        "o arquivo precisa entrar no teste com o defeito"
+    );
+    let audio_antes = audio_bytes(&path);
+
+    let atualizada = writer::write_tags(
+        &conn,
+        song.id,
+        "Apologia ao Jumento",
+        Some("Luiz Gonzaga"),
+        db::get_lyrics(&conn, song.id).unwrap().as_deref(),
+        Some("humor"),
+        None,
+    )
+    .expect("um idioma inválido não pode impedir a curadoria da música");
+
+    assert_eq!(atualizada.title, "Apologia ao Jumento");
+
+    // o quadro alheio sobreviveu INTEIRO, só com o idioma consertado
+    let (lang, texto) = comentario(&path, "anotacao").expect("a anotação não pode ser descartada");
+    assert_eq!(texto, ANOTACAO);
+    assert_eq!(&lang, b"und", "idioma desconhecido vira `und`, o valor do padrão");
+
+    // e nada mais mudou
+    frames_alheios_intactos(&path);
+    assert_eq!(audio_bytes(&path), audio_antes, "o áudio não pode ser tocado");
+    let mut nomes: Vec<String> = fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    nomes.sort();
+    assert_eq!(nomes, vec!["com_letra.mp3", "sem_letra.mp3", "sem_tags.mp3"]);
+}
+
+/// Idioma VÁLIDO não é mexido: o conserto vale só para o que está quebrado.
+/// Sem isto o produto normalizaria o acervo inteiro para `und`, apagando a
+/// informação de idioma que alguém gravou de propósito.
+#[test]
+fn write_tags_nao_mexe_em_idioma_valido() {
+    let (_dir, conn, _folder_id) = setup();
+    let song = song_by_suffix(&conn, "com_letra.mp3");
+    let path = PathBuf::from(&song.file_path);
+    anotar(&path, *b"eng", "anotacao", ANOTACAO);
+    anotar(&path, *b"spa", "outra", "otra anotación");
+
+    writer::write_tags(&conn, song.id, "Título Novo", None, None, None, None).unwrap();
+
+    assert_eq!(comentario(&path, "anotacao").unwrap().0, *b"eng");
+    assert_eq!(comentario(&path, "outra").unwrap().0, *b"spa");
+}
+
+/// USLT com idioma inválido: a gravação passa e a LETRA sobrevive inteira.
+///
+/// Honestidade sobre o que este teste prova: por FORA, o `write_tags` sempre
+/// remove e regrava o USLT (com `por`), então um USLT quebrado nunca chega ao
+/// `save`, e este teste passaria mesmo sem o conserto. Ele fica como guarda do
+/// desfecho que interessa a quem cura — a letra não some. Quem cobre o conserto
+/// do USLT em si é o teste unitário
+/// `writer::tests::o_conserto_troca_so_o_idioma_quebrado_e_nao_perde_quadro`,
+/// que chama a função direto.
+#[test]
+fn write_tags_conserta_idioma_invalido_do_uslt_sem_perder_a_letra() {
+    let (_dir, conn, folder_id) = setup();
+    let song = song_by_suffix(&conn, "com_letra.mp3");
+    let path = PathBuf::from(&song.file_path);
+    let letra = db::get_lyrics(&conn, song.id).unwrap().expect("fixture tem letra");
+    por_idioma_no_quadro(&path, b"USLT", 0, [0, 0, 0]);
+    assert_eq!(uslt(&path).unwrap().0, [0, 0, 0]);
+
+    // o caminho do lote: repassa a MESMA letra e só troca o nome
+    writer::write_tags(
+        &conn,
+        song.id,
+        "Apologia ao Jumento",
+        Some("Luiz Gonzaga"),
+        Some(&letra),
+        None,
+        None,
+    )
+    .expect("idioma inválido no USLT não pode impedir a gravação");
+
+    let (lang, texto) = uslt(&path).expect("a letra não pode ser descartada");
+    assert_eq!(texto, letra);
+    assert_eq!(&lang, b"por", "o USLT que o produto grava é sempre `por`");
+
+    indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
+    assert_eq!(
+        db::get_lyrics(&conn, song.id).unwrap().as_deref(),
+        Some(letra.as_str())
+    );
+}
+
+/// Duas anotações com a MESMA descrição e idiomas inválidos DIFERENTES: o
+/// conserto levaria as duas à mesma chave (`und` + a descrição), e o lofty
+/// guarda uma só — apagaria a anotação de alguém. Medido: `insert` devolve a
+/// substituída e o quadro some.
+///
+/// A regra inviolável ganha: o produto RECUSA a gravação, em pt-BR, e não
+/// toca no arquivo. Recusar é ruim; apagar em silêncio é pior.
+#[test]
+fn write_tags_recusa_em_vez_de_fundir_duas_anotacoes_no_conserto() {
+    let (_dir, conn, _folder_id) = setup();
+    let song = song_by_suffix(&conn, "com_letra.mp3");
+    let path = PathBuf::from(&song.file_path);
+    anotar(&path, *b"eng", "anotacao", "PRIMEIRA anotação");
+    anotar(&path, *b"deu", "anotacao", "SEGUNDA anotação");
+    por_idioma_no_quadro(&path, b"COMM", 0, [0, 0, 0]);
+    por_idioma_no_quadro(&path, b"COMM", 1, [0, 0, 1]);
+    let bytes_antes = fs::read(&path).unwrap();
+
+    let err = writer::write_tags(&conn, song.id, "Título Novo", None, None, None, None)
+        .expect_err("fundir duas anotações numa só é apagar dado existente");
+
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "não foi possível salvar em {}: {}",
+            song.file_path,
+            writer::ERRO_ANOTACOES_INDISTINGUIVEIS
+        )
+    );
+    assert_eq!(
+        fs::read(&path).unwrap(),
+        bytes_antes,
+        "gravação recusada não pode tocar no arquivo"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// V10.1 — as falhas da GRAVAÇÃO falam pt-BR (mesma família do achado M4 do QA
+// da v0.9.0, corrigido só no caminho do download).
+//
+// Quem cura são ~40 pessoas sem suporte: a mensagem na tela é a única
+// explicação que elas vão receber, e ela precisa dizer o que aconteceu, o que
+// fazer, e DE QUAL MÚSICA se trata (o caminho do arquivo fica).
+// ---------------------------------------------------------------------------
+
+/// MP3 ilegível: a mensagem é pt-BR inteira, cita o arquivo e não repassa o
+/// texto da biblioteca.
+#[test]
+fn write_tags_explica_em_portugues_um_mp3_ilegivel() {
+    let (_dir, conn, _folder_id) = setup();
+    let song = song_by_suffix(&conn, "sem_letra.mp3");
+    // o arquivo continua existindo e com o mesmo nome — o conteúdo é que não
+    // é mais um MP3 (disco com setor ruim, cópia interrompida, HD que dormiu)
+    copy_fixture("corrompido.mp3", Path::new(&song.file_path));
+
+    let err = writer::write_tags(&conn, song.id, "Título", None, None, None, None)
+        .expect_err("arquivo ilegível não pode ser gravado");
+
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "não foi possível salvar em {}: {}",
+            song.file_path,
+            writer::ERRO_ARQUIVO_ILEGIVEL
+        )
+    );
+    assert!(
+        err.to_string().contains(&song.file_path),
+        "sem o caminho, a pessoa não sabe de qual música a mensagem fala"
+    );
+}
+
+// Falta de permissão, disco cheio e as demais falhas de sistema são traduzidas
+// em `writer::frase_de_io`/`frase_de_lofty`, com teste unitário por caso no
+// próprio módulo. NÃO há teste de integração para elas de propósito: tirar o
+// bit de escrita da pasta não impede nada quando a suíte roda como root (é o
+// caso no contêiner de desenvolvimento e no CI), então o teste passaria ou
+// falharia conforme quem o rodou — a "falha fantasma" que a DECISIONS #77 saiu
+// para acabar. A ponte entre a falha real e a frase é o `map_err` de cada
+// chamada, e ela é curta o bastante para ser lida.
