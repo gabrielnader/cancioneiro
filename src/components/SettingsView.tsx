@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getBackend, type AcessorioInfo } from "../lib/api";
 import {
-  ACESSORIO_CANCELADO,
   ACESSORIO_CORROMPIDO,
   ACESSORIO_INDETERMINADO,
   ACESSORIO_INDISPONIVEL,
@@ -24,7 +23,8 @@ import {
 } from "../lib/curadoria";
 import { buildFolderTree, isUnderFolder } from "../lib/folderTree";
 import { getAppVersion } from "../lib/updater";
-import { novoScanId, useEnrichStore } from "../stores/enrichStore";
+import { useDownloadStore } from "../stores/downloadStore";
+import { useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
 import { useToastStore } from "../stores/toastStore";
 import { useUiStore } from "../stores/uiStore";
@@ -263,9 +263,27 @@ function CuradoriaSection() {
   const aoAtualizar = useCallback((info: AcessorioInfo) => {
     setAcessorios((atual) => {
       if (!atual || !atual.some((a) => a.nome === info.nome)) return [info];
+      // devolver o MESMO array quando nada muda evita uma recontagem por
+      // igualdade de referência (o efeito da contagem depende de `acessorios`)
+      if (atual.some((a) => a.nome === info.nome && a === info)) return atual;
       return atual.map((a) => (a.nome === info.nome ? info : a));
     });
   }, []);
+
+  /**
+   * V10.4 — o desfecho dos downloads vem da STORE, e não de um callback do
+   * cartão.
+   *
+   * O download sobrevive à navegação desde esta versão (ver `downloadStore`),
+   * então ele pode terminar com esta tela fechada: quem volta relê a lista do
+   * backend e está certo. O que este efeito cobre é o outro caso — o download
+   * que termina com a tela ABERTA —, e ele lê a store em vez de um callback
+   * porque quem termina o download já não é este componente.
+   */
+  const resultadosDoDownload = useDownloadStore((s) => s.resultados);
+  useEffect(() => {
+    for (const info of Object.values(resultadosDoDownload)) aoAtualizar(info);
+  }, [resultadosDoDownload, aoAtualizar]);
 
   /**
    * A contagem vem do backend (`enrich_count`), pela MESMA função que a
@@ -385,7 +403,7 @@ function CuradoriaSection() {
         música, e interromper quando quiser.
       </p>
 
-      <Acessorios lista={acessorios} aoAtualizar={aoAtualizar} />
+      <Acessorios lista={acessorios} />
 
       <div className="mt-4 max-w-md">
         <label
@@ -516,7 +534,9 @@ function CuradoriaSection() {
  *
  * 1. **Nada baixa sozinho**: só existe download depois de um clique em cima de
  *    um texto que diz o que é, quanto ocupa, quanto TEMPO leva e de onde vem.
- * 2. **Progresso e cancelamento**, não uma tela parada (DECISIONS #92).
+ * 2. **Progresso e cancelamento**, não uma tela parada (DECISIONS #92) — e,
+ *    desde a V10.4, progresso que SOBREVIVE a sair desta tela: o download é do
+ *    aplicativo, não do componente (ver `downloadStore`).
  * 3. **Baixou uma vez, não pergunta de novo**: no estado "pronto" não há botão.
  * 4. **Falha honesta**: a frase de erro vem PRONTA do backend e é mostrada como
  *    veio. Reescrevê-la aqui criaria uma segunda versão da verdade sobre uma
@@ -524,11 +544,9 @@ function CuradoriaSection() {
  */
 function Acessorios({
   lista,
-  aoAtualizar,
 }: {
   /** `undefined` = perguntando; `null` = não deu para conferir; `[]` = não há. */
   lista: AcessorioInfo[] | null | undefined;
-  aoAtualizar: (info: AcessorioInfo) => void;
 }) {
   return (
     <div className="mt-4 space-y-3">
@@ -541,12 +559,7 @@ function Acessorios({
         <p className="text-[13px] text-[#5B6472]">{ACESSORIO_SEM_BINARIO}</p>
       )}
       {(lista ?? []).map((info) => (
-        <CartaoDoAcessorio
-          key={info.nome}
-          info={info}
-          lista={lista}
-          aoAtualizar={aoAtualizar}
-        />
+        <CartaoDoAcessorio key={info.nome} info={info} lista={lista} />
       ))}
     </div>
   );
@@ -571,64 +584,25 @@ function totalConfiavel(p: { baixados: number; total: number | null }): number |
 function CartaoDoAcessorio({
   info,
   lista,
-  aoAtualizar,
 }: {
   info: AcessorioInfo;
   lista: AcessorioInfo[] | null | undefined;
-  aoAtualizar: (info: AcessorioInfo) => void;
 }) {
-  const [baixando, setBaixando] = useState<{
-    baixados: number;
-    total: number | null;
-    segundosRestantes: number | null;
-  } | null>(null);
+  /**
+   * V10.4 — TUDO sobre o download vem da store, e nada dele nasce aqui.
+   *
+   * O `useState` que morava neste componente era o defeito D1 inteiro: a tela
+   * de Configurações é desmontada ao trocar de view, e com ela iam embora o
+   * progresso, a assinatura do evento e o lugar onde o desfecho apareceria —
+   * enquanto o download continuava vivo no backend, invisível. Voltar
+   * mostrava o botão "Baixar" de novo, e clicar nele punha dois downloads
+   * escrevendo o mesmo `.parcial`.
+   */
+  const baixando = useDownloadStore((s) => s.emCurso[info.nome] ?? null);
   /** Desfecho do último download (cancelamento ou a frase do backend). */
-  const [mensagem, setMensagem] = useState<string | null>(null);
-  /** Download vivo: os eventos de qualquer outro são DESCARTADOS (M4). */
-  const downloadAtual = useRef<string | null>(null);
-
-  async function baixar() {
-    const id = novoScanId();
-    downloadAtual.current = id;
-    setMensagem(null);
-    // o total só aparece quando o servidor o anunciar: começar em 0 de 0
-    // desenharia uma barra cheia de um arquivo vazio (DECISIONS #86)
-    setBaixando({ baixados: 0, total: null, segundosRestantes: null });
-    let unlisten: (() => void) | null = null;
-    try {
-      unlisten = await getBackend().onAcessorioProgresso((p) => {
-        if (p.download_id !== downloadAtual.current) return;
-        if (p.nome !== info.nome) return;
-        setBaixando({
-          baixados: p.baixados,
-          total: p.total,
-          // velocidade MEDIDA desta conexão; null enquanto a amostra é curta
-          segundosRestantes: p.segundos_restantes,
-        });
-      });
-    } catch {
-      // sem canal de progresso o download continua: só não há barra
-    }
-    try {
-      const desfecho = await getBackend().acessorioBaixar(info.nome, id);
-      // `cancelado` é campo, não dedução: cancelar e falhar terminam os dois
-      // com o acessório ausente, e a tela precisa dizer qual dos dois foi
-      if (desfecho.cancelado) setMensagem(ACESSORIO_CANCELADO);
-      aoAtualizar(desfecho.acessorio);
-    } catch (e) {
-      // a frase já vem em pt-BR e explicando o que aconteceu com o arquivo
-      setMensagem(String(e).replace(/^Error:\s*/, ""));
-    } finally {
-      unlisten?.();
-      downloadAtual.current = null;
-      setBaixando(null);
-    }
-  }
-
-  function parar() {
-    const id = downloadAtual.current;
-    if (id) void getBackend().acessorioCancelar(id);
-  }
+  const mensagem = useDownloadStore((s) => s.mensagens[info.nome] ?? null);
+  const baixar = useDownloadStore((s) => s.baixar);
+  const parar = useDownloadStore((s) => s.parar);
 
   // A leitura do estado mora num lugar só: um acessório que sumiu da lista não
   // é o mesmo que um acessório ausente, e um estado que esta versão não
@@ -675,7 +649,7 @@ function CartaoDoAcessorio({
           {baixando === null && (
             <button
               type="button"
-              onClick={() => void baixar()}
+              onClick={() => void baixar(info.nome)}
               className="mt-2 rounded-md border border-[#0F766E] px-3 py-1.5 text-[14px] font-medium text-[#0F766E] hover:bg-[#F0FDFA]"
             >
               {rotuloBaixarAcessorio(info, estado === "corrompido")}
@@ -717,7 +691,7 @@ function CartaoDoAcessorio({
           )}
           <button
             type="button"
-            onClick={parar}
+            onClick={() => parar(info.nome)}
             className="mt-2 rounded-md px-3 py-1.5 text-[14px] font-medium text-[#374151] hover:bg-[#F3F4F6]"
           >
             Parar

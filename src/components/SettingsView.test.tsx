@@ -25,6 +25,7 @@ import {
 import type { EstadoDaContagem } from "../lib/curadoria";
 import type { AcessorioInfo, AcessorioProgresso, Contagem } from "../lib/api";
 import type { Song } from "../lib/types";
+import { estadoInicialDosDownloads, useDownloadStore } from "../stores/downloadStore";
 import { useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
 import { useUiStore } from "../stores/uiStore";
@@ -74,6 +75,7 @@ function acessorio(estado: AcessorioInfo["estado"]): AcessorioInfo {
     arquivo: "fpcalc-linux-x86_64",
     tamanho_bytes: 5_538_312,
     segundos_estimados: 6,
+    tempo_medido_nesta_maquina: false,
     executavel: true,
     estado,
     origem:
@@ -89,6 +91,7 @@ function whisper(estado: AcessorioInfo["estado"]): AcessorioInfo {
     arquivo: "whisper-cli-linux-x86_64",
     tamanho_bytes: 2_000_000,
     segundos_estimados: 2,
+    tempo_medido_nesta_maquina: false,
     executavel: true,
     estado,
     origem:
@@ -104,6 +107,7 @@ function modelo(estado: AcessorioInfo["estado"]): AcessorioInfo {
     arquivo: "ggml-small-q5_1.bin",
     tamanho_bytes: 181_000_000,
     segundos_estimados: 181,
+    tempo_medido_nesta_maquina: false,
     executavel: false,
     estado,
     origem:
@@ -165,6 +169,10 @@ function estadoBase() {
     }),
   } as unknown as Backend);
   useUiStore.setState({ view: "settings" });
+  // V10.4 — o download vive numa store, e não no cartão: cada teste parte de
+  // uma máquina que não está baixando nada (senão o download de um teste
+  // sobreviveria ao teste, que é exatamente a propriedade nova).
+  useDownloadStore.setState(estadoInicialDosDownloads());
   useLibraryStore.setState({
     folders: [{ id: 1, path: "/acervo", last_scanned_at: null }],
     allSongs: [
@@ -755,6 +763,151 @@ describe("SettingsView — acessório do reconhecimento pelo som (V9)", () => {
     expect(acessorioCancelar).toHaveBeenCalledWith(
       acessorioBaixar.mock.calls[0][1],
     );
+  });
+
+  // -------------------------------------------------------------------------
+  // V10.4 — SAIR DA TELA NÃO É CANCELAR (defeito de campo D1)
+  // -------------------------------------------------------------------------
+  //
+  // *"Coloquei pra baixar o modelo novo e sai da pagina. o download parou e
+  // tive que começar de novo."* — 1,5 GB perdidos por trocar de aba.
+  //
+  // O invoke nunca morreu (é `(async)` e roda no backend); o que morria era
+  // tudo o que a pessoa podia ver dele, porque o `App.tsx` DESMONTA esta tela
+  // ao trocar de view e o estado do download vivia dentro do cartão. O PRD V9,
+  // regra 2, promete o contrário: "segundo plano, sem travar busca nem
+  // reprodução, com progresso visível e cancelamento".
+
+  /** Sai de Configurações e volta — o que o `App.tsx` faz de verdade. */
+  function sairEVoltar(tela: ReturnType<typeof render>): void {
+    tela.unmount();
+    render(<SettingsView />);
+  }
+
+  it("sair de Configurações e voltar reencontra o download em andamento", async () => {
+    acessorioBaixar.mockImplementation(() => new Promise(() => {}));
+    const tela = render(<SettingsView />);
+    const botao = await screen.findByRole("button", {
+      name: rotuloBaixarAcessorio(acessorio("ausente"), false),
+    });
+    await act(async () => {
+      fireEvent.click(botao);
+    });
+    await act(async () => {
+      emitirProgressoDoAcessorio?.({
+        nome: "fpcalc",
+        baixados: 4_000_000,
+        total: 5_538_312,
+        segundos_restantes: 3,
+        download_id: acessorioBaixar.mock.calls[0][1] as string,
+      });
+    });
+
+    await act(async () => {
+      sairEVoltar(tela);
+    });
+
+    // o progresso está de volta na tela, com o número de onde parou
+    expect(
+      await screen.findByText(textoDoDownload(4_000_000, 5_538_312, 3)),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Parar" })).toBeEnabled();
+    // e o download continua sendo UM: o botão que dispararia o segundo não
+    // está lá (dois downloads escreveriam o mesmo `.parcial`)
+    expect(
+      screen.queryByRole("button", { name: /Baixar/ }),
+    ).not.toBeInTheDocument();
+    expect(acessorioBaixar).toHaveBeenCalledTimes(1);
+  });
+
+  it("o progresso continua andando depois da volta", async () => {
+    acessorioBaixar.mockImplementation(() => new Promise(() => {}));
+    const tela = render(<SettingsView />);
+    const botao = await screen.findByRole("button", {
+      name: rotuloBaixarAcessorio(acessorio("ausente"), false),
+    });
+    await act(async () => {
+      fireEvent.click(botao);
+    });
+    await act(async () => {
+      sairEVoltar(tela);
+    });
+    await act(async () => {
+      emitirProgressoDoAcessorio?.({
+        nome: "fpcalc",
+        baixados: 5_000_000,
+        total: 5_538_312,
+        segundos_restantes: 1,
+        download_id: acessorioBaixar.mock.calls[0][1] as string,
+      });
+    });
+    expect(
+      screen.getByText(textoDoDownload(5_000_000, 5_538_312, 1)),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * A falha que acontece com a pessoa em OUTRA tela tem de estar esperando
+   * quando ela voltar. Antes ela sumia com o componente, e o defeito ficava
+   * indistinguível de "o download simplesmente não estava lá".
+   */
+  it("a falha acontecida fora da tela espera a pessoa voltar", async () => {
+    let falhar!: (e: Error) => void;
+    acessorioBaixar.mockImplementation(
+      () => new Promise((_r, reject) => (falhar = reject)),
+    );
+    const tela = render(<SettingsView />);
+    const botao = await screen.findByRole("button", {
+      name: rotuloBaixarAcessorio(acessorio("ausente"), false),
+    });
+    await act(async () => {
+      fireEvent.click(botao);
+    });
+    // a pessoa sai da tela, e SÓ ENTÃO o download falha
+    await act(async () => {
+      tela.unmount();
+      falhar(new Error(ERROS_DE_GRAVACAO.gravacao));
+    });
+
+    render(<SettingsView />);
+    expect(await screen.findByText(ERROS_DE_GRAVACAO.gravacao)).toBeVisible();
+    // e o caminho de volta está aberto: dá para baixar de novo
+    expect(
+      await screen.findByRole("button", {
+        name: rotuloBaixarAcessorio(acessorio("ausente"), false),
+      }),
+    ).toBeEnabled();
+  });
+
+  /**
+   * O acessório que ficou PRONTO enquanto a pessoa estava fora aparece pronto
+   * na volta — e sem botão de baixar de novo (PRD V9, regra 3).
+   */
+  it("o download que terminou fora da tela aparece pronto na volta", async () => {
+    let concluir!: () => void;
+    acessorioBaixar.mockImplementation(
+      () =>
+        new Promise((r) => {
+          concluir = () => r({ cancelado: false, acessorio: acessorio("pronto") });
+        }),
+    );
+    const tela = render(<SettingsView />);
+    const botao = await screen.findByRole("button", {
+      name: rotuloBaixarAcessorio(acessorio("ausente"), false),
+    });
+    await act(async () => {
+      fireEvent.click(botao);
+    });
+    // o estado do backend acompanha: quem voltar relê a lista
+    acessoriosEstado.mockResolvedValue([acessorio("pronto")]);
+    await act(async () => {
+      tela.unmount();
+      concluir();
+    });
+
+    render(<SettingsView />);
+    expect(await screen.findByText(ACESSORIO_PRONTO)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Baixar/ })).toBeNull();
   });
 });
 

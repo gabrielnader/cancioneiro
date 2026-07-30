@@ -1513,6 +1513,48 @@ test.describe("V9/V10 — o acessório do som e o conflito (F18 fases 2 e 3)", (
     await expect(bloco.getByRole("button", { name: /^Baixar \(/ })).toBeVisible();
   });
 
+  /**
+   * V10.4 — SAIR DA TELA NÃO É CANCELAR (defeito de campo D1).
+   *
+   * *"Coloquei pra baixar o modelo novo e sai da pagina. o download parou e
+   * tive que começar de novo."* — 1,5 GB perdidos por trocar de aba, sem
+   * aviso. O PRD V9, regra 2, promete segundo plano com progresso visível; o
+   * estado do download morava no componente, e o `App.tsx` desmonta esta tela
+   * ao trocar de view.
+   *
+   * Só o E2E navega de verdade: os testes de unidade desmontam o componente à
+   * mão, e é a lateral que a pessoa clica.
+   */
+  test("sair de Configurações e voltar reencontra o download em andamento", async ({
+    page,
+  }) => {
+    await resetApp(page);
+    await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__CANCIONEIRO_MOCK__._acessorio.atrasoMs = 400;
+    });
+    await page.getByRole("button", { name: "Configurações" }).click();
+    const bloco = page.getByRole("region", { name: "Reconhecer a música pelo som" });
+    await bloco.getByRole("button", { name: /^Baixar \(/ }).click();
+    await expect(bloco.getByText(/^Baixando…/)).toBeVisible();
+
+    // a pessoa vai ouvir música no meio do download, como o PRD promete
+    await page.getByRole("button", { name: "Biblioteca", exact: true }).click();
+    await expect(page.getByRole("region", { name: "Curadoria do acervo" })).toHaveCount(0);
+    await page.getByRole("button", { name: "Configurações" }).click();
+
+    // o download está lá, com barra e com o caminho para parar
+    await expect(bloco.getByText(/^Baixando…/)).toBeVisible();
+    await expect(bloco.getByRole("button", { name: "Parar" })).toBeVisible();
+    // e o botão que dispararia um SEGUNDO download do mesmo arquivo não está
+    await expect(bloco.getByRole("button", { name: /^Baixar \(/ })).toHaveCount(0);
+
+    // e ele termina: sair da tela não interrompeu nada
+    await expect(
+      bloco.getByText("Pronto. Não é preciso baixar de novo."),
+    ).toBeVisible();
+  });
+
   // A soma SHA-256 é a verificação que impede um download comprometido de
   // virar execução de código. Quando ela falha, a frase do backend é a
   // explicação inteira — e ela aparece como veio.
@@ -1726,7 +1768,15 @@ test.describe("V10 — a etapa que resolve (F18 fase 3)", () => {
     await expect(
       bloco.getByText(/É preciso baixar um arquivo de 181,3 MB/),
     ).toBeVisible();
-    await expect(bloco.getByText(/O download leva cerca de 3 minutos/)).toBeVisible();
+    // V10.4 — o tempo saiu de uma banda de referência que anunciava 26 minutos
+    // para um download que levou 3 (defeito de campo D3). Com a referência
+    // honesta, 190 MB são ~1 minuto; e enquanto o número for DECLARADO a frase
+    // carrega a ressalva — o número medido desta máquina é que a dispensa.
+    await expect(
+      bloco.getByText(
+        /O download leva cerca de 1 minuto — mais se a sua internet estiver lenta/,
+      ),
+    ).toBeVisible();
 
     await page.getByRole("button", { name: "Buscar dados desta pasta" }).click();
     const dialog = page.getByRole("dialog", { name: "Completar dados" });

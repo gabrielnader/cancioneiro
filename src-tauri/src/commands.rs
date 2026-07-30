@@ -57,6 +57,40 @@ pub struct Db {
     /// modo que o mapa não cresce sem limite e cancelar um id desconhecido —
     /// varredura já encerrada, id inventado — é um no-op inofensivo.
     scans: Mutex<HashMap<String, Arc<AtomicBool>>>,
+    /// V10.4 — os ARQUIVOS de acessório que estão sendo baixados agora.
+    ///
+    /// É outra coisa que o mapa de cancelamento acima, que é por `download_id`:
+    /// aqui a chave é o arquivo, porque o que não pode acontecer duas vezes ao
+    /// mesmo tempo é a escrita do MESMO `.parcial`. Ver
+    /// `dois_downloads_do_mesmo_arquivo_nao_correm_juntos`.
+    downloads: Arc<Mutex<std::collections::HashSet<String>>>,
+}
+
+/// V10.4 — a frase de quem clicou duas vezes no mesmo download.
+///
+/// Ela existe para NÃO acontecer: a tela guarda o download em store global
+/// desde esta versão, então voltar a Configurações mostra o que já está
+/// rodando em vez de oferecer o botão de novo. Esta é a rede embaixo — e ela
+/// diz o que está acontecendo, porque "não foi possível gravar" era exatamente
+/// o que a pessoa lia antes.
+pub const ERRO_DOWNLOAD_JA_EM_ANDAMENTO: &str =
+    "este download já está em andamento — acompanhe o progresso em Configurações";
+
+/// Enquanto este guard existe, o arquivo está travado para downloads novos.
+/// A trava sai no `Drop`, então nenhum caminho de saída (erro, cancelamento,
+/// pânico) deixa um acessório travado para sempre.
+#[derive(Debug)]
+pub struct DownloadEmCurso {
+    arquivo: String,
+    registro: Arc<Mutex<std::collections::HashSet<String>>>,
+}
+
+impl Drop for DownloadEmCurso {
+    fn drop(&mut self) {
+        if let Ok(mut vivos) = self.registro.lock() {
+            vivos.remove(&self.arquivo);
+        }
+    }
 }
 
 impl Db {
@@ -65,7 +99,23 @@ impl Db {
             conn: Mutex::new(conn),
             path,
             scans: Mutex::new(HashMap::new()),
+            downloads: Arc::new(Mutex::new(std::collections::HashSet::new())),
         }
+    }
+
+    /// Reserva o arquivo para ESTE download. `Err` quando já há um em curso.
+    fn download_begin(&self, arquivo: &str) -> Result<DownloadEmCurso> {
+        let mut vivos = self
+            .downloads
+            .lock()
+            .map_err(|_| AppError("estado dos downloads corrompido (lock poisoned)".into()))?;
+        if !vivos.insert(arquivo.to_string()) {
+            return Err(AppError(ERRO_DOWNLOAD_JA_EM_ANDAMENTO.into()));
+        }
+        Ok(DownloadEmCurso {
+            arquivo: arquivo.to_string(),
+            registro: Arc::clone(&self.downloads),
+        })
     }
 
     fn lock(&self) -> Result<MutexGuard<'_, Connection>> {
@@ -904,16 +954,26 @@ pub struct AcessorioInfo {
     pub arquivo: String,
     /// Quanto ocupa, em bytes.
     pub tamanho_bytes: u64,
-    /// Quanto tempo o download deve levar, em segundos, numa conexão de
-    /// referência (V10). A dispensa do tempo valia para 5 MB; para os 180 MB
-    /// do modelo, não vale — sem isto a tela oferece um download sem dizer se
-    /// ele leva três minutos ou três horas.
+    /// Quanto tempo o download deve levar, em segundos. A dispensa do tempo
+    /// valia para 5 MB; para os 1,5 GB do modelo grande, não vale — sem isto a
+    /// tela oferece um download sem dizer se ele leva três minutos ou três
+    /// horas.
     ///
-    /// É estimativa DECLARADA, não medida (`acessorios::BANDA_REFERENCIA_BYTES_S`,
-    /// 1 MB/s): a copy tem de dizer "cerca de". Durante o download o número
-    /// honesto passa a ser o `segundos_restantes` do progresso, que vem da
-    /// velocidade real desta conexão.
+    /// V10.4 — o número sai da banda MEDIDA nesta máquina quando ela existe, e
+    /// da referência declarada (`acessorios::BANDA_REFERENCIA_BYTES_S`)
+    /// enquanto não existe. Qual das duas está na tela é o
+    /// `tempo_medido_nesta_maquina` abaixo. Durante o download quem fala é o
+    /// `segundos_restantes` do progresso, que é sempre medido.
     pub segundos_estimados: u64,
+    /// O `segundos_estimados` acima é MEDIÇÃO desta máquina, ou o número de
+    /// fábrica?
+    ///
+    /// É um FATO sobre o número, e não o número — mesma escolha da
+    /// DECISIONS #124 para a razão da transcrição, e pelo mesmo motivo:
+    /// mandar a banda para o frontend convidaria o TypeScript a fazer a conta
+    /// de novo (DECISIONS #80). Aqui ele decide UMA coisa: se a tela diz
+    /// "cerca de X" com a ressalva de conexão lenta, ou sem ela.
+    pub tempo_medido_nesta_maquina: bool,
     /// "ausente" | "pronto" | "corrompido" | "indisponivel".
     pub estado: String,
     /// É um PROGRAMA que o aplicativo executa (`true`) ou um DADO que ele só
@@ -990,6 +1050,7 @@ fn info_de(
     acessorio: &crate::acessorios::Acessorio,
     cache: &Path,
     tem_chave: bool,
+    banda: Option<u64>,
 ) -> AcessorioInfo {
     let mut estado = crate::acessorios::estado(acessorio, cache);
     // Sem a chave do AcoustID compilada nesta build, o `fpcalc` não teria o
@@ -1007,7 +1068,8 @@ fn info_de(
         para_que_serve: para_que_serve(acessorio.nome).to_string(),
         arquivo: acessorio.arquivo.to_string(),
         tamanho_bytes: acessorio.tamanho_bytes,
-        segundos_estimados: crate::acessorios::segundos_estimados(acessorio.tamanho_bytes),
+        segundos_estimados: crate::acessorios::segundos_estimados(acessorio.tamanho_bytes, banda),
+        tempo_medido_nesta_maquina: banda.is_some_and(|b| b > 0),
         estado: estado.como_texto().to_string(),
         executavel: acessorio.executavel,
         origem: acessorio.url(),
@@ -1023,13 +1085,25 @@ fn info_de(
 /// disco, e comando síncrono roda na thread que desenha a janela
 /// (DECISIONS #92).
 #[tauri::command(async)]
-pub fn acessorios_estado(app: AppHandle) -> Result<Vec<AcessorioInfo>> {
+pub fn acessorios_estado(app: AppHandle, state: State<'_, Db>) -> Result<Vec<AcessorioInfo>> {
     let cache = diretorio_de_cache(&app)?;
     let tem_chave = !crate::fingerprint::chave_acoustid().is_empty();
+    let banda = banda_desta_maquina(&state);
     Ok(crate::acessorios::catalogo_desta_maquina()
         .into_iter()
-        .map(|a| info_de(a, &cache, tem_chave))
+        .map(|a| info_de(a, &cache, tem_chave, banda))
         .collect())
+}
+
+/// A banda que esta máquina já mediu, ou `None`.
+///
+/// Falha de banco NÃO derruba a tela de acessórios: sem o número medido vale a
+/// referência, que é exatamente o estado de quem nunca baixou nada. Uma
+/// estimativa é conveniência, e conveniência não bloqueia o único caminho de
+/// entrada de um recurso (DECISIONS #80).
+fn banda_desta_maquina(state: &Db) -> Option<u64> {
+    let conn = state.lock().ok()?;
+    db::banda_medida(&conn).ok().flatten().map(|b| b as u64)
 }
 
 /// Baixa o acessório `nome`, confere a soma e o instala. Nada baixa sozinho:
@@ -1061,17 +1135,36 @@ pub fn acessorio_baixar(
         return Err(AppError(crate::acessorios::ERRO_INDISPONIVEL.into()));
     }
 
+    // V10.4 — a trava do ARQUIVO vem ANTES de qualquer coisa cara: dois
+    // downloads do mesmo acessório escreveriam o mesmo `.parcial`, e o
+    // primeiro a terminar troca o arquivo de nome por baixo do segundo. O
+    // guard solta sozinho em todo caminho de saída (ver `DownloadEmCurso`).
+    let _em_curso = state.download_begin(acessorio.arquivo)?;
+
     let cancel = state.scan_begin(&download_id)?;
     let nome_evento = acessorio.nome.to_string();
     let id_evento = download_id.clone();
     // O relógio começa aqui, e não no primeiro byte: o que a pessoa espera
     // inclui o tempo de abrir a conexão.
     let inicio = std::time::Instant::now();
+    // V10.4 — o último progresso, guardado para a MEDIÇÃO da banda.
+    //
+    // É o par que o `segundos_restantes` já usava a cada pedaço e que era
+    // jogado fora no fim. Tem de ser lido AQUI, e não depois do `baixar`: o
+    // que vem depois do último byte é `sync_all` e a releitura de 1,5 GB para
+    // conferir a soma — tempo de disco, não de rede. Contá-lo faria a máquina
+    // se medir como mais lenta do que é, que é o erro que esta rodada veio
+    // consertar.
+    let ultimo_progresso = Mutex::new((0u64, std::time::Duration::ZERO));
     let resultado = crate::acessorios::baixar(
         acessorio,
         &cache,
         acessorio_fetcher,
         |baixados, total| {
+            let decorridos = inicio.elapsed();
+            if let Ok(mut ultimo) = ultimo_progresso.lock() {
+                *ultimo = (baixados, decorridos);
+            }
             let _ = app.emit(
                 "acessorio:progresso",
                 AcessorioProgresso {
@@ -1079,9 +1172,7 @@ pub fn acessorio_baixar(
                     baixados,
                     total,
                     segundos_restantes: crate::acessorios::segundos_restantes(
-                        baixados,
-                        total,
-                        inicio.elapsed(),
+                        baixados, total, decorridos,
                     ),
                     download_id: id_evento.clone(),
                 },
@@ -1092,11 +1183,35 @@ pub fn acessorio_baixar(
     state.scan_end(&download_id);
 
     let cancelado = matches!(resultado, Ok(None));
+    // A banda é medida no download que CHEGOU AO FIM: um cancelamento ou uma
+    // queda no meio mediriam a parte que veio, e a parte que veio de um
+    // download interrompido não descreve a conexão (ela costuma ser a rápida,
+    // antes de a rede piorar).
+    if matches!(resultado, Ok(Some(_))) {
+        registrar_banda(&state, &ultimo_progresso);
+    }
     resultado?;
     Ok(AcessorioDownload {
         cancelado,
-        acessorio: info_de(acessorio, &cache, tem_chave),
+        acessorio: info_de(acessorio, &cache, tem_chave, banda_desta_maquina(&state)),
     })
+}
+
+/// Guarda o que este download ensinou sobre a conexão desta máquina.
+///
+/// Amostra curta demais não vira medição (`acessorios::banda_medida` decide), e
+/// falha de banco não derruba um download que deu certo: perder a medição
+/// custa uma estimativa de fábrica no próximo download, e nada mais.
+fn registrar_banda(state: &Db, ultimo: &Mutex<(u64, std::time::Duration)>) {
+    let Ok((bytes, decorridos)) = ultimo.lock().map(|u| *u) else {
+        return;
+    };
+    if crate::acessorios::banda_medida(bytes, decorridos).is_none() {
+        return;
+    }
+    if let Ok(conn) = state.lock() {
+        let _ = db::somar_banda(&conn, bytes as f64, decorridos.as_secs_f64());
+    }
 }
 
 /// Cancela o download `download_id`. Id desconhecido (download já encerrado)
@@ -1613,6 +1728,135 @@ mod tests {
         assert!(flag.load(Ordering::SeqCst));
         state.scan_end("download-1");
         assert_eq!(state.scans_vivas(), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // V10.4 — DOIS DOWNLOADS DO MESMO ARQUIVO NÃO PODEM CONVIVER
+    // -----------------------------------------------------------------------
+    //
+    // Os dois escreveriam o MESMO `.parcial`, e o primeiro a terminar troca o
+    // arquivo de nome (ou o apaga, se a soma não bater) por baixo do segundo —
+    // que então não acha mais o que conferir. Era o caminho de campo da
+    // v0.10.1: a tela perdia o download ao sair de Configurações, a pessoa
+    // voltava, clicava de novo, e o segundo download morria com uma frase que
+    // falava de gravação.
+    //
+    // A trava é por ARQUIVO, e não por nome de acessório: é o `.parcial` que
+    // colide, e dois nomes de catálogo podem um dia apontar para o mesmo
+    // arquivo. A tela também impede (a store recusa o segundo clique), mas a
+    // regra mora aqui porque é aqui que ela é verdadeira — a v0.10.1 provou o
+    // custo de uma garantia que só existe no frontend.
+
+    #[test]
+    fn dois_downloads_do_mesmo_arquivo_nao_correm_juntos() {
+        let state = estado();
+        let primeiro = state
+            .download_begin("ggml-medium.bin")
+            .expect("o primeiro download entra");
+
+        let erro = state
+            .download_begin("ggml-medium.bin")
+            .expect_err("o segundo é recusado enquanto o primeiro vive");
+        assert_eq!(erro.to_string(), ERRO_DOWNLOAD_JA_EM_ANDAMENTO);
+
+        // e a frase não é a de gravação: o problema não é o disco desta pessoa
+        assert!(!erro.to_string().contains("gravar"));
+
+        drop(primeiro);
+        state
+            .download_begin("ggml-medium.bin")
+            .expect("terminado o primeiro, o mesmo arquivo baixa de novo");
+    }
+
+    // -----------------------------------------------------------------------
+    // V10.4 — o laço da banda se fecha (defeito de campo D3)
+    // -----------------------------------------------------------------------
+
+    /// **O que este download mediu vale para o próximo.** É a DECISIONS #112
+    /// aplicada ao download: o produto já media a velocidade para pintar a
+    /// barra e jogava a medição fora no fim, então a tela continuava
+    /// prometendo o número de fábrica para sempre — que foi o "26 minutos"
+    /// para um download de 3 do relato de campo.
+    ///
+    /// O teste percorre o laço inteiro sem Tauri: medir, guardar, reler,
+    /// estimar.
+    #[test]
+    fn a_medicao_de_um_download_vira_a_estimativa_do_proximo() {
+        let conn = db::open_in_memory().unwrap();
+        // exatamente o caso de campo: 1,5 GB em menos de 3 minutos
+        let bytes = 1_533_763_059u64;
+        let relogio = std::time::Duration::from_secs(175);
+
+        let banda = crate::acessorios::banda_medida(bytes, relogio)
+            .expect("1,5 GB em 175 s é amostra de sobra");
+        db::somar_banda(&conn, bytes as f64, relogio.as_secs_f64()).unwrap();
+        let guardada = db::banda_medida(&conn).unwrap().expect("a máquina se mediu") as u64;
+        assert_eq!(guardada, banda, "o que voltou do banco é o que foi medido");
+
+        let de_fabrica = crate::acessorios::segundos_estimados(bytes, None);
+        let medida = crate::acessorios::segundos_estimados(bytes, Some(guardada));
+        assert!(
+            medida < de_fabrica,
+            "a máquina medida deixa de receber o número de fábrica \
+             ({medida} s contra {de_fabrica} s)"
+        );
+        assert!(
+            (170..=185).contains(&medida),
+            "e o número novo é o que a máquina levou de verdade: {medida} s"
+        );
+    }
+
+    /// O `AcessorioInfo` DIZ de onde veio o número — a tela precisa saber se
+    /// mantém a ressalva de internet lenta ou não (mesma escolha da #124).
+    #[test]
+    fn o_acessorio_diz_se_o_tempo_e_medido_ou_de_fabrica() {
+        let dir = tempfile::tempdir().unwrap();
+        let modelo = crate::acessorios::desta_maquina(crate::acessorios::MODELO_WHISPER_GRANDE)
+            .expect("o modelo grande existe aqui");
+
+        let de_fabrica = info_de(modelo, dir.path(), true, None);
+        assert!(!de_fabrica.tempo_medido_nesta_maquina);
+
+        let medido = info_de(modelo, dir.path(), true, Some(9_000_000));
+        assert!(medido.tempo_medido_nesta_maquina);
+        assert!(
+            medido.segundos_estimados < de_fabrica.segundos_estimados,
+            "a máquina rápida não recebe o número da conexão modesta"
+        );
+
+        // banda zero não é medição: seria uma divisão por zero servida na tela
+        let zero = info_de(modelo, dir.path(), true, Some(0));
+        assert!(!zero.tempo_medido_nesta_maquina);
+        assert_eq!(zero.segundos_estimados, de_fabrica.segundos_estimados);
+    }
+
+    /// Arquivos DIFERENTES continuam podendo baixar ao mesmo tempo: eles não
+    /// disputam `.parcial` nenhum, e travar um pelo outro seria inventar uma
+    /// fila que ninguém pediu.
+    #[test]
+    fn downloads_de_arquivos_diferentes_convivem() {
+        let state = estado();
+        let _modelo = state.download_begin("ggml-medium.bin").unwrap();
+        let _fpcalc = state
+            .download_begin("fpcalc-linux-x86_64")
+            .expect("outro arquivo, outro parcial");
+    }
+
+    /// A trava é liberada mesmo quando o download FALHA — o guard solta no
+    /// `Drop`, então não há caminho de saída que deixe o acessório travado
+    /// para sempre. Um acessório que nunca mais baixa, num produto sem
+    /// suporte, é o recurso morto em silêncio.
+    #[test]
+    fn a_trava_do_download_e_solta_ate_quando_o_download_entra_em_panico() {
+        let state = estado();
+        let resultado = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = state.download_begin("ggml-medium.bin").unwrap();
+            panic!("o download explodiu no meio");
+        }));
+        assert!(resultado.is_err());
+        state
+            .download_begin("ggml-medium.bin")
+            .expect("a trava saiu junto com o guard");
     }
 
     // -----------------------------------------------------------------------

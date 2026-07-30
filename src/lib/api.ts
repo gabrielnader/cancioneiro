@@ -353,13 +353,25 @@ export interface AcessorioInfo {
   arquivo: string;
   tamanho_bytes: number;
   /**
-   * Quanto o download deve levar, em segundos, numa conexão de REFERÊNCIA
-   * (V10 — 1 MB/s, deliberadamente conservadora). A dispensa do tempo valia
-   * para 5 MB; para 180 MB não vale — oferecer o download sem dizer se ele
-   * leva três minutos ou três horas não é oferecer escolha nenhuma. É número
-   * declarado, e por isso a copy diz "cerca de" (DECISIONS #106).
+   * Quanto o download deve levar, em segundos. A dispensa do tempo valia para
+   * 5 MB; para 1,5 GB não vale — oferecer o download sem dizer se ele leva
+   * três minutos ou três horas não é oferecer escolha nenhuma.
+   *
+   * V10.4 — o número sai da banda MEDIDA nesta máquina quando ela existe, e da
+   * referência declarada enquanto não existe. Qual das duas está aqui é o
+   * `tempo_medido_nesta_maquina` abaixo, e a copy diz "cerca de" nos dois
+   * casos: nem medição é promessa.
    */
   segundos_estimados: number;
+  /**
+   * O `segundos_estimados` é MEDIÇÃO desta máquina, ou o número de fábrica?
+   *
+   * Vem como FATO, e não como a banda em bytes/s, pela razão da DECISIONS #124:
+   * mandar o número convidaria o TypeScript a refazer a conta, e conta
+   * duplicada em duas linguagens diverge (DECISIONS #80). Ele decide UMA
+   * coisa: se a frase do download mantém a ressalva de internet lenta.
+   */
+  tempo_medido_nesta_maquina: boolean;
   /**
    * É um PROGRAMA que o aplicativo executa (`true`) ou um DADO que ele só lê
    * (`false`)? O modelo são 180 MB que ninguém executa, e "um programa de 2 MB

@@ -43,11 +43,15 @@ import { FONTE_TRANSCRICAO, ORIGEM_TRANSCRICAO } from "./types";
 // Tempo — um formatador só, para não haver duas maneiras de dizer "3 horas"
 // ---------------------------------------------------------------------------
 
-/** "menos de 1 minuto" / "11 minutos" / "1 hora" / "3 horas". */
+/** "menos de 1 minuto" / "1 minuto" / "11 minutos" / "1 hora" / "3 horas". */
 function tempoCurto(segundos: number): string {
   if (segundos < 60) return "menos de 1 minuto";
   const minutos = Math.round(segundos / 60);
-  if (minutos < 90) return `${minutos} minutos`;
+  // V10.4 — o singular existia para "1 hora" e não para "1 minuto". A faixa
+  // era inalcançável enquanto a banda de referência do download era de 1 MB/s
+  // (nenhum acessório caía entre 60 e 89 s); com a referência honesta os
+  // 190 MB do modelo pequeno caem bem ali, e a tela diria "cerca de 1 minutos".
+  if (minutos < 90) return minutos === 1 ? "1 minuto" : `${minutos} minutos`;
   const horas = Math.round(minutos / 60);
   return horas === 1 ? "1 hora" : `${horas} horas`;
 }
@@ -942,8 +946,10 @@ export interface AcessorioParaTexto {
   /** Frase pronta vinda do backend ("reconhecer a música pelo som"). */
   para_que_serve: string;
   tamanho_bytes: number;
-  /** Tempo do download numa conexão de REFERÊNCIA (V10). */
+  /** Tempo do download, como o backend o calculou (V10; V10.4). */
   segundos_estimados: number;
+  /** O tempo acima é medição desta máquina, ou o número de fábrica? */
+  tempo_medido_nesta_maquina: boolean;
   /** Programa que o app executa, ou dado que ele só lê? */
   executavel: boolean;
 }
@@ -966,12 +972,23 @@ export function tituloDoAcessorio(a: AcessorioParaTexto): string {
  *
  * "Uma vez só" responde à pergunta seguinte, que é a regra 3: baixou uma vez,
  * o app não pergunta de novo.
+ *
+ * **V10.4 — a frase diz DE ONDE VEM O TEMPO.** A v0.10.1 anunciou 26 minutos
+ * para um download de 3, e a pessoa quase não baixou. O número de referência
+ * subiu, mas número declarado continua sendo declarado: enquanto ele for de
+ * fábrica, a frase carrega a ressalva de internet lenta — a mesma mitigação
+ * que a DECISIONS #85 exigiu da estimativa da varredura. Medido nesta máquina,
+ * a ressalva sai e o texto diz por quê: quem já baixou 1,5 GB aqui não precisa
+ * ser avisado de que a própria conexão pode ser lenta.
  */
 export function textoDoAcessorioAusente(a: AcessorioParaTexto): string {
   const oQue = a.executavel ? "um programa" : "um arquivo";
+  const tempo = a.tempo_medido_nesta_maquina
+    ? `${cercaDe(a.segundos_estimados)} neste computador`
+    : `${cercaDe(a.segundos_estimados)} — mais se a sua internet estiver lenta`;
   return (
     `É preciso baixar ${oQue} de ${formatarTamanho(a.tamanho_bytes)}, uma vez` +
-    ` só. O download leva ${cercaDe(a.segundos_estimados)}.`
+    ` só. O download leva ${tempo}.`
   );
 }
 

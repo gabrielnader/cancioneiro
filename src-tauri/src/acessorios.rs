@@ -241,10 +241,47 @@ pub const QUALQUER_PLATAFORMA: &str = "qualquer";
 // agora ou à noite. O número de referência abaixo é DECLARADO, não medido, e a
 // copy tem de dizer "cerca de".
 
-/// Velocidade de referência: 1 MB/s (~8 Mbit/s), uma conexão doméstica
-/// modesta. Deliberadamente conservadora — pela DECISIONS #85, estimativa que
-/// promete MENOS do que leva é o defeito; folga não é.
-pub const BANDA_REFERENCIA_BYTES_S: u64 = 1_000_000;
+/// Velocidade de referência, para quando esta máquina ainda não mediu a
+/// própria: **3 MB/s (~24 Mbit/s)**.
+///
+/// V10.4 — ERA 1 MB/s, E ESSE NÚMERO ASSUSTOU EM CAMPO. A tela anunciou **26
+/// minutos** para o modelo grande; ele baixou em **menos de 3** (acima de
+/// 8 MB/s). Erro de quase 10x, e para o lado que faz a pessoa não começar.
+///
+/// **Qual é o lado seguro DESTE número.** A DECISIONS #85 diz que errar para
+/// cima é o lado seguro de uma estimativa de TRABALHO, e continua certa lá: a
+/// varredura já foi decidida quando o número aparece, e quem prometeu 3
+/// minutos e entregou 20 deixou alguém preso esperando. Aqui é o contrário em
+/// três pontos, e é por isso que a regra vira:
+///
+/// 1. **O número é o portão, não o relatório.** Ele é lido ANTES do clique, e
+///    a única decisão que ele governa é começar ou não. Uma estimativa
+///    inflada não protege ninguém — ela impede o download, e a etapa 5
+///    simplesmente não existe naquela máquina, para sempre e sem ninguém
+///    saber. É a pior falha possível num recurso opcional sem suporte.
+/// 2. **Errar para cima aqui não custa nada a quem começou.** O download roda
+///    em segundo plano (PRD V9, regra 2), então terminar antes do previsto não
+///    deixa ninguém esperando — ao contrário da varredura da #85, que prende a
+///    pessoa na tela.
+/// 3. **O número se corrige sozinho em segundos.** Assim que os bytes começam
+///    a andar, quem fala é o `segundos_restantes`, que é MEDIDO. A referência
+///    governa a decisão de começar e mais nada.
+///
+/// **Por que 3 MB/s e não os 8,5 medidos.** 8,5 é a conexão de UMA pessoa, e
+/// prometer a conexão de uma pessoa a quarenta é trocar um chute por outro.
+/// 3 MB/s fica bem abaixo dela — e abaixo da banda doméstica comum de hoje —,
+/// então continua sendo folga; só que folga de ~3x, e não de ~10x. Para 1,5 GB
+/// dá ~8 min (café), e não 26 (outro dia). Para os 190 MB do modelo pequeno dá
+/// pouco mais de um minuto, e não "menos de 1 minuto", que seria o defeito da
+/// #85 em miniatura.
+///
+/// **O que sobra de risco, e o que o cobre.** Quem estiver numa linha de fato
+/// lenta vai ler ~8 min e esperar mais. Duas coisas cobrem isso, e as duas já
+/// existem: a copy carrega a ressalva de internet lenta (a mesma mitigação que
+/// a #85 pediu para a estimativa da varredura), e a barra troca este número
+/// pelo MEDIDO nos primeiros segundos. Quem começou nunca fica sem o número
+/// certo; quem não começa por causa do número é que fica sem o recurso.
+pub const BANDA_REFERENCIA_BYTES_S: u64 = 3_000_000;
 
 /// Amostra mínima antes de trocar a referência pela velocidade MEDIDA. No
 /// primeiro pedaço a velocidade aparente é absurda (64 KiB em microssegundos),
@@ -252,10 +289,40 @@ pub const BANDA_REFERENCIA_BYTES_S: u64 = 1_000_000;
 const AMOSTRA_MINIMA: Duration = Duration::from_millis(500);
 const BYTES_MINIMOS_DA_AMOSTRA: u64 = 256 * 1024;
 
+/// Bytes que um download precisa ter movido para dizer algo sobre a CONEXÃO
+/// desta máquina. Abaixo disto o que se mede é o tempo de abrir a conexão: os
+/// 2 MB do `whisper-cli` chegam antes de o TCP sair do berço.
+pub const BYTES_MINIMOS_DE_BANDA: u64 = 8 * 1024 * 1024;
+
+/// E o relógio mínimo, pelo outro lado: 8 MB que aparecem em 20 ms vieram de
+/// um cache de proxy, não de um download.
+const SEGUNDOS_MINIMOS_DE_BANDA: Duration = Duration::from_secs(1);
+
+/// A banda que ESTE download mediu, em bytes/s — `None` quando a amostra é
+/// curta demais para valer.
+///
+/// É a mesma conta do `segundos_restantes`, guardada em vez de descartada. A
+/// DECISIONS #112 fechou este laço para a transcrição ("a primeira medição
+/// desta máquina passa a valer para as estimativas seguintes") e o download
+/// tinha ficado de fora: media a velocidade, pintava a barra com ela, e jogava
+/// fora ao terminar.
+pub fn banda_medida(bytes: u64, decorridos: Duration) -> Option<u64> {
+    if bytes < BYTES_MINIMOS_DE_BANDA || decorridos < SEGUNDOS_MINIMOS_DE_BANDA {
+        return None;
+    }
+    let por_segundo = bytes as f64 / decorridos.as_secs_f64();
+    (por_segundo >= 1.0).then_some(por_segundo as u64)
+}
+
 /// Quanto tempo se espera para baixar `tamanho_bytes`, ANTES de começar.
 /// Arredonda para CIMA.
-pub fn segundos_estimados(tamanho_bytes: u64) -> u64 {
-    tamanho_bytes.div_ceil(BANDA_REFERENCIA_BYTES_S)
+///
+/// `banda` é o que esta máquina já mediu (`db::banda_medida`), quando há algo
+/// medido. Sem ela vale a referência declarada acima — e a tela precisa dizer
+/// qual das duas está mostrando, como a #124 faz com a razão da transcrição.
+pub fn segundos_estimados(tamanho_bytes: u64, banda: Option<u64>) -> u64 {
+    let por_segundo = banda.filter(|b| *b > 0).unwrap_or(BANDA_REFERENCIA_BYTES_S);
+    tamanho_bytes.div_ceil(por_segundo)
 }
 
 /// Quanto ainda falta, a partir do que ESTA conexão já mostrou. `None` quando
@@ -315,7 +382,24 @@ pub const ERRO_SEM_PERMISSAO: &str =
      sincronizada com a nuvem, pause e tente de novo";
 pub const ERRO_ARQUIVO_EM_USO: &str =
     "o acessório está em uso por outro programa — feche o aplicativo, abra de novo e tente";
-pub const ERRO_GRAVACAO: &str = "não foi possível gravar o download neste computador";
+
+/// V10.4 — o arquivo do download DESAPARECEU antes de terminar.
+///
+/// Não é falha de gravação: gravar deu certo, e depois alguém levou o arquivo.
+/// As causas conhecidas são três, e as três pedem a mesma ação — antivírus que
+/// põe em quarentena, pasta sincronizada com a nuvem que move, e um segundo
+/// download do MESMO acessório trocando o `.parcial` de nome por baixo do
+/// primeiro. Dizer "não foi possível gravar" aqui manda a pessoa conferir
+/// espaço em disco numa máquina onde disco nunca foi o problema.
+pub const ERRO_ARQUIVO_SUMIU: &str =
+    "o arquivo do download sumiu antes de terminar — em geral é o antivírus ou uma pasta \
+     sincronizada com a nuvem levando o arquivo; pause os dois e tente de novo";
+
+/// A frase de quando NÃO se sabe a causa. Ela diz o que fazer, e o
+/// `erro_de_escrita` acrescenta o CÓDIGO do sistema no fim — ver ali por quê.
+pub const ERRO_GRAVACAO: &str =
+    "não foi possível gravar o download neste computador — tente de novo; se repetir, pause o \
+     antivírus e a sincronização com a nuvem";
 
 /// Em que passo do download a escrita falhou. A MESMA `io::Error` quer dizer
 /// coisas diferentes conforme o passo, e mandar a pessoa procurar no lugar
@@ -326,28 +410,60 @@ enum Passo {
     Pasta,
     /// Escrever o `.parcial`.
     Gravacao,
+    /// RELER o `.parcial` para conferir a soma (a garantia da QA M3).
+    Conferencia,
     /// Trocar o `.parcial` de nome (e o bit de execução antes dele).
     Instalacao,
 }
 
 /// Traduz a falha de escrita para uma frase em pt-BR que diz o que fazer.
+///
+/// V10.4 — a ordem das perguntas é a ordem em que elas são CONCLUSIVAS, e cada
+/// desvio existe porque a frase anterior mandava a pessoa procurar no lugar
+/// errado. O caso de campo da v0.10.1 (1,5 GB, "não foi possível salvar nesse
+/// computador", e o download seguinte funcionando em 3 minutos) é exatamente o
+/// que acontece quando várias causas caem na mesma frase.
 fn erro_de_escrita(passo: Passo, e: &std::io::Error) -> AppError {
-    if e.raw_os_error()
+    // Disco cheio pelo TIPO antes do código: a tabela abaixo cobre `ENOSPC` e
+    // dois códigos do Windows, e o Windows tem outros (recursos de disco
+    // esgotados, cota de perfil) que o próprio Rust já classifica. A tabela
+    // vira reforço, e não a única fonte.
+    if matches!(
+        e.kind(),
+        std::io::ErrorKind::StorageFull | std::io::ErrorKind::QuotaExceeded
+    ) || e
+        .raw_os_error()
         .is_some_and(|c| CODIGOS_DISCO_CHEIO.contains(&c))
     {
         return AppError(ERRO_DISCO_CHEIO.into());
+    }
+    // O arquivo não está mais lá. Gravar funcionou; alguém LEVOU o que foi
+    // gravado — e a ação é outra (ver `ERRO_ARQUIVO_SUMIU`).
+    if e.kind() == std::io::ErrorKind::NotFound {
+        return AppError(ERRO_ARQUIVO_SUMIU.into());
     }
     if e.kind() == std::io::ErrorKind::PermissionDenied {
         // No Windows, `rename` por cima de um `fpcalc` que está RODANDO dá
         // "os error 5" (acesso negado) — que não é problema de permissão de
         // pasta nenhum. É o caso real de quem manda baixar de novo com uma
-        // varredura em curso.
+        // varredura em curso. Reler o parcial e ser barrado tem a mesma causa
+        // provável: alguém está segurando aquele arquivo (antivírus varrendo
+        // 1,5 GB recém-escritos, ou o outro download do mesmo acessório).
         return AppError(match passo {
-            Passo::Instalacao => ERRO_ARQUIVO_EM_USO.into(),
+            Passo::Instalacao | Passo::Conferencia => ERRO_ARQUIVO_EM_USO.into(),
             Passo::Pasta | Passo::Gravacao => ERRO_SEM_PERMISSAO.into(),
         });
     }
-    AppError(ERRO_GRAVACAO.into())
+    // O QUE SOBRA: não sabemos. A frase diz isso e diz o que tentar, e leva o
+    // CÓDIGO do sistema — um NÚMERO, nunca o texto em inglês que a
+    // DECISIONS #121 proíbe. Este produto não tem suporte nem telemetria: sem
+    // o número, o próximo relato de campo volta a ser "não foi possível
+    // gravar" e a investigação recomeça do zero, que foi o que aconteceu com o
+    // defeito da v0.10.1.
+    AppError(match e.raw_os_error() {
+        Some(codigo) => format!("{ERRO_GRAVACAO} (código {codigo})"),
+        None => ERRO_GRAVACAO.to_string(),
+    })
 }
 
 /// Pedaço de leitura do download. 64 KiB dá progresso miúdo o bastante para a
@@ -568,7 +684,12 @@ fn leituras_de(caminho: &Path) -> u64 {
 
 /// SHA-256 de um arquivo, lido em pedaços (o modelo da etapa 5 tem 1,5 GB e
 /// não cabe na memória de uma máquina modesta).
-fn sha256_do_arquivo(caminho: &Path) -> Result<String> {
+///
+/// Devolve o `io::Error` CRU, e não um `AppError`: quem chama depois de um
+/// download precisa saber se o arquivo sumiu, se está preso ou se foi outra
+/// coisa — a frase certa depende disso (V10.4). Achatar aqui é o que apagava a
+/// causa antes de alguém poder perguntar.
+fn sha256_do_arquivo(caminho: &Path) -> std::io::Result<String> {
     let mut arquivo = std::fs::File::open(caminho)?;
     contar_leitura(caminho);
     let mut hasher = Sha256::new();
@@ -815,7 +936,15 @@ where
     // "nada entra no cache sem conferir" devolvia `Ok`. Reler custa alguns MB
     // de leitura de disco (180 MB na etapa 5), que é o preço de a garantia
     // ser verdadeira.
-    let soma = sha256_do_arquivo(&parcial.0).map_err(|_| AppError(ERRO_GRAVACAO.into()))?;
+    // V10.4 — a falha DESTA releitura passa pelo mesmo tradutor das outras.
+    //
+    // Ela subia por um `map_err(|_| ERRO_GRAVACAO)` que jogava a causa fora, e
+    // era o caminho mais provável de o antivírus (ou o segundo download do
+    // mesmo acessório) aparecer na tela como "não foi possível gravar". O erro
+    // aqui é de LEITURA, mas a pergunta que a pessoa faz é a mesma — o que
+    // aconteceu com o meu download —, e as respostas úteis são as mesmas.
+    let soma = sha256_do_arquivo(&parcial.0)
+        .map_err(|e| erro_de_escrita(Passo::Conferencia, &e))?;
     if soma != acessorio.sha256 {
         return Err(AppError(ERRO_SOMA_NAO_CONFERE.into()));
     }
@@ -1122,19 +1251,90 @@ mod tests {
 
     /// "A dispensa do tempo valia para 5 MB, não vale para 180 MB." O tempo
     /// sai de um número de referência declarado, e a conta é ARREDONDADA PARA
-    /// CIMA: prometer menos do que leva é o defeito da DECISIONS #85.
+    /// CIMA.
     #[test]
     fn o_tempo_estimado_sai_do_tamanho_e_arredonda_para_cima() {
-        assert_eq!(segundos_estimados(0), 0);
-        assert_eq!(segundos_estimados(BANDA_REFERENCIA_BYTES_S), 1);
-        assert_eq!(segundos_estimados(BANDA_REFERENCIA_BYTES_S + 1), 2);
-        // 180 MB não podem sair como "menos de um minuto"
+        assert_eq!(segundos_estimados(0, None), 0);
+        assert_eq!(segundos_estimados(BANDA_REFERENCIA_BYTES_S, None), 1);
+        assert_eq!(segundos_estimados(BANDA_REFERENCIA_BYTES_S + 1, None), 2);
+        // 190 MB não podem sair como "menos de um minuto" — é a régua que a
+        // banda de referência tem de continuar respeitando depois de subir
+        // (V10.4): abaixo de 60 s a copy diz literalmente "menos de 1 minuto"
+        // para um download de 190 MB, que é a DECISIONS #85 em miniatura.
         let modelo = desta_maquina(MODELO_WHISPER).expect("o modelo existe aqui");
         assert!(modelo.tamanho_bytes > 100_000_000, "o modelo é grande");
         assert!(
-            segundos_estimados(modelo.tamanho_bytes) >= 60,
-            "180 MB precisam de tempo na tela"
+            segundos_estimados(modelo.tamanho_bytes, None) >= 60,
+            "190 MB precisam de tempo na tela"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // V10.4 — a estimativa que assustou (defeito de campo D3)
+    // -----------------------------------------------------------------------
+
+    /// **A referência não pode errar por ordem de grandeza — para nenhum dos
+    /// dois lados.**
+    ///
+    /// Medido em campo: os 1,5 GB do `ggml-medium.bin` baixaram em menos de 3
+    /// minutos (acima de 8 MB/s), e a tela dizia **26 minutos**. Erro de quase
+    /// 10x, e para o lado que faz a pessoa não baixar — que, num recurso
+    /// opcional sem suporte, é o recurso morrendo em silêncio.
+    ///
+    /// Os dois limites deste teste são a régua: nem um número que assusta
+    /// (acima de ~15 min para 1,5 GB), nem um número que promete banda de
+    /// escritório (abaixo de ~4 min, que só uma conexão muito boa cumpre).
+    #[test]
+    fn a_referencia_nao_erra_por_ordem_de_grandeza_para_nenhum_lado() {
+        let grande = desta_maquina(MODELO_WHISPER_GRANDE).expect("o grande existe aqui");
+        let segundos = segundos_estimados(grande.tamanho_bytes, None);
+        assert!(
+            segundos <= 15 * 60,
+            "{segundos} s para 1,5 GB é o número que faz a pessoa desistir antes de começar"
+        );
+        assert!(
+            segundos >= 4 * 60,
+            "{segundos} s para 1,5 GB promete uma conexão que nem todo mundo tem"
+        );
+    }
+
+    /// **A banda MEDIDA desta máquina vence a referência.** É a #112 aplicada
+    /// ao download: o produto já sabe medir velocidade durante a barra de
+    /// progresso; o que faltava era essa medição sobreviver ao download e
+    /// valer para o próximo.
+    #[test]
+    fn a_estimativa_usa_a_banda_medida_quando_ela_existe() {
+        let dez_mb_s = 10_000_000;
+        // 1 GB a 10 MB/s = 100 s, e não os 250 s da referência
+        assert_eq!(segundos_estimados(1_000_000_000, Some(dez_mb_s)), 100);
+        // arredonda para cima do mesmo jeito
+        assert_eq!(segundos_estimados(dez_mb_s + 1, Some(dez_mb_s)), 2);
+        // banda zero é banda ausente: dividir por ela seria uma divisão por
+        // zero servida como estimativa
+        assert_eq!(
+            segundos_estimados(1_000_000, Some(0)),
+            segundos_estimados(1_000_000, None)
+        );
+    }
+
+    /// A medição só vale quando a amostra é uma TRANSFERÊNCIA, e não um aperto
+    /// de mão. É o piso do `segundos_restantes` (DECISIONS #106) e o dos 300 s
+    /// de áudio da #112, pela mesma razão: número medido sobre amostra
+    /// minúscula é pior que número declarado, porque parece mais verdadeiro.
+    #[test]
+    fn a_banda_medida_exige_uma_amostra_que_seja_transferencia() {
+        // 200 MB em 20 s = 10 MB/s: amostra de sobra
+        assert_eq!(
+            banda_medida(200_000_000, Duration::from_secs(20)),
+            Some(10_000_000)
+        );
+        // 2 MB (o `whisper-cli`) é arquivo pequeno demais para dizer algo
+        // sobre a conexão: o que se mede ali é o tempo de abrir a conexão
+        assert_eq!(banda_medida(2_000_000, Duration::from_secs(2)), None);
+        // e um relógio curto demais transforma cache de proxy em "400 MB/s"
+        assert_eq!(banda_medida(200_000_000, Duration::from_millis(20)), None);
+        // download cancelado no primeiro pedaço não é medição nenhuma
+        assert_eq!(banda_medida(0, Duration::from_secs(30)), None);
     }
 
     /// O tempo que RESTA vem de medição, não da referência: a referência
@@ -1800,6 +2000,7 @@ mod tests {
             ERRO_DISCO_CHEIO,
             ERRO_SEM_PERMISSAO,
             ERRO_ARQUIVO_EM_USO,
+            ERRO_ARQUIVO_SUMIU,
             ERRO_GRAVACAO,
             ERRO_SOMA_NAO_CONFERE,
             ERRO_DOWNLOAD_INTERROMPIDO,
@@ -1812,6 +2013,123 @@ mod tests {
             }
             assert!(msg.chars().next().is_some_and(|c| c.is_lowercase()));
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // V10.4 — as causas separadas (o "não foi possível gravar" de campo)
+    // -----------------------------------------------------------------------
+
+    /// Um leitor que APAGA o `.parcial` no fim, em vez de esvaziá-lo.
+    ///
+    /// É o antivírus que põe o arquivo em quarentena (não zera: LEVA), o
+    /// sincronizador de nuvem que o move, e o segundo download do MESMO
+    /// acessório que troca o parcial de nome por baixo do primeiro. Nos três a
+    /// releitura da QA M3 falha com "não encontrado".
+    struct SomeNoFim {
+        restante: Vec<u8>,
+        parcial: PathBuf,
+    }
+
+    impl std::io::Read for SomeNoFim {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.restante.is_empty() {
+                let _ = std::fs::remove_file(&self.parcial);
+                return Ok(0);
+            }
+            let n = buf.len().min(self.restante.len());
+            buf[..n].copy_from_slice(&self.restante[..n]);
+            self.restante.drain(..n);
+            Ok(n)
+        }
+    }
+
+    /// O ARQUIVO QUE SOME NO MEIO TEM FRASE PRÓPRIA.
+    ///
+    /// Era o desfecho da releitura da QA M3: `sha256_do_arquivo(&parcial)`
+    /// subia por um `map_err(|_| ERRO_GRAVACAO)` que apagava a causa, e a
+    /// pessoa lia "não foi possível gravar o download neste computador" numa
+    /// máquina onde gravar nunca foi o problema — alguém tinha LEVADO o
+    /// arquivo. É o M4 da v0.9.0 (mandar procurar no lugar errado) num caminho
+    /// novo.
+    #[test]
+    fn o_parcial_que_some_no_meio_nao_e_acusado_de_falha_de_gravacao() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = acessorio_de_teste(&sha256_dos_bytes(CONTEUDO));
+        let parcial = a.parcial(dir.path());
+
+        let erro = baixar(
+            &a,
+            dir.path(),
+            |_url| {
+                Ok(Corpo {
+                    total: Some(CONTEUDO.len() as u64),
+                    bytes: Box::new(SomeNoFim {
+                        restante: CONTEUDO.to_vec(),
+                        parcial: parcial.clone(),
+                    }),
+                })
+            },
+            sem_progresso,
+            sem_cancelamento,
+        )
+        .expect_err("o arquivo do disco sumiu");
+
+        assert_eq!(erro.to_string(), ERRO_ARQUIVO_SUMIU);
+        assert!(!a.caminho(dir.path()).exists(), "nada foi instalado");
+        assert_eq!(sobrou_na_pasta(dir.path()), Vec::<String>::new());
+    }
+
+    /// Disco cheio é reconhecido pelo TIPO do erro, e não só pela tabela de
+    /// códigos deste sistema.
+    ///
+    /// A tabela cobre `ENOSPC` no Unix e dois códigos no Windows; o Windows
+    /// tem outros (`ERROR_DISK_RESOURCES_EXHAUSTED`, cota de perfil) que o
+    /// próprio Rust já classifica como `StorageFull` e que caíam na frase
+    /// genérica. Perguntar ao `ErrorKind` primeiro faz a tabela virar reforço,
+    /// e não a única fonte.
+    #[test]
+    fn disco_cheio_e_reconhecido_pelo_tipo_e_nao_so_pelo_codigo() {
+        use std::io::{Error, ErrorKind};
+        for passo in [Passo::Pasta, Passo::Gravacao, Passo::Instalacao] {
+            assert_eq!(
+                erro_de_escrita(passo, &Error::from(ErrorKind::StorageFull)).to_string(),
+                ERRO_DISCO_CHEIO
+            );
+            assert_eq!(
+                erro_de_escrita(passo, &Error::from(ErrorKind::QuotaExceeded)).to_string(),
+                ERRO_DISCO_CHEIO
+            );
+        }
+    }
+
+    /// A frase que sobra — a de quando NÃO se sabe a causa — diz o que fazer e
+    /// carrega o CÓDIGO do sistema.
+    ///
+    /// O código é um número, não inglês (DECISIONS #121 proíbe repassar o
+    /// texto do sistema, e o caminho do arquivo já viaja fora da frase pelo
+    /// mesmo motivo). Ele existe porque este produto não tem suporte e nem
+    /// telemetria: quando o dono do produto relata "não foi possível gravar",
+    /// o número é a única coisa que separa a próxima investigação de outro
+    /// palpite. Foi a falta dele que deixou o defeito de campo da v0.10.1 sem
+    /// causa determinada.
+    #[test]
+    fn a_frase_generica_carrega_o_codigo_do_sistema_e_diz_o_que_fazer() {
+        use std::io::Error;
+        // um código que não é disco cheio, nem permissão, nem "sumiu"
+        let msg = erro_de_escrita(Passo::Gravacao, &Error::from_raw_os_error(5555)).to_string();
+        assert!(msg.starts_with(ERRO_GRAVACAO), "{msg}");
+        assert!(msg.contains("5555"), "o código do sistema viaja junto: {msg}");
+        assert!(
+            !msg.contains("espaço"),
+            "não acusa disco cheio numa máquina com disco sobrando: {msg}"
+        );
+        // e a frase base termina dizendo o que fazer
+        assert!(ERRO_GRAVACAO.contains("tente de novo"), "{ERRO_GRAVACAO}");
+        // sem código do sistema (erro construído no Rust) não inventa número
+        assert_eq!(
+            erro_de_escrita(Passo::Gravacao, &Error::other("qualquer coisa")).to_string(),
+            ERRO_GRAVACAO
+        );
     }
 
     /// Fim a fim: a pasta de cache não pode ser criada (há um ARQUIVO no
@@ -1836,8 +2154,13 @@ mod tests {
 
         let msg = erro.to_string();
         assert!(!msg.contains("os error"), "vazou o erro do sistema: {msg}");
+        // `starts_with`, e não igualdade: a frase genérica carrega o CÓDIGO do
+        // sistema no fim (um número, nunca o texto em inglês) — ver
+        // `a_frase_generica_carrega_o_codigo_do_sistema_e_diz_o_que_fazer`.
         assert!(
-            [ERRO_DISCO_CHEIO, ERRO_SEM_PERMISSAO, ERRO_GRAVACAO].contains(&msg.as_str()),
+            [ERRO_DISCO_CHEIO, ERRO_SEM_PERMISSAO, ERRO_GRAVACAO]
+                .iter()
+                .any(|frase| msg.starts_with(frase)),
             "é uma das frases de escrita, e veio: {msg}"
         );
         assert_eq!(chamadas.get(), 0, "nem chega a abrir conexão");

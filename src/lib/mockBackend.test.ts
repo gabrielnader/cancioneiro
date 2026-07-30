@@ -2135,10 +2135,28 @@ describe("mockBackend", () => {
 
     // DECISIONS #106 — para 180 MB a dispensa do tempo acabou. O número é
     // DECLARADO (banda de referência de 1 MB/s), e a copy diz "cerca de".
+    // V10.4 — a banda de referência subiu de 1 para 3 MB/s (o número velho
+    // anunciou 26 minutos em campo para um download de 3), e o mock a espelha:
+    // mock que discorda do backend certifica o contrato errado (DECISIONS #88).
     it("cada acessório anuncia o tempo do download, arredondado para cima", async () => {
       for (const a of await backend.acessoriosEstado()) {
-        expect(a.segundos_estimados).toBe(Math.ceil(a.tamanho_bytes / 1_000_000));
+        expect(a.segundos_estimados).toBe(Math.ceil(a.tamanho_bytes / 3_000_000));
+        // e o mock nunca mede: ele não baixa nada de verdade
+        expect(a.tempo_medido_nesta_maquina).toBe(false);
       }
+    });
+
+    /**
+     * A régua da V10.4: o número que a tela mostra ANTES do clique não pode
+     * errar por ordem de grandeza para nenhum dos dois lados. Para cima, ele
+     * faz a pessoa não baixar — e um recurso opcional que ninguém baixa é um
+     * recurso que não existe, num produto sem suporte.
+     */
+    it("o modelo grande não é anunciado com um número que faz desistir", async () => {
+      const lista = await backend.acessoriosEstado();
+      const grande = lista.find((a) => a.nome === "modelo-de-transcricao-grande")!;
+      expect(grande.segundos_estimados).toBeLessThanOrEqual(15 * 60);
+      expect(grande.segundos_estimados).toBeGreaterThanOrEqual(4 * 60);
     });
 
     it("baixar o modelo instala o modelo, e não o transcritor", async () => {

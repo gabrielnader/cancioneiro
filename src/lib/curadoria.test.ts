@@ -147,6 +147,7 @@ function acessorio(over: Partial<AcessorioInfo> = {}): AcessorioInfo {
     arquivo: "fpcalc-linux-x86_64",
     tamanho_bytes: 5_538_312,
     segundos_estimados: 6,
+    tempo_medido_nesta_maquina: false,
     executavel: true,
     estado: "ausente",
     origem: "https://github.com/exemplo/releases/download/acessorios-v1/fpcalc",
@@ -1310,6 +1311,64 @@ describe("a copy dos acessórios", () => {
     );
     expect(texto).toContain("172,6 MB");
     expect(texto).toContain("cerca de 3 minutos");
+  });
+
+  // -------------------------------------------------------------------------
+  // V10.4 — a estimativa diz DE ONDE ELA VEM (defeito de campo D3)
+  // -------------------------------------------------------------------------
+  //
+  // A tela anunciou 26 minutos para um download que levou menos de 3. O número
+  // subiu (a banda de referência deixou de ser de 2010), mas o conserto do
+  // número sozinho não basta: enquanto ele for DECLARADO, ele pode errar por
+  // fator numa conexão ruim — e aí a frase tem de admitir isso, que é a
+  // mitigação que a DECISIONS #85 já exigiu da estimativa da varredura ("bem
+  // mais se a internet estiver lenta").
+  //
+  // Quando o número é MEDIDO nesta máquina, a ressalva sai e o texto diz por
+  // quê. É a mesma escolha da #124 na pergunta do fim da transcrição: quem
+  // decide o que a tela diz é um FATO sobre o número, não o número.
+
+  /**
+   * O singular de MINUTO existia só para a hora. A faixa entre 60 e 89 s era
+   * inalcançável enquanto a banda de referência era de 1 MB/s — nenhum
+   * acessório do catálogo caía ali —, e com a referência honesta os 190 MB do
+   * modelo pequeno caem exatamente nela. "Cerca de 1 minutos" é a frase que
+   * ensina a não ler o resto da tela.
+   */
+  it("um minuto é dito no singular, como uma hora sempre foi", () => {
+    const um = textoDoAcessorioAusente(
+      acessorio({ tamanho_bytes: 190_085_487, segundos_estimados: 64 }),
+    );
+    expect(um).toContain("cerca de 1 minuto —");
+    expect(um).not.toContain("1 minutos");
+
+    const varios = textoDoAcessorioAusente(
+      acessorio({ tamanho_bytes: 190_085_487, segundos_estimados: 300 }),
+    );
+    expect(varios).toContain("cerca de 5 minutos");
+  });
+
+  it("estimativa de fábrica admite que a internet lenta muda a conta", () => {
+    const texto = textoDoAcessorioAusente(
+      acessorio({ tamanho_bytes: 1_533_763_059, segundos_estimados: 512 }),
+    );
+    expect(texto).toContain("cerca de 9 minutos");
+    expect(texto).toContain("mais se a sua internet estiver lenta");
+    expect(frases(texto)).toBeLessThanOrEqual(2);
+  });
+
+  it("estimativa medida nesta máquina diz isso, e larga a ressalva", () => {
+    const texto = textoDoAcessorioAusente(
+      acessorio({
+        tamanho_bytes: 1_533_763_059,
+        segundos_estimados: 175,
+        tempo_medido_nesta_maquina: true,
+      }),
+    );
+    expect(texto).toContain("cerca de 3 minutos");
+    expect(texto).toContain("neste computador");
+    expect(texto).not.toContain("internet estiver lenta");
+    expect(frases(texto)).toBeLessThanOrEqual(2);
   });
 
   it("o rótulo do botão carrega o tamanho, e o de repetição diz que é de novo", () => {

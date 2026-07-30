@@ -1128,3 +1128,141 @@ opção mais simples que passa nos Acceptance Checks do PRD.
     load-bearing, e hoje um erro nele mente na estimativa (#85) sem desligar
     nada. Cache em disco também não: conferir o cache é o trabalho que ele
     existiria para evitar.
+
+## V10.4 — os três defeitos do download de 1,5 GB (teste em campo da v0.10.1)
+
+126. **Sair da tela não é cancelar, e o que morria era a TELA — não o
+    download.** Relato de campo: *"coloquei pra baixar o modelo novo e sai da
+    pagina. o download parou e tive que começar de novo."* 1,5 GB perdidos por
+    trocar de aba, contra a regra 2 do PRD V9 ("segundo plano, com progresso
+    visível e cancelamento").
+    **Medido antes de escolher o conserto**, porque as duas hipóteses pediam
+    trabalhos muito diferentes: o `acessorio_baixar` é
+    `#[tauri::command(async)]` e roda numa thread do backend — ele não sabe que
+    alguém navegou, e continua até o fim. O que morria era tudo o que a pessoa
+    podia VER dele: o `useState` do progresso, a assinatura de
+    `acessorio:progresso` e o lugar onde o desfecho apareceria viviam dentro de
+    `CartaoDoAcessorio`, e o `App.tsx` DESMONTA a tela de Configurações ao
+    trocar de view. Ou seja: o download não parava, ficava invisível — o que na
+    prática é pior, porque a volta mostrava o botão "Baixar" de novo.
+    **E era esse botão que armava o defeito seguinte.** Clicar nele disparava
+    um SEGUNDO `acessorio_baixar` do mesmo acessório, e os dois escrevem o
+    MESMO `.parcial`: o primeiro a terminar troca o arquivo de nome (ou o
+    apaga, se a soma não bater) por baixo do outro, que então não acha mais o
+    que conferir. É a família do `scan_id` (QA M4) num caminho novo.
+    O download passou a morar numa **store** (`src/stores/downloadStore.ts`),
+    como a varredura e a transcrição, e pelo mesmo motivo: o trabalho é do
+    APLICATIVO, não da tela. Com isso, quatro coisas passaram a valer — o
+    progresso reaparece quando a pessoa volta; **a frase de erro ESPERA** por
+    ela (uma falha acontecida com a tela fechada não pode simplesmente não
+    estar lá); a store recusa o segundo download do mesmo acessório antes de
+    qualquer `await`; e a assinatura do evento é UMA para o aplicativo, criada
+    no primeiro download e solta no último — antes era uma por clique, e sair
+    da tela no meio fazia o `finally` que a soltava nunca rodar.
+    **A trava contra o download duplicado está nas DUAS pontas, e a que vale é
+    a do backend** (`Db::download_begin`, por ARQUIVO — é o `.parcial` que
+    colide, não o nome do acessório). A da store existe para a recusa não virar
+    frase vermelha; a do Rust existe porque a v0.10.1 acabou de provar o custo
+    de uma garantia que só existe no frontend. Ela é um guard que solta no
+    `Drop`, para nenhum caminho de saída — erro, cancelamento, pânico — deixar
+    um acessório travado para sempre.
+    **O estado da assinatura mora no estado da store, e não numa variável de
+    módulo.** Variável de módulo sobrevive ao `setState` do estado inicial, e o
+    teste seguinte herda uma assinatura que já não existe — o tipo de teste que
+    passa ou falha conforme a ordem em que rodou (#77).
+127. **"Não foi possível salvar nesse computador" era a frase de QUANDO NÃO SE
+    SABE, e ela engolia pelo menos quatro causas diferentes.** O segundo relato
+    de campo: a barra chegou a ~85% e travou com essa frase; o download
+    seguinte funcionou em menos de 3 minutos. Disco cheio, que é o que a frase
+    sugere, ficou improvável na hora.
+    O que se descobriu lendo o caminho: a frase NÃO era a de disco cheio (essa
+    diz "não há espaço em disco"); era `ERRO_GRAVACAO`, o `_ =>` do tradutor de
+    io. E o ponto mais provável de ela sair num download de 1,5 GB era a
+    releitura da QA M3 — `sha256_do_arquivo(&parcial)` subia por um
+    `map_err(|_| ERRO_GRAVACAO)` que jogava a causa fora. Um `.parcial` que
+    SUMIU (antivírus em quarentena, pasta sincronizada com a nuvem, ou o
+    segundo download da #126 renomeando o arquivo por baixo) aparecia na tela
+    como falha de gravação, mandando a pessoa conferir espaço em disco numa
+    máquina onde disco nunca foi o problema. É o M4 da v0.9.0 se repetindo.
+    Quatro mudanças, e nenhuma inventa distinção que o sistema não dê:
+    **(a)** a releitura passa pelo mesmo tradutor das escritas, com um passo
+    próprio (`Passo::Conferencia`), e `sha256_do_arquivo` devolve o `io::Error`
+    cru em vez de achatá-lo em `AppError`;
+    **(b)** arquivo NÃO ENCONTRADO ganhou frase própria — gravar funcionou, e
+    alguém levou o que foi gravado; a ação é pausar antivírus e nuvem, não
+    liberar disco;
+    **(c)** disco cheio passou a ser reconhecido pelo `ErrorKind`
+    (`StorageFull`, `QuotaExceeded`) e não só pela tabela de códigos, que cobria
+    `ENOSPC` e dois do Windows e deixava de fora os outros que o próprio Rust já
+    classifica;
+    **(d)** a frase genérica passou a dizer o que fazer **e a carregar o CÓDIGO
+    do sistema** — um número, nunca o texto em inglês que a #121 proíbe, na
+    mesma disciplina do caminho do arquivo que já viaja fora da frase. Ela
+    existe porque **este produto não tem suporte nem telemetria**: sem o número,
+    o próximo relato volta a ser "não foi possível gravar" e a investigação
+    recomeça do zero, que é exatamente o que aconteceu aqui.
+    **O que NÃO foi determinado, e fica escrito:** por que a barra parou aos
+    85%. O mecanismo do parcial que some explica a FRASE, mas ele falharia no
+    fim do download (na conferência), não no meio; um `write_all` que falha aos
+    85% com um código que não é `ENOSPC` nem permissão continua sendo
+    hipótese — antivírus segurando o arquivo é a mais provável. Sem o código do
+    sistema não há como escolher entre elas, e é por isso que a mudança (d)
+    existe. O que se pode afirmar é que o download seguinte funcionou porque a
+    #126 tirou o segundo download concorrente de cena.
+    **O que não se fez: dar nome único ao `.parcial` por download.** Resolveria
+    a colisão sem trava, mas um processo que morre passaria a deixar 1,5 GB de
+    lixo com nome que ninguém reusa — hoje o parcial de nome fixo é truncado
+    pelo download seguinte. A colisão é problema de concorrência, e se resolve
+    onde a concorrência é decidida.
+128. **Numa estimativa de DOWNLOAD, o lado seguro não é o da #85 — e a razão é
+    que este número é um portão, não um relatório.** A tela anunciou **26
+    minutos** para o modelo grande; ele baixou em **menos de 3** (acima de
+    8 MB/s). Erro de quase 10x, e a #85 diria que errar para cima é o lado
+    seguro. Ela continua certa onde nasceu, e errada aqui, por três diferenças:
+    **(a) o número governa uma decisão que ainda não foi tomada.** A estimativa
+    da varredura aparece para quem já decidiu varrer, e prometer menos do que
+    leva deixa a pessoa presa esperando. Esta aparece ANTES do clique, e a
+    única coisa que ela decide é começar ou não. Uma estimativa inflada não
+    protege ninguém: ela impede o download, e a etapa 5 deixa de existir naquela
+    máquina, para sempre e sem ninguém saber. Num recurso opcional de um produto
+    sem suporte, esse é o pior desfecho possível — pior que qualquer espera.
+    **(b) errar para cima aqui não custa nada a quem começou.** O download roda
+    em segundo plano (PRD V9, regra 2, e agora de verdade — #126), então
+    terminar antes do previsto não prende ninguém na tela.
+    **(c) o número se corrige sozinho em segundos.** Assim que os bytes andam,
+    quem fala é o `segundos_restantes`, que é MEDIDO. A referência governa a
+    decisão de começar, e mais nada.
+    **A referência subiu de 1 para 3 MB/s, e não para os 8,5 medidos**: 8,5 é a
+    conexão de UMA pessoa, e prometer a conexão de uma pessoa a quarenta é
+    trocar um chute por outro. 3 MB/s continua sendo folga — só que de ~3x, e
+    não de ~10x. Para 1,5 GB dá ~8 min (café), e não 26 (outro dia); e mantém a
+    régua que o teste antigo já protegia, de os 190 MB do modelo pequeno não
+    saírem como "menos de 1 minuto".
+    **E o número passou a se MEDIR, que é a #112 aplicada ao download.** O
+    produto já media a velocidade a cada pedaço para pintar a barra e jogava a
+    medição fora ao terminar. Agora ela é somada em `medicoes_de_banda`
+    (somatórios, como a #112: um download de 1,5 GB pesa o que vale, e um de
+    8 MB não manda na estimativa do próximo) e volta na estimativa seguinte.
+    Três escolhas dentro disso. **Tabela nova, e não uma chave a mais em
+    `medicoes_da_maquina`**: lá as colunas se chamam `audio_segundos` e
+    `relogio_segundos`, e guardar bytes numa coluna chamada "áudio" é a #117
+    escrita em DDL. Sem migração — `CREATE TABLE IF NOT EXISTS` roda em toda
+    abertura. **O piso é na ESCRITA, e não na leitura como na #112**: lá as
+    amostras curtas somam até virar uma boa; aqui um arquivo pequeno cronometra
+    o aperto de mão, não a conexão, e somá-las enviesaria para baixo
+    permanentemente. **E a medição para no último byte**, antes do `sync_all` e
+    da releitura de 1,5 GB para conferir a soma: contar tempo de disco como
+    tempo de rede faria a máquina se medir como mais lenta do que é — o erro
+    que esta rodada veio consertar.
+    **O que sobra, e fica dito:** o primeiro download grande de cada máquina
+    ainda usa o número de fábrica, porque os acessórios pequenos (2-5 MB) ficam
+    abaixo do piso. Por isso a referência honesta é o conserto load-bearing, e a
+    medição é o que impede o número de ficar errado para sempre.
+    **A tela diz de ONDE veio o número**, com um booleano e não com a banda —
+    mandar a banda convidaria o TypeScript a refazer a conta (#80/#124).
+    Declarado, o texto carrega a ressalva de internet lenta (a mitigação que a
+    #85 pediu para a varredura); medido, ele diz "neste computador" e larga a
+    ressalva. E o singular de "1 minuto" passou a existir: ele só valia para "1
+    hora", e a faixa de 60 a 89 s era inalcançável com a banda antiga — com a
+    nova, os 190 MB do modelo pequeno caem exatamente ali, e a tela diria
+    "cerca de 1 minutos".

@@ -139,6 +139,24 @@ CREATE TABLE IF NOT EXISTS medicoes_da_maquina (
     audio_segundos REAL NOT NULL DEFAULT 0,
     relogio_segundos REAL NOT NULL DEFAULT 0
 );
+
+-- V10.4 — a VELOCIDADE DE DOWNLOAD desta máquina, pela mesma razão e com a
+-- mesma forma (somatórios) da tabela acima. Tabela SEPARADA, e não uma chave a
+-- mais na `medicoes_da_maquina`, porque ali as colunas se chamam
+-- `audio_segundos`/`relogio_segundos`: guardar bytes numa coluna chamada
+-- "áudio" é a documentação que mente da DECISIONS #117, escrita em DDL.
+--
+-- Uma linha só ('download'): a conexão é da MÁQUINA, não do arquivo. Ela entra
+-- pelo `CREATE TABLE IF NOT EXISTS` e não por migração — banco antigo ganha a
+-- tabela vazia na primeira abertura, e nada precisa ser convertido.
+--
+-- Reconstruível: apagar o banco devolve a estimativa à banda de referência, e
+-- o primeiro download acima do piso mede de novo.
+CREATE TABLE IF NOT EXISTS medicoes_de_banda (
+    chave TEXT PRIMARY KEY,
+    bytes REAL NOT NULL DEFAULT 0,
+    segundos REAL NOT NULL DEFAULT 0
+);
 "#;
 
 /// DDL da FTS5 e seus triggers, separada do SCHEMA para a migração poder
@@ -538,6 +556,54 @@ pub fn razao_medida(conn: &Connection, chave: &str, piso_de_audio: f64) -> Resul
 }
 
 // ---------------------------------------------------------------------------
+// V10.4 — a banda de download desta máquina
+// ---------------------------------------------------------------------------
+
+/// Chave única da tabela: a conexão é da MÁQUINA, não de um arquivo.
+const MEDICAO_BANDA: &str = "download";
+
+/// Soma o que ESTE download moveu ao que a máquina já sabia sobre a própria
+/// conexão.
+///
+/// Somatórios, e não a banda pronta, pelo motivo da DECISIONS #112: uma média
+/// sem memória faria o download de 8 MB pesar o mesmo que o de 1,5 GB. Quem
+/// decide se a amostra vale é `acessorios::banda_medida`, ANTES de chamar
+/// aqui — um download curto demais nem chega a virar linha, e por isso não há
+/// piso na leitura (a #112 põe o piso na leitura porque lá as amostras curtas
+/// somam até virar uma boa; aqui elas só enviesariam para baixo, já que num
+/// arquivo pequeno o que se cronometra é abrir a conexão).
+pub fn somar_banda(conn: &Connection, bytes: f64, segundos: f64) -> Result<()> {
+    if !(bytes > 0.0 && segundos > 0.0) {
+        return Ok(()); // nada a medir; gravar zero só sujaria a conta
+    }
+    conn.execute(
+        "INSERT INTO medicoes_de_banda (chave, bytes, segundos)
+         VALUES (?1, ?2, ?3)
+         ON CONFLICT(chave) DO UPDATE SET
+             bytes = bytes + excluded.bytes,
+             segundos = segundos + excluded.segundos",
+        params![MEDICAO_BANDA, bytes, segundos],
+    )?;
+    Ok(())
+}
+
+/// A banda MEDIDA nesta máquina, em bytes por segundo. `None` = esta máquina
+/// ainda não baixou nada que valesse medir, e vale a referência declarada.
+pub fn banda_medida(conn: &Connection) -> Result<Option<f64>> {
+    let medida: Option<(f64, f64)> = conn
+        .query_row(
+            "SELECT bytes, segundos FROM medicoes_de_banda WHERE chave = ?1",
+            params![MEDICAO_BANDA],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    Ok(match medida {
+        Some((bytes, segundos)) if bytes > 0.0 && segundos > 0.0 => Some(bytes / segundos),
+        _ => None,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Playlists
 // ---------------------------------------------------------------------------
 
@@ -770,6 +836,55 @@ mod tests {
             )],
             "uma linha só, com os somatórios intactos"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // V10.4 — a banda do download, medida nesta máquina
+    // -----------------------------------------------------------------------
+
+    /// A banda acumula em SOMATÓRIOS, como a razão da transcrição
+    /// (DECISIONS #112): assim um download de 1,5 GB pesa o que ele vale, e um
+    /// de 8 MB não manda na estimativa do próximo.
+    #[test]
+    fn a_banda_medida_acumula_e_pesa_cada_download_pelo_que_ele_moveu() {
+        let conn = open_in_memory().unwrap();
+        // máquina que nunca baixou nada: não há o que responder
+        assert_eq!(banda_medida(&conn).unwrap(), None);
+
+        // 100 MB em 20 s = 5 MB/s
+        somar_banda(&conn, 100_000_000.0, 20.0).unwrap();
+        assert_eq!(banda_medida(&conn).unwrap(), Some(5_000_000.0));
+
+        // mais 900 MB em 60 s: a média PESADA vira 1 GB / 80 s = 12,5 MB/s
+        somar_banda(&conn, 900_000_000.0, 60.0).unwrap();
+        assert_eq!(banda_medida(&conn).unwrap(), Some(12_500_000.0));
+    }
+
+    /// Amostra sem sentido não entra: gravar zero (ou negativo) só sujaria a
+    /// conta, exatamente como no `somar_medicao`.
+    #[test]
+    fn banda_sem_bytes_ou_sem_relogio_nao_e_gravada() {
+        let conn = open_in_memory().unwrap();
+        somar_banda(&conn, 0.0, 10.0).unwrap();
+        somar_banda(&conn, 100_000_000.0, 0.0).unwrap();
+        somar_banda(&conn, -1.0, -1.0).unwrap();
+        assert_eq!(banda_medida(&conn).unwrap(), None);
+    }
+
+    /// A tabela nasce em banco NOVO e aparece em banco ANTIGO: ela entra pelo
+    /// `CREATE TABLE IF NOT EXISTS` do schema, que roda em toda abertura, e
+    /// não por migração — não há coluna a alterar nem dado a converter.
+    #[test]
+    fn a_tabela_da_banda_aparece_sem_migracao() {
+        let conn = open_in_memory().unwrap();
+        let n: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='medicoes_de_banda'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1);
     }
 
     #[test]

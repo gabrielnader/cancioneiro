@@ -518,10 +518,15 @@ const CATALOGO = [
 
 /**
  * Banda de REFERÊNCIA do download, em bytes por segundo — espelha
- * `acessorios::BANDA_REFERENCIA_BYTES_S`. Deliberadamente conservadora: pela
- * DECISIONS #85, estimativa que promete MENOS do que leva é o defeito.
+ * `acessorios::BANDA_REFERENCIA_BYTES_S`.
+ *
+ * V10.4 — era 1 MB/s, e esse número anunciou 26 minutos em campo para um
+ * download que levou menos de 3. Ver o comentário longo no Rust: numa
+ * estimativa de DOWNLOAD o lado seguro não é o da DECISIONS #85, porque o
+ * número é o portão de entrada do recurso, e não o relatório de um trabalho
+ * já começado.
  */
-const BANDA_REFERENCIA_BYTES_S = 1_000_000;
+const BANDA_REFERENCIA_BYTES_S = 3_000_000;
 
 // ---------------------------------------------------------------------------
 // O custo da varredura e da transcrição — ESPELHO do Rust, não uma segunda conta
@@ -595,7 +600,20 @@ export const ERROS_DE_GRAVACAO = {
     "sincronizada com a nuvem, pause e tente de novo",
   emUso:
     "o acessório está em uso por outro programa — feche o aplicativo, abra de novo e tente",
-  gravacao: "não foi possível gravar o download neste computador",
+  // V10.4 — o arquivo que SOME no meio (antivírus em quarentena, pasta
+  // sincronizada com a nuvem, um segundo download do mesmo acessório) deixou
+  // de ser acusado de falha de gravação: gravar funcionou, e alguém levou o
+  // que foi gravado.
+  sumiu:
+    "o arquivo do download sumiu antes de terminar — em geral é o antivírus ou uma pasta " +
+    "sincronizada com a nuvem levando o arquivo; pause os dois e tente de novo",
+  // A frase de quando NÃO se sabe a causa. No backend ela ainda ganha o
+  // CÓDIGO do sistema entre parênteses — um número, nunca o texto em inglês
+  // (DECISIONS #121) —, porque sem suporte e sem telemetria o número é a
+  // única coisa que separa a próxima investigação de outro palpite.
+  gravacao:
+    "não foi possível gravar o download neste computador — tente de novo; se repetir, pause o " +
+    "antivírus e a sincronização com a nuvem",
 } as const;
 
 /**
@@ -1190,10 +1208,13 @@ export function createMockBackend(): MockBackend {
     return {
       ...a,
       estado: estadoDe(a.nome),
-      // DECISIONS #106 — número DECLARADO, da banda de referência, e
-      // arredondado para CIMA: a copy diz "cerca de", e prometer menos do que
-      // leva é o defeito da DECISIONS #85.
+      // DECISIONS #106 — número da banda de referência, arredondado para CIMA,
+      // e a copy diz "cerca de".
       segundos_estimados: Math.ceil(a.tamanho_bytes / BANDA_REFERENCIA_BYTES_S),
+      // V10.4 — o mock nunca mede: ele não baixa nada de verdade, e inventar
+      // uma medição aqui faria a tela dizer "neste computador" sobre uma
+      // conexão que não existe. O backend real mede (`db::banda_medida`).
+      tempo_medido_nesta_maquina: false,
     };
   }
 
