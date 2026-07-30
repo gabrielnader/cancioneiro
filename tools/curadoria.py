@@ -881,6 +881,16 @@ _RE_CARA_DE_HORARIO = re.compile(r"^\d{1,4}(?:[-:.]\d{1,2}){1,}$")
 # projeto. Por isso só entram rótulos que NENHUMA canção usa como nome:
 # "Vai", "Vamos", "Valsa", "Variações", "Compilado", "Artista" ficam de fora,
 # e há teste fixando cada um deles.
+# Em QUAL campo o texto foi lido. O slot é parâmetro OBRIGATÓRIO de
+# `eh_placeholder` de propósito: a regra de coletânea (decisão 105) foi
+# argumentada para ARTISTA — "rótulos que nenhuma canção usa como nome" — e
+# generalizou sozinha para os dois campos justamente porque o predicado não
+# perguntava o campo. Uma música de TÍTULO "Diversos" passava a valer campo
+# vazio e perdia o título num clique. Predicado que não pergunta o slot
+# generaliza de novo na próxima vez que alguém acrescentar uma regra.
+CAMPO_TITULO = "titulo"
+CAMPO_ARTISTA = "artista"
+
 _ROTULOS_DE_COLETANEA = frozenset({
     "various artists", "various artist", "various",
     "varios artistas", "varias artistas", "varios interpretes",
@@ -919,7 +929,7 @@ def _tem_marca_de_ripador(chave: str, bruto: str) -> bool:
     return any(_RE_CARA_DE_HORARIO.match(p) for p in bruto.split())
 
 
-def eh_placeholder(texto: str) -> bool:
+def eh_placeholder(texto: str, campo: str) -> bool:
     """True se o texto é placeholder (tag-lixo ou entrada-lixo do LRCLIB):
     vazio, só dígitos/pontuação, "AudioTrack N"/"Faixa N"/"Track N"/
     "Pista N" (com ou sem prefixo numérico), "no artist", "[Unknown
@@ -930,7 +940,9 @@ def eh_placeholder(texto: str) -> bool:
         return True  # vazio, só pontuação/# ou só dígitos
     if chave in _PLACEHOLDERS_EXATOS:
         return True
-    if _eh_rotulo_de_coletanea(chave, texto):
+    # Só no ARTISTA: "Diversos" é rótulo de coletânea no crédito e é TÍTULO
+    # legítimo no título. Ver CAMPO_TITULO/CAMPO_ARTISTA acima.
+    if campo == CAMPO_ARTISTA and _eh_rotulo_de_coletanea(chave, texto):
         return True
     if bool(_RE_PLACEHOLDER_FAIXA.match(chave)):
         return True
@@ -953,10 +965,10 @@ def eh_placeholder(texto: str) -> bool:
     return not palavras
 
 
-def _sem_placeholder(texto: str) -> str:
+def _sem_placeholder(texto: str, campo: str) -> str:
     """Tag placeholder é tratada como campo VAZIO em todos os pontos:
     não vira palpite, não bloqueia proposta BAIXA, não pula arquivo."""
-    return "" if eh_placeholder(texto) else texto
+    return "" if eh_placeholder(texto, campo) else texto
 
 
 def limpar_nome_arquivo(nome: str) -> str:
@@ -984,8 +996,8 @@ def gerar_palpites(nome_arquivo: str, titulo: str = "",
     os DOIS ÚLTIMOS segmentos nas duas ordens); nome inteiro como título.
     Tag placeholder ("02 AudioTrack 02", "no artist"...) é tratada como
     vazia: NUNCA vira palpite — vale o nome do arquivo."""
-    titulo = _sem_placeholder(titulo)
-    artista = _sem_placeholder(artista)
+    titulo = _sem_placeholder(titulo, CAMPO_TITULO)
+    artista = _sem_placeholder(artista, CAMPO_ARTISTA)
     palpites = []
     if titulo:
         palpites.append((titulo, artista))
@@ -1064,9 +1076,10 @@ def _identificar(palpites: list, duracao_mp3: float, buscar,
                 raise
             log(f"  {len(resultados)} resultados")
             validos = [res for res in resultados
-                       if not (eh_placeholder(res.get("trackName") or "")
-                               or eh_placeholder(res.get("artistName")
-                                                 or ""))]
+                       if not (eh_placeholder(res.get("trackName") or "",
+                                              CAMPO_TITULO)
+                               or eh_placeholder(res.get("artistName") or "",
+                                                 CAMPO_ARTISTA))]
             if len(validos) < len(resultados):
                 log(f"  {len(resultados) - len(validos)} "
                     "descartados (placeholder)")
@@ -1150,8 +1163,8 @@ def cmd_enriquecer(pasta: Path, csv_out: Path | None = None,
             continue
         # tag placeholder ("AudioTrack 17", "no artist"...) conta como vazia:
         # não pula o arquivo, não vira palpite e não bloqueia a BAIXA
-        titulo_tag = _sem_placeholder(info["titulo"])
-        artista_tag = _sem_placeholder(info["artista"])
+        titulo_tag = _sem_placeholder(info["titulo"], CAMPO_TITULO)
+        artista_tag = _sem_placeholder(info["artista"], CAMPO_ARTISTA)
         if titulo_tag and artista_tag and info["letra"] and not forcar:
             print(f"PULADO: {rel} (já tem título, artista e letra)")
             continue
@@ -1299,9 +1312,9 @@ def cmd_aplicar_proposta(pasta: Path, csv_path: Path, dry_run: bool = False,
             if (row.get("confianca") or "").strip().upper() == "BAIXA":
                 # BAIXA nunca sobrescreve tag REAL: só preenche campos
                 # vazios (tag placeholder conta como vazia e cede lugar)
-                if _sem_placeholder(info["titulo"]):
+                if _sem_placeholder(info["titulo"], CAMPO_TITULO):
                     titulo = ""
-                if _sem_placeholder(info["artista"]):
+                if _sem_placeholder(info["artista"], CAMPO_ARTISTA):
                     artista = ""
             temas_novos = (el.normalize_temas(el.split_temas_input(temas_raw))
                            if temas_raw else [])
@@ -1503,7 +1516,7 @@ def extrair_candidatos(texto: str, maximo: int = MAX_CANDIDATOS) -> list:
     contagem = {}  # chave -> [ocorrências, ordem de aparição, frase]
     for ordem, frase in enumerate(frases):
         chave = _norm_comparacao(frase)
-        if (_candidato_fraco(frase) or eh_placeholder(frase)
+        if (_candidato_fraco(frase) or eh_placeholder(frase, CAMPO_TITULO)
                 or eh_alucinacao(frase)):
             continue
         if chave in contagem:
@@ -1517,7 +1530,7 @@ def extrair_candidatos(texto: str, maximo: int = MAX_CANDIDATOS) -> list:
     candidatos = [v[2] for v in repetidas]
     primeira = frases[0]
     if (len(primeira.split()) <= MAX_PALAVRAS_PRIMEIRA
-            and not eh_placeholder(primeira)
+            and not eh_placeholder(primeira, CAMPO_TITULO)
             and not eh_alucinacao(primeira)
             and not _candidato_fraco(primeira)):
         candidatos.append(primeira)
@@ -1566,8 +1579,10 @@ def _identificar_por_refrao(candidatos: list, duracao_mp3: float, buscar,
         log(f'  busca: track="{candidato}"')
         resultados = buscar(track_name=candidato)
         validos = [res for res in resultados
-                   if not (eh_placeholder(res.get("trackName") or "")
-                           or eh_placeholder(res.get("artistName") or ""))]
+                   if not (eh_placeholder(res.get("trackName") or "",
+                                          CAMPO_TITULO)
+                           or eh_placeholder(res.get("artistName") or "",
+                                             CAMPO_ARTISTA))]
         log(f"  {len(resultados)} resultados"
             + (f" ({len(resultados) - len(validos)} descartados: placeholder)"
                if len(validos) < len(resultados) else ""))
@@ -1991,8 +2006,8 @@ def cmd_transcrever(pasta: Path, transcritor=None, fetcher=None,
                     letra_id = res.get("plainLyrics") or ""
                     # tag placeholder ("Faixa 5", "no artist") conta como
                     # vazia: pode ser preenchida
-                    titulo_atual = _sem_placeholder(info["titulo"])
-                    artista_atual = _sem_placeholder(info["artista"])
+                    titulo_atual = _sem_placeholder(info["titulo"], CAMPO_TITULO)
+                    artista_atual = _sem_placeholder(info["artista"], CAMPO_ARTISTA)
                     # nesta linha a duração sai em segundos puros (padrão do
                     # enriquecer: "mp3 214s, lrclib 216s")
                     duracao_res = res.get("duration")
@@ -2359,7 +2374,8 @@ def escolher_candidato(resultados: list, duracao_mp3: float,
         for gravacao in gravacoes:
             titulo = _nfc(str(gravacao.get("title") or "")).strip()
             artista = _artista_da_gravacao(gravacao)
-            if eh_placeholder(titulo) or eh_placeholder(artista):
+            if (eh_placeholder(titulo, CAMPO_TITULO)
+                    or eh_placeholder(artista, CAMPO_ARTISTA)):
                 log(f'  descartado (placeholder): "{titulo} / {artista}"')
                 continue
             duracao = gravacao.get("duration")
@@ -2397,7 +2413,8 @@ def buscar_letra_oficial(titulo: str, artista: str, duracao_mp3: float,
     for res in resultados:
         track = _nfc(str(res.get("trackName") or ""))
         nome = _nfc(str(res.get("artistName") or ""))
-        if eh_placeholder(track) or eh_placeholder(nome):
+        if (eh_placeholder(track, CAMPO_TITULO)
+                or eh_placeholder(nome, CAMPO_ARTISTA)):
             continue
         letra = res.get("plainLyrics") or ""
         if not letra:
@@ -2557,7 +2574,8 @@ def buscar_letra_vagalume(titulo: str, artista: str, chave: str,
         # sem os dois lados não há o que conferir: não se consulta
         log("  vagalume: sem título E artista para conferir — não consultado")
         return None
-    if eh_placeholder(titulo) or eh_placeholder(artista):
+    if (eh_placeholder(titulo, CAMPO_TITULO)
+            or eh_placeholder(artista, CAMPO_ARTISTA)):
         log("  vagalume: título/artista de placeholder — não consultado")
         return None
     log(f'  vagalume: mus="{titulo}" art="{artista}"')
@@ -2589,7 +2607,8 @@ def buscar_letra_vagalume(titulo: str, artista: str, chave: str,
         if not letra or _letra_indisponivel(letra):
             log(f'  vagalume: descartado (sem letra útil): "{titulo_res}"')
             continue
-        if eh_placeholder(titulo_res) or eh_placeholder(artista_res):
+        if (eh_placeholder(titulo_res, CAMPO_TITULO)
+                or eh_placeholder(artista_res, CAMPO_ARTISTA)):
             log(f'  vagalume: descartado (placeholder): '
                 f'"{titulo_res} / {artista_res}"')
             continue
@@ -2726,8 +2745,8 @@ def cmd_identificar(pasta: Path, impressao_digital=None, fetcher=None,
                 durs = f"mp3 {duracao:.0f}s, acoustid {dur_ac}"
                 # tag placeholder ("Faixa 5", "no artist") conta como vazia:
                 # pode ser preenchida
-                titulo_atual = _sem_placeholder(info["titulo"])
-                artista_atual = _sem_placeholder(info["artista"])
+                titulo_atual = _sem_placeholder(info["titulo"], CAMPO_TITULO)
+                artista_atual = _sem_placeholder(info["artista"], CAMPO_ARTISTA)
                 pode_sobrescrever = sobrescrever_tags and confianca == "ALTA"
                 if not pode_sobrescrever and (
                         _discorda(titulo_atual, titulo_id)
@@ -2921,8 +2940,9 @@ def _incompleto(info: dict) -> bool:
     40 pessoas curando cada uma o seu acervo em máquinas modestas, a conta
     de horas de CPU precisa ser honesta (PRD V8)."""
     tem_letra = bool(info["letra"]) or bool(info.get("instrumental"))
-    return not (tem_letra and _sem_placeholder(info["titulo"])
-                and _sem_placeholder(info["artista"]))
+    return not (tem_letra
+                and _sem_placeholder(info["titulo"], CAMPO_TITULO)
+                and _sem_placeholder(info["artista"], CAMPO_ARTISTA))
 
 
 def _amostrar(itens: list, quantos: int) -> list:

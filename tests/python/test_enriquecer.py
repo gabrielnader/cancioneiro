@@ -347,7 +347,7 @@ class TestEhPlaceholder:
         "no title", "Sem Título", "sem titulo", "untitled", "Unknown",
     ])
     def test_placeholder_e_detectado(self, texto):
-        assert curadoria.eh_placeholder(texto) is True
+        assert curadoria.eh_placeholder(texto, curadoria.CAMPO_TITULO) is True
 
     @pytest.mark.parametrize("texto", [
         "Oh! Chuva", "Chegança", "Antonio Nobrega", "Cali",
@@ -355,7 +355,7 @@ class TestEhPlaceholder:
         "Princesa Goiana", "É cedo ainda",
     ])
     def test_nome_real_nao_e_placeholder(self, texto):
-        assert curadoria.eh_placeholder(texto) is False
+        assert curadoria.eh_placeholder(texto, curadoria.CAMPO_TITULO) is False
 
 
 class TestRuidoDeArquivoNaoEngoleTituloReal:
@@ -371,7 +371,7 @@ class TestRuidoDeArquivoNaoEngoleTituloReal:
         "Recording", "Cópia", "Novo", "Convertido",
     ])
     def test_palavra_comum_sozinha_nunca_e_lixo(self, texto):
-        assert curadoria.eh_placeholder(texto) is False
+        assert curadoria.eh_placeholder(texto, curadoria.CAMPO_TITULO) is False
 
     @pytest.mark.parametrize("texto", [
         "04 Faixa 4 Artista Desconheci",     # truncado pelo ID3
@@ -380,12 +380,14 @@ class TestRuidoDeArquivoNaoEngoleTituloReal:
         "faixa 12 mp3",
     ])
     def test_lixo_de_ripador_de_verdade_continua_lixo(self, texto):
-        assert curadoria.eh_placeholder(texto) is True
+        assert curadoria.eh_placeholder(texto, curadoria.CAMPO_TITULO) is True
 
     def test_a_marca_de_ripador_e_o_que_habilita_a_regra(self):
         # a MESMA palavra: sozinha é título, com marca de ripador é lixo
-        assert curadoria.eh_placeholder("Gravação") is False
-        assert curadoria.eh_placeholder("Gravação 04 converted") is True
+        assert curadoria.eh_placeholder(
+            "Gravação", curadoria.CAMPO_TITULO) is False
+        assert curadoria.eh_placeholder(
+            "Gravação 04 converted", curadoria.CAMPO_TITULO) is True
 
     def test_titulo_real_nao_e_sobrescrito_pela_identificacao(self, tmp_path):
         """Ponta a ponta: com "Gravação" virando placeholder, o
@@ -398,10 +400,12 @@ class TestRuidoDeArquivoNaoEngoleTituloReal:
         tags.add(TIT2(encoding=3, text=["Gravação"]))
         tags.add(TPE1(encoding=3, text=["Coral do Bairro"]))
         tags.save(str(alvo), v2_version=4)
-        assert curadoria._sem_placeholder("Gravação") == "Gravação"
+        assert curadoria._sem_placeholder(
+            "Gravação", curadoria.CAMPO_TITULO) == "Gravação"
         # e o guarda de conflito volta a enxergar a divergência
         assert curadoria._discorda(
-            curadoria._sem_placeholder("Gravação"), "Timoneiro") is True
+            curadoria._sem_placeholder(
+                "Gravação", curadoria.CAMPO_TITULO), "Timoneiro") is True
 
 
 class TestVariousArtistsNaoEArtista:
@@ -422,7 +426,29 @@ class TestVariousArtistsNaoEArtista:
         "Coletânea", "coletanea", "Coletâneas",
     ])
     def test_rotulo_de_coletanea_e_placeholder(self, texto):
-        assert curadoria.eh_placeholder(texto) is True
+        assert curadoria.eh_placeholder(texto,
+                                        curadoria.CAMPO_ARTISTA) is True
+
+    def test_coletanea_vale_so_no_slot_de_artista(self):
+        """Emenda à decisão 105: a regra foi argumentada para ARTISTA
+        ("rótulos que nenhuma canção usa como nome") e generalizou sozinha
+        para os dois campos, porque o predicado não perguntava o campo.
+
+        O dano é concreto: uma música de TÍTULO "Diversos" passava a valer
+        campo vazio, caía no grupo dobrado da revisão — fechado e
+        pré-marcado — sob a frase "N músicas SEM TÍTULO ou artista vão
+        receber o nome que está no arquivo", que para ela é FALSA. Um
+        clique levava embora um título que a pessoa vê na biblioteca."""
+        for rotulo in ["Various Artists", "Diversos", "V.A.", "Coletânea"]:
+            assert curadoria.eh_placeholder(
+                rotulo, curadoria.CAMPO_ARTISTA) is True, rotulo
+            assert curadoria.eh_placeholder(
+                rotulo, curadoria.CAMPO_TITULO) is False, rotulo
+        # o resto do lixo de ripador continua valendo nos DOIS campos: ele
+        # não é nome de coisa nenhuma, em slot nenhum
+        for lixo in ["AudioTrack 03", "Artista Desconhecido", "untitled"]:
+            for campo in (curadoria.CAMPO_TITULO, curadoria.CAMPO_ARTISTA):
+                assert curadoria.eh_placeholder(lixo, campo) is True, lixo
 
     def test_a_licao_da_decisao_89_o_titulo_de_uma_palavra(self):
         """Ao completar a lista de lixo, o Rust passou a marcar "Pista"
@@ -434,16 +460,17 @@ class TestVariousArtistsNaoEArtista:
             "Variações", "Variação", "Diverso", "Coletivo", "Vários Caminhos",
             "Artista", "Artistas", "Compilado",
         ]:
-            assert curadoria.eh_placeholder(titulo) is False, titulo
+            assert curadoria.eh_placeholder(
+                titulo, curadoria.CAMPO_TITULO) is False, titulo
 
     def test_va_sem_acento_e_rotulo_va_com_acento_e_titulo(self):
         """A abreviação "VA" se escreve sem acento; "Vá" é o verbo. Como o
         `_norm_comparacao` tira o acento, as duas chegariam à mesma chave —
         e apagar o título "Vá" de alguém é exatamente o dano da decisão 65
         (placeholder é tratado como campo VAZIO)."""
-        assert curadoria.eh_placeholder("VA") is True
-        assert curadoria.eh_placeholder("Vá") is False
-        assert curadoria.eh_placeholder("vá") is False
+        assert curadoria.eh_placeholder("VA", curadoria.CAMPO_ARTISTA) is True
+        assert curadoria.eh_placeholder("Vá", curadoria.CAMPO_ARTISTA) is False
+        assert curadoria.eh_placeholder("vá", curadoria.CAMPO_ARTISTA) is False
 
     def test_a_musica_de_coletanea_volta_a_ser_incompleta(self, tmp_path):
         """Ponta a ponta: com "Various Artists" contando como artista real,
@@ -455,12 +482,14 @@ class TestVariousArtistsNaoEArtista:
         tags.add(TPE1(encoding=3, text=["Various Artists"]))
         tags.save(str(alvo), v2_version=4)
         info = curadoria.ler_info(alvo)
-        assert curadoria._sem_placeholder(info["artista"]) == ""
+        assert curadoria._sem_placeholder(
+            info["artista"], curadoria.CAMPO_ARTISTA) == ""
         # e o rótulo nunca vira consulta nem conflito contra o artista real
         # (o `_discorda` do Python recebe o valor já sem placeholder, como
         # fazem os chamadores; no Rust a mesma checagem é feita dentro dele)
         assert curadoria._discorda(
-            curadoria._sem_placeholder("Various Artists"),
+            curadoria._sem_placeholder("Various Artists",
+                                       curadoria.CAMPO_ARTISTA),
             "Luiz Gonzaga") is False
         palpites = curadoria.gerar_palpites(
             alvo.name, info["titulo"], info["artista"])
