@@ -175,6 +175,71 @@ ou traz de volta esse painel. O programa lembra a sua escolha na próxima vez.
 
 ---
 
+## O programa se atualiza sozinho
+
+Você não precisa baixar nada de novo. Ao abrir, o Cancioneiro confere se saiu uma
+versão nova; se saiu, baixa em segundo plano e avisa quando estiver pronta, com um
+botão **Reiniciar agora**. Enquanto isso você continua usando normalmente.
+
+Se não houver internet, ou não houver versão nova, ele não faz nada e não avisa nada.
+Dá para desligar essa conferência em **Configurações**.
+
+No Mac, depois de cada atualização pode voltar a aparecer um aviso do sistema pedindo
+permissão. É chato e é esperado — o programa ainda não tem assinatura digital, e para
+o macOS cada versão nova é um programa diferente. Clique em permitir.
+
+---
+
+## Completando as músicas
+
+Muita música chega com o nome errado, sem artista ou sem letra — e sem letra não dá
+para achá-la por um trecho. O Cancioneiro procura esses dados sozinho.
+
+**Como rodar:** clique em **Configurações**, na coluna da esquerda, escolha a pasta e
+clique em **Buscar dados desta pasta**. Antes de começar ele diz quantas músicas vai
+olhar e quanto tempo deve levar. Roda em segundo plano — dá para continuar ouvindo
+música enquanto isso, e dá para interromper quando quiser.
+
+Ele procura em quatro lugares, do mais barato para o mais caro: o que já está no
+próprio arquivo, o **som da gravação** (que reconhece a música mesmo com a etiqueta
+errada), e dois sites de letra.
+
+**Nada é gravado sem você conferir.** No fim aparece uma lista para revisar, em ordem
+de importância:
+
+- **Discordâncias** vêm primeiro: o som diz que a música é uma e a etiqueta diz outra.
+  A tela mostra os dois lados; você decide. Nenhuma vem marcada.
+- **Letras encontradas**, com o nome do site de onde vieram.
+- **Músicas sem voz**, que passam a não ser mais cobradas por letra.
+- **Trocas de nome que já existia** — nunca vêm marcadas, porque trocariam algo que
+  alguém escreveu à mão.
+- Por último, um grupo fechado e **já marcado** com as sugestões seguras: músicas sem
+  título ou sem artista que vão receber o nome que está no próprio arquivo. Só
+  preenche o que está em branco. Dá para abrir e conferir, ou desmarcar tudo de uma
+  vez.
+
+Clique em **Aplicar selecionadas** e pronto. Os dados são gravados **dentro dos
+próprios arquivos MP3** — se você levar as músicas para outro computador, a letra vai
+junto.
+
+### Escrever a letra ouvindo o áudio
+
+Quando alguma música ficar sem letra, o programa oferece, no fim da busca, escrever a
+letra **ouvindo o áudio**. Isso funciona sem internet e nada sai do seu computador.
+
+Duas coisas para saber antes:
+
+- Na primeira vez ele precisa baixar um arquivo grande (a tela diz o tamanho e o
+  tempo). É uma vez só na vida do computador.
+- **É demorado** — minutos por música. A tela mostra o quanto falta, e dá para
+  interromper.
+
+A letra que sai daí é escrita por máquina e **pode ter erros**. Ela aparece marcada
+como tal, e serve para você achar a música pelo trecho que lembra, não como letra
+oficial. Se quiser corrigir, é só usar o **Editar** no painel da direita.
+
+---
+
 ## Deu errado? Veja aqui
 
 **"Cancioneiro está danificado e não pode ser aberto" (Mac).**
@@ -198,9 +263,8 @@ naquele arquivo — então não há como achá-la por um trecho da letra ainda. 
 - Procure pelo **nome da música**, pelo **artista** ou pelo **nome da pasta** onde ela
   está; isso funciona mesmo sem letra.
 - Tente menos palavras (duas ou três bastam) e sem se preocupar com acentos.
-- Avise quem cuida do acervo: falta completar os dados dessa música. Quem faz a
-  curadoria usa o botão **Editar** no painel da direita, ou o botão **✎**
-  ("Completar dados desta pasta") que aparece ao lado do nome da pasta.
+- **Complete os dados você mesmo**: veja a parte "Completando as músicas" logo
+  acima. É ela que acha título, artista e letra do que está faltando.
 
 **"Sumiu uma música" / o nome dela ficou cinza.**
 Nome em cinza quer dizer que o arquivo não está mais no lugar onde estava: foi
