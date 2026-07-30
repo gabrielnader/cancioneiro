@@ -1019,28 +1019,30 @@ pub struct AcessorioDownload {
 ///
 /// Régua da DECISIONS #100: a primeira frase diz o que é, o resto só existe se
 /// responder a uma pergunta que a pessoa faria naquele momento, e jargão nosso
-/// não aparece. Aqui a régua tem um segundo dono: **são três cartões para uma
-/// etapa só** — um programa e dois arquivos —, e quem lê não sabe o que é um
+/// não aparece. Aqui a régua tem um segundo dono: **são dois cartões para uma
+/// etapa só** — um programa e um arquivo —, e quem lê não sabe o que é um
 /// modelo, nem tem a quem perguntar.
 fn para_que_serve(nome: &str) -> &'static str {
     match nome {
         crate::acessorios::FPCALC => "reconhecer a música pelo som",
         crate::acessorios::WHISPER_CLI => "escrever a letra ouvindo o áudio",
         // Duas entradas para uma etapa só, e a frase precisa explicar por quê:
-        // são 2 MB de programa e 180 MB de dado, e a pessoa vai ver os dois.
+        // são 2 MB de programa e 1,4 GB de dado, e a pessoa vai ver os dois.
         //
-        // V10.2 — e agora são TRÊS cartões, porque há dois arquivos de
-        // entendimento. A pergunta que a pessoa faz ao ver dois cartões
-        // parecidos é "preciso dos dois? qual roda?", e é ela que o texto do
-        // grande responde. Nenhum dos dois diz "modelo", "pequeno" ou
-        // "grande": o tamanho já está no cartão, em MB, logo abaixo.
-        crate::acessorios::MODELO_WHISPER => {
-            "entender o que é cantado — este é o rápido, e às vezes deixa \
-             trechos de fora"
-        }
+        // V10.5 — a frase MUDOU quando o segundo modelo saiu do catálogo. Ela
+        // dizia "entender MELHOR o que é cantado — é bem mais lento, e o
+        // aplicativo usa este quando ele está aqui", porque a pergunta diante
+        // de dois cartões parecidos era "preciso dos dois? qual roda?". Essa
+        // pergunta deixou de existir, e uma tela que a responde está falando de
+        // um arquivo que não está lá.
+        //
+        // A pergunta que sobra, diante de um cartão só e de 1,4 GB, é "o que eu
+        // perco se não baixar?" — e é essa que a segunda metade responde. Sem
+        // dizer "modelo" nem o tamanho: o tamanho já está no cartão logo
+        // abaixo.
         crate::acessorios::MODELO_WHISPER_GRANDE => {
-            "entender melhor o que é cantado — é bem mais lento, e o aplicativo \
-             usa este quando ele está aqui"
+            "entender o que é cantado — sem ele o aplicativo não escreve letra \
+             nenhuma"
         }
         _ => "",
     }
@@ -1296,7 +1298,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // V10.2 — a tela precisa dizer o que cada MODELO é, em uma frase
+    // V10.5 — a tela precisa dizer o que o MODELO é, em uma frase
     // -----------------------------------------------------------------------
 
     /// **Todo acessório do catálogo tem a sua frase.** O `para_que_serve` vira
@@ -1314,23 +1316,26 @@ mod tests {
         }
     }
 
-    /// **Os dois modelos aparecem juntos, e a pessoa precisa saber qual é
-    /// qual** — sem jargão, e sem caixinha de escolher.
+    /// **A frase do modelo responde à pergunta que a pessoa faz AGORA — e essa
+    /// pergunta mudou (V10.5).**
+    ///
+    /// *Mudou de propósito, e não por acidente.* Ele exigia que as frases dos
+    /// DOIS modelos se distinguissem e que a do grande respondesse "preciso dos
+    /// dois? qual roda?". Com um cartão só essa pergunta não existe mais, e
+    /// mantê-la respondida seria a tela falando de um arquivo que não está lá.
+    /// A pergunta que sobra, diante de um único cartão de 1,4 GB, é **"o que eu
+    /// perco se não baixar?"**.
     ///
     /// Régua da DECISIONS #100: a primeira frase diz o que é; o resto só existe
     /// se responder a uma pergunta que a pessoa faria naquele momento; cabe em
     /// 2 frases e 210 caracteres; e jargão nosso não aparece.
-    ///
-    /// A pergunta que ela FAZ ao ver dois cartões parecidos é "preciso dos
-    /// dois? qual roda?" — então é essa, e só essa, que o texto do grande
-    /// responde.
     #[test]
-    fn as_frases_dos_dois_modelos_dizem_qual_e_qual() {
-        let pequeno = para_que_serve(crate::acessorios::MODELO_WHISPER);
-        let grande = para_que_serve(crate::acessorios::MODELO_WHISPER_GRANDE);
-        assert_ne!(pequeno, grande, "duas frases iguais não distinguem nada");
+    fn a_frase_do_modelo_diz_o_que_ele_faz_e_o_que_falta_sem_ele() {
+        let modelo = para_que_serve(crate::acessorios::MODELO_WHISPER_GRANDE);
+        let programa = para_que_serve(crate::acessorios::WHISPER_CLI);
+        assert_ne!(modelo, programa, "duas frases iguais não distinguem nada");
 
-        for t in [pequeno, grande] {
+        for t in [modelo, programa] {
             assert!(
                 t.chars().count() <= 210,
                 "{} caracteres, o teto é 210: {t:?}",
@@ -1355,19 +1360,17 @@ mod tests {
                 );
             }
         }
-        // um é o que entende melhor, o outro é o rápido — em palavras de gente
-        assert!(grande.contains("melhor"), "o grande diz que entende melhor");
+        // a frase não pode mais comparar com um arquivo que saiu do catálogo
+        for sumiu in ["melhor", "mais lento", "mais devagar", "rápido", "usa este"] {
+            assert!(
+                !modelo.contains(sumiu),
+                "{modelo:?} compara com o modelo que saiu: {sumiu:?}"
+            );
+        }
+        // e diz o que a pessoa perde sem ele — é o que justifica 1,4 GB
         assert!(
-            grande.contains("mais lento") || grande.contains("mais devagar"),
-            "e diz o preço disso: {grande:?}"
-        );
-        assert!(
-            grande.contains("usa este") || grande.contains("usa ele"),
-            "e responde \"qual roda quando tenho os dois?\": {grande:?}"
-        );
-        assert!(
-            pequeno.contains("rápido") || pequeno.contains("rapidez"),
-            "o pequeno diz que é o rápido: {pequeno:?}"
+            modelo.contains("sem ele"),
+            "a frase precisa dizer o que falta sem este arquivo: {modelo:?}"
         );
     }
 

@@ -4843,8 +4843,9 @@ fn a_razao_medida_e_guardada_pelo_backend_e_manda_na_estimativa_seguinte() {
     )
     .unwrap();
     assert_eq!(
-        antes.segundos_de_transcricao, 240,
-        "240 s de áudio a 1,0 (a razão de REFERÊNCIA)"
+        antes.segundos_de_transcricao,
+        (240.0 * transcricao::RAZAO_DE_REFERENCIA_DO_GRANDE).ceil() as u64,
+        "240 s de áudio pela razão de REFERÊNCIA do modelo que roda aqui"
     );
 
     // uma execução da etapa 5 que gasta bem mais relógio do que áudio — é o
@@ -4916,7 +4917,7 @@ fn amostra_curta_demais_nao_troca_a_estimativa_declarada() {
     assert!(r.razao_medida.is_some(), "a execução mediu");
     assert_eq!(
         r.razao_desta_maquina,
-        transcricao::RAZAO_DE_REFERENCIA,
+        transcricao::RAZAO_DE_REFERENCIA_DO_GRANDE,
         "mas a amostra ainda não vale: continua a de referência"
     );
 
@@ -4929,7 +4930,10 @@ fn amostra_curta_demais_nao_troca_a_estimativa_declarada() {
         SEM_CANCELAMENTO,
     )
     .unwrap();
-    assert_eq!(depois.segundos_de_transcricao, 240);
+    assert_eq!(
+        depois.segundos_de_transcricao,
+        (240.0 * transcricao::RAZAO_DE_REFERENCIA_DO_GRANDE).ceil() as u64
+    );
     assert!(
         !depois.estimativa_medida_nesta_maquina,
         "e a tela continua com a ressalva, porque o número ainda é de fábrica"
@@ -4954,12 +4958,16 @@ impl enrich::Fontes for ComModelo {
     }
 }
 
-/// **A razão de fábrica é POR MODELO.** Numa máquina que ainda não mediu nada,
-/// a mesma pasta tem estimativas diferentes conforme o modelo baixado — o
-/// grande é ~3x mais lento, e anunciar o número do pequeno seria prometer 3
-/// horas para um trabalho de 9 (DECISIONS #85, agora por uma porta nova).
+/// **A razão de fábrica é a DO MODELO que roda aqui.**
+///
+/// *Mudou de propósito, e não por acidente (V10.5).* Ele comparava as duas
+/// estimativas de fábrica da mesma pasta, uma por modelo baixado — a
+/// convivência dos dois acabou com a medição no acervo real. O que ele fixa
+/// agora é que a estimativa que a pergunta do fim mostra sai da razão do modelo
+/// que a máquina realmente vai usar (3,0), e não do 1,0 que era do `small`:
+/// prometer 3 horas para um trabalho de 9 é a DECISIONS #85 por uma porta nova.
 #[test]
-fn a_estimativa_de_fabrica_muda_com_o_modelo_baixado() {
+fn a_estimativa_de_fabrica_e_a_do_modelo_que_roda_aqui() {
     let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
     let song = song_by_suffix(&conn, "sem_letra.mp3");
     conn.execute("UPDATE songs SET duration_seconds = 240 WHERE id = ?1", [song.id])
@@ -4969,37 +4977,67 @@ fn a_estimativa_de_fabrica_muda_com_o_modelo_baixado() {
         enrich::enrich_scan(&conn, "", ComModelo(modelo), ZERO, SEM_PROGRESSO, SEM_CANCELAMENTO)
             .unwrap()
     };
-    let pequeno = estimar(transcricao::modelo_oferecido());
-    let grande = estimar(transcricao::MODELOS[0]);
-
-    assert_eq!(pequeno.segundos_de_transcricao, 240, "240 s a 1,0");
+    let oferecido = estimar(transcricao::modelo_oferecido());
     assert_eq!(
-        grande.segundos_de_transcricao,
+        transcricao::modelo_oferecido().nome,
+        transcricao::MODELOS[0].nome,
+        "com um modelo só, o oferecido e o preferido são o mesmo"
+    );
+    assert_eq!(
+        oferecido.segundos_de_transcricao,
         (240.0 * transcricao::RAZAO_DE_REFERENCIA_DO_GRANDE).ceil() as u64,
         "o modelo que entende melhor custa mais, e a tela diz isso ANTES"
     );
-    assert!(!pequeno.estimativa_medida_nesta_maquina);
-    assert!(!grande.estimativa_medida_nesta_maquina, "os dois são de fábrica");
+    assert!(!oferecido.estimativa_medida_nesta_maquina, "é de fábrica");
 }
 
-/// **Medir com um modelo NÃO corrige (nem estraga) a estimativa do outro.**
+/// **A medição do modelo que SAIU não move a estimativa do que ficou.**
 ///
-/// É o item que decidiu a medição por modelo. A alternativa — invalidar tudo
-/// quando o modelo muda — precisaria guardar exatamente o mesmo fato ("qual
-/// modelo mediu isto") para saber que mudou, e então jogá-lo fora; e a queda do
-/// grande para o pequeno (grande corrompido) é um caminho DESENHADO, então a
-/// máquina oscila entre os dois e cada oscilação zeraria uma medição boa.
+/// *Mudou de propósito, e não por acidente (V10.5).* Ele media com um dos dois
+/// modelos e conferia que o outro não se mexia. Agora ele descreve a máquina de
+/// quem usou a v0.10.x: a linha do `ggml-small-q5_1.bin` continua no banco e
+/// **não é lida por ninguém** — é lixo inofensivo, e é assim que fica.
+///
+/// Reetiquetá-la para o modelo atual seria afirmar que uma medição feita com um
+/// motor vale para outro (DECISIONS #72), com erro de fator ~3 para MENOS na
+/// única frase que diz quanto tempo o trabalho leva. Apagá-la seria o programa
+/// mexendo por conta própria em dado que já existe.
 #[test]
-fn medir_com_um_modelo_nao_move_a_estimativa_do_outro() {
+fn a_medicao_do_modelo_que_saiu_nao_move_a_estimativa_do_que_ficou() {
     let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
     let song = song_by_suffix(&conn, "sem_letra.mp3");
     conn.execute("UPDATE songs SET duration_seconds = 240 WHERE id = ?1", [song.id])
         .unwrap();
 
-    // uma noite inteira transcrevendo com o PEQUENO
+    // como a v0.10.x deixou esta máquina: uma noite inteira medida com o
+    // `small`, sob a chave DELE
+    let chave_do_pequeno = format!("{}:ggml-small-q5_1.bin", db::MEDICAO_TRANSCRICAO);
+    db::somar_medicao(&conn, &chave_do_pequeno, 6000.0, 3000.0).unwrap();
+
+    let estimativa = enrich::enrich_scan(
+        &conn,
+        "",
+        ComModelo(transcricao::MODELOS[0]),
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+    assert!(
+        !estimativa.estimativa_medida_nesta_maquina,
+        "para o modelo que ficou, a estimativa continua sendo de fábrica — \
+         ninguém o mediu aqui"
+    );
+    assert_eq!(
+        estimativa.segundos_de_transcricao,
+        (240.0 * transcricao::RAZAO_DE_REFERENCIA_DO_GRANDE).ceil() as u64,
+        "a medição do modelo que saiu NÃO vaza para o número do que ficou"
+    );
+
+    // e medir COM o modelo atual passa a valer, na chave dele
     let r = enrich::transcricao_scan(
         &conn,
-        transcricao::modelo_oferecido(),
+        transcricao::MODELOS[0],
         &[song.id],
         motor_lento("uma letra bem comprida", 600.0, Duration::from_millis(60)),
         SEM_PROGRESSO_5,
@@ -5007,27 +5045,16 @@ fn medir_com_um_modelo_nao_move_a_estimativa_do_outro() {
     )
     .unwrap();
     assert!(r.razao_medida.is_some());
-
-    let estimar = |modelo| {
-        enrich::enrich_scan(&conn, "", ComModelo(modelo), ZERO, SEM_PROGRESSO, SEM_CANCELAMENTO)
-            .unwrap()
-    };
-    let com_pequeno = estimar(transcricao::modelo_oferecido());
-    assert!(
-        com_pequeno.estimativa_medida_nesta_maquina,
-        "para o pequeno, a estimativa agora é MEDIÇÃO desta máquina"
-    );
-
-    let com_grande = estimar(transcricao::MODELOS[0]);
-    assert!(
-        !com_grande.estimativa_medida_nesta_maquina,
-        "e para o grande continua sendo de fábrica — ninguém o mediu aqui"
-    );
-    assert_eq!(
-        com_grande.segundos_de_transcricao,
-        (240.0 * transcricao::RAZAO_DE_REFERENCIA_DO_GRANDE).ceil() as u64,
-        "a medição do pequeno NÃO vaza para o número do grande"
-    );
+    let depois = enrich::enrich_scan(
+        &conn,
+        "",
+        ComModelo(transcricao::MODELOS[0]),
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+    assert!(depois.estimativa_medida_nesta_maquina);
 }
 
 /// A medição ACUMULA entre execuções, e é por isso que ela é guardada como

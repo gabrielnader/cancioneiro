@@ -1677,7 +1677,7 @@ test.describe("V10 — a etapa que resolve (F18 fase 3)", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const mock = (window as any).__CANCIONEIRO_MOCK__;
       mock._estadoDoAcessorio("whisper-cli", "pronto");
-      mock._estadoDoAcessorio("modelo-de-transcricao", "pronto");
+      mock._estadoDoAcessorio("modelo-de-transcricao-grande", "pronto");
       mock._ensinarTranscricao("/musicas/mock/sem_tags.mp3", {
         letra: "na beira do mar sagrado\nna beira do mar sagrado",
         refrao: "na beira do mar sagrado",
@@ -1761,27 +1761,34 @@ test.describe("V10 — a etapa que resolve (F18 fase 3)", () => {
     const bloco = page.getByRole("region", {
       name: /Entender o que é cantado/,
     });
-    // 181,3 MB é o tamanho REAL do arquivo publicado. O mock usava um
-    // arredondamento (172,6 MB) até o catálogo ganhar as somas de verdade —
+    // 1,4 GB é o tamanho REAL do arquivo publicado (1.533.763.059 bytes). O
+    // mock usava um arredondamento até o catálogo ganhar as somas de verdade —
     // e número inventado no mock é a mesma família das divergências da #88:
     // o E2E fixava um tamanho que a tela nunca mostraria.
+    //
+    // V10.5 — eram 181,3 MB enquanto o modelo pequeno era o oferecido. Com ele
+    // fora do catálogo, o número passou de MB para GB, e a frase tem de
+    // continuar legível: "um arquivo de 1462,7 MB" é um número que ninguém lê
+    // como tamanho.
     await expect(
-      bloco.getByText(/É preciso baixar um arquivo de 181,3 MB/),
+      bloco.getByText(/É preciso baixar um arquivo de 1,4 GB, uma vez só/),
     ).toBeVisible();
     // V10.4 — o tempo saiu de uma banda de referência que anunciava 26 minutos
     // para um download que levou 3 (defeito de campo D3). Com a referência
-    // honesta, 190 MB são ~1 minuto; e enquanto o número for DECLARADO a frase
-    // carrega a ressalva — o número medido desta máquina é que a dispensa.
+    // honesta, 1,5 GB são ~9 minutos; e enquanto o número for DECLARADO a
+    // frase carrega a ressalva — o número medido desta máquina é que a
+    // dispensa.
     await expect(
       bloco.getByText(
-        /O download leva cerca de 1 minuto — mais se a sua internet estiver lenta/,
+        /O download leva cerca de 9 minutos — mais se a sua internet estiver lenta/,
       ),
     ).toBeVisible();
 
     await page.getByRole("button", { name: "Buscar dados desta pasta" }).click();
     const dialog = page.getByRole("dialog", { name: "Completar dados" });
     await expect(dialog.getByText(/Sobrou 1 música sem letra/)).toBeVisible();
-    await expect(dialog.getByText(/baixe 182,8 MB em Configurações/)).toBeVisible();
+    // o programa (1.635.784 bytes) MAIS o modelo: 1,4 GB, e o mesmo "cerca de"
+    await expect(dialog.getByText(/baixe 1,4 GB em Configurações/)).toBeVisible();
     // e não há o que começar: o trabalho não existe nesta máquina
     await expect(dialog.getByRole("button", { name: "Começar agora" })).toHaveCount(
       0,

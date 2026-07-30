@@ -327,22 +327,25 @@ export interface EnrichApplyResult {
  */
 export interface AcessorioInfo {
   /**
-   * Identidade estável, e o que `acessorioBaixar` recebe. Eram um só até a
-   * v0.9.0; a V10 acrescenta o transcritor e o modelo que ele consulta, e a
-   * V10.2 um segundo modelo — maior e melhor — que o backend PREFERE quando
-   * está baixado. Os dois convivem por uma rodada só, até a medição no acervo
-   * real dizer qual fica; um dos dois será removido.
+   * Identidade estável, e o que `acessorioBaixar` recebe. Era um só até a
+   * v0.9.0; a V10 acrescentou o transcritor e o modelo que ele consulta, e a
+   * V10.2 um segundo modelo, maior e melhor, para a medição no acervo real
+   * escolher entre os dois.
+   *
+   * **V10.5 — a medição decidiu, e `"modelo-de-transcricao"` (o pequeno) saiu
+   * daqui junto com o catálogo do Rust.** O `-grande` que sobrou no nome é
+   * herança: ele é a identidade que o backend publica, e renomeá-la para
+   * melhorar a leitura do TypeScript quebraria o `acessorioBaixar` de quem não
+   * tem a quem perguntar.
    *
    * A tela não escolhe: ela desenha um cartão por item do catálogo, e quem
    * decide qual modelo roda é o backend. Este tipo existe só para o
    * `acessorioBaixar` não receber um nome inventado — quando ele descrever
-   * MENOS do que o backend devolve, é divergência nascendo (decisão 88).
+   * MENOS do que o backend devolve, é divergência nascendo (decisão 88); e
+   * quando descrever MAIS, é a mesma divergência ao contrário, com a tela
+   * preparada para um cartão que o app real não tem.
    */
-  nome:
-    | "fpcalc"
-    | "whisper-cli"
-    | "modelo-de-transcricao"
-    | "modelo-de-transcricao-grande";
+  nome: "fpcalc" | "whisper-cli" | "modelo-de-transcricao-grande";
   /**
    * Para que serve, em pt-BR e PRONTO PARA EXIBIR. Vem do backend de propósito:
    * quem cura não sabe o que é "impressão digital acústica", e a frase que
@@ -374,8 +377,8 @@ export interface AcessorioInfo {
   tempo_medido_nesta_maquina: boolean;
   /**
    * É um PROGRAMA que o aplicativo executa (`true`) ou um DADO que ele só lê
-   * (`false`)? O modelo são 180 MB que ninguém executa, e "um programa de 2 MB
-   * e um arquivo de 181 MB" é outra conversa que "dois programas".
+   * (`false`)? O modelo é 1,4 GB que ninguém executa, e "um programa de 2 MB e
+   * um arquivo de 1,4 GB" é outra conversa que "dois programas".
    */
   executavel: boolean;
   /**

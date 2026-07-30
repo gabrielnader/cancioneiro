@@ -458,7 +458,7 @@ const ACESSORIO_FPCALC = {
 /**
  * Os dois acessórios da etapa 5 (V10), com os valores do `acessorios::CATALOGO`
  * do Rust (linux-x86_64). São DUAS entradas para uma etapa só, e a separação é
- * deliberada: 2 MB e 181 MB têm conversas diferentes com quem vai clicar, e um
+ * deliberada: 2 MB e 1,4 GB têm conversas diferentes com quem vai clicar, e um
  * pode estar pronto sem o outro.
  */
 const ACESSORIO_WHISPER = {
@@ -473,48 +473,37 @@ const ACESSORIO_WHISPER = {
   origem: `${URL_BASE}/whisper-cli-linux-x86_64`,
 };
 
-const ACESSORIO_MODELO = {
-  nome: "modelo-de-transcricao" as const,
-  para_que_serve:
-    "entender o que é cantado — este é o rápido, e às vezes deixa trechos" +
-    " de fora",
-  arquivo: "ggml-small-q5_1.bin",
-  // DADO, não programa: o mesmo arquivo serve as quatro máquinas, e ele não
-  // recebe o bit de execução.
-  tamanho_bytes: 190_085_487,
-  executavel: false,
-  origem: `${URL_BASE}/ggml-small-q5_1.bin`,
-};
-
 /**
- * O segundo modelo (V10.2): maior, melhor e MUITO mais lento. Existe porque a
- * medição no acervo real reprovou o pequeno — 37% de encontrabilidade contra
- * os 78% do motor anterior, com estrofes inteiras engolidas como "[música]".
+ * O modelo da etapa 5. Era o `ggml-small-q5_1.bin` (190 MB) até a V10.2 pôr um
+ * segundo modelo ao lado dele para a medição escolher.
  *
- * Os dois convivem por UMA rodada, até o acervo real dizer qual fica. O mock
- * precisa dos dois porque a regra que importa — o backend PREFERE o grande
- * quando ele está pronto — só é exercitável com os dois no catálogo, e
- * catálogo do mock menor que o do Rust foi como as três divergências
- * anteriores começaram (decisão 88).
+ * **V10.5 — a medição escolheu, e o pequeno saiu.** No acervo real, com a letra
+ * conferida OUVINDO a gravação, 83 trechos de 3 músicas: 31% do pequeno contra
+ * 48% do grande, e as marcas "[música]" / "[MÚSICA DE FUNDO]" sumiram da saída.
+ * Os números e as duas ressalvas estão no `acessorios::CATALOGO` do Rust e na
+ * decisão 129.
+ *
+ * O mock acompanhou na mesma rodada: catálogo do mock MAIOR que o do Rust é a
+ * mesma família das quatro divergências da decisão 88, ao contrário — a tela
+ * ficaria preparada para um cartão que o aplicativo real não tem, e o E2E
+ * certificaria esse cartão.
+ *
+ * O `-grande` no nome é herança da V10.2 e é o que o backend publica.
  */
-const ACESSORIO_MODELO_GRANDE = {
+const ACESSORIO_MODELO = {
   nome: "modelo-de-transcricao-grande" as const,
   para_que_serve:
-    "entender melhor o que é cantado — é bem mais lento, e o aplicativo usa" +
-    " este quando ele está aqui",
+    "entender o que é cantado — sem ele o aplicativo não escreve letra nenhuma",
   arquivo: "ggml-medium.bin",
+  // DADO, não programa: o mesmo arquivo serve as quatro máquinas, e ele não
+  // recebe o bit de execução.
   tamanho_bytes: 1_533_763_059,
   executavel: false,
   origem: `${URL_BASE}/ggml-medium.bin`,
 };
 
 /** O catálogo desta "máquina", na ordem em que a tela o mostra. */
-const CATALOGO = [
-  ACESSORIO_FPCALC,
-  ACESSORIO_WHISPER,
-  ACESSORIO_MODELO,
-  ACESSORIO_MODELO_GRANDE,
-];
+const CATALOGO = [ACESSORIO_FPCALC, ACESSORIO_WHISPER, ACESSORIO_MODELO];
 
 /**
  * Banda de REFERÊNCIA do download, em bytes por segundo — espelha

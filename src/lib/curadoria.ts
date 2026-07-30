@@ -50,7 +50,10 @@ function tempoCurto(segundos: number): string {
   // V10.4 — o singular existia para "1 hora" e não para "1 minuto". A faixa
   // era inalcançável enquanto a banda de referência do download era de 1 MB/s
   // (nenhum acessório caía entre 60 e 89 s); com a referência honesta os
-  // 190 MB do modelo pequeno caem bem ali, e a tela diria "cerca de 1 minutos".
+  // 190 MB do modelo pequeno caíam bem ali, e a tela diria "cerca de 1
+  // minutos". O modelo pequeno saiu do catálogo na V10.5, mas o singular fica:
+  // ele é do FORMATADOR, e o próximo acessório de tamanho médio o alcança de
+  // novo sem ninguém lembrar disto aqui.
   if (minutos < 90) return minutos === 1 ? "1 minuto" : `${minutos} minutos`;
   const horas = Math.round(minutos / 60);
   return horas === 1 ? "1 hora" : `${horas} horas`;
@@ -812,8 +815,17 @@ export function textoDaTranscricaoIndisponivel(
   );
 }
 
-/** Os acessórios que a etapa 5 exige — os dois, e os dois prontos. */
-const ACESSORIOS_DA_TRANSCRICAO = ["whisper-cli", "modelo-de-transcricao"];
+/**
+ * Os acessórios que a etapa 5 exige — os dois, e os dois prontos.
+ *
+ * V10.5 — o modelo é o `modelo-de-transcricao-grande`, o único que restou no
+ * catálogo. Um nome errado aqui não quebra nada visível: o modelo some da
+ * conta, e a pergunta do fim oferece 2 MB para um download de 1,4 GB.
+ */
+const ACESSORIOS_DA_TRANSCRICAO = [
+  "whisper-cli",
+  "modelo-de-transcricao-grande",
+];
 
 /**
  * Quanto falta baixar para a etapa 5 existir. `null` quando não há nada a
@@ -934,9 +946,19 @@ export const AVISO_NOME_ESCRITO =
 /**
  * "Quanto ocupa", em pt-BR. Uma casa decimal e vírgula: é um número para
  * decidir se vale a pena, não para conferir byte a byte.
+ *
+ * **V10.5 — passou a ter GB.** Com o modelo pequeno fora do catálogo, o único
+ * arquivo de dado tem 1,5 bilhão de bytes, e a tela dizia "1462,7 MB": quatro
+ * dígitos antes da vírgula deixam de dizer se é muito ou pouco, que é
+ * exatamente o trabalho deste número. "1,4 GB" é a mesma informação legível.
+ *
+ * O GB é BINÁRIO, como o MB e o kB daqui. Duas bases no mesmo formatador
+ * dariam dois tamanhos para o mesmo arquivo, e o 181,3 MB que a tela já mostra
+ * há três versões é binário.
  */
 export function formatarTamanho(bytes: number): string {
   const mb = bytes / (1024 * 1024);
+  if (mb >= 1000) return `${(mb / 1024).toFixed(1).replace(".", ",")} GB`;
   if (mb >= 1) return `${mb.toFixed(1).replace(".", ",")} MB`;
   return `${Math.round(bytes / 1024)} kB`;
 }

@@ -61,8 +61,8 @@ use std::time::Duration;
 // quem baixou o `fpcalc` não é afetado). Nenhum teste desta suíte depende dos
 // valores reais: o que se testa é o MECANISMO de conferência.
 //
-// V10.2 — SÃO DOIS MODELOS, E ISSO É TEMPORÁRIO. Ver o bloco marcado dentro do
-// catálogo, logo abaixo da entrada do `ggml-small-q5_1.bin`.
+// V10.5 — SOBROU UM MODELO, E O BLOCO MARCADO NO CATÁLOGO DIZ QUAL E POR QUÊ,
+// com os números da medição e as duas ressalvas que andam com eles.
 //
 // AO PREENCHER UMA SOMA, PREENCHA O TAMANHO JUNTO: os tamanhos das entradas
 // pendentes são APROXIMAÇÕES para a tela ter o que dizer, e saem do mesmo
@@ -153,41 +153,53 @@ pub const CATALOGO: &[Acessorio] = &[
         tamanho_bytes: 2_830_456,
         executavel: true,
     },
-    Acessorio {
-        nome: MODELO_WHISPER,
-        // DADO, não programa: o mesmo arquivo serve as quatro máquinas, e ele
-        // não recebe o bit de execução.
-        plataforma: QUALQUER_PLATAFORMA,
-        arquivo: "ggml-small-q5_1.bin",
-        sha256: "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
-        tamanho_bytes: 190_085_487,
-        executavel: false,
-    },
-    // ███ V10.2 — O SEGUNDO MODELO EXISTE PARA SER MEDIDO, E UM DOS DOIS SAI ██
+    // ███ V10.5 — UM MODELO SÓ: O `ggml-medium.bin`. A MEDIÇÃO DECIDIU ███████
     //
-    // NÃO trate dois modelos como o desenho final. Esta entrada e a de cima
-    // convivem por UMA rodada, para o acervo real dizer qual fica; assim que a
-    // medição decidir, **um dos dois é REMOVIDO do catálogo** (e a entrada que
-    // ficar herda a preferência sozinha, sem `transcricao::MODELOS`).
+    // O `ggml-small-q5_1.bin` (190 MB) SAIU. Os dois conviviam por uma rodada,
+    // e a rodada acabou. Medido no acervo real, com a letra conferida OUVINDO a
+    // gravação — não a letra publicada na internet —, em 83 trechos do tipo que
+    // uma pessoa lembraria, de 3 músicas:
     //
-    // POR QUE ELE ENTROU: a v0.10.0 saiu com o `small` quantizado e a qualidade
-    // reprovou na medição do acervo real — 37% de encontrabilidade contra os
-    // 78% que o faster-whisper tinha entregado. Foi exatamente o risco que o
-    // PRD V10 registrou ("a prova não viaja junto quando o código é reusado",
-    // DECISIONS #72), acontecendo. E o modo de falha não é grafia: o modelo
-    // classifica trecho CANTADO como música e não o transcreve — as saídas
-    // vieram salpicadas de `[música]`, `[MÚSICA DE FUNDO]`, `[cantarolando]`, e
-    // numa das faixas quatro estrofes inteiras sumiram. Onde ele emite a marca,
-    // a letra não existe. Não é falta de idioma: o `--language pt` está sendo
-    // passado (`transcricao::argumentos`).
+    //     música                  trechos   pequeno   grande
+    //     Cadê o Gato                  26       30%      53%
+    //     Girias do Norte              17       29%      52%
+    //     Último dos Moicanos          40       32%      42%
+    //     TOTAL                        83       31%      48%
+    //
+    // O grande recuperou 17 trechos e perdeu 3. E o que mais importa: **as
+    // marcas `[música]`, `[MÚSICA DE FUNDO]` e `[cantarolando]` desapareceram**
+    // — elas eram o modelo desistindo de transcrever trecho cantado, e eram a
+    // causa de estrofes inteiras sumirem.
+    //
+    // DUAS RESSALVAS, e sem elas o 48% engana:
+    //
+    // 1. **A amostra é o material mais DIFÍCIL do acervo.** Saiu, sem querer,
+    //    uma pasta de humor: narrativa falada-cantada, dialeto regional e uma
+    //    música construída sobre palavras inventadas ("alavantuí, chã-de-dama
+    //    anarrariê"). É razoável ESPERAR mais que 48% no repertório cantado
+    //    comum — mas isso é expectativa, **não está medido**, e não se afirma.
+    // 2. **O problema estrutural diminuiu, NÃO acabou.** Das quatro estrofes
+    //    que o pequeno engoliu no "Último dos Moicanos", só UMA voltou.
+    //    Continuam fora "Tinha jurado à minha mãe", "Comprei um sítio", "A tal
+    //    viúva do bandido" e "Voltei à vila". A transcrição ainda perde pedaços
+    //    de áudio cantado, e quem for medir de novo tem de saber disso.
     //
     // SÃO 1,5 GB, e o dono do produto autorizou: ele ensina cada pessoa
     // pessoalmente, e este download roda uma vez só na vida da máquina.
+    //
+    // QUEM JÁ BAIXOU O PEQUENO tem 190 MB órfãos no cache, e o aplicativo NÃO
+    // os apaga: não é esquecimento, é a DECISIONS #130. Ninguém lê aquele
+    // arquivo (o `estado` só pergunta pelo que está no catálogo), ele não é
+    // executável, e código que decide sozinho destruir arquivo na máquina de
+    // alguém é o tipo de iniciativa que este produto não toma — nem dentro da
+    // própria pasta de cache. Quem quiser o espaço apaga o arquivo.
     //
     // A soma e o tamanho foram conferidos por ele BAIXANDO o arquivo publicado
     // e recalculando — não são o que o fluxo imprimiu e ninguém releu.
     Acessorio {
         nome: MODELO_WHISPER_GRANDE,
+        // DADO, não programa: o mesmo arquivo serve as quatro máquinas, e ele
+        // não recebe o bit de execução.
         plataforma: QUALQUER_PLATAFORMA,
         arquivo: "ggml-medium.bin",
         sha256: "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
@@ -207,21 +219,17 @@ pub const FPCALC: &str = "fpcalc";
 /// Nome do PROGRAMA da etapa 5 (whisper.cpp).
 pub const WHISPER_CLI: &str = "whisper-cli";
 
-/// Nome do MODELO da etapa 5 — dado, não programa. São duas entradas
-/// separadas de propósito: 2 MB e 180 MB têm conversas diferentes com quem
-/// vai clicar, e um pode estar pronto sem o outro.
+/// Nome do MODELO da etapa 5 (`ggml-medium.bin`) — dado, não programa. É uma
+/// entrada separada do `whisper-cli` de propósito: 2 MB e 1,5 GB têm conversas
+/// diferentes com quem vai clicar, e um pode estar pronto sem o outro.
 ///
-/// Desde a V10.2 este é o modelo PEQUENO dos dois. O nome não mudou porque ele
-/// é a identidade que atravessa para o frontend (`acessorio_baixar(nome)`), e
-/// renomear identidade de contrato para melhorar a leitura de quem escreve o
-/// Rust é o tipo de troca que quebra a tela de quem não tem a quem perguntar.
-pub const MODELO_WHISPER: &str = "modelo-de-transcricao";
-
-/// Nome do modelo GRANDE da etapa 5 (V10.2, `ggml-medium.bin`).
-///
-/// **Temporário e declarado**: ele existe para a remedição escolher entre os
-/// dois, e um dos dois sai do catálogo depois disso. Ver o bloco no `CATALOGO`
-/// e a ordem de preferência em `transcricao::MODELOS`.
+/// **O `-grande` do nome é herança da V10.2, e fica.** Ele nasceu quando havia
+/// dois modelos no catálogo; o pequeno saiu na V10.5 e este é o único que
+/// restou. O nome não muda junto porque ele é a identidade que atravessa para o
+/// frontend (`acessorio_baixar(nome)`) — renomear identidade de contrato para
+/// melhorar a leitura de quem escreve o Rust é o tipo de troca que quebra a
+/// tela de quem não tem a quem perguntar. Ele nunca aparece na tela: o que a
+/// pessoa lê é o `commands::para_que_serve`.
 pub const MODELO_WHISPER_GRANDE: &str = "modelo-de-transcricao-grande";
 
 /// Plataforma dos acessórios que são DADO: um arquivo só serve as quatro
@@ -271,9 +279,10 @@ pub const QUALQUER_PLATAFORMA: &str = "qualquer";
 /// prometer a conexão de uma pessoa a quarenta é trocar um chute por outro.
 /// 3 MB/s fica bem abaixo dela — e abaixo da banda doméstica comum de hoje —,
 /// então continua sendo folga; só que folga de ~3x, e não de ~10x. Para 1,5 GB
-/// dá ~8 min (café), e não 26 (outro dia). Para os 190 MB do modelo pequeno dá
-/// pouco mais de um minuto, e não "menos de 1 minuto", que seria o defeito da
-/// #85 em miniatura.
+/// dá ~8 min (café), e não 26 (outro dia). E a régua de baixo continua valendo
+/// mesmo depois de o modelo pequeno sair do catálogo (V10.5): 190 MB por esta
+/// banda dão pouco mais de um minuto, e não "menos de 1 minuto", que seria o
+/// defeito da #85 em miniatura. Há teste com o número literal.
 ///
 /// **O que sobra de risco, e o que o cobre.** Quem estiver numa linha de fato
 /// lenta vai ler ~8 min e esperar mais. Duas coisas cobrem isso, e as duas já
@@ -1072,11 +1081,18 @@ mod tests {
         );
         assert!(arquivos.contains(&"whisper-cli-linux-x86_64"));
         assert!(arquivos.contains(&"whisper-cli-windows-x86_64.exe"));
-        assert!(arquivos.contains(&"ggml-small-q5_1.bin"));
         // V10.2 — o `medium` foi publicado no MESMO lançamento pelo fluxo
         // `acessorio-modelo.yml`, que recusa republicar por cima de um nome já
         // existente (acrescentar arquivo não muda a soma dos que já estão lá).
         assert!(arquivos.contains(&"ggml-medium.bin"));
+        // V10.5 — o `small` PERDEU a medição e saiu do catálogo. O arquivo
+        // continua publicado no lançamento (nada é despublicado: quem estiver
+        // numa versão antiga do aplicativo continua podendo baixá-lo), mas
+        // este aplicativo não o oferece mais.
+        assert!(
+            !arquivos.contains(&"ggml-small-q5_1.bin"),
+            "o modelo pequeno saiu do catálogo — ver o bloco do CATALOGO"
+        );
     }
 
     /// Guarda de regressão: o que JÁ FOI PUBLICADO não pode voltar a ter soma
@@ -1112,44 +1128,38 @@ mod tests {
         }
     }
 
-    /// V10.2 — **os DOIS modelos, com as somas e os tamanhos que o dono do
-    /// produto conferiu baixando os arquivos publicados e recalculando.**
+    /// V10.5 — **UM modelo, e é o `ggml-medium.bin`.** A medição no acervo real
+    /// decidiu: 48% de encontrabilidade contra os 31% do `ggml-small-q5_1.bin`,
+    /// em 83 trechos de 3 músicas, com a letra conferida OUVINDO a gravação.
     ///
-    /// O `medium` entra porque a qualidade do `small` quantizado REPROVOU na
-    /// medição do acervo real: 37% de encontrabilidade contra os 78% do motor
-    /// antigo, e com um modo de falha que não é grafia — o modelo classifica
-    /// trecho cantado como música e devolve `[música]` no lugar da estrofe.
-    ///
-    /// **Isto é temporário e declarado**: assim que a remedição decidir, um dos
-    /// dois SAI do catálogo. Ver o comentário do `CATALOGO`.
+    /// A soma e o tamanho são os que o dono do produto conferiu baixando o
+    /// arquivo publicado e recalculando — não são o que o fluxo imprimiu e
+    /// ninguém releu. Ver o bloco do `CATALOGO` para as duas ressalvas que
+    /// acompanham o número.
     #[test]
-    fn o_catalogo_tem_os_dois_modelos_com_as_somas_publicadas() {
-        let por_arquivo = |arquivo: &str| {
-            CATALOGO
-                .iter()
-                .find(|a| a.arquivo == arquivo)
-                .unwrap_or_else(|| panic!("{arquivo} não está no catálogo"))
-        };
-        let pequeno = por_arquivo("ggml-small-q5_1.bin");
+    fn o_catalogo_tem_um_modelo_so_e_e_o_grande() {
+        let modelos: Vec<&Acessorio> = CATALOGO.iter().filter(|a| !a.executavel).collect();
         assert_eq!(
-            pequeno.sha256, "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
-            "o modelo pequeno continua INALTERADO"
+            modelos.len(),
+            1,
+            "a convivência dos dois modelos acabou com a medição: {:?}",
+            modelos.iter().map(|a| a.arquivo).collect::<Vec<_>>()
         );
-        assert_eq!(pequeno.tamanho_bytes, 190_085_487);
-
-        let grande = por_arquivo("ggml-medium.bin");
+        let modelo = modelos[0];
+        assert_eq!(modelo.arquivo, "ggml-medium.bin");
+        // O NOME de contrato não mudou junto com a saída do pequeno: ele é o
+        // que o frontend manda em `acessorio_baixar(nome)`, e renomear
+        // identidade de contrato para melhorar a leitura de quem escreve o Rust
+        // é o tipo de troca que quebra a tela de quem não tem a quem perguntar.
+        assert_eq!(modelo.nome, MODELO_WHISPER_GRANDE);
         assert_eq!(
-            grande.sha256, "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208"
+            modelo.sha256, "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208"
         );
-        assert_eq!(grande.tamanho_bytes, 1_533_763_059);
-        assert!(!grande.executavel, "modelo é DADO, não programa");
+        assert_eq!(modelo.tamanho_bytes, 1_533_763_059);
+        assert!(!modelo.executavel, "modelo é DADO, não programa");
         assert_eq!(
-            grande.plataforma, QUALQUER_PLATAFORMA,
+            modelo.plataforma, QUALQUER_PLATAFORMA,
             "dado não tem processador"
-        );
-        assert!(
-            grande.tamanho_bytes > pequeno.tamanho_bytes,
-            "o `medium` é o grande dos dois"
         );
     }
 
@@ -1159,9 +1169,9 @@ mod tests {
     fn o_modelo_e_dado_e_o_transcritor_e_executavel() {
         let modelos: Vec<&Acessorio> = CATALOGO
             .iter()
-            .filter(|a| [MODELO_WHISPER, MODELO_WHISPER_GRANDE].contains(&a.nome))
+            .filter(|a| a.nome == MODELO_WHISPER_GRANDE)
             .collect();
-        assert_eq!(modelos.len(), 2, "os dois modelos estão no catálogo");
+        assert_eq!(modelos.len(), 1, "V10.5 — sobrou UM modelo no catálogo");
         for modelo in &modelos {
             assert!(!modelo.executavel, "{}: o modelo não é programa", modelo.arquivo);
             assert_eq!(
@@ -1169,10 +1179,7 @@ mod tests {
                 "dado não tem processador: um arquivo serve as quatro máquinas"
             );
         }
-        for a in CATALOGO
-            .iter()
-            .filter(|a| ![MODELO_WHISPER, MODELO_WHISPER_GRANDE].contains(&a.nome))
-        {
+        for a in CATALOGO.iter().filter(|a| a.nome != MODELO_WHISPER_GRANDE) {
             assert!(a.executavel, "{}: é programa", a.arquivo);
         }
     }
@@ -1226,23 +1233,24 @@ mod tests {
         );
     }
 
-    /// Nesta máquina existem os quatro acessórios: o do som, o transcritor e os
-    /// DOIS modelos. Um catálogo que esquecesse a plataforma faria a etapa
-    /// sumir da tela sem ninguém perceber (DECISIONS #101).
+    /// Nesta máquina existem os três acessórios: o do som, o transcritor e o
+    /// modelo. Um catálogo que esquecesse a plataforma faria a etapa sumir da
+    /// tela sem ninguém perceber (DECISIONS #101).
     ///
-    /// **É esta lista que a tela mostra**, e é por isso que a preferência entre
-    /// os modelos não precisa de caixinha de seleção: os dois aparecem porque a
-    /// tela lista o catálogo, e quem escolhe qual roda é o programa.
+    /// **É esta lista que a tela mostra.** Eram quatro cartões enquanto os dois
+    /// modelos conviviam; com a medição decidida (V10.5) voltaram a ser três, e
+    /// some junto a pergunta "preciso dos dois?" que o cartão do grande existia
+    /// para responder.
     #[test]
-    fn esta_maquina_tem_o_som_o_transcritor_e_os_dois_modelos() {
-        for nome in [FPCALC, WHISPER_CLI, MODELO_WHISPER, MODELO_WHISPER_GRANDE] {
+    fn esta_maquina_tem_o_som_o_transcritor_e_o_modelo() {
+        for nome in [FPCALC, WHISPER_CLI, MODELO_WHISPER_GRANDE] {
             assert!(
                 desta_maquina(nome).is_some(),
                 "{nome} não tem arquivo para esta máquina"
             );
         }
         let nomes: Vec<&str> = catalogo_desta_maquina().iter().map(|a| a.nome).collect();
-        assert_eq!(nomes.len(), 4, "quatro acessórios, sem repetição: {nomes:?}");
+        assert_eq!(nomes.len(), 3, "três acessórios, sem repetição: {nomes:?}");
     }
 
     // -----------------------------------------------------------------------
@@ -1261,10 +1269,14 @@ mod tests {
         // banda de referência tem de continuar respeitando depois de subir
         // (V10.4): abaixo de 60 s a copy diz literalmente "menos de 1 minuto"
         // para um download de 190 MB, que é a DECISIONS #85 em miniatura.
-        let modelo = desta_maquina(MODELO_WHISPER).expect("o modelo existe aqui");
-        assert!(modelo.tamanho_bytes > 100_000_000, "o modelo é grande");
+        //
+        // V10.5 — os 190 MB deixaram de ser um acessório do catálogo (o modelo
+        // pequeno saiu), e o número virou LITERAL aqui de propósito: a régua é
+        // da BANDA DE REFERÊNCIA, não daquela entrada. Amarrá-la ao menor
+        // acessório de hoje faria a guarda sumir sozinha no dia em que o
+        // catálogo mudasse de novo.
         assert!(
-            segundos_estimados(modelo.tamanho_bytes, None) >= 60,
+            segundos_estimados(190_085_487, None) >= 60,
             "190 MB precisam de tempo na tela"
         );
     }

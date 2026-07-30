@@ -99,19 +99,25 @@ function whisper(estado: AcessorioInfo["estado"]): AcessorioInfo {
   };
 }
 
-/** O MODELO da etapa 5 (V10) — 181 MB de DADO, que ninguém executa. */
+/**
+ * O MODELO da etapa 5 — DADO, que ninguém executa.
+ *
+ * V10.5 — é o `ggml-medium.bin`, o único que restou no catálogo. O tamanho
+ * aqui é o da fixture (181 MB) e não o real: o que estes testes exercitam é o
+ * cartão, não o número publicado — esse tem guarda no Rust e no E2E.
+ */
 function modelo(estado: AcessorioInfo["estado"]): AcessorioInfo {
   return {
-    nome: "modelo-de-transcricao",
-    para_que_serve: "entender o que é cantado — é o que o transcritor consulta",
-    arquivo: "ggml-small-q5_1.bin",
+    nome: "modelo-de-transcricao-grande",
+    para_que_serve: "entender o que é cantado — sem ele o aplicativo não escreve letra nenhuma",
+    arquivo: "ggml-medium.bin",
     tamanho_bytes: 181_000_000,
     segundos_estimados: 181,
     tempo_medido_nesta_maquina: false,
     executavel: false,
     estado,
     origem:
-      "https://github.com/gabrielnader/cancioneiro/releases/download/acessorios-v1/ggml-small-q5_1.bin",
+      "https://github.com/gabrielnader/cancioneiro/releases/download/acessorios-v1/ggml-medium.bin",
   };
 }
 
@@ -1130,7 +1136,7 @@ describe("SettingsView — os acessórios da etapa 5 (V10)", () => {
       );
     });
     expect(acessorioBaixar).toHaveBeenCalledWith(
-      "modelo-de-transcricao",
+      "modelo-de-transcricao-grande",
       expect.any(String),
     );
   });
@@ -1152,7 +1158,7 @@ describe("SettingsView — os acessórios da etapa 5 (V10)", () => {
     });
     await act(async () => {
       emitirProgressoDoAcessorio?.({
-        nome: "modelo-de-transcricao",
+        nome: "modelo-de-transcricao-grande",
         baixados: 40_000_000,
         total: 181_000_000,
         segundos_restantes: 141,

@@ -250,13 +250,23 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
 }
 
 /// V10.2 — a medição da etapa 5 passou a ser POR MODELO, e a linha que a
-/// v0.10.0 deixou no banco continua valendo: ela é do modelo pequeno.
+/// v0.10.0 deixou no banco ganha o nome do arquivo que a produziu: o modelo
+/// pequeno. Não é adivinhação — naquela versão o catálogo tinha um modelo só.
 ///
 /// Não é migração de schema (a tabela não mudou), então não entra no
 /// `migrate_if_needed` nem faz o `user_version` andar — é uma linha de DADO
-/// sendo dita por inteiro. Descartá-la devolveria a estimativa desta máquina ao
-/// número de fábrica sem motivo nenhum: a v0.10.0 tinha UM modelo, então o que
-/// está ali é, sem adivinhação, quanto o `ggml-small-q5_1.bin` levou aqui.
+/// sendo dita por inteiro.
+///
+/// **V10.5 — o modelo pequeno saiu do catálogo, e esta linha virou lixo
+/// inofensivo: ninguém a lê.** Ela continua sendo reetiquetada, e não apagada
+/// nem reaproveitada, por dois motivos que puxam para o mesmo lado.
+/// Reetiquetá-la para o `ggml-medium.bin` seria afirmar que uma medição feita
+/// com um motor vale para outro, que é o erro que o PRD V10 registrou
+/// (DECISIONS #72) — e um erro de fator ~3, para MENOS, na única frase que diz
+/// quanto tempo o trabalho leva. Apagá-la seria o programa mexendo por conta
+/// própria em dado que já existe; e é justamente o `:{arquivo}` no fim da chave
+/// que impede a linha de ser "aproveitada" por engano mais tarde. Uma chave
+/// `transcricao` nua seria a próxima candidata a isso.
 ///
 /// `UPDATE OR IGNORE` porque a chave é PRIMARY KEY: se a nova já existir, a
 /// antiga fica onde está em vez de a gravação inteira falhar. Rodar de novo é
@@ -491,18 +501,26 @@ pub fn get_lyrics(conn: &Connection, song_id: i64) -> Result<Option<String>> {
 /// áudio.
 ///
 /// V10.2 — a chave completa inclui o ARQUIVO do modelo
-/// (`transcricao:ggml-small-q5_1.bin`), e quem a monta é
+/// (`transcricao:ggml-medium.bin`), e quem a monta é
 /// `transcricao::Modelo::chave_de_medicao`. Um modelo três vezes mais lento
 /// somado ao mesmo total faria a estimativa mentir por um fator, e é a
 /// DECISIONS #72 na forma mais direta possível: a prova não viaja junto quando
 /// o que a produziu muda.
+///
+/// **V10.5 — é este sufixo que faz a medição do modelo que SAIU ficar inerte**
+/// em vez de virar o número do modelo que ficou. Ela continua no banco, com o
+/// nome do arquivo que a produziu, e ninguém a lê.
 pub const MEDICAO_TRANSCRICAO: &str = "transcricao";
 
 /// A chave que a v0.10.0 gravava, quando havia UM modelo só.
 const MEDICAO_DE_MODELO_UNICO: &str = "transcricao";
 
 /// E o modelo que a produziu. Não é adivinhação: naquela versão o catálogo
-/// tinha um modelo, e era este. Há teste pinando o nome contra o catálogo.
+/// tinha um modelo, e era este.
+///
+/// **Ele NÃO está mais no catálogo (V10.5)**, e há teste pinando exatamente
+/// isso: apontar esta constante para um modelo em uso faria uma medição feita
+/// com outro motor governar a estimativa de tempo do atual.
 const ARQUIVO_DO_MODELO_UNICO: &str = "ggml-small-q5_1.bin";
 
 /// Acumula mais uma amostra de medição.
@@ -785,20 +803,30 @@ mod tests {
         assert_eq!(nomes, vec!["Barco", nfd, "Zebra"]);
     }
 
-    /// V10.2 — o arquivo que a reetiquetagem afirma ter produzido a medição da
-    /// v0.10.0 tem de ser um arquivo que EXISTE no catálogo. Um erro de digitação
-    /// aqui não quebraria nada visível: a linha antiga viraria uma chave que
-    /// ninguém lê, e a estimativa desta máquina voltaria ao número de fábrica em
-    /// silêncio. É o tipo de defeito que só aparece na máquina de quem não tem a
-    /// quem perguntar.
+    /// **A reetiquetagem NÃO pode apontar para um modelo que o aplicativo usa
+    /// hoje (V10.5).**
+    ///
+    /// *Mudou de propósito, e não por acidente.* Até a V10.2 este teste exigia
+    /// o contrário — que `ARQUIVO_DO_MODELO_UNICO` fosse um arquivo do
+    /// catálogo —, porque naquele momento a linha da v0.10.0 ainda VALIA como
+    /// medição do modelo pequeno. O pequeno saiu do catálogo, a linha virou
+    /// lixo inofensivo, e o defeito perigoso inverteu de lado: apontar a chave
+    /// antiga para o `ggml-medium.bin` faria uma medição feita com OUTRO motor
+    /// governar a estimativa de tempo do atual — errada por um fator ~3, para
+    /// menos, e sem ninguém a quem perguntar (DECISIONS #72, #85).
+    ///
+    /// A linha continua sendo reetiquetada, e não apagada: ela é dado que o
+    /// programa produziu, e dizer de qual arquivo ela é custa nada.
     #[test]
-    fn o_modelo_da_medicao_antiga_e_um_arquivo_do_catalogo() {
+    fn a_medicao_antiga_nao_e_atribuida_a_nenhum_modelo_em_uso() {
         assert!(
-            crate::acessorios::CATALOGO
+            !crate::acessorios::CATALOGO
                 .iter()
-                .any(|a| a.arquivo == ARQUIVO_DO_MODELO_UNICO && !a.executavel),
-            "{ARQUIVO_DO_MODELO_UNICO} não é um modelo do catálogo"
+                .any(|a| a.arquivo == ARQUIVO_DO_MODELO_UNICO),
+            "{ARQUIVO_DO_MODELO_UNICO} voltou ao catálogo: a medição da v0.10.0 \
+             passaria a valer para um modelo que não a produziu"
         );
+        assert_eq!(ARQUIVO_DO_MODELO_UNICO, "ggml-small-q5_1.bin");
         assert_eq!(MEDICAO_DE_MODELO_UNICO, MEDICAO_TRANSCRICAO);
     }
 

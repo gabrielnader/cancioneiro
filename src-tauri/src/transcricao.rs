@@ -6,9 +6,10 @@
 //! motor: lá é o `faster-whisper` (CTranslate2, Python), aqui é o
 //! `whisper-cli` do whisper.cpp com um modelo baixado como acessório.
 //!
-//! **Qual modelo é escolha do programa, não da pessoa** (V10.2): há dois no
-//! catálogo por uma rodada, e a transcrição usa o preferido que estiver pronto.
-//! Ver o bloco marcado em `MODELOS`, incluindo por quanto tempo eles são dois.
+//! **Qual modelo é escolha do programa, não da pessoa** (V10.2): a transcrição
+//! usa o preferido que estiver pronto. Desde a V10.5 há UM no catálogo — a
+//! medição no acervo real decidiu entre os dois que conviviam. Ver o bloco
+//! marcado em `MODELOS`.
 //!
 //! # A prova NÃO viaja junto com o código (DECISIONS #72)
 //!
@@ -173,17 +174,28 @@ pub const IDIOMA: &str = "pt";
 // Quanto tempo isto leva — e por que o número começa DECLARADO
 // ---------------------------------------------------------------------------
 
-/// Segundos de CPU por segundo de ÁUDIO. **Número de referência, não medido.**
+/// Segundos de CPU por segundo de ÁUDIO, para o `ggml-medium.bin`.
+/// **Número de referência, não medido.**
 ///
 /// O `tools/curadoria.py` usa 0,25 para o `small` do faster-whisper, e esse
 /// número é a proporção PUBLICADA daquele motor. Este é outro motor
-/// (whisper.cpp) com outro modelo (quantizado q5_1) e em máquinas que ninguém
-/// pode olhar: reusar 0,25 seria a DECISIONS #72 outra vez — a prova não viaja
-/// junto quando o código é reusado.
+/// (whisper.cpp) com outro modelo e em máquinas que ninguém pode olhar: reusar
+/// 0,25 seria a DECISIONS #72 outra vez — a prova não viaja junto quando o
+/// código é reusado.
 ///
-/// 1,0 ("um minuto de máquina por minuto de música") é deliberadamente
-/// conservador. Estimativa que promete MENOS do que leva é o defeito da
-/// DECISIONS #85; folga não é. E a copy tem de dizer "cerca de".
+/// **De onde saem os 3,0.** A v0.10.0 declarava 1,0 para o `small` ("um minuto
+/// de máquina por minuto de música"), e o dono do produto mediu o `medium` como
+/// ~3x mais lento que ele. É palpite em cima de palpite, e é por isso que a
+/// medição é POR MODELO: este 3,0 vale só até esta máquina transcrever 5
+/// minutos de áudio com este modelo, e some.
+///
+/// Ele NÃO é a média esperada: pela DECISIONS #85 o defeito é prometer MENOS do
+/// que leva, então este número erra para cima de propósito. E a copy tem de
+/// dizer "cerca de".
+///
+/// **V10.5 — o 1,0 do `small` SUMIU junto com o modelo.** Ele não vira o padrão
+/// de nada: uma razão declarada é a de UM motor, e a de um motor que saiu do
+/// produto não descreve mais coisa nenhuma.
 ///
 /// **Este número existe para ser substituído por medição, e agora ele é.**
 ///
@@ -191,26 +203,12 @@ pub const IDIOMA: &str = "pt";
 /// fora: nenhum consumidor no repositório inteiro (QA A1). A frase "leva cerca
 /// de 3 horas NESTE COMPUTADOR" saía de uma constante declarada, num produto
 /// cujo `whisper-cli` de macOS passou a sair sem Metal e sem Accelerate, o que
-/// a torna ainda mais otimista — e prometer menos do que leva é o defeito da
-/// DECISIONS #85.
+/// a torna ainda mais otimista.
 ///
 /// O caminho de volta é `db::somar_medicao` / `db::razao_medida`: quem manda a
 /// medição de volta é o próprio backend, ao fim de cada execução da etapa 5, e
 /// quem a lê é a varredura que monta a pergunta do fim. Nada disso atravessa o
 /// frontend — ver a DECISIONS #112.
-pub const RAZAO_DE_REFERENCIA: f64 = 1.0;
-
-/// Razão de referência do modelo GRANDE (V10.2).
-///
-/// **Declarado, e declarado em cima de outro declarado**: o dono do produto
-/// mediu o `medium` como ~3x mais lento que o `small`, e a razão do `small`
-/// ainda é a de fábrica (1,0). Multiplicar um palpite por um palpite é o pior
-/// número do produto — e é exatamente por isso que a medição passou a ser POR
-/// MODELO: este 3,0 vale só até esta máquina transcrever 5 minutos de áudio
-/// com este modelo, e some.
-///
-/// Ele NÃO é a média esperada: pela DECISIONS #85 o defeito é prometer MENOS do
-/// que leva, então este número erra para cima de propósito.
 pub const RAZAO_DE_REFERENCIA_DO_GRANDE: f64 = 3.0;
 
 /// Áudio mínimo já transcrito nesta máquina para a razão MEDIDA valer.
@@ -221,25 +219,29 @@ pub const RAZAO_DE_REFERENCIA_DO_GRANDE: f64 = 3.0;
 pub const AUDIO_MINIMO_PARA_MEDIR: f64 = 300.0;
 
 // ---------------------------------------------------------------------------
-//  ██  V10.2 — OS DOIS MODELOS, E POR QUANTO TEMPO ELES SÃO DOIS  ██
+//  ██  V10.5 — UM MODELO, PORQUE A MEDIÇÃO DECIDIU  ██
 // ---------------------------------------------------------------------------
 //
-// **Isto é TEMPORÁRIO e está declarado.** Assim que a remedição no acervo real
-// disser qual dos dois fica, um deles SAI do catálogo e esta lista volta a ter
-// uma entrada — ou deixa de existir. Não trate dois modelos como o desenho
-// final: o produto não tem tela de escolha de modelo, e não vai ter.
+// O `ggml-small-q5_1.bin` saiu do catálogo: 31% de encontrabilidade contra os
+// 48% do `ggml-medium.bin`, em 83 trechos de 3 músicas, com a letra conferida
+// OUVINDO a gravação. Os números, e as DUAS ressalvas que andam com eles,
+// estão no bloco marcado do `acessorios::CATALOGO` — leia lá antes de repetir
+// o 48% em qualquer lugar.
 //
-// POR QUE HÁ DOIS AGORA: a v0.10.0 saiu com o `small` quantizado e a
-// encontrabilidade medida no acervo real deu **37%**, contra os **78%** que o
-// faster-whisper tinha entregado. O modo de falha não é grafia — o modelo
-// classifica trecho CANTADO como música e não o transcreve, devolvendo
-// `[música]`, `[MÚSICA DE FUNDO]`, `[cantarolando]`; numa faixa, quatro
-// estrofes inteiras sumiram. Onde ele emite a marca, a letra não existe.
+// A LISTA CONTINUA EXISTINDO com um item só, e não virou uma constante. Ela é
+// o lugar onde a preferência é DECLARADA, e é ela que a guarda do catálogo
+// verifica ("todo acessório de DADO está na lista"): sem ela, o próximo modelo
+// publicado apareceria na tela — a tela lista o catálogo —, alguém baixaria
+// 1,5 GB e a transcrição nunca o usaria.
 //
-// PREFERÊNCIA, NÃO ESCOLHA: se o grande estiver pronto, é ele que roda; senão
-// o pequeno; senão a etapa não existe. Os dois aparecem na tela porque ela
-// lista o catálogo, e isso basta — caixinha de seleção é pedágio para quem não
-// sabe o que é um modelo, que é a mesma conta da DECISIONS #102.
+// PREFERÊNCIA, NÃO ESCOLHA: o primeiro da lista que estiver pronto é o que
+// roda; nenhum pronto, a etapa não existe nesta máquina. Não há caixinha de
+// seleção, e não vai haver — escolha é pedágio para quem não sabe o que é um
+// modelo (DECISIONS #102).
+//
+// E A ORDEM É DECLARADA, não deduzida do tamanho do arquivo: um modelo melhor
+// e MENOR amanhã (destilado, podado) entra na frente sem esta lista precisar
+// de exceção, e ordenar por bytes o poria no fim.
 
 /// Um modelo da etapa 5 — o arquivo que o `whisper-cli` lê para entender o que
 /// é cantado.
@@ -253,36 +255,31 @@ pub struct Modelo {
     pub razao_de_referencia: f64,
 }
 
-/// O modelo GRANDE (`ggml-medium.bin`) — entende melhor e é bem mais lento.
+/// O modelo da etapa 5 (`ggml-medium.bin`) — o que sobrou da medição.
+///
+/// O identificador continua dizendo GRANDE, como o nome do acessório: ele é o
+/// grande dos dois que existiram, e trocar o nome não mudaria nada além de
+/// apagar de onde ele veio.
 pub static MODELO_GRANDE: Modelo = Modelo {
     nome: crate::acessorios::MODELO_WHISPER_GRANDE,
     razao_de_referencia: RAZAO_DE_REFERENCIA_DO_GRANDE,
 };
 
-/// O modelo PEQUENO (`ggml-small-q5_1.bin`) — o da v0.10.0, rápido e o que o
-/// funil oferece para baixar.
-pub static MODELO_PEQUENO: Modelo = Modelo {
-    nome: crate::acessorios::MODELO_WHISPER,
-    razao_de_referencia: RAZAO_DE_REFERENCIA,
-};
-
 /// Os modelos da etapa 5, na ORDEM DE PREFERÊNCIA — o que entende melhor
-/// primeiro.
-///
-/// A ordem é DECLARADA, e não deduzida do tamanho do arquivo. Hoje o preferido
-/// é também o maior, mas "maior" é proxy: um modelo melhor e menor amanhã
-/// (destilado, podado) entraria na frente sem esta lista precisar de exceção,
-/// e ordenar por bytes o poria no fim.
-pub const MODELOS: &[&Modelo] = &[&MODELO_GRANDE, &MODELO_PEQUENO];
+/// primeiro. Hoje é UM; ver o bloco marcado acima para por que a lista
+/// continua sendo uma lista.
+pub const MODELOS: &[&Modelo] = &[&MODELO_GRANDE];
 
 /// O modelo que o funil OFERECE para baixar, e cuja estimativa a tela mostra
 /// enquanto não há nenhum no cache: o último da ordem de preferência.
 ///
-/// É o mais barato de baixar — 180 MB contra 1,5 GB —, e é o que a pergunta do
-/// fim propõe a quem ainda não tem a etapa 5. Estimar com o outro seria
-/// anunciar o tempo de um download que ninguém vai fazer.
+/// Com um modelo só ele é o MESMO que o preferido, e a função continua
+/// existindo porque as duas perguntas são diferentes — "qual eu ofereço a quem
+/// não tem nada?" e "qual eu rodo?" — e voltarão a ter respostas diferentes no
+/// dia em que houver dois de novo. Enquanto forem a mesma, há teste dizendo
+/// isso em voz alta.
 pub fn modelo_oferecido() -> &'static Modelo {
-    &MODELO_PEQUENO
+    MODELOS[MODELOS.len() - 1]
 }
 
 impl Modelo {
@@ -2548,7 +2545,7 @@ mod tests {
     const SEM_PROGRESSO: &dyn Fn(u8) = &|_| {};
 
     // -----------------------------------------------------------------------
-    // V10.2 — a PREFERÊNCIA entre os modelos, e a medição POR MODELO
+    // V10.5 — a lista de UM modelo, e a medição POR MODELO que continua
     // -----------------------------------------------------------------------
 
     /// A lista de modelos é ordem de PREFERÊNCIA, e ela cobre o catálogo.
@@ -2559,6 +2556,12 @@ mod tests {
     /// preferência não sabe que ele existe. Hoje "dado" e "modelo" coincidem;
     /// quando deixarem de coincidir, é nesta linha que alguém vai ter de dizer
     /// qual é qual.
+    ///
+    /// **V10.5 — a lista tem UM item, e a guarda continua valendo dos dois
+    /// lados**: nada no catálogo fora da lista, e nada na lista fora do
+    /// catálogo. É justamente com uma entrada só que ela ganha valor: o
+    /// próximo modelo publicado entra no catálogo (a tela lista o catálogo) e
+    /// pode facilmente não entrar aqui.
     #[test]
     fn a_ordem_dos_modelos_e_de_preferencia_e_cobre_o_catalogo() {
         assert!(!MODELOS.is_empty());
@@ -2586,77 +2589,84 @@ mod tests {
                 a.arquivo
             );
         }
-    }
-
-    /// **O maior primeiro, e o pequeno é o que se oferece.** A preferência é
-    /// por QUALIDADE, e o `medium` só entrou porque a do `small` reprovou no
-    /// acervo real (37% contra 78%).
-    #[test]
-    fn o_preferido_e_o_grande_e_o_oferecido_e_o_pequeno() {
-        assert_eq!(MODELOS[0].nome, crate::acessorios::MODELO_WHISPER_GRANDE);
-        assert_eq!(modelo_oferecido().nome, crate::acessorios::MODELO_WHISPER);
-        let tamanho = |m: &Modelo| {
+        // e o contrário: nada aqui que o catálogo não ofereça — uma entrada
+        // órfã seria um modelo que a transcrição prefere e que ninguém pode
+        // baixar
+        assert_eq!(
+            MODELOS.len(),
             crate::acessorios::CATALOGO
                 .iter()
-                .find(|a| a.nome == m.nome)
-                .map_or(0, |a| a.tamanho_bytes)
-        };
-        assert!(
-            tamanho(MODELOS[0]) > tamanho(modelo_oferecido()),
-            "hoje o preferido é também o maior — mas quem manda é a ordem \
-             DECLARADA, não o tamanho do arquivo"
+                .filter(|a| !a.executavel)
+                .count(),
+            "a lista e o catálogo têm de descrever os MESMOS modelos"
         );
     }
 
-    /// **A razão declarada é POR MODELO, e a do grande é maior.** Um número de
-    /// fábrica só do `small` faria a tela prometer 3 horas para um trabalho de
-    /// 9 na máquina que baixou o `medium` — é a DECISIONS #85 (prometer menos
-    /// do que leva) por uma porta nova.
+    /// **Sobrou UM modelo, e é o `ggml-medium.bin` (V10.5).**
+    ///
+    /// *Mudou de propósito, e não por acidente.* Este teste pinava a
+    /// PREFERÊNCIA entre dois modelos ("o maior primeiro, o pequeno é o que se
+    /// oferece"), que era o desenho temporário da V10.2. A medição no acervo
+    /// real acabou com a convivência — 48% do grande contra 31% do pequeno em
+    /// 83 trechos —, e o que ele pina agora é o desfecho dela: o catálogo, a
+    /// preferência e a oferta apontam todos para o mesmo arquivo. Uma tela que
+    /// oferecesse um modelo e uma transcrição que rodasse outro é exatamente o
+    /// defeito que a lista de preferência existe para impedir.
     #[test]
-    fn a_razao_declarada_do_grande_e_maior_que_a_do_pequeno() {
-        let pequeno = MODELOS
-            .iter()
-            .find(|m| m.nome == crate::acessorios::MODELO_WHISPER)
-            .unwrap();
-        let grande = MODELOS
-            .iter()
-            .find(|m| m.nome == crate::acessorios::MODELO_WHISPER_GRANDE)
-            .unwrap();
-        assert_eq!(pequeno.razao_de_referencia, RAZAO_DE_REFERENCIA);
+    fn o_unico_modelo_e_o_grande_e_e_ele_que_se_oferece() {
+        assert_eq!(MODELOS.len(), 1, "a convivência dos dois acabou");
+        assert_eq!(MODELOS[0].nome, crate::acessorios::MODELO_WHISPER_GRANDE);
+        assert_eq!(modelo_oferecido().nome, MODELOS[0].nome);
+        assert_eq!(modelo_oferecido().arquivo(), "ggml-medium.bin");
+    }
+
+    /// **A razão declarada que sobrou é a DO MOTOR QUE SOBROU.**
+    ///
+    /// *Mudou de propósito, e não por acidente.* Ele comparava as razões dos
+    /// dois modelos (o grande é ~3x mais lento). Com um modelo só não há
+    /// comparação a fazer — e o defeito que resta é o oposto e mais silencioso:
+    /// alguém "limpa" a constante do grande de volta para 1,0, que era a do
+    /// pequeno, e a tela passa a prometer 3 horas para um trabalho de 9
+    /// (DECISIONS #85, para menos).
+    #[test]
+    fn a_razao_declarada_e_a_do_modelo_que_ficou() {
+        let modelo = MODELOS[0];
+        assert_eq!(modelo.razao_de_referencia, RAZAO_DE_REFERENCIA_DO_GRANDE);
         assert!(
-            grande.razao_de_referencia >= pequeno.razao_de_referencia * 3.0,
-            "o `medium` é ~3x mais lento, e arredondar para BAIXO é o defeito"
+            modelo.razao_de_referencia >= 3.0,
+            "1,0 era a razão do `small`, que saiu do produto; o `medium` é ~3x \
+             mais lento que ele, e arredondar para BAIXO é o defeito"
         );
     }
 
-    /// **Com os dois prontos, roda o GRANDE.** É preferência, não escolha:
-    /// não há caixinha de seleção, porque escolha é pedágio para quem não sabe
-    /// o que é um modelo (DECISIONS #102).
+    /// **Com o modelo pronto, é ele que roda.** Continua sendo preferência, e
+    /// não escolha: não há caixinha de seleção, porque escolha é pedágio para
+    /// quem não sabe o que é um modelo (DECISIONS #102).
     #[test]
-    fn com_os_dois_prontos_a_transcricao_usa_o_grande() {
+    fn com_o_modelo_pronto_a_transcricao_usa_ele() {
         use crate::acessorios::Estado;
         let escolhido = modelo_pronto(|_| Estado::Pronto).expect("há modelo pronto");
         assert_eq!(escolhido.nome, crate::acessorios::MODELO_WHISPER_GRANDE);
     }
 
-    /// **O grande CORROMPIDO cai para o pequeno, em vez de falhar.** O arquivo
-    /// truncado por um desligamento no meio de 1,5 GB não pode desligar a etapa
-    /// 5 numa máquina que tem o outro modelo pronto e sem ninguém a quem
-    /// perguntar. `Corrompido` e `Ausente` valem o mesmo aqui: os dois querem
-    /// dizer "não dá para usar este".
+    /// **O modelo inutilizável desliga a etapa 5, e é isso que tem de
+    /// acontecer.**
+    ///
+    /// *Mudou de propósito, e não por acidente.* Ele fixava a QUEDA do grande
+    /// corrompido para o pequeno — a rede de proteção que os dois modelos no
+    /// catálogo compravam. Sem o segundo modelo não há para onde cair, e o
+    /// desenho tem de dizer isso em vez de disfarçar: `None` é a etapa não
+    /// existir nesta máquina, que é o que a tela mostra e o que o botão "baixar
+    /// de novo" conserta. Um arquivo de 1,5 GB truncado NÃO pode virar um
+    /// transcritor que roda com dado quebrado.
     #[test]
-    fn modelo_grande_indisponivel_cai_para_o_pequeno() {
+    fn modelo_inutilizavel_desliga_a_etapa_em_vez_de_rodar_quebrado() {
         use crate::acessorios::Estado;
         for ruim in [Estado::Corrompido, Estado::Ausente, Estado::Indisponivel] {
-            let escolhido = modelo_pronto(|m| {
-                if m.nome == crate::acessorios::MODELO_WHISPER_GRANDE {
-                    ruim
-                } else {
-                    Estado::Pronto
-                }
-            })
-            .unwrap_or_else(|| panic!("{ruim:?} no grande não pode desligar a etapa"));
-            assert_eq!(escolhido.nome, crate::acessorios::MODELO_WHISPER);
+            assert!(
+                modelo_pronto(|_| ruim).is_none(),
+                "{ruim:?} não pode virar transcritor"
+            );
         }
     }
 
@@ -2676,7 +2686,6 @@ mod tests {
     fn arquivo_errado_no_cache_nao_vira_transcritor() {
         let cache = tempfile::tempdir().unwrap();
         for nome in [
-            crate::acessorios::MODELO_WHISPER,
             crate::acessorios::MODELO_WHISPER_GRANDE,
             crate::acessorios::WHISPER_CLI,
         ] {
@@ -2716,53 +2725,72 @@ mod tests {
         }
     }
 
-    /// **A medição de um modelo não manda na estimativa do outro.** É o item
-    /// que justifica a chave por modelo: o `medium` é ~3x mais lento, e uma
-    /// medição feita com o `small` passaria a subestimar por um fator.
+    /// **A medição do modelo que SAIU não manda na estimativa do que ficou.**
+    ///
+    /// *Mudou de propósito, e não por acidente.* Ele provava que a medição de
+    /// um dos dois modelos não vazava para o outro. Agora prova a consequência
+    /// disso na máquina de quem já usou a v0.10.x: a linha do
+    /// `ggml-small-q5_1.bin` continua no banco, e ela é **lixo inofensivo** —
+    /// ninguém a lê, e ela não desloca nada.
+    ///
+    /// **Por que ela não é apagada nem reetiquetada.** Reetiquetá-la para o
+    /// `ggml-medium.bin` seria afirmar que uma medição feita com um motor vale
+    /// para outro, que é exatamente o erro do PRD V10 (DECISIONS #72) — e um
+    /// erro de fator ~3, para MENOS, na única frase que diz quanto tempo o
+    /// trabalho leva. Apagá-la seria o programa mexendo em dado que já existe
+    /// para arrumar uma casa que ninguém vê.
     #[test]
-    fn a_medicao_de_um_modelo_nao_vaza_para_o_outro() {
+    fn a_medicao_do_modelo_que_saiu_nao_move_a_estimativa_do_que_ficou() {
         let conn = crate::db::open_in_memory().unwrap();
-        let pequeno = modelo_oferecido();
-        let grande = MODELOS[0];
-        // 600 s de áudio em 300 s de relógio com o PEQUENO: razão 0,5
-        crate::db::somar_medicao(&conn, &pequeno.chave_de_medicao(), 600.0, 300.0).unwrap();
+        let modelo = MODELOS[0];
+        // como a v0.10.x deixou: 600 s de áudio em 300 s de relógio com o
+        // `small`, sob a chave DELE
+        let chave_do_pequeno = format!("{}:ggml-small-q5_1.bin", crate::db::MEDICAO_TRANSCRICAO);
+        crate::db::somar_medicao(&conn, &chave_do_pequeno, 600.0, 300.0).unwrap();
 
-        assert_eq!(razao_desta_maquina(&conn, pequeno), 0.5);
-        assert_eq!(razao_medida_desta_maquina(&conn, pequeno), Some(0.5));
         assert_eq!(
-            razao_desta_maquina(&conn, grande),
-            grande.razao_de_referencia,
-            "o grande continua na razão DECLARADA — ninguém o mediu"
+            razao_desta_maquina(&conn, modelo),
+            modelo.razao_de_referencia,
+            "o modelo que ficou continua na razão DECLARADA — ninguém o mediu"
         );
-        assert_eq!(razao_medida_desta_maquina(&conn, grande), None);
+        assert_eq!(razao_medida_desta_maquina(&conn, modelo), None);
+        // e a linha antiga continua ali, intacta: ninguém a apagou
+        assert_eq!(
+            crate::db::razao_medida(&conn, &chave_do_pequeno, AUDIO_MINIMO_PARA_MEDIR).unwrap(),
+            Some(0.5)
+        );
     }
 
     /// **"Medido" é um FATO, não uma comparação de floats.** A v0.10.0 decidia
     /// se a estimativa era medição comparando o número com a constante de
-    /// referência: numa máquina que medisse exatamente 1,0 a tela mentiria
-    /// dizendo "de fábrica" — e com dois modelos há duas constantes, então a
-    /// comparação também escolheria a errada.
+    /// referência: numa máquina que medisse exatamente a razão declarada, a
+    /// tela mentiria dizendo "de fábrica".
     #[test]
     fn medido_e_um_fato_e_nao_a_comparacao_com_a_constante() {
         let conn = crate::db::open_in_memory().unwrap();
         let m = modelo_oferecido();
-        // exatamente a razão de referência, medida de verdade
-        crate::db::somar_medicao(&conn, &m.chave_de_medicao(), 600.0, 600.0).unwrap();
-        assert_eq!(razao_desta_maquina(&conn, m), RAZAO_DE_REFERENCIA);
+        // exatamente a razão de referência (3,0), medida de verdade
+        crate::db::somar_medicao(&conn, &m.chave_de_medicao(), 600.0, 1800.0).unwrap();
+        assert_eq!(razao_desta_maquina(&conn, m), RAZAO_DE_REFERENCIA_DO_GRANDE);
         assert_eq!(
             razao_medida_desta_maquina(&conn, m),
-            Some(RAZAO_DE_REFERENCIA),
+            Some(RAZAO_DE_REFERENCIA_DO_GRANDE),
             "o número empata com a constante, mas ele é MEDIDO"
         );
     }
 
-    /// **A medição da v0.10.0 não é perdida — ela era do PEQUENO.** Naquela
-    /// versão havia UM modelo só, então a linha `transcricao` do banco diz,
-    /// sem adivinhação, quanto o `ggml-small-q5_1.bin` levou nesta máquina.
-    /// Descartá-la devolveria a estimativa ao número de fábrica sem motivo, e
-    /// "nunca apagar dado existente" vale para dado que o programa produziu.
+    /// **A medição da v0.10.0 continua dizendo de QUAL modelo ela é — e por
+    /// isso ela não é lida como sendo do modelo que ficou (V10.5).**
+    ///
+    /// *Mudou de propósito, e não por acidente.* Ele fixava que a linha da
+    /// v0.10.0 seguia VALENDO, como medição do pequeno. Com o pequeno fora do
+    /// catálogo ela não vale mais para estimativa nenhuma — e o que este teste
+    /// protege agora é o outro lado: que ela não seja aproveitada para o
+    /// `ggml-medium.bin`. A reetiquetagem continua rodando porque ela é o que
+    /// torna a linha IDENTIFICÁVEL; sem ela sobraria uma chave `transcricao`
+    /// nua, que é a próxima candidata a ser "aproveitada" por engano.
     #[test]
-    fn a_medicao_de_modelo_unico_da_v0_10_0_vira_a_do_pequeno() {
+    fn a_medicao_de_modelo_unico_da_v0_10_0_nao_e_lida_como_do_modelo_atual() {
         let arquivo = tempfile::NamedTempFile::new().unwrap();
         {
             let conn = crate::db::open_at(arquivo.path()).unwrap();
@@ -2777,14 +2805,16 @@ mod tests {
         // a abertura seguinte (a atualização do aplicativo) reetiqueta a linha
         let conn = crate::db::open_at(arquivo.path()).unwrap();
         assert_eq!(
-            razao_medida_desta_maquina(&conn, modelo_oferecido()),
-            Some(1.5),
-            "a medição antiga continua valendo, agora dizendo de QUAL modelo é"
-        );
-        assert_eq!(
             razao_medida_desta_maquina(&conn, MODELOS[0]),
             None,
-            "e ela NÃO é lida como se fosse do modelo grande"
+            "a medição do motor que saiu NÃO é lida como se fosse do que ficou"
+        );
+        // ela continua no banco, com o nome do arquivo que a produziu
+        let chave_do_pequeno = format!("{}:ggml-small-q5_1.bin", crate::db::MEDICAO_TRANSCRICAO);
+        assert_eq!(
+            crate::db::razao_medida(&conn, &chave_do_pequeno, AUDIO_MINIMO_PARA_MEDIR).unwrap(),
+            Some(1.5),
+            "1,5 s de relógio por segundo de áudio, como o `small` mediu aqui"
         );
     }
 

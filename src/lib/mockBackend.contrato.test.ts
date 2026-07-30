@@ -840,7 +840,7 @@ describe("contrato mock × Rust — a etapa 5 ecoa o nome (QA A2)", () => {
   async function comEtiquetaDeRipador(artista: string | null) {
     // a etapa 5 só existe com os dois acessórios prontos
     backend._estadoDoAcessorio("whisper-cli", "pronto");
-    backend._estadoDoAcessorio("modelo-de-transcricao", "pronto");
+    backend._estadoDoAcessorio("modelo-de-transcricao-grande", "pronto");
     await backend.addFolder("/musicas/teste");
     const songs = await backend.listSongs();
     const song = songs.find((s) => s.file_path === "/musicas/teste/sem_letra.mp3")!;
@@ -896,7 +896,7 @@ describe("contrato mock × Rust — a etapa 5 ecoa o nome (QA A2)", () => {
   */
   it("título vazio no banco cai no palpite, e não em string vazia", async () => {
     backend._estadoDoAcessorio("whisper-cli", "pronto");
-    backend._estadoDoAcessorio("modelo-de-transcricao", "pronto");
+    backend._estadoDoAcessorio("modelo-de-transcricao-grande", "pronto");
     await backend.addFolder("/musicas/teste");
     const songs = await backend.listSongs();
     const song = songs.find((s) => s.file_path === "/musicas/teste/sem_letra.mp3")!;

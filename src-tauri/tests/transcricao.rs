@@ -61,7 +61,7 @@ fn script(dir: &Path, corpo: &str) -> PathBuf {
 
 #[cfg(unix)]
 fn modelo_falso(dir: &Path) -> PathBuf {
-    let caminho = dir.join("ggml-small-q5_1.bin");
+    let caminho = dir.join("ggml-medium.bin");
     std::fs::write(&caminho, b"modelo de mentira").unwrap();
     caminho
 }

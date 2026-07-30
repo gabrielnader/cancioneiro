@@ -1364,7 +1364,7 @@ describe("mockBackend", () => {
       backend._estadoDoAcessorio("whisper-cli", "pronto");
       expect((await backend.enrichCount("")).transcricao_disponivel).toBe(false);
 
-      backend._estadoDoAcessorio("modelo-de-transcricao", "pronto");
+      backend._estadoDoAcessorio("modelo-de-transcricao-grande", "pronto");
       expect((await backend.enrichCount("")).transcricao_disponivel).toBe(true);
     });
 
@@ -2095,36 +2095,36 @@ describe("mockBackend", () => {
   // -------------------------------------------------------------------------
 
   describe("os acessórios da etapa 5 (V10)", () => {
-    it("o catálogo tem o transcritor e OS DOIS modelos, além do som", async () => {
+    it("o catálogo tem o transcritor e UM modelo, além do som", async () => {
       const nomes = (await backend.acessoriosEstado()).map((a) => a.nome);
-      // Dois modelos por UMA rodada (V10.2): a medição no acervo real
-      // reprovou o pequeno — 37% de encontrabilidade contra os 78% do motor
-      // anterior —, e o grande está aqui para ser comparado. Quando o acervo
-      // decidir, um dos dois sai e esta lista volta a ter três nomes.
+      // V10.5 — a convivência dos dois modelos durou uma rodada. A medição no
+      // acervo real (83 trechos, 3 músicas, letra conferida ouvindo) deu 48%
+      // para o grande contra 31% do pequeno, e o pequeno saiu. Catálogo do
+      // mock MAIOR que o do Rust é a mesma família das divergências da #88, ao
+      // contrário: a tela desenharia um cartão que o app real não tem.
       expect(nomes).toEqual([
         "fpcalc",
         "whisper-cli",
-        "modelo-de-transcricao",
         "modelo-de-transcricao-grande",
       ]);
     });
 
-    it("os dois modelos são DADO, e o grande se explica sozinho", async () => {
+    /**
+     * *Mudou de propósito, e não por acidente (V10.5).* Ele conferia que os
+     * DOIS modelos eram dado e que o grande respondia "qual roda?" — a
+     * pergunta de quem vê dois cartões parecidos. Com um cartão só essa
+     * pergunta não existe; a que sobra é "o que eu perco se não baixar?".
+     */
+    it("o modelo é DADO, e a frase dele diz o que falta sem ele", async () => {
       const catalogo = await backend.acessoriosEstado();
       const modelos = catalogo.filter((a) => a.nome.startsWith("modelo-"));
-      expect(modelos).toHaveLength(2);
-      for (const m of modelos) {
-        expect(m.executavel).toBe(false);
-      }
-      // quem vê dois cartões parecidos pergunta uma coisa só: qual roda?
-      const grande = modelos.find((m) => m.nome.endsWith("-grande"))!;
-      expect(grande.para_que_serve).toContain("usa este quando ele está aqui");
-      expect(grande.tamanho_bytes).toBeGreaterThan(
-        modelos.find((m) => !m.nome.endsWith("-grande"))!.tamanho_bytes,
-      );
+      expect(modelos).toHaveLength(1);
+      expect(modelos[0].executavel).toBe(false);
+      expect(modelos[0].para_que_serve).toContain("sem ele");
+      expect(modelos[0].para_que_serve).not.toContain("usa este");
     });
 
-    // "um programa de 2 MB e um arquivo de 181 MB" é outra conversa que
+    // "um programa de 2 MB e um arquivo de 1,4 GB" é outra conversa que
     // "dois programas": o modelo é DADO, e ninguém o executa.
     it("o modelo é dado, não programa — e é o grande", async () => {
       const [, whisper, modelo] = await backend.acessoriosEstado();
@@ -2160,8 +2160,8 @@ describe("mockBackend", () => {
     });
 
     it("baixar o modelo instala o modelo, e não o transcritor", async () => {
-      const desfecho = await backend.acessorioBaixar("modelo-de-transcricao", "dl-1");
-      expect(desfecho.acessorio.nome).toBe("modelo-de-transcricao");
+      const desfecho = await backend.acessorioBaixar("modelo-de-transcricao-grande", "dl-1");
+      expect(desfecho.acessorio.nome).toBe("modelo-de-transcricao-grande");
       expect(desfecho.acessorio.estado).toBe("pronto");
       const lista = await backend.acessoriosEstado();
       expect(lista.find((a) => a.nome === "whisper-cli")!.estado).toBe("ausente");
@@ -2172,7 +2172,7 @@ describe("mockBackend", () => {
     it("o progresso traz os segundos que faltam, e não os inventa no começo", async () => {
       const restantes: Array<number | null> = [];
       await backend.onAcessorioProgresso((p) => restantes.push(p.segundos_restantes));
-      await backend.acessorioBaixar("modelo-de-transcricao", "dl-1");
+      await backend.acessorioBaixar("modelo-de-transcricao-grande", "dl-1");
       expect(restantes[0]).toBeNull();
       expect(restantes.some((r) => typeof r === "number")).toBe(true);
     });
@@ -2183,7 +2183,7 @@ describe("mockBackend", () => {
     async function pronta(): Promise<Song> {
       await backend.addFolder("/musicas/teste");
       backend._estadoDoAcessorio("whisper-cli", "pronto");
-      backend._estadoDoAcessorio("modelo-de-transcricao", "pronto");
+      backend._estadoDoAcessorio("modelo-de-transcricao-grande", "pronto");
       const songs = await backend.listSongs();
       return songs.find((s) => s.title === "Instrumental Sem Letra")!;
     }
@@ -2233,7 +2233,7 @@ describe("mockBackend", () => {
     it("não transcreve quem já tem letra nem quem já é instrumental", async () => {
       await backend.addFolder("/musicas/teste");
       backend._estadoDoAcessorio("whisper-cli", "pronto");
-      backend._estadoDoAcessorio("modelo-de-transcricao", "pronto");
+      backend._estadoDoAcessorio("modelo-de-transcricao-grande", "pronto");
       const songs = await backend.listSongs();
       const comLetra = songs.find((s) => s.title === "Coração Sertanejo")!;
       const semTags = songs.find((s) => s.title === "sem_tags")!;
@@ -2275,7 +2275,7 @@ describe("mockBackend", () => {
     it("segundos_restantes só existe depois da primeira música terminar", async () => {
       await backend.addFolder("/musicas/teste");
       backend._estadoDoAcessorio("whisper-cli", "pronto");
-      backend._estadoDoAcessorio("modelo-de-transcricao", "pronto");
+      backend._estadoDoAcessorio("modelo-de-transcricao-grande", "pronto");
       const songs = await backend.listSongs();
       const restantes: Array<number | null> = [];
       await backend.onTranscricaoProgresso((p) => restantes.push(p.segundos_restantes));
@@ -2289,7 +2289,7 @@ describe("mockBackend", () => {
     it("enrichCancelScan para a fila", async () => {
       await backend.addFolder("/musicas/teste");
       backend._estadoDoAcessorio("whisper-cli", "pronto");
-      backend._estadoDoAcessorio("modelo-de-transcricao", "pronto");
+      backend._estadoDoAcessorio("modelo-de-transcricao-grande", "pronto");
       backend._enrichDelayMs = 1;
       const songs = await backend.listSongs();
       const pendente = backend.transcreverMusicas(

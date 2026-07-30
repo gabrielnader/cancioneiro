@@ -1230,6 +1230,24 @@ describe("formatarTamanho — o 'quanto ocupa' que a pessoa lê antes de decidir
     expect(formatarTamanho(65_536)).toBe("64 kB");
     expect(formatarTamanho(0)).toBe("0 kB");
   });
+
+  /**
+   * V10.5 — com o modelo pequeno fora do catálogo, o único arquivo de dado tem
+   * 1,5 bilhão de bytes, e "1462,7 MB" é um número que ninguém lê como
+   * tamanho: quatro dígitos antes da vírgula deixam de dizer se é muito ou
+   * pouco. A régua da #100 é a frase ser legível na hora de decidir.
+   */
+  it("quatro dígitos viram GB, com a mesma casa decimal", () => {
+    // o modelo da etapa 5, e o modelo + o programa da pergunta do fim
+    expect(formatarTamanho(1_533_763_059)).toBe("1,4 GB");
+    expect(formatarTamanho(1_533_763_059 + 1_635_784)).toBe("1,4 GB");
+    // a troca acontece ANTES do quarto dígito, e o GB é binário como o MB e o
+    // kB daqui: duas bases no mesmo formatador dariam dois tamanhos para o
+    // mesmo arquivo
+    expect(formatarTamanho(999 * 1024 * 1024)).toBe("999,0 MB");
+    expect(formatarTamanho(1000 * 1024 * 1024)).toBe("1,0 GB");
+    expect(formatarTamanho(1024 * 1024 * 1024)).toBe("1,0 GB");
+  });
 });
 
 describe("estadoDoAcessorio — a leitura do que o backend devolveu", () => {
@@ -1255,7 +1273,12 @@ describe("estadoDoAcessorio — a leitura do que o backend devolveu", () => {
 
   it("cada estado passa direto", () => {
     for (const e of ["pronto", "ausente", "corrompido", "indisponivel"]) {
-      expect(estadoDoAcessorio(lista("modelo-de-transcricao", e), "modelo-de-transcricao")).toBe(e);
+      expect(
+        estadoDoAcessorio(
+          lista("modelo-de-transcricao-grande", e),
+          "modelo-de-transcricao-grande",
+        ),
+      ).toBe(e);
     }
   });
 
@@ -1439,8 +1462,11 @@ describe("downloadParaTranscrever — o que falta para a etapa 5 existir", () =>
     segundos_estimados: 2,
     estado: "ausente",
   });
+  // V10.5 — o nome é o do modelo que ficou. Um acessório da etapa 5 que a
+  // lista `ACESSORIOS_DA_TRANSCRICAO` não reconhece some da conta: a pergunta
+  // do fim ofereceria 2 MB para um download de 1,4 GB.
   const modelo = acessorio({
-    nome: "modelo-de-transcricao",
+    nome: "modelo-de-transcricao-grande",
     para_que_serve: "entender o que é cantado",
     tamanho_bytes: 181_000_000,
     segundos_estimados: 181,

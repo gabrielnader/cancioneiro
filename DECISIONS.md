@@ -1266,3 +1266,149 @@ opção mais simples que passa nos Acceptance Checks do PRD.
     hora", e a faixa de 60 a 89 s era inalcançável com a banda antiga — com a
     nova, os 190 MB do modelo pequeno caem exatamente ali, e a tela diria
     "cerca de 1 minutos".
+
+## V10.5 — a medição decidiu, e o modelo pequeno saiu
+
+129. **O `ggml-medium.bin` ficou; o `ggml-small-q5_1.bin` saiu do catálogo. A
+    convivência dos dois durou uma rodada, que é o que a #122 declarou.**
+    Medido no acervo real, com a letra conferida **ouvindo a gravação** — e não
+    a letra publicada na internet —, em **83 trechos** do tipo que uma pessoa
+    lembraria, de **3 músicas**:
+
+    | música | trechos | pequeno | grande |
+    |---|---|---|---|
+    | Cadê o Gato | 26 | 30% | **53%** |
+    | Girias do Norte | 17 | 29% | **52%** |
+    | Último dos Moicanos | 40 | 32% | **42%** |
+    | **total** | **83** | **31%** | **48%** |
+
+    O grande recuperou 17 trechos e perdeu 3. E o que mais importa, porque é o
+    modo de falha que a #122 descreveu: **as marcas `[música]`,
+    `[MÚSICA DE FUNDO]` e `[cantarolando]` desapareceram**. Elas eram o modelo
+    desistindo de transcrever trecho cantado, e eram a causa de estrofes
+    inteiras sumirem.
+    **Duas ressalvas andam com o número, e sem elas ele engana.**
+    **(a) A amostra é o material mais DIFÍCIL do acervo.** Saiu, sem querer,
+    uma pasta de humor: narrativa falada-cantada, dialeto regional e uma música
+    construída sobre palavras inventadas ("alavantuí, chã-de-dama anarrariê").
+    É razoável *esperar* mais que 48% no repertório cantado comum — mas isso é
+    **expectativa, não medição**, e não se afirma como medida. Quem quiser o
+    número do repertório comum roda o `tests/remedicao.rs` sobre ele.
+    **(b) O problema estrutural diminuiu, NÃO acabou.** Das quatro estrofes que
+    o pequeno engoliu no "Último dos Moicanos", **só uma voltou**. Continuam
+    fora "Tinha jurado à minha mãe", "Comprei um sítio", "A tal viúva do
+    bandido" e "Voltei à vila". A transcrição ainda perde pedaços de áudio
+    cantado, e isso está escrito nos três lugares onde alguém vai ler: o bloco
+    do `acessorios::CATALOGO`, o de `transcricao::MODELOS` e o cabeçalho do
+    `tests/remedicao.rs`.
+    **A lista de preferência continua sendo uma lista, com um item.** Ela não
+    virou constante porque é ali que a guarda mora: *todo acessório de DADO do
+    catálogo está na ordem de preferência* — e agora também o contrário, *nada
+    na lista fora do catálogo*. Com uma entrada só a guarda vale mais, não
+    menos: o próximo modelo publicado entra no catálogo (a tela lista o
+    catálogo), alguém baixa 1,5 GB, e sem a lista a transcrição nunca o usa.
+    **Três testes mudaram de PROPÓSITO, e cada um diz isso no próprio
+    comentário** — a preferência entre dois modelos, a comparação das duas
+    razões declaradas, e a queda do grande corrompido para o pequeno. O último
+    é o que mais muda: **sem segundo modelo não há para onde cair**, e o
+    desenho passa a dizer isso em vez de disfarçar — modelo inutilizável
+    desliga a etapa 5 (`None`), que é o que a tela mostra e o que o botão
+    "baixar de novo" conserta. Um arquivo de 1,5 GB truncado não pode virar um
+    transcritor rodando com dado quebrado.
+    **A razão declarada de 1,0 sumiu junto com o modelo.** Ela era a do
+    `small`; uma razão declarada é a de UM motor, e a de um motor que saiu do
+    produto não descreve mais coisa nenhuma. Ficou só o 3,0 do `medium`, que é
+    palpite sobre palpite e existe para ser substituído pela medição desta
+    máquina.
+130. **Os 190 MB órfãos no cache de quem já baixou o modelo pequeno ficam onde
+    estão. O aplicativo não apaga arquivo por conta própria — nem dentro da
+    própria pasta de cache.**
+    A alternativa era varrer a pasta e remover o que o catálogo não conhece
+    mais. Ela foi recusada por três motivos que se somam, e nenhum deles é
+    "dá trabalho".
+    **(a) O ganho é espaço, e só espaço.** O arquivo órfão não é lido por
+    ninguém: o `acessorios::estado` só pergunta pelo que está no catálogo, e o
+    `transcricao::MODELOS` só conhece o `ggml-medium.bin`. Ele não deixa a
+    etapa 5 mais lenta, não confunde a tela e não pode ser executado (é dado,
+    e nunca recebeu o bit de execução). São 190 MB parados num disco que
+    acabou de receber 1,5 GB de bom grado.
+    **(b) O custo do erro é assimétrico e irreversível.** Uma varredura que
+    apaga "o que o catálogo não conhece" é um código que decide sozinho
+    destruir arquivo na máquina de alguém, sem suporte para socorrer quem for
+    atingido por um caso que não previmos — pasta de cache compartilhada,
+    caminho reaproveitado, symlink, um download em curso de uma versão antiga
+    do aplicativo rodando ao lado. O produto inteiro é construído sobre "nada
+    é apagado, nada é sobrescrito sem dizer" (#71, #79, CRÍTICO-1). Abrir a
+    exceção "menos na nossa pasta" é abrir a exceção.
+    **(c) Faz o produto tomar uma iniciativa que ninguém pediu.** Quem quiser
+    os 190 MB de volta apaga o arquivo — o dono do produto ensina cada pessoa
+    pessoalmente, e "pode apagar o arquivo antigo da pasta X" é uma frase que
+    ele pode dizer. O que ele não pode é desfazer uma remoção automática.
+    **O que se fez em vez disso**: o bloco do `CATALOGO` registra que o arquivo
+    órfão existe e que o aplicativo não mexe nele, para o próximo a ler o
+    código não achar que foi esquecimento.
+131. **A medição de tempo do modelo pequeno também fica — e nem é apagada nem
+    reetiquetada.** A linha `transcricao:ggml-small-q5_1.bin` de
+    `medicoes_da_maquina` vira lixo inofensivo: ninguém a lê, porque a chave
+    carrega o ARQUIVO e o arquivo saiu da lista de modelos (#112 + a chave por
+    arquivo).
+    **Reetiquetá-la para o `ggml-medium.bin` seria afirmar que uma medição
+    feita com um motor vale para outro** — exatamente o erro que o PRD V10
+    registrou (#72) —, e com consequência concreta: erro de fator ~3, **para
+    menos**, na única frase que diz quanto tempo o trabalho leva. Apagá-la
+    seria o mesmo tipo de iniciativa da #130, sobre dado que o programa
+    produziu.
+    **A reetiquetagem da v0.10.0 continua rodando**, e agora com o propósito
+    invertido: ela não existe mais para a linha VALER, e sim para a linha ser
+    IDENTIFICÁVEL. Uma chave `transcricao` nua seria a próxima candidata a ser
+    "aproveitada" por engano; com o nome do arquivo colado nela, ninguém a
+    confunde com a medição do modelo atual. Há teste pinando que
+    `ARQUIVO_DO_MODELO_UNICO` **não** é um arquivo do catálogo — a guarda é o
+    contrário exato da que existia na V10.2.
+132. **O tamanho na tela passou de MB para GB, e é por legibilidade, não por
+    estética.** Com o pequeno fora, o único arquivo de dado tem 1.533.763.059
+    bytes, e o formatador dizia **"1462,7 MB"**: quatro dígitos antes da
+    vírgula deixam de dizer se é muito ou pouco, que é o único trabalho desse
+    número (régua da #100 — a frase tem de ser legível na hora de decidir).
+    O GB é **binário**, como o MB e o kB que já estavam ali: duas bases no
+    mesmo formatador dariam dois tamanhos para o mesmo arquivo, e o "181,3 MB"
+    que a tela mostrou por três versões era binário.
+    **O "1462,7 MB" já estava na tela desde a v0.10.1**, no cartão do modelo
+    grande — ninguém tinha olhado porque o cartão que a pergunta do fim
+    oferecia era o do pequeno. Tirar o pequeno foi o que trouxe esse número
+    para a frente.
+    Os textos que mudaram de número, e nenhum de forma:
+    *cartão do modelo em Configurações* — "É preciso baixar um arquivo de
+    **1462,7 MB**, uma vez só." → "…de **1,4 GB**, uma vez só." (o tempo já era
+    "cerca de 9 minutos", e continua);
+    *botão do mesmo cartão* — "Baixar (**1462,7 MB**)" → "Baixar (**1,4 GB**)";
+    *pergunta do fim da varredura* — "…baixe **182,8 MB** em Configurações —
+    cerca de 1 minuto." → "…baixe **1,4 GB** em Configurações — cerca de 9
+    minutos." (ela somava o programa mais o modelo PEQUENO; agora soma o
+    programa mais o único que existe);
+    e *o cartão inteiro do modelo pequeno* — título, "É preciso baixar um
+    arquivo de 181,3 MB… cerca de 1 minuto" e o botão "Baixar (181,3 MB)" —
+    **saiu da tela**, porque a tela lista o catálogo (#101).
+    Os 9 minutos são a banda de referência de 3 MB/s da #128 aplicada a 1,5 GB
+    — o mesmo "~8 min (café)" que ela previu, arredondado pela tela. A ressalva
+    de internet lenta continua enquanto o número for declarado.
+133. **O mock perdeu o cartão do modelo pequeno junto com o Rust.** Catálogo do
+    mock MAIOR que o do backend é a mesma família das quatro divergências da
+    #88, ao contrário: a tela ficaria preparada para um cartão que o aplicativo
+    real não tem, e o E2E — que roda contra o mock — certificaria esse cartão.
+    O `AcessorioInfo["nome"]` do `api.ts` perdeu `"modelo-de-transcricao"` pelo
+    mesmo motivo.
+    **O nome de contrato do que ficou continua sendo
+    `"modelo-de-transcricao-grande"`**, com o `-grande` herdado de quando eram
+    dois. Ele nunca aparece na tela (o que a pessoa lê é o `para_que_serve` do
+    backend), e renomear identidade de contrato para melhorar a leitura de quem
+    escreve o código é o tipo de troca que quebra o `acessorio_baixar` de quem
+    não tem a quem perguntar.
+    **A frase do cartão mudou, e essa mudou de conteúdo.** Ela era *"entender
+    melhor o que é cantado — é bem mais lento, e o aplicativo usa este quando
+    ele está aqui"*, e a segunda metade respondia à pergunta de quem via dois
+    cartões parecidos: *preciso dos dois? qual roda?*. Essa pergunta deixou de
+    existir, e uma tela que a responde está falando de um arquivo que não está
+    lá. A que sobra, diante de um cartão só e de 1,4 GB, é *o que eu perco se
+    não baixar?* — daí *"entender o que é cantado — sem ele o aplicativo não
+    escreve letra nenhuma"*.

@@ -19,23 +19,31 @@
 //!
 //! ```sh
 //! CANCIONEIRO_WHISPER_CLI=/caminho/whisper-cli \
-//! CANCIONEIRO_WHISPER_MODELO=/caminho/ggml-small-q5_1.bin \
+//! CANCIONEIRO_WHISPER_MODELO=/caminho/ggml-medium.bin \
 //! CANCIONEIRO_REMEDICAO=/caminho/trechos.json \
 //! cargo test --test remedicao -- --ignored --nocapture
 //! ```
 //!
-//! # V10.2 — é este arnês que decide qual dos dois modelos FICA
+//! # V10.5 — foi este arnês que decidiu qual dos dois modelos ficou
 //!
 //! A primeira remedição, com o `ggml-small-q5_1.bin`, deu **37%** contra os
 //! 78% do faster-whisper — e o modo de falha não é grafia: o modelo classifica
 //! trecho CANTADO como música e devolve `[música]` no lugar da estrofe. Daí o
-//! `ggml-medium.bin` ter entrado no catálogo, **em caráter temporário**.
+//! `ggml-medium.bin` ter entrado no catálogo, em caráter temporário.
 //!
-//! Rode este arnês uma vez por modelo, nos MESMOS arquivos e trechos,
-//! trocando só o `CANCIONEIRO_WHISPER_MODELO`. Compare **encontráveis** (é o
-//! número que decide) e, de quebra, a razão medida — que é o custo do que se
-//! ganha. **O modelo perdedor sai do catálogo**: dois modelos não são o
-//! desenho final, são uma medição em curso.
+//! A rodada de comparação aconteceu: **83 trechos, 3 músicas, com a letra
+//! conferida OUVINDO a gravação** (e não a letra publicada na internet).
+//! Pequeno **31%**, grande **48%** — 17 trechos recuperados, 3 perdidos, e as
+//! marcas `[música]` / `[MÚSICA DE FUNDO]` / `[cantarolando]` desapareceram. O
+//! pequeno saiu do catálogo. Os números por música e as **duas ressalvas** que
+//! andam com eles estão no bloco marcado do `acessorios::CATALOGO` e na
+//! DECISIONS #129 — a segunda ressalva importa para quem for medir de novo: o
+//! problema estrutural diminuiu, não acabou.
+//!
+//! Para comparar um modelo NOVO com o de hoje, rode este arnês uma vez por
+//! modelo, nos MESMOS arquivos e trechos, trocando só o
+//! `CANCIONEIRO_WHISPER_MODELO`. Compare **encontráveis** (é o número que
+//! decide) e, de quebra, a razão medida — que é o custo do que se ganha.
 //!
 //! `trechos.json` é a lista dos MESMOS arquivos e dos MESMOS trechos lembrados
 //! da medição original — remedir em outro material não remede nada:
