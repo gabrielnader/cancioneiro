@@ -1,0 +1,90 @@
+name: acessorio-modelo
+
+# Publica APENAS um modelo de transcrição no lançamento `acessorios-v1`.
+#
+# Existe por um estrago real: para acrescentar o `ggml-medium.bin` eu rodei o
+# `acessorio-transcritor.yml`, que reconstrói os três `whisper-cli` junto. O
+# do Windows NÃO é reprodutível — o MSVC carimba data e caminho no executável
+# —, então ele voltou com soma diferente sem que nada dele tivesse mudado. O
+# catálogo do aplicativo ainda esperava a soma antiga: no Windows, o download
+# passaria a falhar a conferência e a transcrição nasceria morta.
+#
+# O comentário do próprio fluxo avisava disso ("rodar de novo com a mesma tag
+# substitui os arquivos e muda os hashes que o app espera") e eu rodei mesmo
+# assim. Aviso em comentário não é trava; este fluxo é.
+#
+# Acrescentar arquivo NOVO a um lançamento não mexe nos que já estão lá — é
+# só o `--clobber` sobre um nome existente que troca. Por isso aqui não há
+# `--clobber`, e publicar por cima de um modelo já existente é RECUSADO.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Lançamento de acessórios onde publicar"
+        required: true
+        default: "acessorios-v1"
+      modelo:
+        description: "Arquivo do modelo no repositório ggerganov/whisper.cpp"
+        required: true
+        default: "ggml-medium.bin"
+
+permissions:
+  contents: write
+
+jobs:
+  publicar:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Recusar se este modelo já está publicado
+        # Republicar por cima é o caminho que quebra o catálogo de quem já
+        # baixou: mesma URL, conteúdo diferente, conferência falhando numa
+        # máquina que não tem a quem perguntar. Modelo novo = nome novo.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag }}
+          MODELO: ${{ github.event.inputs.modelo }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" \
+               --json assets --jq '.assets[].name' | grep -qx "$MODELO"; then
+            echo "::error::$MODELO já existe em $TAG. Substituir trocaria a soma"
+            echo "::error::que o aplicativo espera. Publique com outro nome."
+            exit 1
+          fi
+
+      - name: Baixar o modelo
+        env:
+          MODELO: ${{ github.event.inputs.modelo }}
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$MODELO" \
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/$MODELO"
+          ls -l "$MODELO"
+
+      - name: Soma de verificação
+        env:
+          MODELO: ${{ github.event.inputs.modelo }}
+        run: sha256sum "$MODELO" | tee SHA256-modelo.txt
+
+      - name: Publicar
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag }}
+          MODELO: ${{ github.event.inputs.modelo }}
+        run: gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" "$MODELO"
+
+      - name: Resumo (é daqui que a soma vai para o código)
+        env:
+          MODELO: ${{ github.event.inputs.modelo }}
+        run: |
+          {
+            echo "## \`$MODELO\` publicado em \`${{ github.event.inputs.tag }}\`"
+            echo
+            echo '```'
+            cat SHA256-modelo.txt
+            echo '```'
+            echo
+            echo "Nenhum binário foi tocado — os \`whisper-cli\` e o \`fpcalc\`"
+            echo "continuam com as somas que o catálogo já conhece."
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -7,6 +7,12 @@ name: acessorio-transcritor
 # estão lá — quem já baixou o `fpcalc` não é afetado. É por isso que a tag é
 # um espaço de nomes estável e não uma versão de cada arquivo (PRD V9).
 #
+# ATENÇÃO: este fluxo RECONSTRÓI os binários. O `whisper-cli` do Windows não
+# é reprodutível (o MSVC carimba data e caminho), então rodá-lo troca a soma
+# dele mesmo sem nenhuma mudança de código — e o catálogo do aplicativo passa
+# a esperar um hash que o lançamento não serve mais. Já aconteceu uma vez.
+# Para publicar SÓ um modelo, use o `acessorio-modelo.yml`.
+#
 # Por que construir em vez de rehospedar: o whisper.cpp não publica binário
 # para as quatro plataformas. E `BUILD_SHARED_LIBS=OFF` é deliberado — com
 # bibliotecas dinâmicas o Windows sairia com DLLs ao lado, e o acessório
@@ -24,7 +30,7 @@ on:
         required: true
         default: "v1.7.4"
       modelo:
-        description: "Modelo a rehospedar (small quantizado — PRD V10)"
+        description: "Modelo a rehospedar — NÃO use isto só para trocar de modelo"
         required: true
         default: "ggml-small-q5_1.bin"
 

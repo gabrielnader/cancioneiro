@@ -118,8 +118,15 @@ pub const CATALOGO: &[Acessorio] = &[
         nome: WHISPER_CLI,
         plataforma: "windows-x86_64",
         arquivo: "whisper-cli-windows-x86_64.exe",
-        sha256: "6fa0be8580b27c163746ebe30cc3974c0f0bdfc425525766f7cf4828f1f529c5",
-        tamanho_bytes: 965_632,
+        // Republicado: o `whisper-cli` do Windows NÃO é reprodutível (o MSVC
+        // carimba data e caminho no executável), então republicar o
+        // lançamento para acrescentar um MODELO trocou a soma deste binário
+        // sem que nada dele tivesse mudado. Linux e macOS saíram idênticos.
+        // Foi o aviso do próprio fluxo acontecendo: "rodar de novo com a
+        // mesma tag substitui os arquivos e muda os hashes que o app espera".
+        // Ver a trava que o `acessorio-modelo.yml` passou a dar.
+        sha256: "db0f063f489170c32bc6a59fe3b05db99e3ff3a317e2fe8b4362bdd95b9ab4de",
+        tamanho_bytes: 971_776,
         executavel: true,
     },
     Acessorio {
