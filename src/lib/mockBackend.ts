@@ -625,8 +625,8 @@ const ERRO_SEM_MODELO =
 // ---------------------------------------------------------------------------
 // Placeholders — porte do `is_placeholder` do Rust (que por sua vez porta o
 // `eh_placeholder` do tools/curadoria.py). Tag placeholder vale VAZIO em todo
-// ponto: não é palpite, não abre o Vagalume e NÃO marca a música como
-// completa. Foi por não olhar isto que a contagem do app dava zero num CD
+// ponto: não é palpite, não libera consulta a site de letra e NÃO marca a
+// música como completa. Foi por não olhar isto que a contagem do app dava zero num CD
 // ripado inteiro de "Faixa 01…12 / Artista Desconhecido".
 // ---------------------------------------------------------------------------
 
@@ -886,8 +886,9 @@ function mesmoValor(a: string | null | undefined, b: string | null | undefined):
 /**
  * O "LRCLIB" do mock: um catálogo minúsculo e determinístico, com as músicas
  * das fixtures. Quem tem tag real FORA do catálogo é exatamente o caso que a
- * etapa 3 existe para atender — é assim que o mock ganha um caminho de
- * Vagalume sem contrariar a regra real (título E artista de verdade).
+ * etapa do lyrics.ovh existe para atender — é assim que o mock ganha um
+ * caminho para ela sem contrariar a regra real (título E artista de
+ * verdade, porque essa fonte não devolve nome para conferir).
  */
 const LRCLIB_CATALOGO: Record<
   string,
@@ -1329,8 +1330,9 @@ export function createMockBackend(): MockBackend {
   }
 
   /**
-   * O funil inteiro para UMA música (V8/F18), na ordem de custo crescente:
-   * o que já está no arquivo → LRCLIB → Vagalume (só com chave). É o mesmo
+   * O funil inteiro para UMA música (V8/F18, atualizado na V10): o que já
+   * está no arquivo → o som da gravação → LRCLIB → lyrics.ovh. Nenhuma etapa
+   * pede credencial de quem usa. É o mesmo
    * caminho para o lote e para o caso pontual do editor — duas implementações
    * divergiriam, e é justamente a procedência que a pessoa usa para decidir.
    *
