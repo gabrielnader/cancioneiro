@@ -1,6 +1,6 @@
 # REPORT — Cancioneiro
 
-## Estado em 0.10.5 — o que o produto é, e o que ele custou aprender
+## Estado em 0.10.6 — o que o produto é, e o que ele custou aprender
 
 O Cancioneiro é um player de MP3 **offline** (Tauri 2 + Rust + React, SQLite com
 FTS5) que existe para resolver um problema só: **achar uma música pelo pedaço de
@@ -55,16 +55,16 @@ que *esta máquina* faz, não o que o produto sabe fazer.
 
 ### As suítes
 
-| suíte | 0.6.0 (início da janela) | 0.10.5 |
+| suíte | 0.6.0 (início da janela) | 0.10.6 |
 |---|---|---|
-| cargo test | 106 | **455** |
+| cargo test | 106 | **463** |
 | pytest | 557 | **754** |
-| vitest | 369 | **1163** |
+| vitest | 369 | **1166** |
 | Playwright E2E | 22 | **51** |
-| total | 1054 | **2423** |
+| total | 1054 | **2434** |
 
 `tsc` limpo, `cargo check` sem avisos, **0 warnings**. As decisões de projeto —
-**154** hoje, contra 30 ao fim da V1 — estão em
+**171** hoje, contra 30 ao fim da V1 — estão em
 [`DECISIONS.md`](./DECISIONS.md), cada uma com o motivo e, quando existe, o
 número que a sustenta.
 
@@ -216,6 +216,54 @@ ao ponto do funil que depende dela.
    que o Rust corrigiu (uma música chamada "Diversos" valeria vazio), e ficou de
    fora por escopo — ele é ferramenta de terminal do dono do produto e não vai
    para as 40 máquinas, mas o dano é o mesmo dentro do arquivo dele.
+
+---
+
+> **Atualização V10.10 (0.10.6):** pedida como "alguns pequenos ajustes", e um
+> deles destampou o defeito mais consequente da janela.
+>
+> **O que se pediu.** Um botão que transcreve UMA música direto, sem antes pagar
+> o funil de rede inteiro — porque neste acervo o funil quase nunca acha, e
+> pagar segundos de rede para só então poder transcrever é pedágio. E dois
+> consertos na mensagem de erro, propostos a partir de um relato: o dono clicou
+> em "Buscar dados na internet" e recebeu **"sem conexão"** em vermelho, com a
+> internet dele funcionando — ele tinha acabado de baixar 1,4 GB no mesmo app.
+>
+> **O que se achou.** "sem conexão" era o ramo de TRANSPORTE (DNS mudo, tempo
+> esgotado, conexão recusada), que não é "sua internet caiu" e sim "este
+> servidor não respondeu". A rodada da V9 já separara o caso em que o servidor
+> **responde** com erro; ficara de fora o caso em que ele **não responde**. Mas
+> a frase era o menor dos problemas: logo depois da etapa 2 havia um
+> `if erro.is_some() { return }` que **abortava as etapas de letra**, e ele não
+> distinguia origem nenhuma. **A falha do `fpcalc` — um programa LOCAL, que não
+> diz nada sobre a internet — cancelava a consulta ao LRCLIB.** O `fpcalc` falha
+> em faixa curta, gravação caseira silenciosa e arquivo de estrutura estranha,
+> que é o perfil exato deste acervo; nas fixtures do projeto, medido, ele falha
+> em **três de quatro** arquivos.
+>
+> Ou seja: música cuja impressão digital falhava saía da varredura **sem nunca
+> ter sido perguntada às bases de letra**, e a linha vermelha acusava a internet
+> de quem estava olhando. Desde a v0.9.0, atrás de uma frase que mandava a
+> pessoa conferir o roteador.
+>
+> **O conserto.** O aborto passou a exigir **evidência**: duas fontes
+> independentes mudas e nenhuma tendo respondido. Resposta HTTP de erro conta
+> como "respondeu" — servidor vivo prova internet viva. E a frase diz de quem é
+> o silêncio: *"o reconhecimento pelo som não respondeu"*, *"o site de letras
+> não respondeu"*, e só com evidência *"a internet parece estar fora do ar:
+> nenhum site respondeu"* — com a evidência dentro da frase, para a pessoa poder
+> discordar dela.
+>
+> **A busca tolerante, medida dos DOIS lados.** A rodada anterior mediu o que
+> ela ganha (30% → 54%) e nunca o que ela perde. O dono achou o buraco com um
+> exemplo, na página de teste, antes de existir uma linha de código:
+> `na minha casa se eu` — a busca de hoje acha, a nova não, porque a transcrição
+> destruiu esse verso e a de hoje se safa por exigir as palavras em qualquer
+> lugar em vez de na ordem. Medido: **5 trechos em 721 (0,7%)** se perderiam.
+> Pouco — e perder caso que já funciona não se negocia. A proposta virou
+> **somar** as duas em vez de trocar: **55%**, sem perder nenhum, com risco de
+> regressão zero por construção e não por medição. Continua **fora** desta
+> versão.
 
 ---
 

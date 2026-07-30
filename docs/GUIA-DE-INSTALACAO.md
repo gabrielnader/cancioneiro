@@ -235,11 +235,12 @@ no fim da seção, o programa diz sempre quantas músicas daquela pasta estão s
 e quanto tempo levaria — e o botão está ali a qualquer momento. Se você fechar a caixa
 da busca, não perdeu nada: a lista não depende dela.
 
-**E para uma música só.** Abra a música, clique em **Editar** e depois em **Buscar
-dados**. Se a internet não tiver a letra — o que é comum —, o programa oferece ali
-mesmo escrevê-la ouvindo o áudio, dizendo quanto tempo leva **para aquela música**.
-São minutos, não horas: é a forma mais prática de resolver uma música que você quer
-achar hoje.
+**E para uma música só.** Abra a música e clique em **Editar**. Ali dentro há um
+botão que escreve a letra daquela música ouvindo o áudio, **direto**, com o tempo
+escrito nele: *"cerca de 4 minutos neste computador"*. Você não precisa buscar na
+internet antes — os dois botões ficam lado a lado, cada um dizendo quanto custa, e
+você escolhe. São minutos, não horas: é a forma mais prática de resolver uma música
+que você quer achar hoje.
 
 Duas coisas para saber antes:
 
@@ -262,6 +263,15 @@ sempre que você instalar uma versão nova.
 
 **Tela azul "O Windows protegeu o seu computador".**
 Clique em **Mais informações** e depois em **Executar assim mesmo** (passo **2.2**).
+
+**"O reconhecimento pelo som não respondeu" / "O site de letras não respondeu."**
+Um dos serviços da internet não respondeu naquela hora. **Não é a sua conexão** — se
+fosse, o programa diria isso. As outras etapas continuam funcionando normalmente, e
+vale tentar de novo mais tarde.
+
+**"A internet parece estar fora do ar: nenhum site respondeu."**
+Aqui sim: nenhum dos serviços respondeu. Confira sua conexão. Escrever a letra
+ouvindo o áudio continua funcionando, porque não usa internet.
 
 **"O programa não entendeu como este MP3 está montado por dentro."**
 Não é erro seu e não é o seu disco. Alguns MP3 antigos foram montados de um jeito
