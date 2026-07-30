@@ -465,7 +465,10 @@ const ACESSORIO_WHISPER = {
   nome: "whisper-cli" as const,
   para_que_serve: "escrever a letra ouvindo o áudio",
   arquivo: "whisper-cli-linux-x86_64",
-  tamanho_bytes: 2_000_000,
+  // tamanho REAL do binário publicado, como as demais entradas: o mock
+  // desenha o número que a pessoa vê, e arredondar aqui fixava no E2E um
+  // tamanho que a tela nunca mostraria.
+  tamanho_bytes: 1_635_784,
   executavel: true,
   origem: `${URL_BASE}/whisper-cli-linux-x86_64`,
 };

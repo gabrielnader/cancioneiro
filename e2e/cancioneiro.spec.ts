@@ -1719,15 +1719,19 @@ test.describe("V10 — a etapa que resolve (F18 fase 3)", () => {
     const bloco = page.getByRole("region", {
       name: /Entender o que é cantado/,
     });
+    // 181,3 MB é o tamanho REAL do arquivo publicado. O mock usava um
+    // arredondamento (172,6 MB) até o catálogo ganhar as somas de verdade —
+    // e número inventado no mock é a mesma família das divergências da #88:
+    // o E2E fixava um tamanho que a tela nunca mostraria.
     await expect(
-      bloco.getByText(/É preciso baixar um arquivo de 172,6 MB/),
+      bloco.getByText(/É preciso baixar um arquivo de 181,3 MB/),
     ).toBeVisible();
     await expect(bloco.getByText(/O download leva cerca de 3 minutos/)).toBeVisible();
 
     await page.getByRole("button", { name: "Buscar dados desta pasta" }).click();
     const dialog = page.getByRole("dialog", { name: "Completar dados" });
     await expect(dialog.getByText(/Sobrou 1 música sem letra/)).toBeVisible();
-    await expect(dialog.getByText(/baixe 174,5 MB em Configurações/)).toBeVisible();
+    await expect(dialog.getByText(/baixe 182,8 MB em Configurações/)).toBeVisible();
     // e não há o que começar: o trabalho não existe nesta máquina
     await expect(dialog.getByRole("button", { name: "Começar agora" })).toHaveCount(
       0,
