@@ -82,6 +82,50 @@ def acha_sync_mpeg(dados: bytes, inicio: int) -> int | None:
     return None
 
 
+# Marcas que explicam uma sobra entre o fim da etiqueta e o começo do áudio.
+# Cada uma tem consequência DIFERENTE para a gravação, e é por isso que vale
+# nomeá-las em vez de dizer só "tem lixo aqui".
+MARCAS_DA_SOBRA: list[tuple[bytes, str]] = [
+    (b"ID3", "uma SEGUNDA etiqueta ID3v2 grudada na primeira"),
+    (b"3DI", "o RODAPÉ de uma etiqueta ID3v2 (a etiqueta declarou tamanho menor)"),
+    (b"APETAGEX", "uma etiqueta APE"),
+    (b"Xing", "um cabeçalho Xing solto (fora de quadro MPEG)"),
+    (b"Info", "um cabeçalho Info solto (fora de quadro MPEG)"),
+    (b"LAME", "assinatura do codificador LAME"),
+    (b"TAG", "uma etiqueta ID3v1 no lugar errado"),
+    (b"\xff\xf1", "um quadro AAC/ADTS"),
+    (b"\xff\xf9", "um quadro AAC/ADTS"),
+]
+
+
+def descreve_a_sobra(dados: bytes, inicio: int, sync: int) -> None:
+    """Diz o que há entre o fim declarado da etiqueta e o primeiro quadro.
+
+    É o pedaço que decide o conserto. A mesma sobra pode ser uma etiqueta
+    mal-declarada (o arquivo está bom, o TAMANHO está errado), lixo de um
+    editor antigo, ou áudio de outro formato — e cada um desses casos merece
+    uma frase diferente na tela de quem não tem a quem perguntar.
+    """
+    sobra = dados[inicio:sync]
+    print(f"    o que há na sobra ({len(sobra)} bytes):")
+    for marca, o_que_e in MARCAS_DA_SOBRA:
+        pos = sobra.find(marca)
+        if pos != -1:
+            print(f"      - em +{pos}: {o_que_e}")
+    zeros = sobra.count(0)
+    print(f"      - {zeros} de {len(sobra)} bytes são zero ({100 * zeros // len(sobra)}%)")
+    # os primeiros bytes em hexa e em texto: é o que identifica o programa que
+    # gravou, quando ele deixou assinatura legível
+    amostra = sobra[:48]
+    hexa = " ".join(f"{b:02x}" for b in amostra)
+    texto = "".join(chr(b) if 32 <= b < 127 else "." for b in amostra)
+    print(f"      - começo: {hexa}")
+    print(f"                {texto}")
+    legivel = bytes(b for b in sobra if 32 <= b < 127)
+    if len(legivel) >= 8:
+        print(f"      - texto achado na sobra: {legivel[:120]!r}")
+
+
 def texto_das_etiquetas(caminho: Path) -> list[str]:
     """Problemas de TEXTO nas etiquetas — a outra família da mesma frase.
 
@@ -151,6 +195,7 @@ def diagnosticar(caminho: Path) -> None:
         return
     if sync != inicio:
         print(f"  quadro MPEG começa em {sync:,} (e não em {inicio:,}) — {sync - inicio} bytes de sobra")
+        descreve_a_sobra(dados, inicio, sync)
     else:
         print(f"  quadro MPEG começa em {sync:,}, como esperado")
 
