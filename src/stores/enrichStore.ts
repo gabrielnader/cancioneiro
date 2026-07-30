@@ -474,10 +474,15 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
       V10.6 — fechar a revisão com a oferta de transcrição na tela AVISA, em vez
       de descartá-la em silêncio.
 
-      A condição é a MESMA que desenha a oferta (revisão, gente sobrando, etapa
-      5 possível aqui, pergunta não dispensada): avisar sobre uma oferta que a
-      pessoa não viu, ou que ela já respondeu com "agora não", seria ruído — e
-      ruído numa tela sem suporte é dúvida.
+      Avisar sobre uma oferta que a pessoa não viu, ou que ela já respondeu com
+      "agora não", seria ruído — e ruído numa tela sem suporte é dúvida. Daí
+      exigir revisão aberta, gente sobrando e pergunta não dispensada.
+
+      A condição NÃO é idêntica à que desenha a oferta: a tela também a desenha
+      sem os acessórios, com o texto do download, e aqui isso não avisa. É de
+      propósito, e não um esquecimento — a revisão é aberta DE DENTRO de
+      Configurações, então fechá-la já devolve a pessoa à tela dos cartões de
+      acessório. O aviso apontaria para onde ela está olhando.
 
       É INFORMATIVO, e não uma confirmação. Com o bloco permanente de
       Configurações a lista já não se perde: uma caixa perguntando "tem certeza?"

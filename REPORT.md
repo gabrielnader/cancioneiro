@@ -1,6 +1,6 @@
 # REPORT — Cancioneiro
 
-## Estado em 0.10.1 — o que o produto é, e o que ele custou aprender
+## Estado em 0.10.3 — o que o produto é, e o que ele custou aprender
 
 O Cancioneiro é um player de MP3 **offline** (Tauri 2 + Rust + React, SQLite com
 FTS5) que existe para resolver um problema só: **achar uma música pelo pedaço de
@@ -55,16 +55,16 @@ que *esta máquina* faz, não o que o produto sabe fazer.
 
 ### As suítes
 
-| suíte | 0.6.0 (início da janela) | 0.10.1 |
+| suíte | 0.6.0 (início da janela) | 0.10.3 |
 |---|---|---|
-| cargo test | 106 | **415** |
+| cargo test | 106 | **434** |
 | pytest | 557 | **750** |
-| vitest | 369 | **1028** |
-| Playwright E2E | 22 | **44** |
-| total | 1054 | **2237** |
+| vitest | 369 | **1108** |
+| Playwright E2E | 22 | **48** |
+| total | 1054 | **2340** |
 
 `tsc` limpo, `cargo check` sem avisos, **0 warnings**. As decisões de projeto —
-**125** hoje, contra 30 ao fim da V1 — estão em
+**138** hoje, contra 30 ao fim da V1 — estão em
 [`DECISIONS.md`](./DECISIONS.md), cada uma com o motivo e, quando existe, o
 número que a sustenta.
 
@@ -216,6 +216,71 @@ ao ponto do funil que depende dela.
    que o Rust corrigiu (uma música chamada "Diversos" valeria vazio), e ficou de
    fora por escopo — ele é ferramenta de terminal do dono do produto e não vai
    para as 40 máquinas, mas o dano é o mesmo dentro do arquivo dele.
+
+---
+
+> **Atualização V10.6 (0.10.3):** a versão que vai para os beta testers, e ela
+> existe por causa de **um relato de campo de uma frase**: rodada a varredura na
+> biblioteca inteira, o dono clicou em "Aplicar selecionadas (28)" esperando
+> transcrever em seguida — e a caixa fechou, levando a oferta de transcrição com
+> ela. *"Agora tenho que começar de novo pra chegar na parte de transcrição de
+> novo."* Minutos de varredura, jogados fora por um clique que parecia seguro.
+>
+> **O defeito era de projeto, e o meu.** Eu pendurei a oferta da etapa 5 no
+> *resultado* da varredura, e resultado de varredura é efêmero. Mas "quais
+> músicas estão sem letra" não é resultado de varredura — é **fato permanente da
+> biblioteca**, e o banco sempre soube responder. Três correções, e a terceira é
+> a que resolve de verdade: (1) aplicar não fecha mais a caixa — as linhas
+> gravadas ficam na tela com selo **GRAVADA**, num grupo próprio no fim; (2)
+> fechar com a oferta na tela **avisa** onde ela continua, informativo e não uma
+> confirmação, porque com a terceira correção a lista deixou de se perder; (3)
+> `transcricao_pendentes` responde quantas e quais a qualquer momento, e
+> Configurações ganhou o bloco permanente.
+>
+> O conserto que a caixa aberta **obrigou**: o eco do `apply` passou a ser o do
+> arquivo. Aplicar o nome e depois a letra da mesma música é o caso *típico*, e a
+> segunda gravação seria recusada com "a música mudou depois da busca" — e mudou
+> mesmo: mudamos nós, um clique antes. Duas linhas da mesma música no mesmo lote
+> viram **uma** gravação, com o nome da linha de maior risco e a letra da linha
+> que a traz, com a procedência dela.
+>
+> Uma afirmação do relatório da rodada foi conferida e **não se sustentou**: a
+> condição do aviso ao fechar não é idêntica à que desenha a oferta — a tela
+> também a desenha sem os acessórios instalados, e ali não avisa. O
+> *comportamento* está certo (a revisão é aberta de dentro de Configurações, e
+> fechá-la já devolve a pessoa à tela dos cartões de acessório), então o que se
+> corrigiu foi o comentário. Invariante falso escrito no código é armadilha para
+> quem ler depois.
+
+---
+
+> **Atualização V10.5 (0.10.2):** **a medição decidiu, e um modelo saiu do
+> catálogo.** Contra a letra conferida **ouvindo a gravação** — não a publicada
+> na internet —, em 83 trechos do tipo que uma pessoa lembraria, de 3 músicas do
+> acervo real:
+>
+> | música | trechos | pequeno | grande |
+> |---|---|---|---|
+> | Cadê o Gato | 26 | 30% | 53% |
+> | Girias do Norte | 17 | 29% | 52% |
+> | Último dos Moicanos | 40 | 32% | 42% |
+> | **total** | **83** | **31%** | **48%** |
+>
+> O `ggml-small-q5_1.bin` saiu: 190 MB a menos para baixar não compensam metade
+> da encontrabilidade, e dois modelos no catálogo eram um pedágio de escolha
+> disfarçado de opção. **Duas ressalvas ficam registradas junto do número**, e
+> elas importam mais que ele: a amostra é o material **mais difícil possível**
+> (pasta de humor, sotaque regional, palavras inventadas — "alavantuí,
+> chã-de-dama anarrariê"), e das quatro estrofes que o modelo pequeno **pulava
+> inteiras**, o grande recuperou **uma**. 48% não é "a letra sai certa": é "dá
+> para achar a música".
+>
+> Na mesma rodada, os **três defeitos do download de 1,5 GB** que o teste em
+> campo trouxe como três sintomas — parou, travou, funcionou na terceira — e que
+> eram **um** defeito só: o download seguia rodando invisível depois de sair da
+> tela, e o botão que reaparecia armava uma segunda gravação concorrente no
+> mesmo `.parcial`. O diagnóstico que eu dei primeiro (mensagem de disco cheio)
+> estava errado, e foi o agente que me corrigiu.
 
 ---
 

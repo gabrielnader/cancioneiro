@@ -57,6 +57,10 @@ Perguntas que valem ouro:
   encurtou uma vez e vai encurtar de novo.)
 - O grupo fechado, já marcado, com as sugestões seguras: você **percebeu que ele
   estava marcado**?
+- Depois de clicar em "Aplicar selecionadas", a caixa **continua aberta** e as linhas
+  gravadas ficam marcadas como **Gravada**. Isso ficou claro, ou você achou que tinha
+  dado errado por a caixa não ter fechado? (Isto é novo nesta versão e nasceu de um
+  relato — aplicar fechava tudo e jogava fora o trabalho da busca.)
 
 ### 5. Alguma música ficou pior?
 

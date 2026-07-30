@@ -218,14 +218,22 @@ de importância:
   preenche o que está em branco. Dá para abrir e conferir, ou desmarcar tudo de uma
   vez.
 
-Clique em **Aplicar selecionadas** e pronto. Os dados são gravados **dentro dos
-próprios arquivos MP3** — se você levar as músicas para outro computador, a letra vai
-junto.
+Clique em **Aplicar selecionadas**. Os dados são gravados **dentro dos próprios
+arquivos MP3** — se você levar as músicas para outro computador, a letra vai junto.
+
+A caixa **não fecha** quando você aplica. As linhas gravadas ficam ali marcadas como
+**Gravada**, e você continua trabalhando nas outras: dá para aplicar um punhado,
+conferir, aplicar mais. Quando terminar, feche no botão **Fechar**.
 
 ### Escrever a letra ouvindo o áudio
 
 Quando alguma música ficar sem letra, o programa oferece, no fim da busca, escrever a
 letra **ouvindo o áudio**. Isso funciona sem internet e nada sai do seu computador.
+
+**E você não precisa aceitar na hora.** Em **Configurações → Curadoria do acervo**,
+no fim da seção, o programa diz sempre quantas músicas daquela pasta estão sem letra
+e quanto tempo levaria — e o botão está ali a qualquer momento. Se você fechar a caixa
+da busca, não perdeu nada: a lista não depende dela.
 
 Duas coisas para saber antes:
 
