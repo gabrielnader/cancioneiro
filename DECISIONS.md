@@ -2084,3 +2084,226 @@ opção mais simples que passa nos Acceptance Checks do PRD.
     permanente. Quem quer o fato de agora tem o bloco de Configurações.
     **(e) O `aviso` da gravação continua sem chegar ao editor** (#152b): esta
     rodada não mexeu no retorno do `writeTags`.
+
+## V10.10 — o botão que não cobra o funil antes, e o "sem conexão" que mentia
+
+163. **A ficha de UMA música ganhou um botão que dispara a etapa 5 direto, e o
+    custo está escrito nele.**
+    Pedido do dono do produto, verbatim: *"No caso específico de mexer música
+    por música quero um botão separado pra fazer transcrição. Pra não precisar
+    rodar todo o fluxo pra depois só poder transcrever. Mas só nessa tela de
+    música individual."*
+    A V10.9 (#153) pôs a etapa 5 na ficha pendurada no desfecho da busca: ela só
+    aparecia **depois** de "Buscar dados na internet" e só quando as quatro
+    etapas não achavam letra. A premissa da #154(a) era que, naquele segundo, a
+    pergunta é se a internet tem esta música. **O uso desmentiu a premissa**: com
+    3% de cobertura medida, quem abre uma ficha deste acervo em geral JÁ SABE que
+    a internet não tem — e o preço de estar errado era o funil inteiro, segundos
+    de rede e uma leitura de impressão digital, antes de poder transcrever.
+    **A escolha às cegas que a V8 recusou continua recusada, e é por isso que o
+    tempo está no RÓTULO.** Aquilo eram dois botões dizendo "buscar na internet",
+    indistinguíveis para quem não sabe o que é LRCLIB. Aqui os dois dizem coisas
+    diferentes e cada um traz o próprio custo: *"Buscar dados na internet"*
+    (segundos, e a dica lista as etapas) e *"Escrever a letra ouvindo o áudio
+    (cerca de 4 minutos — pode levar mais nesta máquina)"*. O custo no rótulo é o
+    que transforma a escolha em informada, e é o mesmo motivo pelo qual o tamanho
+    vai no botão do download (`rotuloBaixarAcessorio`): é a última coisa lida
+    antes do clique.
+    **A procedência do número é a das outras portas** (#86 e #112): só medição
+    desta máquina autoriza *"(cerca de 4 minutos neste computador)"*. O tempo e a
+    ressalva saíram de UMA função (`tempoDaTranscricao`, extraída da
+    `fraseDoTempoDaTranscricao`) — duas maneiras de dizer o mesmo número são duas
+    telas que amanhã divergem sobre a mesma medição (#80 aplicada a texto), e
+    aqui as duas cabem na MESMA tela, porque a pergunta do fim de uma varredura
+    e a ficha convivem.
+    **Nenhum segundo caminho**: `transcricao_pendentes_da_musica(song_id)` e
+    `startTranscricao(pendentes.musicas)`, como na V10.9 — mesma barra, mesmo
+    cancelamento, mesma revisão, e a fila continua vindo da PORTA e não de um
+    `[song.id]` montado na tela (#155). Nada mudou no Rust para este conserto.
+164. **A convivência dos dois botões, resolvida: não há dois.** O "Começar
+    agora" da ficha SAIU, e o bloco da oferta ficou só com a metade que não cabe
+    num botão.
+    Depois de uma busca sem letra, a V10.9 desenhava *"Esta música continua sem
+    letra. Escrever a letra ouvindo o áudio leva cerca de 4 minutos…"* com um
+    botão "Começar agora". Com o botão permanente na barra de ações, isso seriam
+    **dois botões para a mesma ação na mesma tela** — a duplicação que a V8
+    removeu. As três alternativas foram pesadas:
+    **(a) esconder o botão direto enquanto a oferta estiver na tela** — a
+    affordance mudaria de lugar bem no momento em que a pessoa vai usá-la;
+    **(b) manter a frase da oferta sem o botão** — ela repetiria, em prosa, o que
+    o rótulo do botão já diz três centímetros abaixo, e a régua da #100 é
+    explícita: o resto da tela só existe se responder uma pergunta daquele
+    momento;
+    **(c) a oferta com acessórios prontos deixa de existir** — o que ficou.
+    O que se perde é a abertura *"Esta música continua sem letra."*, e ela não
+    faz falta: quem acabou de ler o `SEM_RESULTADO_INDIVIDUAL` ("procuramos e não
+    achamos nada novo para esta música") está olhando um campo de letra vazio com
+    o botão logo abaixo.
+    **O bloco sobrevive para quem NÃO pode transcrever nesta máquina**, e só. Ele
+    não é um clique daqui — é um download de 1,4 GB, em outra tela —, então não
+    cabe num botão, e a #157 já decidiu que sem `disponivel` **não há botão**: um
+    botão que não faria nada é pior que a frase que diz o que fazer. A frase é a
+    mesma, letra por letra (`fraseDoDownloadDaTranscricao`), e o
+    `textoDaOfertaDestaMusica` encolheu para ela: passou a receber só o
+    `DownloadPendente`. Com isso os dois desenhos são **mutuamente exclusivos por
+    construção** — onde há botão não há bloco, e vice-versa.
+165. **O botão é PERMANENTE; a frase continua saindo só depois da busca. A
+    assimetria é de propósito.**
+    A #154(a) recusou um bloco permanente da etapa 5 na ficha, e a #162(c)
+    registrou isso. Esta rodada não desfaz o argumento: **um botão não é um
+    parágrafo**. Ele ocupa uma linha na barra que já existe, ao lado do outro
+    botão de trabalho, e é lido como o que é — a segunda coisa que se pode mandar
+    o programa fazer por aquele arquivo. Um parágrafo permanente dentro de um
+    formulário cheio de campos continua sendo o que a #100 proíbe.
+    A regra que separa os dois: **o botão é uma AÇÃO que esta máquina executa; a
+    frase manda a pessoa para outra tela**, e faz sentido no segundo em que a
+    busca acaba de deixar a música sem saída. Por isso a frase espera a busca, e
+    o botão não.
+166. **O que o botão descreve é o ARQUIVO e o FORMULÁRIO — nunca o resultado de
+    uma busca.** Ele não some quando a busca traz letra.
+    A #154(b) tinha essa regra ("achou letra, não oferece"), e ela existia porque
+    a oferta INTEIRA era um desfecho da busca. Agora o botão é permanente, e um
+    botão que desaparece porque uma sugestão apareceu na tela é um botão que a
+    pessoa vai procurar e não achar. **Proposta não é fato**: nada foi gravado, e
+    a música continua sem letra até alguém clicar em "Usar estes dados". O medo
+    da #154(b) — cobrar minutos de CPU por algo que um clique resolve — está
+    respondido pelo custo estar no rótulo: quem lê "cerca de 4 minutos" ao lado
+    de uma letra encontrada decide com o preço à vista.
+    **Some, sim, quando a letra ENTRA no campo** — aí a música deixou de estar
+    sem letra, e é essa a mudança que importa. As duas condições LOCAIS
+    (`podeTranscreverEstaMusica`) são as mesmas da V10.9 e não duplicam regra do
+    backend: descrevem o FORMULÁRIO, que é mais atual que o banco. Quem acabou de
+    marcar "esta música é instrumental" não pode receber uma oferta de escrever a
+    letra ouvindo o áudio, e é a mesma razão do `SEM_RESULTADO_INSTRUMENTAL`.
+167. **Música que JÁ TEM LETRA não ganha o botão — e quem decide isso continua
+    sendo o backend.**
+    A porta devolve fila VAZIA para ela (`a_etapa_5_tem_o_que_fazer`), e a ficha
+    não desenha nada. Não se abriu exceção, e o motivo não é economia:
+    **(a) a etapa 5 produziria uma SUBSTITUIÇÃO**, que o `apply` só grava com
+    consentimento explícito (#79). São minutos de CPU para chegar a uma caixa de
+    marcação que a pessoa não tinha como prever ao clicar — o oposto exato de "o
+    botão diz o seu custo";
+    **(b) o #81 é sobre a CONSULTA.** "Quem clicou quer tudo que o produto sabe
+    fazer por aquele arquivo" foi decidido sobre segundos de rede pedindo uma
+    segunda opinião. Minutos de CPU produzindo uma letra de máquina, contra uma
+    letra que pode ter sido corrigida à mão, é outra conversa — e a #71 diz que
+    trabalho humano não é refeito por rotina nenhuma;
+    **(c) o formulário MOSTRA a letra**, editável, ali mesmo. Quem quer refazê-la
+    tem o campo; quem quer a transcrição sobre um arquivo já cheio tem o caminho
+    de sempre, que é decidir isso conscientemente e não por um botão a um clique
+    de distância;
+    **(d) reescrever o portão na tela seria a #80 pela enésima vez.** A regra de
+    quem a etapa 5 transcreve mora numa função só, no Rust, e as três portas a
+    consultam. Um `[song.id]` montado no componente seria a tela decidindo o que
+    a etapa 5 transcreve (#155), e a fila chegaria ao `transcricao_scan` para
+    voltar como linha de erro ("já tem letra").
+168. **"Sem conexão" mentia por omissão, e a frase passou a ser dita só com
+    evidência.**
+    Relato de campo: o dono clicou em "Buscar dados na internet" numa música e
+    recebeu **"sem conexão"** em vermelho, com a internet funcionando
+    perfeitamente — ele tinha acabado de baixar 1,4 GB no mesmo aplicativo.
+    A causa: em `commands::funil_fetcher`, o ramo de **transporte** (DNS que não
+    resolveu, os 10 s esgotados, conexão recusada) devolvia `"sem conexão"` para
+    qualquer servidor mudo. Isso não é "sua internet caiu": é "este servidor não
+    respondeu". A rodada da V9 já tinha separado o caso em que o servidor
+    **responde** com erro (`mensagem_de_status`, com frase distinta para 429, 500
+    e chave recusada); ficou de fora exatamente o caso em que ele **não
+    responde** — e é o mais comum de todos.
+    **A diferença é conferível, e é isso que a torna afirmável.** O funil fala
+    com até TRÊS hosts (AcoustID, LRCLIB, lyrics.ovh), de provedores diferentes.
+    Se outro respondeu na mesma varredura, a acusação contra a internet da pessoa
+    é comprovadamente falsa.
+    Cada destino passou a falar de si, como no `mensagem_de_status`:
+    *"o reconhecimento pelo som não respondeu"*, *"o site de letras não
+    respondeu"*, *"o site de letras sem cadastro não respondeu"*. São constantes
+    dos próprios módulos (`fingerprint`, `lyrics_fetch`, `lyrics_ovh`), ao lado
+    das que já existiam, e continuam sendo TEXTO FIXO sem interpolação — é assim
+    que a garantia de a chave nunca vazar numa mensagem se sustenta.
+    **A evidência de rede caída: duas fontes DIFERENTES mudas, e nenhuma
+    respondendo** (`EstadoDaVarredura::rede_parece_caida`). Uma só não basta, e é
+    esse o conserto — ver a #169. Duas bastam porque são hosts independentes: os
+    dois calados ao mesmo tempo, com nada mais passando, é a melhor evidência que
+    este programa consegue ter sem inventar um teste de rede próprio, que seria
+    um quarto endereço num produto cujo invariável é que nada do acervo sai da
+    máquina. **Responder é chegar uma resposta HTTP, inclusive uma de erro**: 429,
+    500 e chave recusada são servidores vivos, e servidor vivo prova que a
+    internet desta máquina funciona.
+    Com evidência, a frase é *"a internet parece estar fora do ar: nenhum site
+    respondeu"*. **A segunda metade é a evidência, e está no texto de propósito**:
+    é o que permite a quem lê discordar do programa. Quem está com a internet boa
+    e lê "nenhum site respondeu" sabe procurar do lado de fora — um bloqueio do
+    antivírus, um portal de wi-fi — em vez de reiniciar o roteador à toa. O
+    "parece" fica porque a certeza não existe.
+    **Quem troca a frase é a varredura, não a etapa**: uma etapa só sabe do
+    próprio host. O `funil_fetcher` produz o "não respondeu"; o
+    `EstadoDaVarredura::frase_do_erro` o promove a "a internet parece estar fora
+    do ar" quando a evidência já está formada. Há teste no `commands` conferindo
+    que **toda** frase que o `mensagem_de_transporte` produz é reconhecida pelo
+    `enrich::conta_como_servidor_mudo` — uma quarta fonte que entre num lado e
+    não no outro não quebraria nada visível, só deixaria de contar como
+    evidência, e o modo de falha silencioso é o que o teste torna barulhento.
+169. **O que dói mais: o funil ABORTAVA. Agora o aborto depende de evidência de
+    rede caída, e não de um erro qualquer.**
+    Em `enrich.rs`, logo depois da etapa 2, `if erro.is_some() { return ... }`,
+    com o comentário *"Rede caída derruba TODAS as fontes: insistir só gastaria o
+    tempo de quem está esperando."* **O argumento vale se a rede caiu.** Para um
+    servidor só sem responder ele não vale: o LRCLIB provavelmente responderia. No
+    caso relatado, as etapas 3 e 4 muito provavelmente nunca foram consultadas, e
+    a tela disse "sem conexão" — que a pessoa leu como "a internet não tem a
+    letra desta música". **Duas etapas puladas em silêncio.**
+    E não era só rede: **o `fpcalc` falha em três de cada quatro arquivos do
+    acervo real** (é a medição da QA A2, com o binário de verdade nas fixtures do
+    projeto). Faixa curta, gravação silenciosa, MP3 danificado — tudo isso caía no
+    mesmo `erro.is_some()` e cancelava as duas etapas de LETRA, que são as que
+    resolvem a música. Uma falha de acessório local não diz nada sobre o LRCLIB.
+    **A intenção original está preservada**: `if estado.rede_parece_caida()`
+    continua devolvendo cedo, e agora sem depender do erro desta música — uma
+    varredura que já provou que a rede caiu não gasta mais consulta nenhuma,
+    mesmo numa música que ainda não falhou em nada. **A evidência custa as
+    consultas de UMA música**: dois hosts mudos na primeira, e nada da segunda em
+    diante. A pausa de cortesia continua antes de cada consulta que acontece.
+    **A linha da música pulada sai COM MOTIVO, sempre.** Proposta sem erro e sem
+    mudança é descartada como no-op, e a música sumiria da revisão em silêncio —
+    exatamente o que a #47 existe para impedir. Ela recebe a frase da rede caída,
+    que é o motivo verdadeiro: não foi consultada porque nada estava respondendo.
+    **Os vereditos continuam desligando o que já desligavam**: `ERRO_CHAVE_RECUSADA`
+    e `ERRO_FPCALC_NAO_EXECUTA` são afirmações sobre a VARREDURA e continuam
+    desligando a etapa 2 (com a contagem das músicas que ficaram sem ser
+    perguntadas, QA A2). O que mudou é que eles não abortam mais as etapas 3 e 4.
+170. **O erro virou DOIS, e a linha diz o da última etapa que tentou.**
+    Enquanto um erro qualquer abortava o funil, um `erro` só bastava: nada rodava
+    depois dele. Com as etapas seguindo, um só faria duas coisas erradas e
+    silenciosas — o `sem_letra_do_lrclib` pularia a etapa 4 por causa de uma falha
+    do SOM, e o `if let (None, Some(b), Some(conf))` jogaria fora uma letra que o
+    LRCLIB acabou de trazer porque a etapa 2 falhou antes. São
+    `erro_do_som` e `erro_da_letra`, e a linha recebe `erro_da_letra.or(erro_do_som)`.
+    **A da letra vence porque é a que explica o desfecho que a pessoa está
+    olhando**: ela mandou buscar atrás de uma letra, e é a última etapa que
+    tentou trazê-la que diz por que não veio. Sem nenhuma delas sobra a do som,
+    que explica o NOME e continua sendo notícia. Achando letra, não há erro na
+    linha — a música ganhou o que foi buscar.
+    **O `sem_letra_do_lrclib` virou `confianca.is_none()`**, sem o erro: "o
+    LRCLIB não trouxe letra", e nada mais. O comentário da etapa 4 já dizia, na
+    direção contrária, que a queda de um serviço não cancela o outro; a
+    condição fazia exatamente isso.
+171. **O que NÃO se fez, e fica escrito.**
+    **(a) O botão direto não entrou na varredura nem em Configurações.** O pedido
+    é explícito ("só nessa tela de música individual"), e as outras duas portas
+    não têm o problema: a de Configurações é permanente e a do fim da varredura
+    já acontece depois do trabalho.
+    **(b) A ficha continua sem reperguntar a porta depois de nada** (#162d). A
+    resposta descreve o ARQUIVO, e o que muda no formulário é conferido na hora de
+    desenhar. Abrir a ficha de novo faz a pergunta de novo.
+    **(c) O "sem conexão" do `acessorio_fetcher` (download) ficou como está.** Ele
+    fala com UM host, e não há segunda fonte para comparar: a evidência que o
+    funil tem não existe ali. Trocar a frase por "o servidor de downloads não
+    respondeu" seria uma melhora, e é uma rodada própria — o texto daquela tela
+    tem cartão, botão e barra de progresso conversando entre si.
+    **(d) A etapa 2 não passou a ser tentada de novo depois de um host mudo.**
+    Insistir no mesmo host é a única coisa que a evidência já diz não valer a
+    pena, e transformaria uma varredura de 150 músicas em 150 novos tempos
+    esgotados de 10 s.
+    **(e) Não se inventou um teste de rede próprio** (um "ping" a um quarto
+    endereço) para decidir se a internet caiu. Seria um destino a mais na lista
+    fechada do `funil_fetcher`, para responder uma pergunta que as três fontes já
+    respondem entre si.
