@@ -539,10 +539,38 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// SHA-256 de um arquivo, lido em pedaços (o modelo da etapa 5 tem 180 MB e
+/// Quantas vezes cada arquivo foi REALMENTE lido do disco para conferência,
+/// nesta sessão. Só existe na suíte: é o instrumento que prova a memorização
+/// abaixo. "Não releu o arquivo" é uma afirmação sobre o disco, e afirmação
+/// sobre o disco se CONTA — não se deduz lendo o código.
+#[cfg(test)]
+static LEITURAS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<PathBuf, u64>>,
+> = std::sync::LazyLock::new(Default::default);
+
+#[cfg(test)]
+fn contar_leitura(caminho: &Path) {
+    *LEITURAS
+        .lock()
+        .unwrap()
+        .entry(caminho.to_path_buf())
+        .or_default() += 1;
+}
+
+#[cfg(not(test))]
+fn contar_leitura(_caminho: &Path) {}
+
+/// Quantas leituras de disco este caminho já custou nesta sessão.
+#[cfg(test)]
+fn leituras_de(caminho: &Path) -> u64 {
+    LEITURAS.lock().unwrap().get(caminho).copied().unwrap_or(0)
+}
+
+/// SHA-256 de um arquivo, lido em pedaços (o modelo da etapa 5 tem 1,5 GB e
 /// não cabe na memória de uma máquina modesta).
 fn sha256_do_arquivo(caminho: &Path) -> Result<String> {
     let mut arquivo = std::fs::File::open(caminho)?;
+    contar_leitura(caminho);
     let mut hasher = Sha256::new();
     let mut buf = vec![0u8; PEDACO];
     loop {
@@ -555,18 +583,134 @@ fn sha256_do_arquivo(caminho: &Path) -> Result<String> {
     Ok(hex(&hasher.finalize()))
 }
 
+// ---------------------------------------------------------------------------
+// A conferência memorizada (V10.3) — por que a soma não é recalculada a cada
+// pergunta
+// ---------------------------------------------------------------------------
+//
+// O QUE DÓI: `estado` lê o arquivo INTEIRO, e a tela de curadoria pergunta o
+// estado a cada troca de pasta (`enrich_count` -> `etapas_ligadas` ->
+// `transcricao::acessorios_prontos`). Com o modelo pequeno eram 190 MB por
+// clique; com o grande são 1,5 GB. Numa máquina com SHA-NI isso é ~1,3 s; sem
+// SHA-NI e com disco mecânico chega à dezena de segundos — por clique numa
+// pasta da lateral. O comando é `(async)` e não congela a janela
+// (DECISIONS #92), mas a contagem e a estimativa ficam "pensando" por segundos
+// sem motivo, repetidamente, para reconfirmar um fato que não mudou.
+//
+// O QUE SE MEMORIZA: a SOMA de um arquivo IDENTIFICADO por `(caminho, mtime,
+// tamanho)` — não o veredito "pronto" de um acessório. A diferença importa: a
+// comparação com o `sha256` do catálogo continua acontecendo em toda pergunta,
+// então trocar a constante, ou perguntar por outro acessório que aponte para o
+// mesmo arquivo, continua dando a resposta certa. O que se poupa é a LEITURA.
+//
+// A GARANTIA DA #96 CONTINUA DE PÉ: nada é executado sem ter sido conferido —
+// a primeira conferência de cada arquivo, em cada sessão, acontece de verdade.
+// Mtime ou tamanho diferentes invalidam a entrada, então arquivo trocado no
+// disco volta a ser conferido. E instalar por cima ESQUECE o caminho: o
+// arquivo que estava ali era outro.
+//
+// A JANELA QUE SOBRA NÃO É NOVA: um arquivo trocado no meio da sessão com o
+// mtime preservado à mão é a MESMA TOCTOU que o QA da v0.9.0 examinou e
+// aceitou, e que está escrita no `commands::fontes_do_funil` — a soma já era
+// conferida uma vez por varredura, e a execução acontecia dezenas de vezes ao
+// longo de minutos. Isto muda a FREQUÊNCIA de uma conferência que já não era
+// por execução; não abre porta que estivesse fechada.
+//
+// EM MEMÓRIA, PELA VIDA DO PROCESSO, e de propósito: um cache em disco teria
+// de ser conferido — e conferir o cache é o trabalho que ele existe para
+// evitar. Reabrir o aplicativo reconfere tudo, que é o comportamento honesto.
+//
+// O QUE NÃO SE FEZ: responder por presença+tamanho e deixar a soma só para
+// antes de executar tornaria o `tamanho_bytes` do catálogo load-bearing — hoje
+// um erro nele mente na estimativa e não desliga nada, e não vale a pena que
+// passe a desligar.
+
+/// Uma conferência já feita: quem era o arquivo, e qual era a soma dele.
+struct Conferencia {
+    /// Carimbo de modificação no momento da leitura. `mtime` diferente é
+    /// arquivo diferente até prova em contrário.
+    mtime: std::time::SystemTime,
+    tamanho: u64,
+    soma: String,
+}
+
+/// As conferências desta sessão, por caminho. Cresce no máximo até o número de
+/// acessórios do catálogo — são quatro.
+static CONFERIDOS: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<PathBuf, Conferencia>>,
+> = std::sync::LazyLock::new(Default::default);
+
+/// A soma do arquivo, relida do disco só quando ele não é mais o mesmo.
+///
+/// O cadeado é solto ANTES da leitura: segurá-lo durante 1,5 GB de hash faria
+/// a pergunta sobre o `fpcalc` (5 MB) esperar pela pergunta sobre o modelo. Se
+/// duas threads lerem o mesmo arquivo ao mesmo tempo, as duas calculam a mesma
+/// soma e a última grava — trabalho repetido uma vez, nunca resposta errada.
+fn soma_conferida(caminho: &Path, meta: &std::fs::Metadata) -> Result<String> {
+    // Sem mtime não há como saber se o arquivo mudou, e sem saber disso não se
+    // memoriza: o caro é ler o arquivo, o inaceitável é responder por um
+    // arquivo que não é mais aquele.
+    let identidade = meta.modified().ok().map(|mtime| (mtime, meta.len()));
+
+    if let Some((mtime, tamanho)) = identidade {
+        let memoria = CONFERIDOS.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(c) = memoria.get(caminho) {
+            if c.mtime == mtime && c.tamanho == tamanho {
+                return Ok(c.soma.clone());
+            }
+        }
+    }
+
+    let soma = sha256_do_arquivo(caminho)?;
+
+    if let Some((mtime, tamanho)) = identidade {
+        CONFERIDOS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(
+                caminho.to_path_buf(),
+                Conferencia {
+                    mtime,
+                    tamanho,
+                    soma: soma.clone(),
+                },
+            );
+    }
+    Ok(soma)
+}
+
+/// Esquece o que se sabia sobre este caminho. Chamado quando o arquivo que
+/// mora nele é SUBSTITUÍDO por nós: o mtime novo já invalidaria a entrada em
+/// qualquer sistema de arquivos com carimbo fino, mas depender da granularidade
+/// do relógio do disco para uma troca que nós mesmos fizemos é depender do que
+/// não precisa.
+fn esquecer_conferencia(caminho: &Path) {
+    CONFERIDOS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(caminho);
+}
+
 /// Situação do acessório no cache. `Pronto` SÓ quando o arquivo existe **e** a
 /// soma confere — arquivo que existe mas não confere é `Corrompido`, e o
 /// produto o trata como ausente.
+///
+/// A soma sai de `soma_conferida`, que relê o disco só quando o arquivo deixou
+/// de ser o mesmo — ver o bloco acima.
 pub fn estado(acessorio: &Acessorio, cache: &Path) -> Estado {
     if acessorio.soma_pendente() {
         return Estado::Indisponivel;
     }
     let caminho = acessorio.caminho(cache);
-    if !caminho.is_file() {
+    // um `metadata` só responde as três perguntas — existe, é arquivo, e quem
+    // é ele —, e é o mesmo `stat` que o `is_file` daqui já custava
+    let Ok(meta) = std::fs::metadata(&caminho) else {
+        return Estado::Ausente;
+    };
+    if !meta.is_file() {
         return Estado::Ausente;
     }
-    match sha256_do_arquivo(&caminho) {
+    match soma_conferida(&caminho, &meta) {
         // arquivo ilegível é indistinguível de arquivo quebrado para quem
         // vai executá-lo: nos dois casos ele não pode ser usado
         Err(_) => Estado::Corrompido,
@@ -693,6 +837,9 @@ where
     let caminho = acessorio.caminho(cache);
     std::fs::rename(&parcial.0, &caminho).map_err(|e| erro_de_escrita(Passo::Instalacao, &e))?;
     std::mem::forget(parcial); // deu certo: não há mais parcial para apagar
+    // o arquivo que morava neste caminho era OUTRO, e o que a sessão sabia
+    // sobre ele morre aqui (ver o bloco da conferência memorizada)
+    esquecer_conferencia(&caminho);
     Ok(Some(caminho))
 }
 
@@ -1101,6 +1248,173 @@ mod tests {
         .expect_err("acessório sem soma não baixa");
         assert_eq!(erro.to_string(), ERRO_INDISPONIVEL);
         assert_eq!(chamadas.get(), 0, "nem chega a abrir conexão");
+    }
+
+    // -----------------------------------------------------------------------
+    // A conferência memorizada (V10.3 — a dívida (a) da DECISIONS #124)
+    // -----------------------------------------------------------------------
+
+    /// Carimba o mtime do arquivo à mão. O relógio do sistema de arquivos tem
+    /// granularidade própria e "escrever de novo" não garante carimbo
+    /// diferente — num teste sobre invalidação por mtime, quem decide o
+    /// carimbo tem de ser o teste.
+    fn carimbar(caminho: &Path, segundos: u64) {
+        std::fs::File::options()
+            .write(true)
+            .open(caminho)
+            .unwrap()
+            .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(segundos))
+            .unwrap();
+    }
+
+    /// Conteúdo de MESMO tamanho e soma diferente — o caso mais desconfortável
+    /// da memorização: só o mtime denuncia a troca.
+    const OUTRO_CONTEUDO_DO_MESMO_TAMANHO: &[u8] = b"BINARIO DE MENTIRA DO FPCALC\n";
+
+    /// A conferência é UMA por arquivo por sessão. Era uma por chamada, e a
+    /// tela de curadoria chama a cada troca de pasta: com o modelo grande são
+    /// 1,5 GB relidos por clique.
+    #[test]
+    fn conferir_o_mesmo_arquivo_de_novo_nao_le_o_disco_de_novo() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = acessorio_de_teste(&sha256_dos_bytes(CONTEUDO));
+        let caminho = a.caminho(dir.path());
+        std::fs::write(&caminho, CONTEUDO).unwrap();
+
+        assert_eq!(estado(&a, dir.path()), Estado::Pronto);
+        assert_eq!(
+            leituras_de(&caminho),
+            1,
+            "a PRIMEIRA conferência acontece de verdade (DECISIONS #96)"
+        );
+
+        for _ in 0..5 {
+            assert_eq!(estado(&a, dir.path()), Estado::Pronto);
+        }
+        assert_eq!(
+            leituras_de(&caminho),
+            1,
+            "as seguintes saem da memória, sem tocar o disco"
+        );
+    }
+
+    /// Mtime diferente = arquivo trocado no disco = conferência nova. Sem
+    /// isto, o modelo substituído em campo continuaria "pronto" pela memória
+    /// de uma conferência que era de outro arquivo.
+    #[test]
+    fn mtime_diferente_manda_conferir_de_novo() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = acessorio_de_teste(&sha256_dos_bytes(CONTEUDO));
+        let caminho = a.caminho(dir.path());
+        std::fs::write(&caminho, CONTEUDO).unwrap();
+        carimbar(&caminho, 1_000_000);
+
+        assert_eq!(estado(&a, dir.path()), Estado::Pronto);
+        assert_eq!(leituras_de(&caminho), 1);
+
+        carimbar(&caminho, 2_000_000);
+        assert_eq!(estado(&a, dir.path()), Estado::Pronto);
+        assert_eq!(
+            leituras_de(&caminho),
+            2,
+            "carimbo novo invalida a memória, mesmo com o conteúdo igual"
+        );
+    }
+
+    /// Tamanho diferente também invalida — e é o que pega o arquivo trocado
+    /// por um MAIOR com o mtime devolvido à mão ao valor antigo.
+    #[test]
+    fn tamanho_diferente_manda_conferir_de_novo() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = acessorio_de_teste(&sha256_dos_bytes(CONTEUDO));
+        let caminho = a.caminho(dir.path());
+        std::fs::write(&caminho, CONTEUDO).unwrap();
+        carimbar(&caminho, 1_000_000);
+
+        assert_eq!(estado(&a, dir.path()), Estado::Pronto);
+        assert_eq!(leituras_de(&caminho), 1);
+
+        std::fs::write(&caminho, [CONTEUDO, b"e mais um pedaco"].concat()).unwrap();
+        carimbar(&caminho, 1_000_000); // o MESMO carimbo de antes
+
+        assert_eq!(estado(&a, dir.path()), Estado::Corrompido);
+        assert_eq!(
+            leituras_de(&caminho),
+            2,
+            "tamanho diferente é arquivo diferente, carimbo igual ou não"
+        );
+    }
+
+    /// A memorização guarda a SOMA de um arquivo identificado, e não o
+    /// veredito "pronto" de um acessório: conteúdo que mudou volta a ser
+    /// julgado, e o julgamento é o mesmo de sempre.
+    #[test]
+    fn a_memorizacao_nao_guarda_pronto_para_conteudo_que_mudou() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = acessorio_de_teste(&sha256_dos_bytes(CONTEUDO));
+        let caminho = a.caminho(dir.path());
+        std::fs::write(&caminho, CONTEUDO).unwrap();
+        carimbar(&caminho, 1_000_000);
+        assert_eq!(estado(&a, dir.path()), Estado::Pronto);
+
+        // mesmo tamanho, soma diferente: só o carimbo denuncia
+        std::fs::write(&caminho, OUTRO_CONTEUDO_DO_MESMO_TAMANHO).unwrap();
+        carimbar(&caminho, 2_000_000);
+
+        assert_eq!(estado(&a, dir.path()), Estado::Corrompido);
+        assert_eq!(estado(&a, dir.path()), Estado::Corrompido, "e continua");
+    }
+
+    /// Arquivo corrompido continua sendo pego — e a memória também vale para
+    /// ele: não é o veredito "pronto" que se memoriza, é a soma.
+    #[test]
+    fn arquivo_corrompido_e_pego_e_tambem_nao_e_relido() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = acessorio_de_teste(&sha256_dos_bytes(CONTEUDO));
+        let caminho = a.caminho(dir.path());
+        std::fs::write(&caminho, b"metade de um download").unwrap();
+
+        assert_eq!(estado(&a, dir.path()), Estado::Corrompido);
+        assert_eq!(estado(&a, dir.path()), Estado::Corrompido);
+        assert_eq!(leituras_de(&caminho), 1);
+    }
+
+    /// O `.parcial` do download NUNCA sai da memória: o que a QA M3 exige é
+    /// uma leitura do arquivo recém-gravado, e ela acontece toda vez.
+    /// Instalar também ESQUECE o caminho de destino — o arquivo que estava
+    /// ali era outro, e a memória dele não pode sobreviver à troca de nome.
+    #[test]
+    fn instalar_por_cima_esquece_a_conferencia_anterior() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = acessorio_de_teste(&sha256_dos_bytes(CONTEUDO));
+        let caminho = a.caminho(dir.path());
+        // um corrompido do MESMO tamanho do que vai ser instalado por cima
+        std::fs::write(&caminho, OUTRO_CONTEUDO_DO_MESMO_TAMANHO).unwrap();
+        assert_eq!(estado(&a, dir.path()), Estado::Corrompido);
+        let leituras_antes = leituras_de(&caminho);
+
+        let chamadas = Cell::new(0);
+        baixar(
+            &a,
+            dir.path(),
+            fetcher(CONTEUDO, &chamadas),
+            sem_progresso,
+            sem_cancelamento,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(
+            leituras_de(&a.parcial(dir.path())),
+            1,
+            "o parcial é lido do disco, sempre"
+        );
+        assert_eq!(estado(&a, dir.path()), Estado::Pronto);
+        assert_eq!(
+            leituras_de(&caminho),
+            leituras_antes + 1,
+            "o destino foi esquecido na instalação e conferido de novo"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -1556,3 +1870,4 @@ mod tests {
         );
     }
 }
+

@@ -1087,3 +1087,44 @@ opção mais simples que passa nos Acceptance Checks do PRD.
     do que o backend devolve, e o mock deixou de espelhá-lo. É a #117
     (documentação que mente é defeito) na forma de um tipo. O `src/**` estava
     fora do escopo desta rodada de propósito, e isto é o que sobrou para lá.
+
+## V10.3 — a conferência que não precisava acontecer de novo
+
+125. **A conferência do acessório é memorizada por `(caminho, mtime,
+    tamanho)`, em memória, pela vida do processo.** É a dívida (a) da #124
+    paga: `estado` lê o arquivo INTEIRO, e a tela de curadoria pergunta o
+    estado a cada troca de pasta (`enrich_count` → `etapas_ligadas` →
+    `transcricao::acessorios_prontos`). Com o pequeno eram 190 MB por clique;
+    com o grande são 1,5 GB. **Medido**, com SHA-NI e em release: 422 ms para
+    512 MB, ~1,2 s extrapolado para o `ggml-medium.bin` — e isso com o arquivo
+    quente no cache de páginas, que é o melhor caso. Na máquina modesta sem
+    SHA-NI, com o arquivo vindo de disco mecânico, é a dezena de segundos que a
+    #124 previu. Depois: **2,3 µs**, e o disco não é tocado. O comando é
+    `(async)` e nunca congelou a janela (#92), mas a contagem e a estimativa
+    ficavam "pensando" por segundos para reconfirmar um fato que não mudou —
+    e o dono do produto vai baixar 1,5 GB para comparar dois modelos, onde uma
+    lentidão que não é do modelo estragaria a comparação.
+    **A garantia da #96 continua de pé**: nada é executado sem ter sido
+    conferido — a primeira conferência de cada arquivo, em cada sessão,
+    acontece de verdade, e reabrir o aplicativo reconfere tudo. `mtime` ou
+    `tamanho` diferentes invalidam a entrada, e **instalar por cima ESQUECE o
+    caminho** (o arquivo que morava ali era outro; depender da granularidade do
+    relógio do disco para uma troca que nós mesmos fizemos é depender do que
+    não precisa).
+    **O que se memoriza é a SOMA de um arquivo identificado, não o veredito
+    "pronto" de um acessório.** A comparação com o `sha256` do catálogo
+    acontece em toda pergunta, então conteúdo trocado volta a ser julgado e
+    corrompido continua sendo pego. Há teste CONTANDO as leituras de disco:
+    "não releu o arquivo" é afirmação sobre o disco, e afirmação sobre o disco
+    se conta, não se deduz lendo o código.
+    **A janela que sobra não é nova.** Arquivo trocado no meio da sessão com o
+    mtime preservado à mão é a MESMA TOCTOU que o QA da v0.9.0 examinou e
+    aceitou, escrita no `commands::fontes_do_funil`: a soma já era conferida
+    uma vez por varredura, e a execução acontecia dezenas de vezes ao longo de
+    minutos. Isto muda a FREQUÊNCIA de uma conferência que já não era por
+    execução.
+    **A saída descartada foi responder por presença+tamanho** e deixar a soma
+    só para antes de executar: ela tornaria o `tamanho_bytes` do catálogo
+    load-bearing, e hoje um erro nele mente na estimativa (#85) sem desligar
+    nada. Cache em disco também não: conferir o cache é o trabalho que ele
+    existiria para evitar.
