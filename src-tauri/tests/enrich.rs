@@ -4003,7 +4003,15 @@ fn transcrever(
     ids: &[i64],
     motor: impl Fn(&Path, &dyn Fn() -> bool, &dyn Fn(u8)) -> Result<Option<SaidaDoMotor>, AppError>,
 ) -> enrich::TranscricaoResultado {
-    enrich::transcricao_scan(conn, ids, motor, SEM_PROGRESSO_5, SEM_CANCELAMENTO).unwrap()
+    enrich::transcricao_scan(
+        conn,
+        transcricao::modelo_oferecido(),
+        ids,
+        motor,
+        SEM_PROGRESSO_5,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap()
 }
 
 /// A letra escrita pela máquina chega como PROPOSTA, com a fonte visível, e
@@ -4092,6 +4100,7 @@ fn a_etapa_5_recusa_o_instrumental_e_a_musica_que_ja_tem_letra() {
     let chamadas = RefCell::new(0);
     let r = enrich::transcricao_scan(
         &conn,
+        transcricao::modelo_oferecido(),
         &[inst.id, com.id],
         |_mp3: &Path, _c: &dyn Fn() -> bool, _p: &dyn Fn(u8)| {
             *chamadas.borrow_mut() += 1;
@@ -4142,6 +4151,7 @@ fn transcritor_que_nao_executa_desliga_a_etapa_e_falha_de_arquivo_nao() {
     let chamadas = RefCell::new(0);
     let r = enrich::transcricao_scan(
         &conn,
+        transcricao::modelo_oferecido(),
         &ids,
         |_mp3: &Path, _c: &dyn Fn() -> bool, _p: &dyn Fn(u8)| {
             *chamadas.borrow_mut() += 1;
@@ -4158,6 +4168,7 @@ fn transcritor_que_nao_executa_desliga_a_etapa_e_falha_de_arquivo_nao() {
     let chamadas = RefCell::new(0);
     enrich::transcricao_scan(
         &conn,
+        transcricao::modelo_oferecido(),
         &ids,
         |_mp3: &Path, _c: &dyn Fn() -> bool, _p: &dyn Fn(u8)| {
             *chamadas.borrow_mut() += 1;
@@ -4188,6 +4199,7 @@ fn cancelar_para_a_fila_da_transcricao_com_o_que_ja_tem() {
     let feitas = RefCell::new(0);
     let r = enrich::transcricao_scan(
         &conn,
+        transcricao::modelo_oferecido(),
         &ids,
         |_mp3: &Path, _c: &dyn Fn() -> bool, _p: &dyn Fn(u8)| {
             *feitas.borrow_mut() += 1;
@@ -4839,6 +4851,7 @@ fn a_razao_medida_e_guardada_pelo_backend_e_manda_na_estimativa_seguinte() {
     // caso real: máquina modesta, whisper.cpp sem Metal e sem Accelerate
     let r = enrich::transcricao_scan(
         &conn,
+        transcricao::modelo_oferecido(),
         &[song.id],
         motor_lento("uma letra bem comprida", 600.0, Duration::from_millis(60)),
         SEM_PROGRESSO_5,
@@ -4893,6 +4906,7 @@ fn amostra_curta_demais_nao_troca_a_estimativa_declarada() {
     // 30 s de áudio: muito abaixo do piso de 300 s
     let r = enrich::transcricao_scan(
         &conn,
+        transcricao::modelo_oferecido(),
         &[song.id],
         motor_lento("uma letra bem comprida", 30.0, Duration::from_millis(60)),
         SEM_PROGRESSO_5,
@@ -4922,6 +4936,100 @@ fn amostra_curta_demais_nao_troca_a_estimativa_declarada() {
     );
 }
 
+// ===========================================================================
+// V10.2 — a estimativa segue O MODELO, e não só a máquina
+// ===========================================================================
+
+/// Fontes de funil que declaram QUAL modelo esta máquina usaria. É o único
+/// jeito de a suíte alcançar o caminho da máquina que baixou o `medium`: os
+/// arquivos reais têm 1,7 GB e a soma é conferida contra o catálogo.
+struct ComModelo(&'static transcricao::Modelo);
+
+impl enrich::Fontes for ComModelo {
+    fn buscar(&self, _url: &str) -> Result<String, AppError> {
+        Ok("[]".to_string())
+    }
+    fn modelo_da_transcricao(&self) -> &'static transcricao::Modelo {
+        self.0
+    }
+}
+
+/// **A razão de fábrica é POR MODELO.** Numa máquina que ainda não mediu nada,
+/// a mesma pasta tem estimativas diferentes conforme o modelo baixado — o
+/// grande é ~3x mais lento, e anunciar o número do pequeno seria prometer 3
+/// horas para um trabalho de 9 (DECISIONS #85, agora por uma porta nova).
+#[test]
+fn a_estimativa_de_fabrica_muda_com_o_modelo_baixado() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
+    let song = song_by_suffix(&conn, "sem_letra.mp3");
+    conn.execute("UPDATE songs SET duration_seconds = 240 WHERE id = ?1", [song.id])
+        .unwrap();
+
+    let estimar = |modelo| {
+        enrich::enrich_scan(&conn, "", ComModelo(modelo), ZERO, SEM_PROGRESSO, SEM_CANCELAMENTO)
+            .unwrap()
+    };
+    let pequeno = estimar(transcricao::modelo_oferecido());
+    let grande = estimar(transcricao::MODELOS[0]);
+
+    assert_eq!(pequeno.segundos_de_transcricao, 240, "240 s a 1,0");
+    assert_eq!(
+        grande.segundos_de_transcricao,
+        (240.0 * transcricao::RAZAO_DE_REFERENCIA_DO_GRANDE).ceil() as u64,
+        "o modelo que entende melhor custa mais, e a tela diz isso ANTES"
+    );
+    assert!(!pequeno.estimativa_medida_nesta_maquina);
+    assert!(!grande.estimativa_medida_nesta_maquina, "os dois são de fábrica");
+}
+
+/// **Medir com um modelo NÃO corrige (nem estraga) a estimativa do outro.**
+///
+/// É o item que decidiu a medição por modelo. A alternativa — invalidar tudo
+/// quando o modelo muda — precisaria guardar exatamente o mesmo fato ("qual
+/// modelo mediu isto") para saber que mudou, e então jogá-lo fora; e a queda do
+/// grande para o pequeno (grande corrompido) é um caminho DESENHADO, então a
+/// máquina oscila entre os dois e cada oscilação zeraria uma medição boa.
+#[test]
+fn medir_com_um_modelo_nao_move_a_estimativa_do_outro() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
+    let song = song_by_suffix(&conn, "sem_letra.mp3");
+    conn.execute("UPDATE songs SET duration_seconds = 240 WHERE id = ?1", [song.id])
+        .unwrap();
+
+    // uma noite inteira transcrevendo com o PEQUENO
+    let r = enrich::transcricao_scan(
+        &conn,
+        transcricao::modelo_oferecido(),
+        &[song.id],
+        motor_lento("uma letra bem comprida", 600.0, Duration::from_millis(60)),
+        SEM_PROGRESSO_5,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+    assert!(r.razao_medida.is_some());
+
+    let estimar = |modelo| {
+        enrich::enrich_scan(&conn, "", ComModelo(modelo), ZERO, SEM_PROGRESSO, SEM_CANCELAMENTO)
+            .unwrap()
+    };
+    let com_pequeno = estimar(transcricao::modelo_oferecido());
+    assert!(
+        com_pequeno.estimativa_medida_nesta_maquina,
+        "para o pequeno, a estimativa agora é MEDIÇÃO desta máquina"
+    );
+
+    let com_grande = estimar(transcricao::MODELOS[0]);
+    assert!(
+        !com_grande.estimativa_medida_nesta_maquina,
+        "e para o grande continua sendo de fábrica — ninguém o mediu aqui"
+    );
+    assert_eq!(
+        com_grande.segundos_de_transcricao,
+        (240.0 * transcricao::RAZAO_DE_REFERENCIA_DO_GRANDE).ceil() as u64,
+        "a medição do pequeno NÃO vaza para o número do grande"
+    );
+}
+
 /// A medição ACUMULA entre execuções, e é por isso que ela é guardada como
 /// dois somatórios e não como uma razão pronta: uma música de 30 s no fim do
 /// dia não pode mandar na estimativa de um acervo de 150.
@@ -4933,6 +5041,7 @@ fn a_medicao_acumula_entre_execucoes() {
     for _ in 0..3 {
         enrich::transcricao_scan(
             &conn,
+            transcricao::modelo_oferecido(),
             &[song.id],
             motor_lento("uma letra bem comprida", 200.0, Duration::from_millis(40)),
             SEM_PROGRESSO_5,
@@ -4940,10 +5049,18 @@ fn a_medicao_acumula_entre_execucoes() {
         )
         .unwrap();
     }
-    let razao = db::razao_medida(&conn, db::MEDICAO_TRANSCRICAO, 300.0)
+    // V10.2 — a chave é a DO MODELO, e não mais a genérica: a soma de um
+    // modelo três vezes mais lento com a de outro não descreve nenhum dos dois.
+    let modelo = transcricao::modelo_oferecido();
+    let razao = db::razao_medida(&conn, &modelo.chave_de_medicao(), 300.0)
         .unwrap()
         .expect("600 s acumulados passam do piso");
     assert!(razao > 0.0);
+    assert_eq!(
+        db::razao_medida(&conn, db::MEDICAO_TRANSCRICAO, 300.0).unwrap(),
+        None,
+        "nada é guardado sob a chave sem modelo — ela é só o prefixo"
+    );
 }
 
 // ===========================================================================
@@ -4970,6 +5087,7 @@ fn disco_cheio_desliga_a_fila_em_vez_de_acusar_cada_musica() {
     let tentativas = std::cell::Cell::new(0usize);
     let r = enrich::transcricao_scan(
         &conn,
+        transcricao::modelo_oferecido(),
         &ids,
         |_mp3: &Path, _c: &dyn Fn() -> bool, _p: &dyn Fn(u8)| {
             tentativas.set(tentativas.get() + 1);

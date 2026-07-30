@@ -226,7 +226,31 @@ pub fn init_schema(conn: &Connection) -> Result<()> {
     migrate_if_needed(conn)?;
     conn.execute_batch(SCHEMA)?;
     conn.execute_batch(FTS_SCHEMA)?;
+    reetiquetar_medicao_de_modelo_unico(conn)?;
     conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    Ok(())
+}
+
+/// V10.2 — a medição da etapa 5 passou a ser POR MODELO, e a linha que a
+/// v0.10.0 deixou no banco continua valendo: ela é do modelo pequeno.
+///
+/// Não é migração de schema (a tabela não mudou), então não entra no
+/// `migrate_if_needed` nem faz o `user_version` andar — é uma linha de DADO
+/// sendo dita por inteiro. Descartá-la devolveria a estimativa desta máquina ao
+/// número de fábrica sem motivo nenhum: a v0.10.0 tinha UM modelo, então o que
+/// está ali é, sem adivinhação, quanto o `ggml-small-q5_1.bin` levou aqui.
+///
+/// `UPDATE OR IGNORE` porque a chave é PRIMARY KEY: se a nova já existir, a
+/// antiga fica onde está em vez de a gravação inteira falhar. Rodar de novo é
+/// no-op — depois da primeira vez não há linha com a chave velha.
+fn reetiquetar_medicao_de_modelo_unico(conn: &Connection) -> Result<()> {
+    conn.execute(
+        "UPDATE OR IGNORE medicoes_da_maquina SET chave = ?2 WHERE chave = ?1",
+        params![
+            MEDICAO_DE_MODELO_UNICO,
+            format!("{MEDICAO_TRANSCRICAO}:{ARQUIVO_DO_MODELO_UNICO}")
+        ],
+    )?;
     Ok(())
 }
 
@@ -445,8 +469,23 @@ pub fn get_lyrics(conn: &Connection, song_id: i64) -> Result<Option<String>> {
 // O que esta máquina mediu sobre si mesma (V10, QA A1)
 // ---------------------------------------------------------------------------
 
-/// Chave da medição da etapa 5: segundos de relógio por segundo de áudio.
+/// PREFIXO da chave de medição da etapa 5: segundos de relógio por segundo de
+/// áudio.
+///
+/// V10.2 — a chave completa inclui o ARQUIVO do modelo
+/// (`transcricao:ggml-small-q5_1.bin`), e quem a monta é
+/// `transcricao::Modelo::chave_de_medicao`. Um modelo três vezes mais lento
+/// somado ao mesmo total faria a estimativa mentir por um fator, e é a
+/// DECISIONS #72 na forma mais direta possível: a prova não viaja junto quando
+/// o que a produziu muda.
 pub const MEDICAO_TRANSCRICAO: &str = "transcricao";
+
+/// A chave que a v0.10.0 gravava, quando havia UM modelo só.
+const MEDICAO_DE_MODELO_UNICO: &str = "transcricao";
+
+/// E o modelo que a produziu. Não é adivinhação: naquela versão o catálogo
+/// tinha um modelo, e era este. Há teste pinando o nome contra o catálogo.
+const ARQUIVO_DO_MODELO_UNICO: &str = "ggml-small-q5_1.bin";
 
 /// Acumula mais uma amostra de medição.
 ///
@@ -678,6 +717,59 @@ mod tests {
         let mut nomes = vec!["Zebra", nfd, "Barco"];
         nomes.sort_by(|a, b| fold_pt(a).cmp(&fold_pt(b)));
         assert_eq!(nomes, vec!["Barco", nfd, "Zebra"]);
+    }
+
+    /// V10.2 — o arquivo que a reetiquetagem afirma ter produzido a medição da
+    /// v0.10.0 tem de ser um arquivo que EXISTE no catálogo. Um erro de digitação
+    /// aqui não quebraria nada visível: a linha antiga viraria uma chave que
+    /// ninguém lê, e a estimativa desta máquina voltaria ao número de fábrica em
+    /// silêncio. É o tipo de defeito que só aparece na máquina de quem não tem a
+    /// quem perguntar.
+    #[test]
+    fn o_modelo_da_medicao_antiga_e_um_arquivo_do_catalogo() {
+        assert!(
+            crate::acessorios::CATALOGO
+                .iter()
+                .any(|a| a.arquivo == ARQUIVO_DO_MODELO_UNICO && !a.executavel),
+            "{ARQUIVO_DO_MODELO_UNICO} não é um modelo do catálogo"
+        );
+        assert_eq!(MEDICAO_DE_MODELO_UNICO, MEDICAO_TRANSCRICAO);
+    }
+
+    /// A reetiquetagem é IDEMPOTENTE e não inventa linha: abrir o banco vinte
+    /// vezes não duplica nem soma nada, e um banco sem a linha antiga continua
+    /// sem linha nenhuma.
+    #[test]
+    fn reetiquetar_a_medicao_antiga_e_idempotente() {
+        let conn = open_in_memory().unwrap();
+        let linhas = |c: &Connection| -> Vec<(String, f64, f64)> {
+            let mut s = c
+                .prepare("SELECT chave, audio_segundos, relogio_segundos FROM medicoes_da_maquina")
+                .unwrap();
+            let v: Vec<_> = s
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .unwrap()
+                .map(std::result::Result::unwrap)
+                .collect();
+            v
+        };
+        // banco sem medição nenhuma: nada aparece
+        reetiquetar_medicao_de_modelo_unico(&conn).unwrap();
+        assert!(linhas(&conn).is_empty());
+
+        somar_medicao(&conn, MEDICAO_DE_MODELO_UNICO, 600.0, 900.0).unwrap();
+        for _ in 0..3 {
+            reetiquetar_medicao_de_modelo_unico(&conn).unwrap();
+        }
+        assert_eq!(
+            linhas(&conn),
+            vec![(
+                format!("{MEDICAO_TRANSCRICAO}:{ARQUIVO_DO_MODELO_UNICO}"),
+                600.0,
+                900.0
+            )],
+            "uma linha só, com os somatórios intactos"
+        );
     }
 
     #[test]

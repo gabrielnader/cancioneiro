@@ -961,3 +961,129 @@ opção mais simples que passa nos Acceptance Checks do PRD.
     caso no contêiner e no CI), e um teste que passa ou falha conforme quem o
     rodou é a "falha fantasma" que a #77 saiu para acabar. A tradução tem teste
     unitário por caso.
+
+## V10.2 — o segundo modelo, que existe para ser medido
+
+122. **O `medium` entrou porque a qualidade do `small` REPROVOU, e ele é
+    preferência — não é uma caixinha de escolha.** Medida no acervo real, a
+    encontrabilidade do `ggml-small-q5_1.bin` deu **37%**, contra os **78%** que
+    o faster-whisper tinha entregado. Foi o risco que o PRD V10 registrou
+    acontecendo em campo: *a prova não viaja junto quando o código é reusado*
+    (#72). E o modo de falha não é grafia — o que se remedia com dicionário —,
+    é **o modelo classificando trecho CANTADO como música e não o
+    transcrevendo**: as saídas vieram salpicadas de `[música]`, `[Música]`,
+    `[MÚSICA DE FUNDO]`, `[cantarolando]`, e numa das faixas quatro estrofes
+    inteiras sumiram. Onde ele emite a marca, a letra não existe — e uma letra
+    com buraco *tem letra*, some da fila para sempre (#70) e não é encontrável
+    pelo pedaço que a pessoa lembra, que é o produto inteiro. Não é falta de
+    idioma: o `--language pt` está sendo passado, e há teste varrendo a linha de
+    comando.
+    **Preferência, e não escolha**: se o grande estiver pronto, é ele que roda;
+    senão o pequeno; senão a etapa não existe. Não há tela de seleção de modelo,
+    e não vai haver — escolha é pedágio para quem não tem a quem perguntar
+    (#102), e "qual modelo de reconhecimento de fala você prefere" é a pior
+    versão possível desse pedágio. Os dois aparecem em Configurações porque a
+    tela lista o CATÁLOGO (#101), e isso basta: **nada no frontend mudou.**
+    A ordem é DECLARADA (`transcricao::MODELOS`), e não deduzida do tamanho do
+    arquivo. Hoje o preferido é também o maior, mas "maior" é proxy de
+    qualidade: um modelo melhor e menor (destilado, podado) entraria na frente
+    sem esta lista precisar de exceção, e ordenar por bytes o poria no fim. Há
+    guarda pinando que **todo acessório de DADO do catálogo está na ordem de
+    preferência** — sem ela alguém publica um modelo, a pessoa baixa 1,5 GB, e a
+    transcrição nunca o usa porque a preferência não sabe que ele existe.
+    **O grande CORROMPIDO cai para o pequeno em vez de desligar a etapa.** Num
+    download de 1,5 GB o arquivo truncado não é hipótese, e a máquina que já tem
+    o outro modelo pronto não pode ficar sem transcrição por causa disso.
+    `Corrompido`, `Ausente` e `Indisponivel` valem o mesmo aqui: os três querem
+    dizer "não dá para usar ESTE".
+    **Isto é temporário e está escrito onde alguém vai ler**: no bloco do
+    `CATALOGO`, no de `transcricao::MODELOS` e no cabeçalho do
+    `tests/remedicao.rs`, que é o arnês que decide. Assim que a remedição rodar
+    nos MESMOS arquivos com os dois modelos, **um dos dois sai do catálogo**.
+    Dois modelos não são o desenho final; são uma medição em curso.
+    E a tela diz o que cada um é em uma frase, na régua da #100 — sem "modelo",
+    sem "quantizado", sem tamanho (o tamanho já está no cartão, em MB):
+    o pequeno é *"entender o que é cantado — este é o rápido, e às vezes deixa
+    trechos de fora"*; o grande é *"entender melhor o que é cantado — é bem mais
+    lento, e o aplicativo usa este quando ele está aqui"*. A segunda metade da
+    frase do grande responde à única pergunta que alguém faz ao ver dois cartões
+    parecidos: *preciso dos dois? qual roda?*
+123. **A medição de tempo é POR MODELO, e invalidar quando o modelo muda seria
+    mais código para um resultado pior.** A #112 pôs a razão medida no banco sob
+    a chave `transcricao`, quando havia um modelo só. Com dois, e sendo o grande
+    ~3x mais lento, uma medição feita com o pequeno passaria a subestimar por um
+    fator: a tela diria "cerca de 3 horas neste computador" para um trabalho de
+    nove, que é a #85 (prometer menos do que leva) de volta — e permanente, como
+    ela já foi uma vez.
+    As duas saídas foram comparadas, e a escolha não é de gosto:
+    **(a) invalidar a medição quando o modelo muda PRECISA guardar exatamente o
+    mesmo fato que a chave por modelo guarda** — "qual modelo produziu isto" —
+    para poder perceber que mudou. Ou seja, ela paga o mesmo preço em dado, e
+    depois joga o dado fora. É estritamente mais código para menos memória.
+    **(b) a queda do grande para o pequeno é um caminho DESENHADO** (ver #122),
+    não uma exceção: a máquina vai oscilar entre os dois — download que
+    corrompe, arquivo que o antivírus leva, disco que enche. Cada oscilação
+    zeraria uma medição boa e devolveria a estimativa ao número de fábrica,
+    justamente na máquina que mais depende dela.
+    **(c) o piso de 300 s de áudio** (#112) faz a invalidação doer duas vezes:
+    depois de cada troca a amostra volta a ser curta demais para valer, e a tela
+    volta à ressalva "pode levar mais nesta máquina" mesmo tendo medido a
+    máquina a noite inteira. Com chave por modelo, cada modelo mantém o seu
+    banco de horas.
+    **(d) o custo é pequeno porque a #112 já tinha feito a parte cara**:
+    `db::somar_medicao` e `db::razao_medida` sempre receberam a chave por
+    parâmetro. O que faltava era montar a chave certa e passá-la — nenhuma
+    tabela nova, nenhuma migração de schema.
+    A chave carrega o **ARQUIVO** (`transcricao:ggml-small-q5_1.bin`), e não o
+    nome do acessório: se um dia o mesmo nome apontar para outro arquivo, a
+    medição do arquivo velho não pode ser lida como se fosse dele. É a #72
+    escrita numa chave de banco.
+    **A razão DECLARADA também é por modelo**, e pelo mesmo motivo: 1,0 para o
+    pequeno, 3,0 para o grande. O 3,0 é um palpite multiplicado por um palpite —
+    "~3x mais lento" sobre um número de fábrica —, e é o pior número do produto;
+    ele existe para durar cinco minutos de áudio nesta máquina e sumir. Erra
+    para CIMA de propósito (#85).
+    **E a medição da v0.10.0 não é perdida: ela era do pequeno.** Naquela versão
+    o catálogo tinha um modelo, então a linha `transcricao` do banco diz, sem
+    adivinhação, quanto o `ggml-small-q5_1.bin` levou naquela máquina. Ela é
+    reetiquetada na abertura do banco — não é migração de schema (a tabela não
+    mudou), é uma linha de dado passando a se identificar. Descartá-la custaria
+    duas ou três canções de estimativa errada por nada, e "nunca apagar dado
+    existente" vale também para o dado que o próprio programa produziu (#110).
+    Há teste pinando o nome do arquivo contra o catálogo: um erro de digitação
+    ali não quebraria nada visível — a linha viraria uma chave que ninguém lê, e
+    a estimativa voltaria ao número de fábrica em silêncio.
+124. **"A estimativa é medição?" virou um FATO, e deixou de ser uma comparação
+    de floats.** A #119 respondia isso com `razao != RAZAO_DE_REFERENCIA`.
+    Aquilo já mentia num caso — a máquina que medisse exatamente 1,0 seria
+    anunciada como "de fábrica" —, e com dois modelos passaria a mentir por
+    construção, porque há duas constantes de referência e a comparação
+    escolheria a errada. Agora quem responde é
+    `razao_medida_desta_maquina() -> Option<f64>`: existe medição, ou não
+    existe. `estimativa_medida_nesta_maquina` continua sendo o booleano que
+    cruza para a tela, e continua sendo um booleano e não a razão, pelo motivo
+    da #119 (a razão convidaria o TypeScript a multiplicar).
+    **Duas dívidas ficam anotadas, com dono, em vez de resolvidas em silêncio:**
+    **(a) conferir a soma custa ler o arquivo inteiro, e agora o arquivo tem
+    1,5 GB.** `enrich_count` roda a cada troca de pasta na tela de curadoria e
+    confere o modelo; com o pequeno eram 190 MB, com o grande são 1,5 GB.
+    Medido nesta máquina (com SHA-NI) dá ~1,3 s; numa máquina modesta sem
+    SHA-NI, e com o arquivo vindo de disco mecânico, a conta chega à dezena de
+    segundos — por troca de pasta. O comando é `(async)` e não congela a janela
+    (#92), mas a contagem fica "pensando" por tempo demais. **A dupla
+    conferência que esta rodada teria introduzido foi removida** (o
+    `acessorios_prontos` chegou a conferir o modelo escolhido duas vezes na
+    mesma chamada); o custo que sobra é o de UMA leitura, e ele é anterior a
+    esta mudança — só ficou oito vezes maior. As saídas conhecidas (memorizar a
+    soma por mtime+tamanho, ou recusar por tamanho antes de somar) mexem na
+    garantia da #96 — "o que se confere é o que se executa" — ou tornam o
+    `tamanho_bytes` do catálogo load-bearing, onde hoje um erro nele não
+    desliga nada. Nenhuma das duas se decide dentro de uma tarefa sobre
+    qualidade de transcrição.
+    **(b) o tipo do frontend não conhece o nome novo.** `src/lib/api.ts` declara
+    `nome: "fpcalc" | "whisper-cli" | "modelo-de-transcricao"`, e o mock lista
+    três acessórios. Nada quebra — a lista vem do backend em tempo de execução,
+    e a tela desenha um cartão por item —, mas o tipo passou a descrever menos
+    do que o backend devolve, e o mock deixou de espelhá-lo. É a #117
+    (documentação que mente é defeito) na forma de um tipo. O `src/**` estava
+    fora do escopo desta rodada de propósito, e isto é o que sobrou para lá.

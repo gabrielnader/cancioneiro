@@ -141,6 +141,21 @@ pub trait Fontes {
     fn chave_acoustid(&self) -> &str {
         ""
     }
+
+    /// V10.2 — QUAL modelo da etapa 5 esta máquina vai usar.
+    ///
+    /// A varredura não roda a etapa 5, mas é ela que monta a pergunta do fim
+    /// ("…leva cerca de 3 horas neste computador"), e esse número depende do
+    /// modelo: o grande é ~3x mais lento, e mede a própria razão sob a própria
+    /// chave. Sem esta pergunta, a estimativa de uma máquina com o `medium`
+    /// baixado sairia da medição do `small` — errada por um fator, para menos,
+    /// que é o defeito da DECISIONS #85.
+    ///
+    /// O padrão é o modelo OFERECIDO, que é o estado real de quem ainda não
+    /// baixou nenhum — o mesmo espírito do `reconhece_pelo_som` acima.
+    fn modelo_da_transcricao(&self) -> &'static crate::transcricao::Modelo {
+        crate::transcricao::modelo_oferecido()
+    }
 }
 
 impl<F> Fontes for F
@@ -1922,8 +1937,15 @@ where
     // A razão é lida UMA vez por varredura, e não por fechamento: ela não muda
     // no meio, e é dela que saem os dois campos que a tela usa para dizer se o
     // número é medido ou de fábrica.
-    let razao = crate::transcricao::razao_desta_maquina(conn);
-    let medida = razao != crate::transcricao::RAZAO_DE_REFERENCIA;
+    //
+    // V10.2 — e ela é lida PARA O MODELO que esta máquina vai usar. "Medido" é
+    // um `Option` e não `razao != RAZAO_DE_REFERENCIA`: com dois modelos há
+    // duas constantes de referência, e a comparação escolheria a errada — além
+    // de já mentir, antes disso, na máquina que medisse exatamente a constante.
+    let modelo = fontes.modelo_da_transcricao();
+    let medido = crate::transcricao::razao_medida_desta_maquina(conn, modelo);
+    let razao = medido.unwrap_or(modelo.razao_de_referencia);
+    let medida = medido.is_some();
     let fechar = |propostas: Vec<EnrichProposal>| {
         let restantes = sobraram.take();
         EnrichScanResult {
@@ -2009,8 +2031,15 @@ where
 /// `on_progress(feitas, total, nome, porcento_da_musica)` — `porcento_da_musica`
 /// existe porque uma única música leva minutos: uma barra que só anda entre
 /// arquivos fica parada por tempo demais para parecer viva.
+///
+/// `modelo` é QUAL modelo o `transcritor` está usando (V10.2). Ele entra por
+/// parâmetro, e não é deduzido aqui, porque quem escolheu o modelo foi quem
+/// montou o `transcritor` — deduzi-lo de novo seria a mesma regra em dois
+/// lugares, prontas para divergir (DECISIONS #80). É dele que sai a chave sob a
+/// qual esta execução guarda o que mediu.
 pub fn transcricao_scan<T, P, C>(
     conn: &Connection,
+    modelo: &crate::transcricao::Modelo,
     song_ids: &[i64],
     transcritor: T,
     on_progress: P,
@@ -2121,9 +2150,13 @@ where
 
     // QA A1 — a medição VOLTA, e volta por dentro. O frontend não precisa
     // guardar nada nem lembrar de reenviar: a próxima varredura lê daqui.
+    //
+    // V10.2 — sob a chave DESTE modelo. Somar o relógio de um modelo três vezes
+    // mais lento ao total do outro é a mesma medição de duas populações
+    // diferentes, e o resultado não descreve nenhuma das duas.
     db::somar_medicao(
         conn,
-        db::MEDICAO_TRANSCRICAO,
+        &modelo.chave_de_medicao(),
         audio_medido,
         relogio_medido,
     )?;
@@ -2131,7 +2164,7 @@ where
     Ok(TranscricaoResultado {
         propostas,
         razao_medida: (audio_medido > 0.0).then(|| relogio_medido / audio_medido),
-        razao_desta_maquina: crate::transcricao::razao_desta_maquina(conn),
+        razao_desta_maquina: crate::transcricao::razao_desta_maquina(conn, modelo),
     })
 }
 

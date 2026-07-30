@@ -4,8 +4,11 @@
 //! `limpar_transcricao`, `eh_alucinacao`, `extrair_candidatos`,
 //! `sem_conteudo`, e o laço de decisão do `cmd_transcrever`), trocando o
 //! motor: lá é o `faster-whisper` (CTranslate2, Python), aqui é o
-//! `whisper-cli` do whisper.cpp com o modelo `small` quantizado, baixado como
-//! acessório.
+//! `whisper-cli` do whisper.cpp com um modelo baixado como acessório.
+//!
+//! **Qual modelo é escolha do programa, não da pessoa** (V10.2): há dois no
+//! catálogo por uma rodada, e a transcrição usa o preferido que estiver pronto.
+//! Ver o bloco marcado em `MODELOS`, incluindo por quanto tempo eles são dois.
 //!
 //! # A prova NÃO viaja junto com o código (DECISIONS #72)
 //!
@@ -197,6 +200,19 @@ pub const IDIOMA: &str = "pt";
 /// frontend — ver a DECISIONS #112.
 pub const RAZAO_DE_REFERENCIA: f64 = 1.0;
 
+/// Razão de referência do modelo GRANDE (V10.2).
+///
+/// **Declarado, e declarado em cima de outro declarado**: o dono do produto
+/// mediu o `medium` como ~3x mais lento que o `small`, e a razão do `small`
+/// ainda é a de fábrica (1,0). Multiplicar um palpite por um palpite é o pior
+/// número do produto — e é exatamente por isso que a medição passou a ser POR
+/// MODELO: este 3,0 vale só até esta máquina transcrever 5 minutos de áudio
+/// com este modelo, e some.
+///
+/// Ele NÃO é a média esperada: pela DECISIONS #85 o defeito é prometer MENOS do
+/// que leva, então este número erra para cima de propósito.
+pub const RAZAO_DE_REFERENCIA_DO_GRANDE: f64 = 3.0;
+
 /// Áudio mínimo já transcrito nesta máquina para a razão MEDIDA valer.
 ///
 /// Cinco minutos são umas duas ou três canções: o bastante para diluir a
@@ -204,22 +220,159 @@ pub const RAZAO_DE_REFERENCIA: f64 = 1.0;
 /// bastante para a segunda varredura do dia já usar o número real.
 pub const AUDIO_MINIMO_PARA_MEDIR: f64 = 300.0;
 
-/// A razão que vale AGORA nesta máquina: a medida, se já houver amostra que
-/// baste; a de referência, enquanto não houver.
+// ---------------------------------------------------------------------------
+//  ██  V10.2 — OS DOIS MODELOS, E POR QUANTO TEMPO ELES SÃO DOIS  ██
+// ---------------------------------------------------------------------------
+//
+// **Isto é TEMPORÁRIO e está declarado.** Assim que a remedição no acervo real
+// disser qual dos dois fica, um deles SAI do catálogo e esta lista volta a ter
+// uma entrada — ou deixa de existir. Não trate dois modelos como o desenho
+// final: o produto não tem tela de escolha de modelo, e não vai ter.
+//
+// POR QUE HÁ DOIS AGORA: a v0.10.0 saiu com o `small` quantizado e a
+// encontrabilidade medida no acervo real deu **37%**, contra os **78%** que o
+// faster-whisper tinha entregado. O modo de falha não é grafia — o modelo
+// classifica trecho CANTADO como música e não o transcreve, devolvendo
+// `[música]`, `[MÚSICA DE FUNDO]`, `[cantarolando]`; numa faixa, quatro
+// estrofes inteiras sumiram. Onde ele emite a marca, a letra não existe.
+//
+// PREFERÊNCIA, NÃO ESCOLHA: se o grande estiver pronto, é ele que roda; senão
+// o pequeno; senão a etapa não existe. Os dois aparecem na tela porque ela
+// lista o catálogo, e isso basta — caixinha de seleção é pedágio para quem não
+// sabe o que é um modelo, que é a mesma conta da DECISIONS #102.
+
+/// Um modelo da etapa 5 — o arquivo que o `whisper-cli` lê para entender o que
+/// é cantado.
+#[derive(Debug, Clone, Copy)]
+pub struct Modelo {
+    /// O acessório do catálogo que traz este arquivo. É a identidade que
+    /// atravessa para o frontend (`acessorio_baixar(nome)`).
+    pub nome: &'static str,
+    /// Segundos de relógio por segundo de áudio, DECLARADO — vale até esta
+    /// máquina medir este modelo.
+    pub razao_de_referencia: f64,
+}
+
+/// O modelo GRANDE (`ggml-medium.bin`) — entende melhor e é bem mais lento.
+pub static MODELO_GRANDE: Modelo = Modelo {
+    nome: crate::acessorios::MODELO_WHISPER_GRANDE,
+    razao_de_referencia: RAZAO_DE_REFERENCIA_DO_GRANDE,
+};
+
+/// O modelo PEQUENO (`ggml-small-q5_1.bin`) — o da v0.10.0, rápido e o que o
+/// funil oferece para baixar.
+pub static MODELO_PEQUENO: Modelo = Modelo {
+    nome: crate::acessorios::MODELO_WHISPER,
+    razao_de_referencia: RAZAO_DE_REFERENCIA,
+};
+
+/// Os modelos da etapa 5, na ORDEM DE PREFERÊNCIA — o que entende melhor
+/// primeiro.
+///
+/// A ordem é DECLARADA, e não deduzida do tamanho do arquivo. Hoje o preferido
+/// é também o maior, mas "maior" é proxy: um modelo melhor e menor amanhã
+/// (destilado, podado) entraria na frente sem esta lista precisar de exceção,
+/// e ordenar por bytes o poria no fim.
+pub const MODELOS: &[&Modelo] = &[&MODELO_GRANDE, &MODELO_PEQUENO];
+
+/// O modelo que o funil OFERECE para baixar, e cuja estimativa a tela mostra
+/// enquanto não há nenhum no cache: o último da ordem de preferência.
+///
+/// É o mais barato de baixar — 180 MB contra 1,5 GB —, e é o que a pergunta do
+/// fim propõe a quem ainda não tem a etapa 5. Estimar com o outro seria
+/// anunciar o tempo de um download que ninguém vai fazer.
+pub fn modelo_oferecido() -> &'static Modelo {
+    &MODELO_PEQUENO
+}
+
+impl Modelo {
+    /// O arquivo deste modelo, como ele se chama no lançamento e no cache.
+    ///
+    /// A busca é no CATÁLOGO inteiro, e não em `desta_maquina`: modelo é DADO
+    /// e vale para as quatro plataformas, então a resposta não pode depender de
+    /// onde a suíte está rodando. Vazio é inalcançável — há teste varrendo os
+    /// modelos —, e é `""` em vez de um `panic!` porque a única coisa que
+    /// depende disto é uma chave de medição: perder a estimativa é ruim,
+    /// derrubar a transcrição de alguém é pior.
+    pub fn arquivo(&self) -> &'static str {
+        crate::acessorios::CATALOGO
+            .iter()
+            .find(|a| a.nome == self.nome)
+            .map_or("", |a| a.arquivo)
+    }
+
+    /// A chave sob a qual ESTE modelo guarda o que mediu nesta máquina.
+    ///
+    /// A chave carrega o ARQUIVO, e não o nome do acessório: se um dia o mesmo
+    /// nome de acessório passar a apontar para outro arquivo, a medição do
+    /// arquivo antigo não pode ser lida como se fosse dele. É a DECISIONS #72
+    /// escrita numa chave de banco — a prova não viaja junto quando o que a
+    /// produziu muda.
+    pub fn chave_de_medicao(&self) -> String {
+        format!("{}:{}", crate::db::MEDICAO_TRANSCRICAO, self.arquivo())
+    }
+}
+
+/// O modelo que vale: o PRIMEIRO da ordem de preferência que estiver pronto.
+///
+/// `None` = nenhum está pronto, e a etapa 5 não existe nesta máquina.
+///
+/// `estado_de` entra por parâmetro para a regra poder ser exercitada sem os
+/// 1,7 GB de arquivos reais que a suíte não tem como forjar (a soma é
+/// conferida contra o catálogo, e não há como gerar um arquivo que bata). O
+/// caso que isto compra é o que importa: **grande corrompido não desliga a
+/// etapa numa máquina que tem o pequeno** — cai para ele, em vez de falhar.
+pub fn modelo_pronto(
+    estado_de: impl Fn(&Modelo) -> crate::acessorios::Estado,
+) -> Option<&'static Modelo> {
+    MODELOS
+        .iter()
+        .copied()
+        .find(|m| estado_de(m) == crate::acessorios::Estado::Pronto)
+}
+
+/// O modelo cuja estimativa vale nesta máquina: o preferido que estiver
+/// PRONTO; o oferecido, enquanto nenhum está.
+///
+/// Existe porque a pergunta do fim é montada pela VARREDURA, que acontece
+/// antes de a etapa 5 rodar — e "quanto tempo isto leva" depende de qual
+/// modelo vai rodar. Uma varredura que estimasse pelo pequeno numa máquina com
+/// o grande baixado erraria por um fator de três, para menos (DECISIONS #85).
+pub fn modelo_desta_maquina(cache: &Path) -> &'static Modelo {
+    modelo_pronto(|m| crate::acessorios::estado_desta_maquina(m.nome, cache))
+        .unwrap_or_else(modelo_oferecido)
+}
+
+/// A razão que vale AGORA nesta máquina PARA ESTE MODELO: a medida, se já
+/// houver amostra que baste; a de referência dele, enquanto não houver.
 ///
 /// Existe como função — e não como duas leituras espalhadas — porque a escolha
 /// entre número medido e número declarado é exatamente o tipo de regra que
 /// diverge quando está escrita em dois lugares (DECISIONS #80).
-pub fn razao_desta_maquina(conn: &rusqlite::Connection) -> f64 {
+pub fn razao_desta_maquina(conn: &rusqlite::Connection, modelo: &Modelo) -> f64 {
+    razao_medida_desta_maquina(conn, modelo).unwrap_or(modelo.razao_de_referencia)
+}
+
+/// A razão MEDIDA deste modelo nesta máquina, ou `None` enquanto ela não
+/// existe (amostra abaixo do piso, ou nada transcrito ainda).
+///
+/// É este `Option` — e não uma comparação com a constante — que responde "a
+/// estimativa é medição ou palpite de fábrica?" (DECISIONS #119). A v0.10.0
+/// respondia com `razao != RAZAO_DE_REFERENCIA`, e isso mentia na máquina que
+/// medisse exatamente 1,0; com dois modelos há duas constantes, e a comparação
+/// passaria a escolher a errada.
+pub fn razao_medida_desta_maquina(
+    conn: &rusqlite::Connection,
+    modelo: &Modelo,
+) -> Option<f64> {
     crate::db::razao_medida(
         conn,
-        crate::db::MEDICAO_TRANSCRICAO,
+        &modelo.chave_de_medicao(),
         AUDIO_MINIMO_PARA_MEDIR,
     )
     .ok()
     .flatten()
     .filter(|r| *r > 0.0)
-    .unwrap_or(RAZAO_DE_REFERENCIA)
 }
 
 /// Duração mínima e máxima consideradas ao ESTIMAR, em segundos.
@@ -1562,19 +1715,41 @@ pub fn transcrever(
     }))
 }
 
-/// Os dois acessórios da etapa 5, prontos nesta máquina. `None` quando falta
-/// algum: o programa sem o modelo não faz nada, e o modelo sem o programa
-/// tampouco (DECISIONS #101 — a tela lista o que ESTA máquina faz).
-pub fn acessorios_prontos(cache: &Path) -> Option<(PathBuf, PathBuf)> {
-    let pronto = |nome: &str| -> Option<PathBuf> {
-        let a = crate::acessorios::desta_maquina(nome)?;
-        (crate::acessorios::estado(a, cache) == crate::acessorios::Estado::Pronto)
-            .then(|| a.caminho(cache))
-    };
-    Some((
-        pronto(crate::acessorios::WHISPER_CLI)?,
-        pronto(crate::acessorios::MODELO_WHISPER)?,
-    ))
+/// A etapa 5 pronta para rodar nesta máquina: o programa, o arquivo do modelo
+/// e QUAL modelo é.
+///
+/// O terceiro campo não é decoração: é ele que diz sob que chave a medição
+/// desta execução é guardada, e é ele que a estimativa da próxima varredura vai
+/// ler. Devolver só os dois caminhos obrigaria quem chama a redescobrir o
+/// modelo pelo nome do arquivo — um contrato que depende de o chamador lembrar
+/// já falhou uma vez aqui (DECISIONS #112).
+pub struct Transcritor {
+    /// O `whisper-cli` conferido.
+    pub programa: PathBuf,
+    /// O arquivo do modelo no cache, conferido.
+    pub arquivo_do_modelo: PathBuf,
+    /// Qual dos modelos é este.
+    pub modelo: &'static Modelo,
+}
+
+/// Os acessórios da etapa 5, prontos nesta máquina. `None` quando falta algum:
+/// o programa sem modelo não faz nada, e modelo sem programa tampouco
+/// (DECISIONS #101 — a tela lista o que ESTA máquina faz).
+///
+/// Com os DOIS modelos prontos sai o preferido; com o preferido corrompido sai
+/// o outro. Ver `modelo_pronto`.
+pub fn acessorios_prontos(cache: &Path) -> Option<Transcritor> {
+    let programa = crate::acessorios::caminho_pronto(crate::acessorios::WHISPER_CLI, cache)?;
+    let modelo = modelo_pronto(|m| crate::acessorios::estado_desta_maquina(m.nome, cache))?;
+    // O caminho sai do CATÁLOGO, e não de um segundo `caminho_pronto`: aquele
+    // reconferiria a soma, e conferir a soma é ler o arquivo inteiro — 1,5 GB
+    // no modelo grande. O `modelo_pronto` acima já a conferiu, nesta mesma
+    // chamada; repetir não prova nada de novo e custa segundos por varredura.
+    Some(Transcritor {
+        programa,
+        arquivo_do_modelo: crate::acessorios::desta_maquina(modelo.nome)?.caminho(cache),
+        modelo,
+    })
 }
 
 #[cfg(test)]
@@ -2371,6 +2546,247 @@ mod tests {
     const SEGUE: &dyn Fn() -> bool = &|| false;
     /// Ignora o progresso.
     const SEM_PROGRESSO: &dyn Fn(u8) = &|_| {};
+
+    // -----------------------------------------------------------------------
+    // V10.2 — a PREFERÊNCIA entre os modelos, e a medição POR MODELO
+    // -----------------------------------------------------------------------
+
+    /// A lista de modelos é ordem de PREFERÊNCIA, e ela cobre o catálogo.
+    ///
+    /// A guarda que importa é a última: **todo acessório de DADO do catálogo
+    /// tem de estar aqui**. Sem ela, alguém publica um modelo, ele aparece na
+    /// tela, a pessoa baixa 1,5 GB — e a transcrição nunca o usa, porque a
+    /// preferência não sabe que ele existe. Hoje "dado" e "modelo" coincidem;
+    /// quando deixarem de coincidir, é nesta linha que alguém vai ter de dizer
+    /// qual é qual.
+    #[test]
+    fn a_ordem_dos_modelos_e_de_preferencia_e_cobre_o_catalogo() {
+        assert!(!MODELOS.is_empty());
+        for m in MODELOS {
+            assert!(
+                crate::acessorios::CATALOGO.iter().any(|a| a.nome == m.nome),
+                "{} não é acessório do catálogo",
+                m.nome
+            );
+            assert!(
+                !m.arquivo().is_empty(),
+                "{}: sem arquivo, a chave da medição não identifica nada",
+                m.nome
+            );
+            assert!(m.razao_de_referencia > 0.0);
+        }
+        // o oferecido é o ÚLTIMO da preferência: é o mais barato de baixar, e é
+        // o que o funil propõe a quem ainda não tem nenhum
+        assert_eq!(modelo_oferecido().nome, MODELOS[MODELOS.len() - 1].nome);
+        // todo DADO do catálogo é um modelo conhecido daqui
+        for a in crate::acessorios::CATALOGO.iter().filter(|a| !a.executavel) {
+            assert!(
+                MODELOS.iter().any(|m| m.nome == a.nome),
+                "{} é dado no catálogo e não está na ordem de preferência",
+                a.arquivo
+            );
+        }
+    }
+
+    /// **O maior primeiro, e o pequeno é o que se oferece.** A preferência é
+    /// por QUALIDADE, e o `medium` só entrou porque a do `small` reprovou no
+    /// acervo real (37% contra 78%).
+    #[test]
+    fn o_preferido_e_o_grande_e_o_oferecido_e_o_pequeno() {
+        assert_eq!(MODELOS[0].nome, crate::acessorios::MODELO_WHISPER_GRANDE);
+        assert_eq!(modelo_oferecido().nome, crate::acessorios::MODELO_WHISPER);
+        let tamanho = |m: &Modelo| {
+            crate::acessorios::CATALOGO
+                .iter()
+                .find(|a| a.nome == m.nome)
+                .map_or(0, |a| a.tamanho_bytes)
+        };
+        assert!(
+            tamanho(MODELOS[0]) > tamanho(modelo_oferecido()),
+            "hoje o preferido é também o maior — mas quem manda é a ordem \
+             DECLARADA, não o tamanho do arquivo"
+        );
+    }
+
+    /// **A razão declarada é POR MODELO, e a do grande é maior.** Um número de
+    /// fábrica só do `small` faria a tela prometer 3 horas para um trabalho de
+    /// 9 na máquina que baixou o `medium` — é a DECISIONS #85 (prometer menos
+    /// do que leva) por uma porta nova.
+    #[test]
+    fn a_razao_declarada_do_grande_e_maior_que_a_do_pequeno() {
+        let pequeno = MODELOS
+            .iter()
+            .find(|m| m.nome == crate::acessorios::MODELO_WHISPER)
+            .unwrap();
+        let grande = MODELOS
+            .iter()
+            .find(|m| m.nome == crate::acessorios::MODELO_WHISPER_GRANDE)
+            .unwrap();
+        assert_eq!(pequeno.razao_de_referencia, RAZAO_DE_REFERENCIA);
+        assert!(
+            grande.razao_de_referencia >= pequeno.razao_de_referencia * 3.0,
+            "o `medium` é ~3x mais lento, e arredondar para BAIXO é o defeito"
+        );
+    }
+
+    /// **Com os dois prontos, roda o GRANDE.** É preferência, não escolha:
+    /// não há caixinha de seleção, porque escolha é pedágio para quem não sabe
+    /// o que é um modelo (DECISIONS #102).
+    #[test]
+    fn com_os_dois_prontos_a_transcricao_usa_o_grande() {
+        use crate::acessorios::Estado;
+        let escolhido = modelo_pronto(|_| Estado::Pronto).expect("há modelo pronto");
+        assert_eq!(escolhido.nome, crate::acessorios::MODELO_WHISPER_GRANDE);
+    }
+
+    /// **O grande CORROMPIDO cai para o pequeno, em vez de falhar.** O arquivo
+    /// truncado por um desligamento no meio de 1,5 GB não pode desligar a etapa
+    /// 5 numa máquina que tem o outro modelo pronto e sem ninguém a quem
+    /// perguntar. `Corrompido` e `Ausente` valem o mesmo aqui: os dois querem
+    /// dizer "não dá para usar este".
+    #[test]
+    fn modelo_grande_indisponivel_cai_para_o_pequeno() {
+        use crate::acessorios::Estado;
+        for ruim in [Estado::Corrompido, Estado::Ausente, Estado::Indisponivel] {
+            let escolhido = modelo_pronto(|m| {
+                if m.nome == crate::acessorios::MODELO_WHISPER_GRANDE {
+                    ruim
+                } else {
+                    Estado::Pronto
+                }
+            })
+            .unwrap_or_else(|| panic!("{ruim:?} no grande não pode desligar a etapa"));
+            assert_eq!(escolhido.nome, crate::acessorios::MODELO_WHISPER);
+        }
+    }
+
+    /// Sem modelo nenhum pronto, a etapa não existe — e isso é `None`, não uma
+    /// escolha do pior de dois ausentes.
+    #[test]
+    fn sem_modelo_pronto_a_etapa_nao_existe() {
+        use crate::acessorios::Estado;
+        assert!(modelo_pronto(|_| Estado::Ausente).is_none());
+    }
+
+    /// Fim a fim contra o disco DE VERDADE: um arquivo com conteúdo errado no
+    /// lugar do modelo é `Corrompido` para o `acessorios::estado` real, e o
+    /// transcritor não sai. É o pedaço que liga a regra acima ao sistema de
+    /// arquivos — a lição da DECISIONS #98.
+    #[test]
+    fn arquivo_errado_no_cache_nao_vira_transcritor() {
+        let cache = tempfile::tempdir().unwrap();
+        for nome in [
+            crate::acessorios::MODELO_WHISPER,
+            crate::acessorios::MODELO_WHISPER_GRANDE,
+            crate::acessorios::WHISPER_CLI,
+        ] {
+            if let Some(a) = crate::acessorios::desta_maquina(nome) {
+                std::fs::write(a.caminho(cache.path()), b"nao e o arquivo certo").unwrap();
+                assert_eq!(
+                    crate::acessorios::estado(a, cache.path()),
+                    crate::acessorios::Estado::Corrompido
+                );
+            }
+        }
+        assert!(acessorios_prontos(cache.path()).is_none());
+        // e o modelo que vale para a ESTIMATIVA continua sendo o oferecido
+        assert_eq!(
+            modelo_desta_maquina(cache.path()).nome,
+            modelo_oferecido().nome
+        );
+    }
+
+    /// **A medição é POR MODELO.** Cada modelo guarda o próprio somatório, e a
+    /// chave carrega o ARQUIVO — não o nome do acessório: se um dia o mesmo
+    /// nome apontar para outro arquivo, a medição do arquivo antigo não pode
+    /// ser lida como se fosse dele (DECISIONS #72).
+    #[test]
+    fn cada_modelo_tem_a_propria_chave_de_medicao() {
+        let chaves: Vec<String> = MODELOS.iter().map(|m| m.chave_de_medicao()).collect();
+        let mut unicas = chaves.clone();
+        unicas.sort();
+        unicas.dedup();
+        assert_eq!(unicas.len(), chaves.len(), "chave repetida: {chaves:?}");
+        for (m, chave) in MODELOS.iter().zip(&chaves) {
+            assert!(
+                chave.contains(m.arquivo()),
+                "{chave} não diz qual arquivo foi medido"
+            );
+            assert!(chave.starts_with(crate::db::MEDICAO_TRANSCRICAO));
+        }
+    }
+
+    /// **A medição de um modelo não manda na estimativa do outro.** É o item
+    /// que justifica a chave por modelo: o `medium` é ~3x mais lento, e uma
+    /// medição feita com o `small` passaria a subestimar por um fator.
+    #[test]
+    fn a_medicao_de_um_modelo_nao_vaza_para_o_outro() {
+        let conn = crate::db::open_in_memory().unwrap();
+        let pequeno = modelo_oferecido();
+        let grande = MODELOS[0];
+        // 600 s de áudio em 300 s de relógio com o PEQUENO: razão 0,5
+        crate::db::somar_medicao(&conn, &pequeno.chave_de_medicao(), 600.0, 300.0).unwrap();
+
+        assert_eq!(razao_desta_maquina(&conn, pequeno), 0.5);
+        assert_eq!(razao_medida_desta_maquina(&conn, pequeno), Some(0.5));
+        assert_eq!(
+            razao_desta_maquina(&conn, grande),
+            grande.razao_de_referencia,
+            "o grande continua na razão DECLARADA — ninguém o mediu"
+        );
+        assert_eq!(razao_medida_desta_maquina(&conn, grande), None);
+    }
+
+    /// **"Medido" é um FATO, não uma comparação de floats.** A v0.10.0 decidia
+    /// se a estimativa era medição comparando o número com a constante de
+    /// referência: numa máquina que medisse exatamente 1,0 a tela mentiria
+    /// dizendo "de fábrica" — e com dois modelos há duas constantes, então a
+    /// comparação também escolheria a errada.
+    #[test]
+    fn medido_e_um_fato_e_nao_a_comparacao_com_a_constante() {
+        let conn = crate::db::open_in_memory().unwrap();
+        let m = modelo_oferecido();
+        // exatamente a razão de referência, medida de verdade
+        crate::db::somar_medicao(&conn, &m.chave_de_medicao(), 600.0, 600.0).unwrap();
+        assert_eq!(razao_desta_maquina(&conn, m), RAZAO_DE_REFERENCIA);
+        assert_eq!(
+            razao_medida_desta_maquina(&conn, m),
+            Some(RAZAO_DE_REFERENCIA),
+            "o número empata com a constante, mas ele é MEDIDO"
+        );
+    }
+
+    /// **A medição da v0.10.0 não é perdida — ela era do PEQUENO.** Naquela
+    /// versão havia UM modelo só, então a linha `transcricao` do banco diz,
+    /// sem adivinhação, quanto o `ggml-small-q5_1.bin` levou nesta máquina.
+    /// Descartá-la devolveria a estimativa ao número de fábrica sem motivo, e
+    /// "nunca apagar dado existente" vale para dado que o programa produziu.
+    #[test]
+    fn a_medicao_de_modelo_unico_da_v0_10_0_vira_a_do_pequeno() {
+        let arquivo = tempfile::NamedTempFile::new().unwrap();
+        {
+            let conn = crate::db::open_at(arquivo.path()).unwrap();
+            // como a v0.10.0 gravava: chave sem modelo nenhum
+            conn.execute(
+                "INSERT INTO medicoes_da_maquina (chave, audio_segundos, relogio_segundos)
+                 VALUES ('transcricao', 600.0, 900.0)",
+                [],
+            )
+            .unwrap();
+        }
+        // a abertura seguinte (a atualização do aplicativo) reetiqueta a linha
+        let conn = crate::db::open_at(arquivo.path()).unwrap();
+        assert_eq!(
+            razao_medida_desta_maquina(&conn, modelo_oferecido()),
+            Some(1.5),
+            "a medição antiga continua valendo, agora dizendo de QUAL modelo é"
+        );
+        assert_eq!(
+            razao_medida_desta_maquina(&conn, MODELOS[0]),
+            None,
+            "e ela NÃO é lida como se fosse do modelo grande"
+        );
+    }
 
     /// Nenhuma mensagem deste módulo repassa texto do motor: ele fala inglês e
     /// despeja diagnóstico de decodificador, e quem lê não tem a quem

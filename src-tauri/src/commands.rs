@@ -725,7 +725,10 @@ pub fn transcrever_musicas(
     scan_id: String,
 ) -> Result<crate::enrich::TranscricaoResultado> {
     let cache = diretorio_de_cache(&app)?;
-    let (whisper, modelo) = crate::transcricao::acessorios_prontos(&cache)
+    // Qual modelo roda é decidido AQUI, uma vez por fila: o preferido que
+    // estiver pronto, e o outro quando ele não está (V10.2). O `modelo` viaja
+    // junto porque é ele que diz sob que chave a medição desta fila é guardada.
+    let transcritor = crate::transcricao::acessorios_prontos(&cache)
         .ok_or_else(|| AppError(crate::transcricao::ERRO_SEM_MODELO.into()))?;
     // A pasta de trabalho da decodificação. Fica ao lado do cache dos
     // acessórios, sob o perfil do usuário: é onde o aplicativo já grava 180 MB
@@ -762,11 +765,12 @@ pub fn transcrever_musicas(
         let conn = state.scan_conn()?;
         crate::enrich::transcricao_scan(
             &conn,
+            transcritor.modelo,
             &song_ids,
             |mp3, cancelado, por_musica| {
                 crate::transcricao::transcrever(
-                    &whisper,
-                    &modelo,
+                    &transcritor.programa,
+                    &transcritor.arquivo_do_modelo,
                     mp3,
                     // o WAV temporário vai para a pasta de dados do
                     // aplicativo — NUNCA para o lado do MP3 (ver o cabeçalho
@@ -818,6 +822,10 @@ struct FontesDoFunil {
     /// SILÊNCIO. É o estado normal de quem ainda não baixou, não um erro.
     fpcalc: Option<PathBuf>,
     chave_acoustid: &'static str,
+    /// V10.2 — o modelo que a etapa 5 usaria nesta máquina. A varredura não a
+    /// roda, mas é ela que monta a pergunta do fim, e o tempo depende de qual
+    /// modelo vai rodar.
+    modelo: &'static crate::transcricao::Modelo,
 }
 
 impl crate::enrich::Fontes for FontesDoFunil {
@@ -839,6 +847,9 @@ impl crate::enrich::Fontes for FontesDoFunil {
     fn chave_acoustid(&self) -> &str {
         self.chave_acoustid
     }
+    fn modelo_da_transcricao(&self) -> &'static crate::transcricao::Modelo {
+        self.modelo
+    }
 }
 
 /// Monta as fontes para UMA varredura. A soma do acessório é conferida aqui,
@@ -850,6 +861,11 @@ fn fontes_do_funil(app: &AppHandle) -> FontesDoFunil {
     FontesDoFunil {
         fpcalc: fpcalc_pronto(app),
         chave_acoustid: crate::fingerprint::chave_acoustid(),
+        modelo: diretorio_de_cache(app)
+            .map_or_else(
+                |_| crate::transcricao::modelo_oferecido(),
+                |cache| crate::transcricao::modelo_desta_maquina(&cache),
+            ),
     }
 }
 
@@ -858,9 +874,7 @@ fn fontes_do_funil(app: &AppHandle) -> FontesDoFunil {
 /// devolve `None`, e a etapa some sem dizer nada.
 fn fpcalc_pronto(app: &AppHandle) -> Option<PathBuf> {
     let cache = diretorio_de_cache(app).ok()?;
-    let acessorio = crate::acessorios::desta_maquina(crate::acessorios::FPCALC)?;
-    (crate::acessorios::estado(acessorio, &cache) == crate::acessorios::Estado::Pronto)
-        .then(|| acessorio.caminho(&cache))
+    crate::acessorios::caminho_pronto(crate::acessorios::FPCALC, &cache)
 }
 
 /// Pasta de cache dos acessórios, sob o perfil do usuário — a mesma pasta de
@@ -940,15 +954,33 @@ pub struct AcessorioDownload {
     pub acessorio: AcessorioInfo,
 }
 
-/// Para que serve cada acessório, em pt-BR — aparece cru na tela.
+/// Para que serve cada acessório, em pt-BR — aparece cru na tela, como TÍTULO
+/// do bloco (`tituloDoAcessorio` põe a maiúscula).
+///
+/// Régua da DECISIONS #100: a primeira frase diz o que é, o resto só existe se
+/// responder a uma pergunta que a pessoa faria naquele momento, e jargão nosso
+/// não aparece. Aqui a régua tem um segundo dono: **são três cartões para uma
+/// etapa só** — um programa e dois arquivos —, e quem lê não sabe o que é um
+/// modelo, nem tem a quem perguntar.
 fn para_que_serve(nome: &str) -> &'static str {
     match nome {
         crate::acessorios::FPCALC => "reconhecer a música pelo som",
         crate::acessorios::WHISPER_CLI => "escrever a letra ouvindo o áudio",
         // Duas entradas para uma etapa só, e a frase precisa explicar por quê:
         // são 2 MB de programa e 180 MB de dado, e a pessoa vai ver os dois.
+        //
+        // V10.2 — e agora são TRÊS cartões, porque há dois arquivos de
+        // entendimento. A pergunta que a pessoa faz ao ver dois cartões
+        // parecidos é "preciso dos dois? qual roda?", e é ela que o texto do
+        // grande responde. Nenhum dos dois diz "modelo", "pequeno" ou
+        // "grande": o tamanho já está no cartão, em MB, logo abaixo.
         crate::acessorios::MODELO_WHISPER => {
-            "entender o que é cantado — é o que o transcritor consulta"
+            "entender o que é cantado — este é o rápido, e às vezes deixa \
+             trechos de fora"
+        }
+        crate::acessorios::MODELO_WHISPER_GRANDE => {
+            "entender melhor o que é cantado — é bem mais lento, e o aplicativo \
+             usa este quando ele está aqui"
         }
         _ => "",
     }
@@ -1146,6 +1178,82 @@ mod tests {
         state.scan_end("scan-a");
         state.scan_end("scan-b");
         assert_eq!(state.scans_vivas(), 0);
+    }
+
+    // -----------------------------------------------------------------------
+    // V10.2 — a tela precisa dizer o que cada MODELO é, em uma frase
+    // -----------------------------------------------------------------------
+
+    /// **Todo acessório do catálogo tem a sua frase.** O `para_que_serve` vira
+    /// o TÍTULO do bloco na tela (`tituloDoAcessorio`); um acessório sem frase
+    /// aparece como um cartão sem nome, com um botão de baixar 1,5 GB.
+    #[test]
+    fn todo_acessorio_do_catalogo_diz_para_que_serve() {
+        for a in crate::acessorios::CATALOGO {
+            assert!(
+                !para_que_serve(a.nome).is_empty(),
+                "{} ({}) não tem frase",
+                a.nome,
+                a.arquivo
+            );
+        }
+    }
+
+    /// **Os dois modelos aparecem juntos, e a pessoa precisa saber qual é
+    /// qual** — sem jargão, e sem caixinha de escolher.
+    ///
+    /// Régua da DECISIONS #100: a primeira frase diz o que é; o resto só existe
+    /// se responder a uma pergunta que a pessoa faria naquele momento; cabe em
+    /// 2 frases e 210 caracteres; e jargão nosso não aparece.
+    ///
+    /// A pergunta que ela FAZ ao ver dois cartões parecidos é "preciso dos
+    /// dois? qual roda?" — então é essa, e só essa, que o texto do grande
+    /// responde.
+    #[test]
+    fn as_frases_dos_dois_modelos_dizem_qual_e_qual() {
+        let pequeno = para_que_serve(crate::acessorios::MODELO_WHISPER);
+        let grande = para_que_serve(crate::acessorios::MODELO_WHISPER_GRANDE);
+        assert_ne!(pequeno, grande, "duas frases iguais não distinguem nada");
+
+        for t in [pequeno, grande] {
+            assert!(
+                t.chars().count() <= 210,
+                "{} caracteres, o teto é 210: {t:?}",
+                t.chars().count()
+            );
+            assert!(
+                t.matches(['.', '!', '?']).count() <= 1,
+                "cabe em uma frase — é um TÍTULO de bloco: {t:?}"
+            );
+            assert!(
+                t.chars().next().is_some_and(char::is_lowercase),
+                "a tela põe a maiúscula: {t:?}"
+            );
+            assert!(!t.contains('\n') && !t.contains("  "), "texto corrido: {t:?}");
+            for jargao in [
+                "modelo", "quantiz", "whisper", "ggml", "transcri", "small",
+                "medium", "cache", "acessório", "parâmetro", "byte", "cpu",
+            ] {
+                assert!(
+                    !t.to_lowercase().contains(jargao),
+                    "{t:?} tem jargão: {jargao}"
+                );
+            }
+        }
+        // um é o que entende melhor, o outro é o rápido — em palavras de gente
+        assert!(grande.contains("melhor"), "o grande diz que entende melhor");
+        assert!(
+            grande.contains("mais lento") || grande.contains("mais devagar"),
+            "e diz o preço disso: {grande:?}"
+        );
+        assert!(
+            grande.contains("usa este") || grande.contains("usa ele"),
+            "e responde \"qual roda quando tenho os dois?\": {grande:?}"
+        );
+        assert!(
+            pequeno.contains("rápido") || pequeno.contains("rapidez"),
+            "o pequeno diz que é o rápido: {pequeno:?}"
+        );
     }
 
     // -----------------------------------------------------------------------

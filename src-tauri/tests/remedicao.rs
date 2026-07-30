@@ -24,6 +24,19 @@
 //! cargo test --test remedicao -- --ignored --nocapture
 //! ```
 //!
+//! # V10.2 — é este arnês que decide qual dos dois modelos FICA
+//!
+//! A primeira remedição, com o `ggml-small-q5_1.bin`, deu **37%** contra os
+//! 78% do faster-whisper — e o modo de falha não é grafia: o modelo classifica
+//! trecho CANTADO como música e devolve `[música]` no lugar da estrofe. Daí o
+//! `ggml-medium.bin` ter entrado no catálogo, **em caráter temporário**.
+//!
+//! Rode este arnês uma vez por modelo, nos MESMOS arquivos e trechos,
+//! trocando só o `CANCIONEIRO_WHISPER_MODELO`. Compare **encontráveis** (é o
+//! número que decide) e, de quebra, a razão medida — que é o custo do que se
+//! ganha. **O modelo perdedor sai do catálogo**: dois modelos não são o
+//! desenho final, são uma medição em curso.
+//!
 //! `trechos.json` é a lista dos MESMOS arquivos e dos MESMOS trechos lembrados
 //! da medição original — remedir em outro material não remede nada:
 //!
@@ -38,8 +51,8 @@
 //!
 //! - **encontráveis / total** e a porcentagem — o número que substitui os 78%;
 //! - a **razão medida** (segundos de máquina por segundo de áudio), que é o
-//!   valor a pôr em `transcricao::RAZAO_DE_REFERENCIA` para a estimativa de
-//!   tempo deixar de ser declarada;
+//!   valor a pôr no `razao_de_referencia` DESTE modelo (`transcricao::MODELOS`)
+//!   para a estimativa de tempo deixar de ser declarada;
 //! - uma linha por arquivo, dizendo por que cada um achou ou não.
 //!
 //! # O que ele NÃO faz
@@ -208,18 +221,23 @@ fn remedir_os_78_por_cento_com_o_whisper_cpp() {
     println!("instrumentais: {instrumentais} | adiadas: {adiadas} | erros: {erros}");
     if audio_total > 0.0 {
         let razao = relogio_total / audio_total;
-        println!(
-            "razão medida: {razao:.2} s de máquina por segundo de áudio \
-             (a referência compilada é {:.2} — ver transcricao::RAZAO_DE_REFERENCIA)",
-            transcricao::RAZAO_DE_REFERENCIA
-        );
+        println!("razão medida: {razao:.2} s de máquina por segundo de áudio");
+        println!("as referências COMPILADAS, para comparar (transcricao::MODELOS):");
+        for m in transcricao::MODELOS {
+            println!(
+                "  {:<28} {:.2}  ({})",
+                m.arquivo(),
+                m.razao_de_referencia,
+                m.nome
+            );
+        }
     } else {
         println!("razão medida: nenhuma — o motor não informou duração em nenhum arquivo");
     }
     println!(
         "\nO número acima SUBSTITUI os 78%: eles foram medidos com faster-whisper, \
-         que é outro motor (DECISIONS #72). Se este caiu muito, o modelo \
-         não-quantizado volta à mesa.\n"
+         que é outro motor (DECISIONS #72). Rode de novo trocando só o \
+         CANCIONEIRO_WHISPER_MODELO e compare — o perdedor SAI do catálogo.\n"
     );
 }
 

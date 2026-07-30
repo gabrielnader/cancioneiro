@@ -54,13 +54,15 @@ use std::time::Duration;
 // acusar o arquivo de estar corrompido — acusação falsa é pior que ausência
 // de recurso quando a mensagem é a explicação inteira.
 //
-// V10 — AS ENTRADAS DA ETAPA 5 ESTÃO PENDENTES DE PROPÓSITO. Os quatro
-// `whisper-cli` e o modelo `ggml-small-q5_1.bin` são publicados pelo fluxo
-// `.github/workflows/acessorio-transcritor.yml`, no MESMO lançamento
-// `acessorios-v1` (acrescentar arquivo a um lançamento não muda o hash dos
-// que já estão lá — quem baixou o `fpcalc` não é afetado). Enquanto as somas
-// não vêm do resumo daquele fluxo, a etapa 5 aparece como indisponível, que é
-// o que ela é. Nenhum teste desta suíte depende dos valores reais.
+// V10 — AS ENTRADAS DA ETAPA 5. Os `whisper-cli` saem do fluxo
+// `.github/workflows/acessorio-transcritor.yml` e os MODELOS do
+// `acessorio-modelo.yml`, os dois no MESMO lançamento `acessorios-v1`
+// (acrescentar arquivo a um lançamento não muda o hash dos que já estão lá —
+// quem baixou o `fpcalc` não é afetado). Nenhum teste desta suíte depende dos
+// valores reais: o que se testa é o MECANISMO de conferência.
+//
+// V10.2 — SÃO DOIS MODELOS, E ISSO É TEMPORÁRIO. Ver o bloco marcado dentro do
+// catálogo, logo abaixo da entrada do `ggml-small-q5_1.bin`.
 //
 // AO PREENCHER UMA SOMA, PREENCHA O TAMANHO JUNTO: os tamanhos das entradas
 // pendentes são APROXIMAÇÕES para a tela ter o que dizer, e saem do mesmo
@@ -161,6 +163,37 @@ pub const CATALOGO: &[Acessorio] = &[
         tamanho_bytes: 190_085_487,
         executavel: false,
     },
+    // ███ V10.2 — O SEGUNDO MODELO EXISTE PARA SER MEDIDO, E UM DOS DOIS SAI ██
+    //
+    // NÃO trate dois modelos como o desenho final. Esta entrada e a de cima
+    // convivem por UMA rodada, para o acervo real dizer qual fica; assim que a
+    // medição decidir, **um dos dois é REMOVIDO do catálogo** (e a entrada que
+    // ficar herda a preferência sozinha, sem `transcricao::MODELOS`).
+    //
+    // POR QUE ELE ENTROU: a v0.10.0 saiu com o `small` quantizado e a qualidade
+    // reprovou na medição do acervo real — 37% de encontrabilidade contra os
+    // 78% que o faster-whisper tinha entregado. Foi exatamente o risco que o
+    // PRD V10 registrou ("a prova não viaja junto quando o código é reusado",
+    // DECISIONS #72), acontecendo. E o modo de falha não é grafia: o modelo
+    // classifica trecho CANTADO como música e não o transcreve — as saídas
+    // vieram salpicadas de `[música]`, `[MÚSICA DE FUNDO]`, `[cantarolando]`, e
+    // numa das faixas quatro estrofes inteiras sumiram. Onde ele emite a marca,
+    // a letra não existe. Não é falta de idioma: o `--language pt` está sendo
+    // passado (`transcricao::argumentos`).
+    //
+    // SÃO 1,5 GB, e o dono do produto autorizou: ele ensina cada pessoa
+    // pessoalmente, e este download roda uma vez só na vida da máquina.
+    //
+    // A soma e o tamanho foram conferidos por ele BAIXANDO o arquivo publicado
+    // e recalculando — não são o que o fluxo imprimiu e ninguém releu.
+    Acessorio {
+        nome: MODELO_WHISPER_GRANDE,
+        plataforma: QUALQUER_PLATAFORMA,
+        arquivo: "ggml-medium.bin",
+        sha256: "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208",
+        tamanho_bytes: 1_533_763_059,
+        executavel: false,
+    },
 ];
 
 // ===========================================================================
@@ -177,7 +210,19 @@ pub const WHISPER_CLI: &str = "whisper-cli";
 /// Nome do MODELO da etapa 5 — dado, não programa. São duas entradas
 /// separadas de propósito: 2 MB e 180 MB têm conversas diferentes com quem
 /// vai clicar, e um pode estar pronto sem o outro.
+///
+/// Desde a V10.2 este é o modelo PEQUENO dos dois. O nome não mudou porque ele
+/// é a identidade que atravessa para o frontend (`acessorio_baixar(nome)`), e
+/// renomear identidade de contrato para melhorar a leitura de quem escreve o
+/// Rust é o tipo de troca que quebra a tela de quem não tem a quem perguntar.
 pub const MODELO_WHISPER: &str = "modelo-de-transcricao";
+
+/// Nome do modelo GRANDE da etapa 5 (V10.2, `ggml-medium.bin`).
+///
+/// **Temporário e declarado**: ele existe para a remedição escolher entre os
+/// dois, e um dos dois sai do catálogo depois disso. Ver o bloco no `CATALOGO`
+/// e a ordem de preferência em `transcricao::MODELOS`.
+pub const MODELO_WHISPER_GRANDE: &str = "modelo-de-transcricao-grande";
 
 /// Plataforma dos acessórios que são DADO: um arquivo só serve as quatro
 /// máquinas. É sempre o ÚLTIMO recurso na busca, para nunca ganhar de um
@@ -448,8 +493,31 @@ pub fn desta_maquina(nome: &str) -> Option<&'static Acessorio> {
     })
 }
 
+/// Situação do acessório `nome` NESTA máquina, sem o chamador precisar
+/// resolver a plataforma antes.
+///
+/// Sem arquivo publicado para esta plataforma o acessório é `Indisponivel`, e
+/// não `Ausente`: "não existe para esta máquina" não é "ainda não baixaram" —
+/// oferecer o download de algo que não serviria é o que a DECISIONS #101
+/// proíbe, e é a mesma família do estado que a #97 criou.
+pub fn estado_desta_maquina(nome: &str, cache: &Path) -> Estado {
+    desta_maquina(nome).map_or(Estado::Indisponivel, |a| estado(a, cache))
+}
+
+/// Caminho do acessório `nome` quando ele está no cache **e** a soma confere.
+///
+/// Qualquer outra situação devolve `None`, e a etapa que depende dele
+/// simplesmente não existe aqui. Isto é UMA regra — "conferido é o que se
+/// executa" — e ela mora num lugar só: estava copiada no `commands::
+/// fpcalc_pronto` e no `transcricao::acessorios_prontos`, que é como regras
+/// divergem (DECISIONS #80).
+pub fn caminho_pronto(nome: &str, cache: &Path) -> Option<PathBuf> {
+    let a = desta_maquina(nome)?;
+    (estado(a, cache) == Estado::Pronto).then(|| a.caminho(cache))
+}
+
 /// Todos os acessórios que existem para esta máquina, sem repetir nome e na
-/// ordem do catálogo — o som, o transcritor e o modelo.
+/// ordem do catálogo — o som, o transcritor e os modelos.
 pub fn catalogo_desta_maquina() -> Vec<&'static Acessorio> {
     let mut vistos: Vec<&'static Acessorio> = Vec::new();
     for a in CATALOGO {
@@ -729,6 +797,10 @@ mod tests {
         assert!(arquivos.contains(&"whisper-cli-linux-x86_64"));
         assert!(arquivos.contains(&"whisper-cli-windows-x86_64.exe"));
         assert!(arquivos.contains(&"ggml-small-q5_1.bin"));
+        // V10.2 — o `medium` foi publicado no MESMO lançamento pelo fluxo
+        // `acessorio-modelo.yml`, que recusa republicar por cima de um nome já
+        // existente (acrescentar arquivo não muda a soma dos que já estão lá).
+        assert!(arquivos.contains(&"ggml-medium.bin"));
     }
 
     /// Guarda de regressão: o que JÁ FOI PUBLICADO não pode voltar a ter soma
@@ -764,20 +836,67 @@ mod tests {
         }
     }
 
+    /// V10.2 — **os DOIS modelos, com as somas e os tamanhos que o dono do
+    /// produto conferiu baixando os arquivos publicados e recalculando.**
+    ///
+    /// O `medium` entra porque a qualidade do `small` quantizado REPROVOU na
+    /// medição do acervo real: 37% de encontrabilidade contra os 78% do motor
+    /// antigo, e com um modo de falha que não é grafia — o modelo classifica
+    /// trecho cantado como música e devolve `[música]` no lugar da estrofe.
+    ///
+    /// **Isto é temporário e declarado**: assim que a remedição decidir, um dos
+    /// dois SAI do catálogo. Ver o comentário do `CATALOGO`.
+    #[test]
+    fn o_catalogo_tem_os_dois_modelos_com_as_somas_publicadas() {
+        let por_arquivo = |arquivo: &str| {
+            CATALOGO
+                .iter()
+                .find(|a| a.arquivo == arquivo)
+                .unwrap_or_else(|| panic!("{arquivo} não está no catálogo"))
+        };
+        let pequeno = por_arquivo("ggml-small-q5_1.bin");
+        assert_eq!(
+            pequeno.sha256, "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb",
+            "o modelo pequeno continua INALTERADO"
+        );
+        assert_eq!(pequeno.tamanho_bytes, 190_085_487);
+
+        let grande = por_arquivo("ggml-medium.bin");
+        assert_eq!(
+            grande.sha256, "6c14d5adee5f86394037b4e4e8b59f1673b6cee10e3cf0b11bbdbee79c156208"
+        );
+        assert_eq!(grande.tamanho_bytes, 1_533_763_059);
+        assert!(!grande.executavel, "modelo é DADO, não programa");
+        assert_eq!(
+            grande.plataforma, QUALQUER_PLATAFORMA,
+            "dado não tem processador"
+        );
+        assert!(
+            grande.tamanho_bytes > pequeno.tamanho_bytes,
+            "o `medium` é o grande dos dois"
+        );
+    }
+
     /// V10 — o modelo é DADO, não executável, e não recebe (nem deve receber)
     /// o bit de execução. O catálogo presumia que todo acessório era binário.
     #[test]
     fn o_modelo_e_dado_e_o_transcritor_e_executavel() {
-        let modelo = CATALOGO
+        let modelos: Vec<&Acessorio> = CATALOGO
             .iter()
-            .find(|a| a.nome == MODELO_WHISPER)
-            .expect("o modelo está no catálogo");
-        assert!(!modelo.executavel, "o modelo não é programa");
-        assert_eq!(
-            modelo.plataforma, QUALQUER_PLATAFORMA,
-            "dado não tem processador: um arquivo serve as quatro máquinas"
-        );
-        for a in CATALOGO.iter().filter(|a| a.nome != MODELO_WHISPER) {
+            .filter(|a| [MODELO_WHISPER, MODELO_WHISPER_GRANDE].contains(&a.nome))
+            .collect();
+        assert_eq!(modelos.len(), 2, "os dois modelos estão no catálogo");
+        for modelo in &modelos {
+            assert!(!modelo.executavel, "{}: o modelo não é programa", modelo.arquivo);
+            assert_eq!(
+                modelo.plataforma, QUALQUER_PLATAFORMA,
+                "dado não tem processador: um arquivo serve as quatro máquinas"
+            );
+        }
+        for a in CATALOGO
+            .iter()
+            .filter(|a| ![MODELO_WHISPER, MODELO_WHISPER_GRANDE].contains(&a.nome))
+        {
             assert!(a.executavel, "{}: é programa", a.arquivo);
         }
     }
@@ -831,19 +950,23 @@ mod tests {
         );
     }
 
-    /// Nesta máquina existem os três acessórios: o do som, o transcritor e o
-    /// modelo. Um catálogo que esquecesse a plataforma faria a etapa sumir da
-    /// tela sem ninguém perceber (DECISIONS #101).
+    /// Nesta máquina existem os quatro acessórios: o do som, o transcritor e os
+    /// DOIS modelos. Um catálogo que esquecesse a plataforma faria a etapa
+    /// sumir da tela sem ninguém perceber (DECISIONS #101).
+    ///
+    /// **É esta lista que a tela mostra**, e é por isso que a preferência entre
+    /// os modelos não precisa de caixinha de seleção: os dois aparecem porque a
+    /// tela lista o catálogo, e quem escolhe qual roda é o programa.
     #[test]
-    fn esta_maquina_tem_o_som_o_transcritor_e_o_modelo() {
-        for nome in [FPCALC, WHISPER_CLI, MODELO_WHISPER] {
+    fn esta_maquina_tem_o_som_o_transcritor_e_os_dois_modelos() {
+        for nome in [FPCALC, WHISPER_CLI, MODELO_WHISPER, MODELO_WHISPER_GRANDE] {
             assert!(
                 desta_maquina(nome).is_some(),
                 "{nome} não tem arquivo para esta máquina"
             );
         }
         let nomes: Vec<&str> = catalogo_desta_maquina().iter().map(|a| a.nome).collect();
-        assert_eq!(nomes.len(), 3, "três acessórios, sem repetição: {nomes:?}");
+        assert_eq!(nomes.len(), 4, "quatro acessórios, sem repetição: {nomes:?}");
     }
 
     // -----------------------------------------------------------------------
