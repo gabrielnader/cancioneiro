@@ -1,5 +1,446 @@
 # REPORT — Cancioneiro
 
+## Estado em 0.10.1 — o que o produto é, e o que ele custou aprender
+
+O Cancioneiro é um player de MP3 **offline** (Tauri 2 + Rust + React, SQLite com
+FTS5) que existe para resolver um problema só: **achar uma música pelo pedaço de
+letra que alguém lembra**, num acervo grande, sem internet e sem conta. A
+reprodução nunca escreve; a rede só existe em pontos enumerados, e nenhum deles
+é o player.
+
+Da 0.6.0 até aqui o produto deixou de ser só um player. Ele absorveu a **máquina
+de curadoria** que antes morava no terminal: descobrir que música é aquela,
+achar a letra, e — quando não existe letra publicada — **escrevê-la ouvindo o
+áudio**, tudo dentro do aplicativo, em Configurações, sem uma linha de comando.
+
+### O contexto que decide todas as escolhas
+
+São **~40 pessoas não-técnicas, cada uma curando o próprio acervo, na própria
+máquina**, e há coleções que o dono do produto não pode nem ver. **Não existe
+suporte a quem perguntar.**
+
+Isso não é detalhe de distribuição — é o critério de projeto, e está atrás de
+quase tudo que mudou nesta janela:
+
+- **cada mensagem é a única explicação que alguém vai receber** — daí "sem
+  conexão" ter deixado de ser o nome de todo erro (429, 500 e chave recusada
+  eram tudo "sua internet"), e daí a copy inteira ter passado por um passe de
+  redução com régua e teste, depois do relato em campo *"as mensagens estão
+  muito longas"*;
+- **modo é escolha, e escolha é pedágio** — os dois modos de varredura
+  ("completar" e "conferir") sumiram em favor de um botão só;
+- **defeito silencioso é permanente**, porque ninguém vai reportá-lo: a música
+  que sai da fila de curadoria por engano sai *para sempre*;
+- **estimativa errada por ordem de grandeza é pior que estimativa ausente**,
+  porque o PRD a promoveu a parte do fluxo.
+
+### O funil, como ficou
+
+Ele deixou de ser uma fila ordenada por custo e virou **duas fases**, porque a
+impressão digital não devolve letra: devolve *identidade*, que é entrada de
+todas as outras etapas.
+
+| fase | # | etapa | custo | prova do casamento |
+|---|---|---|---|---|
+| A — que música é esta? | 1 | etiquetas + nome do arquivo | instantâneo | nenhuma (palpite local) |
+| A | 2 | impressão digital (AcoustID / `fpcalc`) | **2 s/música, medidos em campo** | acústica; teto de aceitação não afrouxável |
+| B — qual é a letra? | 3 | LRCLIB | ~0,5 s | duração (±3 s) |
+| B | 4 | `lyrics.ovh` | ~0,5 s | **nenhuma verificável por nós** — teto MÉDIA |
+| B | 5 | transcrição local (whisper.cpp) | minutos por música | o próprio áudio |
+
+`fpcalc`, `whisper-cli` e os modelos não vêm no instalador de 5 MB: são
+**acessórios baixados sob demanda**, de um lançamento fixo (`acessorios-v1`),
+com SHA-256 compilado no app e conferido **antes de executar**. A tela lista o
+que *esta máquina* faz, não o que o produto sabe fazer.
+
+### As suítes
+
+| suíte | 0.6.0 (início da janela) | 0.10.1 |
+|---|---|---|
+| cargo test | 106 | **415** |
+| pytest | 557 | **750** |
+| vitest | 369 | **1028** |
+| Playwright E2E | 22 | **44** |
+| total | 1054 | **2237** |
+
+`tsc` limpo, `cargo check` sem avisos, **0 warnings**. As decisões de projeto —
+**125** hoje, contra 30 ao fim da V1 — estão em
+[`DECISIONS.md`](./DECISIONS.md), cada uma com o motivo e, quando existe, o
+número que a sustenta.
+
+E a ressalva que esta janela ensinou a escrever junto com o número: **suíte
+verde mede o que a suíte alcança.** Com 205 testes de Rust verdes o aplicativo
+congelava inteiro ao varrer uma pasta; com quatro suítes verdes a chave de API
+não chegava ao binário. Nenhum desses números prova o produto.
+
+### As medições, com a condição em que foram feitas
+
+Quase toda decisão desta janela foi puxada por um número, e vários deles
+contradisseram a intuição que os precedia.
+
+| medida | valor | condição |
+|---|---|---|
+| cobertura do LRCLIB | **~3%** | acervo real de 94 MP3s de repertório de nicho, Mac M2 |
+| identificação por impressão digital | **16%** (15 de 94), 23 s no total | mesmos 94 arquivos |
+| identificação pelo refrão | **0 e 1** identificações | duas execuções dos 94 (`tiny` e `small`) — e a única foi **errada e aplicada** |
+| transcrição, encontrabilidade | **78%** | faster-whisper (CTranslate2, Python), medida original |
+| transcrição, remedida | **37%** | `whisper.cpp` + `ggml-small-q5_1`, **os mesmos arquivos e trechos** |
+| varredura com as etapas 1 e 3 | 16 músicas em **~2 min** (7 s/música) | uso em campo da v0.9.0 |
+| etapa do som | **2 s/música** | campo; a estimativa dizia 0,3 s — **erro de 7×** |
+| densidade que separa instrumental de letra | instrumentais 0,07 e 0,08 c/s; letras mais magras 1,22 / 2,81 / 3,10 | mesma execução; piso fixado em 0,30 |
+| mock × backend | **17 divergências em 62 textos** | tabela de `is_placeholder` portada caso a caso |
+| conferência de SHA-256 do modelo | **422 ms** para 512 MB → **2,3 µs** | release, SHA-NI, cache de páginas quente; memorizada por (caminho, mtime, tamanho) |
+
+O **37%** é o número mais importante da janela, e ele é uma reprovação: os 78%
+foram medidos com outro motor, e *a prova não viaja junto quando o código é
+reusado*. O arnês de remedição (`src-tauri/tests/remedicao.rs`) roda o **mesmo**
+`transcricao::transcrever` do produto e procura o trecho com o **mesmo** FTS5 —
+reimplementar a medição em Python mediria outra coisa, que é exatamente o tipo
+de "outra coisa" que produziu o número que estava sendo remedido.
+
+### A família de defeito que este projeto encontrou cinco vezes
+
+Não é coincidência, e é o que o relatório tem de mais útil para quem chega de
+fora: **cinco vezes a especificação estava certa, o código estava certo, as
+suítes estavam verdes, e o produto estava errado** — porque o pedaço que ligava
+as duas pontas ninguém tinha escrito, ou porque nenhuma suíte alcançava o lugar
+onde o defeito morava.
+
+1. **O `vad_filter` que destruía 35% das transcrições** (0.6.0, já descrito
+   abaixo): não era o modelo, era configuração — o VAD é detector de *fala* e
+   descartava canto com instrumentação antes de o modelo ouvir.
+2. **O aplicativo que congelava** (0.8.1): comando síncrono do Tauri roda na
+   thread principal, que é a que desenha a janela. As varreduras, a indexação e
+   a gravação em lote paravam a repintura inteira. Relatado em campo como *"não
+   vi barra de progresso em lugar algum, só o cursor rodando"* — **a barra
+   existia**, os eventos eram emitidos e o E2E os cobria, porque o E2E roda
+   contra o mock no navegador, onde não há thread principal do Tauri para
+   bloquear. Quatro suítes verdes, 205 testes de Rust, e nenhuma delas podia
+   pegar isto.
+3. **A chave que nunca chegava ao binário** (0.9.0): o código lia `option_env!`,
+   que é variável de ambiente **em tempo de compilação**, e segredo de
+   repositório não vira variável sozinho. **O passo do CI que punha o valor lá
+   nunca foi escrito.** Toda build saía sem chave — o que desligava a etapa do
+   som, o que marcava o acessório como indisponível, o que recusava o download:
+   a entrega inteira nasceria inerte. Nenhuma suíte veria, porque todas injetam
+   a chave nos testes.
+4. **A tag sem o bump de versão** (0.9.0): o `latest.json` sai com a versão do
+   `tauri.conf.json`, não com a tag. Taguear `v0.9.0` sobre um `0.8.1` esquecido
+   publicaria um manifesto dizendo 0.8.1, o updater compararia `0.8.1 > 0.8.1`,
+   daria falso, e a release ficaria **publicada e invisível** — ninguém
+   atualizaria e ninguém perceberia, porque não há suporte a quem perguntar.
+   Aconteceu, e só não saiu porque o QA pegou. **Lembrança não é mecanismo**: o
+   fluxo passou a recusar a publicação quando a tag não bate com os três
+   arquivos de versão.
+5. **O teste de fumaça que "passava" sem passar o modelo** (0.10.0): sem `-m`, o
+   `whisper-cli` procura um `models/ggml-base.en.bin` inexistente e sai com erro
+   **antes de olhar o áudio**. Os três sistemas "falharam" no WAV e o passo do
+   MP3 "passou", os dois pelo mesmo motivo — e a pergunta que o teste existe
+   para responder nunca chegou a ser feita. Chegou a reportar "MP3 aceito"
+   quando o binário nem tinha aberto o arquivo. **Teste que erra por fora do que
+   mede não mede nada: verde e vermelho igualmente sem significado.**
+
+A resposta de processo foi um **fluxo de fumaça que baixa, confere e roda** cada
+acessório sobre um MP3 real em macOS, Windows e Linux — porque hash prova que
+baixou o arquivo certo, não que ele executa.
+
+### O mock que certifica o contrato errado — quatro vezes
+
+Os E2E rodam o frontend no Chromium com o IPC mockado. Isso é deliberado e está
+documentado desde a V1, mas cobra um preço: **um mock que discorda do backend
+faz o E2E certificar o contrato errado**, e passar. Aconteceu quatro vezes nesta
+janela, e as quatro são diferentes entre si.
+
+1. **Regra velha** (0.8.0): o mock trazia a regra antiga do instrumental, o
+   portão do Vagalume **invertido** (consultando quando falta artista, e
+   propondo nome novo — exatamente a falha "Lampejo × Roberto Carlos") e
+   comparação de obsolescência sem aparar espaço. O E2E passava exercitando
+   chamadas que o backend real nunca faria. O caso em que as três implementações
+   discordavam — instrumental sem artista — **não tinha teste em lugar nenhum**.
+2. **O backend errado** (0.8.0): investigando outra discordância, quem estava
+   certo era o mock. É o item 3 da lista acima.
+3. **Deriva medida** (0.9.0): o `isPlaceholder` do mock era a versão anterior ao
+   porte completo e já sustentava quatro regras novas. Rust × mock:
+   **17 divergências em 62 textos**. Faltavam as duas metades que o porte mandou
+   existir e sobrava a regressão que ele mandou tirar ("Pista" sozinha).
+4. **Por omissão** (0.10.1): quando o segundo modelo entrou no catálogo,
+   `src/lib/api.ts` continuou declarando três nomes de acessório e o mock
+   continuou listando três. **Nada quebrava** — a lista vem do backend em tempo
+   de execução e a tela desenha um cartão por item —, mas o tipo passou a
+   descrever *menos* do que o backend devolve. É a divergência mais difícil de
+   ver, porque não há um caso errado: há um caso ausente.
+
+A resposta foi um `mockBackend.contrato.test.ts` que fixa, caso a caso, a tabela
+que o Rust produz — e a metade comportamental, que prova que cada regra **chega**
+ao ponto do funil que depende dela.
+
+### O que continua em aberto, e é honesto dizer
+
+1. **Windows nunca foi usado por uma pessoa.** Toda medição de campo desta
+   janela veio do Mac M2 do dono do produto; o único Windows que o projeto tocou
+   é runner de CI (build do instalador e fumaça dos acessórios). O `.msi`/`.exe`
+   sai do `release.yml` e ninguém o instalou.
+2. **O aplicativo não é assinado**, e a primeira coisa que cada pessoa faz é
+   abrir o **Terminal** para rodar `xattr -cr /Applications/Cancioneiro.app`
+   (macOS) ou clicar em "Executar assim mesmo" no SmartScreen (Windows). Isto
+   **contradiz diretamente** a promessa que organizou as versões 0.8 a 0.10 —
+   *nunca mais um terminal* — e a contradição está na primeira página do guia de
+   instalação. Resolver custa Apple Developer ID + notarização e certificado de
+   code signing; não foi feito.
+3. **A transcrição engole estrofes.** O `ggml-small-q5_1` classifica trecho
+   *cantado* como música e devolve `[música]`, `[Música]`, `[MÚSICA DE FUNDO]`,
+   `[cantarolando]` no lugar do verso — numa faixa, quatro estrofes inteiras
+   sumiram. Não é falta de idioma (`--language pt` está sendo passado, com teste
+   varrendo a linha de comando). E uma letra com buraco **tem letra**: some da
+   fila para sempre e não é encontrável pelo pedaço que a pessoa lembra, que é o
+   produto inteiro. O `ggml-medium.bin` entrou por causa disso, **como medição
+   em curso e não como desenho**: dois modelos no catálogo é estado temporário,
+   declarado em três lugares, e assim que o arnês rodar com os dois nos mesmos
+   arquivos **um dos dois sai**.
+4. **O `lyrics.ovh` é a única fonte do funil cujo casamento não é verificável.**
+   Ele não devolve título nem artista, então não há segundo lado a conferir. Se
+   fizer casamento aproximado por dentro, pode devolver a letra de "Ponto de
+   Ogum" para um pedido de "Ponto de Oxum" **e o programa não tem como
+   perceber**. O que compensa é pouco e de propósito: só se consulta com título
+   e artista reais, título composto é recusado, o teto é MÉDIA (logo, nunca
+   pré-marcada) e a proposta não troca nome nenhum. **A prova, aqui, é o olho de
+   quem revisa.**
+5. **O macOS perdeu aceleração por hardware.** O `whisper-cli` saiu universal
+   (um arquivo, dois processadores) porque o runner Intel do CI ficava
+   eternamente na fila — três execuções nunca começaram. Metal e Accelerate não
+   compilam para x86_64 no mesmo binário: a transcrição é mais lenta no Apple
+   Silicon do que precisaria ser. Escolha consciente — binário lento é melhor
+   que binário que não roda em metade das máquinas.
+6. **Dívidas anotadas com dono, não resolvidas em silêncio**: o
+   `tools/curadoria.py` carrega o mesmo defeito de `is_placeholder` sem *slot*
+   que o Rust corrigiu (uma música chamada "Diversos" valeria vazio), e ficou de
+   fora por escopo — ele é ferramenta de terminal do dono do produto e não vai
+   para as 40 máquinas, mas o dano é o mesmo dentro do arquivo dele.
+
+---
+
+> **Atualização V10.1 (0.10.1):** rodada de **teste em campo** e de preparação
+> para uma medição, não de recurso novo.
+> **A remedição reprovou o modelo pequeno**: 37% de encontrabilidade contra os
+> 78% do faster-whisper, nos MESMOS arquivos e trechos. O `ggml-medium.bin`
+> (1,5 GB) entra como **segundo** acessório de modelo e a transcrição usa o
+> preferido que estiver pronto — grande, senão pequeno, senão a etapa não
+> existe. **Não há caixinha de seleção, e não vai haver**: "qual modelo de
+> reconhecimento de fala você prefere" é a pior versão possível do pedágio que a
+> decisão 102 saiu para eliminar. Os dois aparecem em Configurações porque a
+> tela lista o catálogo.
+> **Um MP3 do acervo real recusava toda gravação** com `Invalid frame language
+> found: [0,0,0]` — e como toda tentativa falhava igual, a música saía da
+> curadoria para sempre, em silêncio. A suspeita natural (modo de leitura do
+> ID3) estava errada, e foi a medição que disse: nos três modos a **leitura
+> passa** e a **regravação falha**. O quadro quebrado era um `COMM` alheio, dos
+> que a decisão 41 promete preservar — a promessa estava certa e era ela que
+> travava o arquivo. Conserto: `und`, o código que o próprio ISO-639-2 reserva
+> para "idioma indeterminado". Quando dois quadros ficariam com a mesma chave
+> depois do conserto, o produto **recusa a gravação** em vez de apagar a
+> anotação de alguém.
+> **Os erros de gravação passaram a falar português** — era a mesma família do
+> M4 da v0.9.0, corrigida só no caminho do download; o caminho da gravação tinha
+> o mesmo buraco, e era ele que aparecia em campo.
+> **E a soma do modelo deixou de ser refeita a cada troca de pasta**: 422 ms
+> medidos para 512 MB (SHA-NI, cache quente, release), ~1,2 s extrapolados para
+> 1,5 GB, **2,3 µs** depois de memorizada por (caminho, mtime, tamanho). A
+> garantia continua de pé — a primeira conferência de cada arquivo em cada
+> sessão acontece de verdade, e a comparação com o catálogo acontece em toda
+> pergunta. Há teste **contando** as leituras de disco: "não releu o arquivo" é
+> afirmação sobre o disco, e afirmação sobre o disco se conta, não se deduz
+> lendo o código.
+>
+> **O erro de processo desta rodada foi meu, e o comentário avisava.** Para
+> acrescentar o modelo grande rodei o fluxo do transcritor, que reconstrói os
+> três `whisper-cli` junto. O do Windows **não é reprodutível** (o MSVC carimba
+> data e caminho no executável): ele voltou com soma diferente sem nada dele ter
+> mudado, o catálogo passou a esperar um hash que o lançamento não serve mais, e
+> no Windows a transcrição nasceria morta. **Aviso em comentário não é trava** —
+> agora existe um fluxo que publica só o modelo, sem tocar em binário, e que
+> recusa publicar por cima de um arquivo existente.
+
+> **Atualização V10 (0.10.0):** a etapa que resolve, e o **caminho único**
+> (`PRD-v10-transcricao-e-caminho-unico.md`).
+> **A etapa 5** escreve a letra ouvindo o áudio, com `whisper-cli` +
+> modelo quantizado baixados como acessórios. A pergunta não vai para o começo,
+> onde é jargão: vai para o **fim**, quando o app já sabe o que faltou — *"sobraram
+> 47 músicas sem letra; escrever a letra ouvindo o áudio leva cerca de 3 horas
+> neste computador"*.
+> **Os modos sumiram.** Uma varredura só, em todas as músicas da pasta. Com os
+> 2 s/música medidos (contra 0,3 s estimados), separar "completar" de "conferir"
+> custava 2 min e meio num acervo de 150 — e cobrava por eles que alguém que não
+> sabe o que é terminal escolhesse entre dois nomes que não entende. Pior: a
+> conferência era **a única coisa que achava etiqueta errada**, e recurso que
+> depende de o usuário adivinhar que existe é recurso que não existe. O portão
+> de completude não foi apagado, **mudou de lugar**: saiu da porta de entrada e
+> virou o guarda das etapas 3 e 4.
+> **A revisão passou a ser ordenada por RISCO, não por confiança** — conflitos →
+> letras encontradas → trocas de nome escrito → o grupo dobrado dos
+> preenchimentos. "Baixa confiança" juntava o mais seguro com o mais perigoso, e
+> por isso parecia ruído: **confiança baixa não quer dizer "provavelmente
+> errado", quer dizer "sem prova externa"**. Veio de um comportamento observado —
+> *"nem li as sugestões em baixa, não deu vontade de ler mesmo"*, numa revisão de
+> 53 músicas.
+> **O Vagalume foi REMOVIDO, não desligado.** A API está descontinuada, o dono do
+> produto nunca conseguiu a chave, e o módulo **nunca rodou contra o serviço
+> real**: dezenas de testes verdes com o `fetch` injetado e zero contato. É a
+> mesma confiança falsa do item 2 e do item 3 acima. "Só deixe de ser o padrão"
+> foi recusado como reflexo de custo afundado — **existir custa mais que zero**:
+> um campo de chave de API numa tela para 40 leigos, um parágrafo explicando o
+> campo, um destino na lista de rede, e atrito em toda refatoração. Entrou no
+> lugar o `lyrics.ovh`, **sem chave** — e fonte sem chave vem *antes* de fonte
+> com chave, senão é o mesmo que não tê-la. Ganho de produto: **nenhuma etapa do
+> funil exige credencial do usuário.** O que ficou foi a disciplina: a régua de
+> casamento estrito mudou de casa em vez de sair junto, porque **fonte de letra
+> sem duração é uma CATEGORIA**, não um fornecedor.
+> **E o app passou a decodificar o MP3 em Rust puro** (`symphonia`, feature
+> `mp3`) para entregar ao motor o WAV 16 kHz que ele sabe ler — em vez de
+> entregar um MP3 e torcer. Não se depende do formato de entrada de um binário
+> de terceiro: hash prova que baixou o arquivo certo, não que ele faz o que a
+> gente precisa. O temporário nunca é criado ao lado do MP3, e a regra "nenhum
+> arquivo é renomeado ou movido" ganhou o irmão que nunca havia sido escrito:
+> **nada é CRIADO dentro do acervo.**
+>
+> **A duração que mentia voltou, por outra porta — e este é o achado da
+> rodada.** A decisão 108 comemorou o fim do incidente dos 2365 s dizendo que
+> contar amostras do decodificador é medição do áudio. É — **do pedaço que o
+> decodificador resolveu entregar**. O `symphonia` liga `gapless` por padrão, e
+> com ele o `num_frames`, que vem do contador do **Xing/Info**, vira o fim do
+> fluxo. Ou seja: o número promovido ao topo da ordem de autoridade derivava
+> exatamente daquele que a decisão 72 proíbe confiar. Medido nas fixtures deste
+> repositório, dez cópias emendadas (**30,3 s** de áudio) com o contador da
+> primeira dizendo 116 quadros: **3,00 s**. Contador adulterado para 78:
+> **2,04 s**. Corrigido para 1160: **30,30 s**. O arquivo que expõe isso não é
+> exótico — é o que `cat a.mp3 b.mp3 > set.mp3` produz, e todo player toca
+> inteiro. Os dois desfechos eram **permanentes**. Conserto: `gapless` desligado,
+> o cabeçalho virou **piso** (decodificar muito menos que o declarado marca a
+> leitura como incompleta; decodificar mais não acusa nada, porque quem estava
+> errado era o cabeçalho) e o número que o motor anuncia corrobora só nessa
+> direção. **É corroboração usada só no sentido em que ela é sólida.**
+> O mesmo QA achou um `Err(_) => break` no laço da decodificação com um
+> comentário verdadeiro sobre fluxo truncado — que engolia **falha de I/O**: HD
+> externo que dorme, pen drive arrancado, compartilhamento que cai. Medido:
+> **30,56 s de áudio viravam 8,05 s**, sem erro e sem aviso. Em 40 máquinas
+> alheias esse é o modo de falha mais comum do parque, e nenhuma suíte o
+> alcançava.
+
+> **Atualização V9 (0.9.0):** a máquina de acessórios, provada no barato
+> (`PRD-v9-acessorios-e-funil-completo.md`).
+> **O funil virou duas fases**, porque a impressão digital estava ordenada no
+> meio das fontes de letra e isso era erro de categoria — ela não devolve letra,
+> devolve **identidade**. Também sai mais barato: sem nome conhecido são até 7
+> consultas ao LRCLIB, uma por palpite; com o nome verdadeiro é **uma**.
+> **E a inversão criou um risco novo, que está escrito**: o AcoustID e o LRCLIB
+> conferem pela MESMA evidência — duração. Quando o primeiro erra, o segundo
+> **confirma** o erro e devolve ALTA. Não são duas contas independentes; é a
+> mesma conta feita duas vezes. Daí a régua de aceitação do AcoustID não ser
+> afrouxável, nome recusado por ela não vazar para a fase B, e letra achada por
+> nome vindo do som ter **teto MÉDIA**. Não temos taxa de falso positivo do
+> AcoustID neste repertório — os 16% são acerto, não é o mesmo número — e **isso
+> só se reverte com medição, não com argumento.**
+> **Etiqueta ERRADA virou modo de falha próprio.** Caso real: "Te ver feliz, te
+> ver contente / Caetano Veloso" que é "Viver Feliz" do Nilson Chaves. Nada ali é
+> placeholder, então a música era julgada completa e o erro ficava invisível
+> **para sempre** — e quem não conhece o repertório nunca desconfia; a música só
+> não aparece quando procuram. Duas populações que o projeto tratava como uma:
+> nunca publicada (só a transcrição resolve) e publicada mal etiquetada (todas as
+> bases têm; nós é que procurávamos pelo nome errado).
+> **Baixar e executar binário exige provar três coisas separadamente**: que
+> baixou, que é o arquivo certo, e que **executa**. Hash cobre as duas primeiras
+> e não diz nada sobre a terceira — o macOS recusa executável sem assinatura, com
+> regra mais estrita no Apple Silicon. Daí o fluxo de fumaça que baixa, confere e
+> **roda** o acessório sobre um MP3 real em cada sistema.
+> Provar a máquina nova com 3–5 MB de `fpcalc` antes de confiar nela com 180 MB
+> de modelo era o ponto da versão: **o risco desta fase estava no downloader, não
+> no `fpcalc`.**
+>
+> **O QA reprovou a 0.9.0 por dois fatos fora do código de produto** — a chave
+> que não chegava ao binário e a tag sem o bump, ambos descritos acima. Ambos
+> teriam publicado uma versão que existe e não funciona, e nenhuma suíte os
+> alcançava. **Especificação e implementação podem estar certas e o produto
+> errado, se ninguém escreveu o pedaço que liga as duas.**
+
+> **Atualização V8 (0.8.0 / 0.8.1):** a premissa do produto mudou no meio do
+> projeto (`PRD-v8-instrumental-e-funil-no-app.md`), e com ela quase tudo.
+> **A curadoria mudou de dono**: não é um curador preparando acervos para os
+> outros — são ~40 pessoas curando cada uma o seu, e acervos que o dono do
+> produto não pode nem olhar. O funil saiu do `tools/curadoria.py` e entrou em
+> **Configurações**; o ✎ saiu da árvore de pastas no mesmo lançamento (nunca
+> antes, ou haveria uma versão sem varredura em lugar nenhum), porque a lateral é
+> para navegar e um botão que dispara horas de processamento no meio da navegação
+> é convite a clique acidental.
+> **A F17 (marca de instrumental)**, entregue na 0.7.0, resolveu a pendência
+> eterna: música sem voz entrava em toda varredura, transcrevia vazio, virava
+> erro e era tentada de novo para sempre. A marca vai no próprio MP3
+> (`TXXX:INSTRUMENTAL`), e a **escolha humana vence a rotina** — nem `--forcar`
+> nem `--forcar-tudo` desmarcam.
+>
+> **Cinco defeitos desta janela que valem mais que os recursos:**
+> 1. **Letra que já existe não se apaga sozinha** (CRÍTICO): uma música com tag
+>    "AudioTrack 03" e uma transcrição corrigida à mão casava no LRCLIB pela
+>    duração e saía ALTA — e ALTA chega pré-marcada. Um clique destruía a
+>    transcrição e a procedência. Substituir letra virou **segunda marcação,
+>    separada, desmarcada por padrão, que o "Marcar todas" não toca**. Porte
+>    tardio de uma trava que a linha de comando tinha desde sempre e o app nunca
+>    teve.
+> 2. **O botão do produto ficava cinza**: a contagem de candidatas em TypeScript
+>    afirmava espelhar a do Rust e não espelhava em três casos — e como ela
+>    desabilitava o botão, o único ponto de entrada do produto dizia "não há nada
+>    para procurar" justamente nos acervos que mais precisavam (CD ripado com
+>    "Faixa 01…12", pastas de instrumentais sem artista). A contagem virou
+>    comando sobre a MESMA função da varredura. **Regra duplicada em duas
+>    linguagens diverge, e a divergência escolhe o pior momento para aparecer.**
+> 3. **Título que o indexador inventou não é etiqueta**: o `indexer.rs` copia o
+>    nome do arquivo para o `title` quando falta TIT2, e o funil lia isso como
+>    etiqueta REAL — a etapa que se chama "nome do arquivo" não entregava nada
+>    justamente para quem não tem tag nenhuma. Achado ao investigar por que o
+>    mock e o Rust discordavam: **os dois lados de uma divergência merecem
+>    suspeita, e desta vez quem estava errado era o backend.**
+> 4. **Porte parcial é porte errado, e o pedaço que falta é sempre o que ninguém
+>    testou**: `unescape_html` tinha 13 entidades e nenhuma das que importam em
+>    português — `Cora&ccedil;&atilde;o` entrava literal na letra e no índice. Ao
+>    completar o porte apareceu o oposto: o Rust passou a marcar **"Pista"
+>    sozinha** como placeholder, e "Pista" é título real no repertório.
+> 5. **A duração que mentia** (0.7.0, CRÍTICO): sem cabeçalho Xing o mutagen
+>    estima pelo primeiro quadro — **300 s reais viraram 2365 s**, e uma música
+>    cantada foi marcada instrumental para sempre, num produto cujo único desfazer
+>    era um comando de terminal. **Margem de segurança não protege contra erro de
+>    ordem de grandeza; só corroboração protege.** (E voltou na V10, por outra
+>    porta — ver acima.)
+>
+> **A 0.8.1 existe por causa de um único defeito**, e ele é o mais instrutivo do
+> projeto: o app congelava porque comando síncrono do Tauri roda na thread
+> principal. A regra ficou escrita no `commands.rs` — comando que faz rede,
+> percorre disco ou escreve arquivo é `#[tauri::command(async)]`.
+
+> **Atualização V7 (0.7.0):** rodada curta, três coisas, todas vindas do acervo
+> real.
+> **Marca de instrumental (F17)**, **busca por nome de arquivo** (coluna nova no
+> fim da FTS — no FIM porque o trecho destacado sai por POSIÇÃO, e inserir no
+> meio faria a busca citar o campo errado em silêncio) e o conserto da duração.
+> **Dois defeitos que só o modelo `small` revelou**, depois que ele substituiu o
+> `tiny`: transcrição quase vazia era gravada como letra e matava a F17 — com o
+> `tiny` as instrumentais voltavam vazias e a marca funcionava; o `small` devolve
+> ruído, **13 caracteres para 2m55s, 29 para 6m20s**. Isso ia para o índice de
+> busca e, pior, o arquivo passava a "ter letra", então todas as etapas seguintes
+> o pulavam para sempre. O critério virou densidade, calibrado nos números reais
+> (instrumentais 0,07 e 0,08 c/s; letras legítimas mais magras 1,22, 2,81 e 3,10;
+> piso em 0,30, quase no meio geométrico do vão). **A margem é simétrica de
+> propósito, mas os erros não são**: falso positivo tira uma música real da fila
+> para sempre.
+> E a **identificação pelo refrão saiu do caminho padrão**, com o número que a
+> condenou: duas execuções de 94 arquivos deram 0 e 1 identificações, e a única
+> estava **errada e foi aplicada** ("Barco Valente" virou "Não aguento mais /
+> Raça Negra", porque o refrão transcrito foi a frase genérica "não aguento",
+> que obviamente está na letra de uma música com esse nome). **A prova que
+> criamos passa de graça em frase genérica.** Ela nunca entrou no aplicativo —
+> e a consequência é melhor que a regra que se pediria: sem nome vindo daí,
+> "transcrição nunca sobrescreve etiqueta real" não precisa de mecanismo nenhum.
+> **Recurso que erra metade do que produz não entra num produto sem suporte; a
+> parte dele que só informa, entra** — o refrão continua sendo extraído para
+> mostrar uma linha a quem vai conferir 47 letras escritas por máquina.
+
 > **Atualização V6.1 (0.6.0):** rodada guiada inteiramente por medição no
 > acervo real do usuário, não por especulação.
 > **Vagalume** entra como segunda fonte de letra depois do LRCLIB — comunitária
