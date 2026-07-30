@@ -148,12 +148,28 @@ jobs:
         shell: bash
         run: ./${{ matrix.arquivo }} --help > /dev/null
 
+      - name: Baixar o modelo
+        # SEM `-m`, o whisper-cli procura um `models/ggml-base.en.bin` que não
+        # existe e sai com erro ANTES de olhar o arquivo de áudio. A primeira
+        # versão deste trabalho não passava o modelo: os três sistemas
+        # "falharam" no WAV e o passo do MP3 "passou", os dois pelo MESMO
+        # motivo — e a pergunta que o teste existe para responder nunca chegou
+        # a ser feita. Teste que erra por fora do que mede não mede nada.
+        if: steps.baixar.outcome == 'success'
+        shell: bash
+        env:
+          TAG: ${{ github.event.inputs.tag || 'acessorios-v1' }}
+        run: |
+          set -euo pipefail
+          curl -fsSL -o modelo.bin \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/ggml-small-q5_1.bin"
+
       - name: Aceita MP3? (a resposta "não" é resultado, não falha)
         if: steps.baixar.outcome == 'success'
         continue-on-error: true
         id: mp3
         shell: bash
-        run: ./${{ matrix.arquivo }} -f fixtures/com_letra.mp3 -nt 2>&1 | tail -5
+        run: ./${{ matrix.arquivo }} -m modelo.bin -f fixtures/com_letra.mp3 -nt 2>&1 | tail -5
 
       - name: Aceita WAV 16 kHz mono? (é o que o aplicativo entrega)
         if: steps.baixar.outcome == 'success'
@@ -168,7 +184,7 @@ jobs:
                   struct.pack("<h", int(3000 * math.sin(2 * math.pi * 220 * t / 16000)))
                   for t in range(16000)))
           PY
-          ./${{ matrix.arquivo }} -f prova.wav -nt
+          ./${{ matrix.arquivo }} -m modelo.bin -f prova.wav -nt
 
       - name: Registrar o veredito
         if: steps.baixar.outcome == 'success'
