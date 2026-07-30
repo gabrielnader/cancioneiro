@@ -343,6 +343,22 @@ export interface EnrichApplyResult {
   song: Song | null;
   /** Não-nulo = falhou nesta música (ex.: "arquivo não encontrado: …"). */
   error: string | null;
+  /**
+   * V10.8 — a gravação DEU CERTO e há algo a contar sobre ela: hoje, a etiqueta
+   * do MP3 que precisou ser normalizada para o arquivo aceitar a gravação
+   * (`writer::AVISO_ETIQUETA_NORMALIZADA` no Rust).
+   *
+   * **Não é erro, e é por isso que não é o `error`.** A linha gravou, o áudio foi
+   * conferido byte a byte e não há nada a refazer — o que existe é uma
+   * informação que a pessoa tem direito de ler, porque o programa mexeu num byte
+   * do arquivo dela que ela não pediu explicitamente para mexer. Sem pedágio
+   * antes (nenhuma pergunta técnica para quem não tem a quem perguntar) e sem
+   * segredo depois.
+   *
+   * Vem sempre junto com `song` não-nulo: aviso sem gravação não existe. A frase
+   * é do backend e chega PRONTA — a tela a mostra como veio.
+   */
+  aviso: string | null;
 }
 
 // ---------------------------------------------------------------------------

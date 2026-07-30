@@ -221,6 +221,8 @@ export function EnrichReview() {
   // V10.6 — as linhas já gravadas nesta revisão, e o que o disco tem agora
   const aplicadasNaOrdem = useEnrichStore((s) => s.aplicadas);
   const estadoGravado = useEnrichStore((s) => s.gravadas);
+  // V10.8 — o que o backend teve a contar sobre uma gravação que DEU CERTO
+  const avisosDaGravacao = useEnrichStore((s) => s.avisosDaGravacao);
   const close = useEnrichStore((s) => s.close);
   const hideOverlay = useEnrichStore((s) => s.hideOverlay);
   const registrarAplicacao = useEnrichStore((s) => s.registrarAplicacao);
@@ -833,6 +835,22 @@ export function EnrichReview() {
           {gravada && (
             <span className="block text-[13px] font-medium text-[#0F766E]">
               {ROTULO_DA_LINHA_GRAVADA}
+            </span>
+          )}
+          {/*
+            V10.8 — o desfecho de uma gravação que precisou consertar algo no
+            arquivo. Vem DEPOIS do "Gravada no arquivo." de propósito: a primeira
+            coisa a ler é que deu certo, e só então o que foi preciso fazer para
+            dar certo.
+
+            Cinza secundário, e não âmbar: âmbar é ressalva ("vale ler antes de
+            aplicar"), e aqui não há nada a decidir nem a conferir — a gravação
+            aconteceu, o áudio foi conferido, e isto é registro. Âmbar numa linha
+            que deu certo ensinaria a ler âmbar como enfeite.
+          */}
+          {gravada && avisosDaGravacao[p.song_id] !== undefined && (
+            <span className="mt-0.5 block text-[13px] leading-relaxed text-[#5B6472]">
+              {avisosDaGravacao[p.song_id]}
             </span>
           )}
           {error === null && !gravada && (

@@ -82,6 +82,7 @@ describe("enrichStore (V5 — F13)", () => {
       applyErrors: {},
       aplicadas: [],
       gravadas: {},
+      avisosDaGravacao: {},
       scanInFlight: false,
       semLetraNoFim: [],
       segundosDeTranscricao: 0,
@@ -669,8 +670,9 @@ describe("enrichStore (V5 — F13)", () => {
     aplicada de novo.
   */
   describe("registrarAplicacao — cada linha fica com o seu desfecho (A5; V10.6)", () => {
-    const gravada = (id: number, title = "A Canção") => ({
+    const gravada = (id: number, title = "A Canção", aviso: string | null = null) => ({
       song_id: id,
+      aviso,
       song: {
         id,
         file_path: `/acervo/${id}.mp3`,
@@ -697,7 +699,7 @@ describe("enrichStore (V5 — F13)", () => {
         .getState()
         .registrarAplicacao([0, 1], [
           gravada(1),
-          { song_id: 2, song: null, error: "a música mudou depois da busca" },
+          { song_id: 2, song: null, error: "a música mudou depois da busca", aviso: null },
         ]);
 
       const state = useEnrichStore.getState();
@@ -741,7 +743,9 @@ describe("enrichStore (V5 — F13)", () => {
       await useEnrichStore.getState().startScan("");
       useEnrichStore
         .getState()
-        .registrarAplicacao([0], [{ song_id: 1, song: null, error: null }]);
+        .registrarAplicacao([0], [
+          { song_id: 1, song: null, error: null, aviso: null },
+        ]);
       expect(useEnrichStore.getState().applyErrors[1]).toBe(
         "não foi possível gravar",
       );
@@ -754,7 +758,9 @@ describe("enrichStore (V5 — F13)", () => {
       await useEnrichStore.getState().startScan("");
       useEnrichStore
         .getState()
-        .registrarAplicacao([0], [{ song_id: 1, song: null, error: "falhou" }]);
+        .registrarAplicacao([0], [
+          { song_id: 1, song: null, error: "falhou", aviso: null },
+        ]);
       expect(useEnrichStore.getState().applyErrors[1]).toBe("falhou");
 
       useEnrichStore.getState().registrarAplicacao([0], [gravada(1)]);
@@ -762,6 +768,61 @@ describe("enrichStore (V5 — F13)", () => {
         useEnrichStore.getState().applyErrors,
         "o erro descrevia a tentativa anterior, e ela deixou de ser a última",
       ).toEqual({});
+    });
+
+    /*
+      V10.8 — O AVISO DE UMA GRAVAÇÃO QUE DEU CERTO NÃO É UM ERRO.
+
+      A #139 veio de um grupo só para dois desfechos, e a tela afirmou o oposto do
+      que aconteceu. Aqui o risco é o mesmo com outra roupa: pôr o aviso no
+      `applyErrors` desabilitaria e apagaria justamente a linha que gravou, e o
+      cabeçalho do grupo diria que ela "não pôde ser gravada no arquivo".
+    */
+    it("o aviso de uma gravação que deu certo fica em avisosDaGravacao, não em applyErrors", async () => {
+      setBackendForTests({
+        enrichFolderScan: vi.fn(async () => scanResult([proposal({ song_id: 1 })])),
+      } as unknown as Backend);
+      await useEnrichStore.getState().startScan("");
+
+      useEnrichStore
+        .getState()
+        .registrarAplicacao([0], [gravada(1, "A Canção", "a etiqueta foi normalizada")]);
+
+      const state = useEnrichStore.getState();
+      expect(state.avisosDaGravacao[1]).toBe("a etiqueta foi normalizada");
+      expect(
+        state.applyErrors,
+        "aviso não é erro: no applyErrors ele apagaria a linha que gravou",
+      ).toEqual({});
+      expect(state.aplicadas, "a linha gravou").toEqual([0]);
+      expect(state.gravadas[1]).not.toBeUndefined();
+    });
+
+    it("gravação sem nada a contar não inventa aviso nenhum", async () => {
+      setBackendForTests({
+        enrichFolderScan: vi.fn(async () => scanResult([proposal({ song_id: 1 })])),
+      } as unknown as Backend);
+      await useEnrichStore.getState().startScan("");
+      useEnrichStore.getState().registrarAplicacao([0], [gravada(1)]);
+      expect(useEnrichStore.getState().avisosDaGravacao).toEqual({});
+    });
+
+    it("o aviso de uma gravação anterior sobrevive à rodada seguinte", async () => {
+      setBackendForTests({
+        enrichFolderScan: vi.fn(async () =>
+          scanResult([proposal({ song_id: 1 }), proposal({ song_id: 2 })]),
+        ),
+      } as unknown as Backend);
+      await useEnrichStore.getState().startScan("");
+      useEnrichStore
+        .getState()
+        .registrarAplicacao([0], [gravada(1, "A Canção", "normalizei a etiqueta")]);
+      // segunda rodada, outra música: a lista inteira continua na tela, e a
+      // linha da primeira continua contando o que aconteceu com ela
+      useEnrichStore.getState().registrarAplicacao([1], [gravada(2)]);
+      expect(useEnrichStore.getState().avisosDaGravacao).toEqual({
+        1: "normalizei a etiqueta",
+      });
     });
 
     it("o erro de uma linha que não foi retentada NÃO é apagado", async () => {
@@ -772,8 +833,8 @@ describe("enrichStore (V5 — F13)", () => {
       } as unknown as Backend);
       await useEnrichStore.getState().startScan("");
       useEnrichStore.getState().registrarAplicacao([0, 1], [
-        { song_id: 1, song: null, error: "falhou a um" },
-        { song_id: 2, song: null, error: "falhou a dois" },
+        { song_id: 1, song: null, error: "falhou a um", aviso: null },
+        { song_id: 2, song: null, error: "falhou a dois", aviso: null },
       ]);
       // segunda rodada: só a 1 foi retentada, e gravou
       useEnrichStore.getState().registrarAplicacao([0], [gravada(1)]);
@@ -810,7 +871,9 @@ describe("enrichStore (V5 — F13)", () => {
       await useEnrichStore.getState().startScan("");
       useEnrichStore
         .getState()
-        .registrarAplicacao([0], [{ song_id: 1, song: null, error: "falhou" }]);
+        .registrarAplicacao([0], [
+          { song_id: 1, song: null, error: "falhou", aviso: null },
+        ]);
       useEnrichStore.getState().registrarAplicacao([0], [gravada(1)]);
 
       useEnrichStore.getState().close();

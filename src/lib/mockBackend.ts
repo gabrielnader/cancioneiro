@@ -61,6 +61,17 @@ export interface MockBackend extends Backend {
    * veio, e vazio APAGARIA a etiqueta.
    */
   _forcarTituloVazio(filePath: string): void;
+  /**
+   * V10.8 — ensina ao mock que a ETIQUETA deste arquivo precisa ser normalizada
+   * para aceitar a gravação: a sobra entre o fim declarado da etiqueta e o
+   * primeiro quadro MPEG, medida em sete arquivos de um acervo real.
+   *
+   * Ensinada, e não descoberta: o mock não tem um leitor de MP3 (é a mesma razão
+   * do `_ensinarSom` e do `_ensinarFalhaDoSom`). O que ele reproduz é o
+   * CONTRATO — a gravação passa, o resultado traz o `aviso`, e o conserto
+   * acontece uma vez só.
+   */
+  _marcarEtiquetaParaNormalizar(filePath: string): void;
   /** Zera o estado em memória e a persistência. */
   _reset(): void;
   /** Valor devolvido pelo próximo pickFolder(). */
@@ -218,6 +229,18 @@ interface DbState {
    * desliga a etapa pelo resto da varredura.
    */
   somFalha: Record<string, string>;
+  /**
+   * V10.8 — arquivos cuja ETIQUETA precisa ser normalizada para aceitar a
+   * gravação (a sobra entre o fim declarado da etiqueta e o primeiro quadro
+   * MPEG, medida em sete arquivos de um acervo real).
+   *
+   * O mock não tem um leitor de MP3, então ele não descobre a anomalia: ela é
+   * ENSINADA por arquivo, como o que o som responde e como a falha do fpcalc. O
+   * que o mock reproduz fielmente é o que a tela precisa mostrar — a gravação
+   * PASSA e o desfecho traz a frase —, e o fato de o conserto acontecer uma vez
+   * só: a marca cai na primeira gravação, como a anomalia cai do arquivo real.
+   */
+  etiquetaPrecisaNormalizar: string[];
 }
 
 function freshState(): DbState {
@@ -236,6 +259,7 @@ function freshState(): DbState {
     medicaoDaTranscricao: null,
     somDiz: {},
     somFalha: {},
+    etiquetaPrecisaNormalizar: [],
   };
 }
 
@@ -646,6 +670,27 @@ export const ERRO_FPCALC_NAO_EXECUTA =
 
 const RECUSA_LETRA_EXISTENTE =
   'esta música já tem letra — marque "substituir a letra atual" para trocá-la';
+
+/**
+ * V10.8 — o desfecho da gravação que precisou NORMALIZAR a etiqueta do MP3, com
+ * as palavras exatas do Rust (`writer::AVISO_ETIQUETA_NORMALIZADA`).
+ *
+ * A frase está aqui porque aqui há um PRODUTOR dela: o mock decide, por arquivo
+ * ensinado, que aquela gravação normalizou a etiqueta — e sem isso o E2E não
+ * teria como ver na tela o desfecho que a DECISIONS #148(b) exige. É diferente das
+ * frases de ERRO do `writer.rs`, que continuam não espelhadas (#144c): aquelas
+ * chegam à linha como texto opaco do `apply`, e o mock não tem um leitor de MP3
+ * para as produzir.
+ *
+ * As duas cópias são fixadas como DADO nos dois lados (aqui e no
+ * `cada_familia_tem_a_sua_frase_e_ela_cabe_na_regua` do Rust), que é a convenção
+ * da DECISIONS #88 para o que não dá para chamar de um processo só: mudar a
+ * frase quebra o teste de cada lado, e divergir passa a exigir apagar um teste
+ * em vez de acontecer por esquecimento.
+ */
+export const AVISO_ETIQUETA_NORMALIZADA =
+  "para conseguir gravar, o programa corrigiu uma medida errada por dentro da etiqueta deste " +
+  "MP3 — a música em si não foi alterada, e o programa conferiu isso depois de gravar";
 
 /**
  * As recusas da etapa 5, com as palavras do Rust
@@ -2369,6 +2414,7 @@ export function createMockBackend(): MockBackend {
             song_id: ap.song_id,
             song: null,
             error: `música não encontrada: ${ap.song_id}`,
+            aviso: null,
           });
           continue;
         }
@@ -2377,11 +2423,17 @@ export function createMockBackend(): MockBackend {
             song_id: ap.song_id,
             song: null,
             error: `arquivo não encontrado: ${song.file_path}`,
+            aviso: null,
           });
           continue;
         }
         if (!ap.title.trim()) {
-          results.push({ song_id: ap.song_id, song: null, error: "título vazio" });
+          results.push({
+            song_id: ap.song_id,
+            song: null,
+            error: "título vazio",
+            aviso: null,
+          });
           continue;
         }
         // A5: a varredura demora minutos; se a música mudou nesse meio-tempo
@@ -2397,6 +2449,7 @@ export function createMockBackend(): MockBackend {
             error:
               `a música mudou depois da busca ("${song.title}") —` +
               " refaça a busca de dados",
+            aviso: null,
           });
           continue;
         }
@@ -2421,6 +2474,7 @@ export function createMockBackend(): MockBackend {
             song_id: ap.song_id,
             song: null,
             error: RECUSA_LETRA_EXISTENTE,
+            aviso: null,
           });
           continue;
         }
@@ -2448,7 +2502,27 @@ export function createMockBackend(): MockBackend {
             : ap.add_temas;
           song.temas = normalizeTemas(joined);
         }
-        results.push({ song_id: ap.song_id, song: toSong(song), error: null });
+        /*
+          V10.8 — o desfecho DIZ o que foi feito.
+
+          Se este arquivo é um dos que precisam de normalização da etiqueta, a
+          gravação PASSA (é o ponto do conserto) e o resultado traz a frase. A
+          marca cai aqui, na primeira gravação, do mesmo jeito que a anomalia cai
+          do arquivo real: a segunda gravação da mesma música é comum, e repetir o
+          aviso sobre um arquivo já são seria ruído que se aprende a ignorar.
+        */
+        const i = state.etiquetaPrecisaNormalizar.indexOf(song.file_path);
+        let aviso: string | null = null;
+        if (i !== -1) {
+          state.etiquetaPrecisaNormalizar.splice(i, 1);
+          aviso = AVISO_ETIQUETA_NORMALIZADA;
+        }
+        results.push({
+          song_id: ap.song_id,
+          song: toSong(song),
+          error: null,
+          aviso,
+        });
       }
       save();
       return results;
@@ -2641,6 +2715,13 @@ export function createMockBackend(): MockBackend {
       const song = state.songs.find((s) => s.file_path === filePath);
       if (!song) return;
       song.title = "";
+      save();
+    },
+
+    _marcarEtiquetaParaNormalizar(filePath: string): void {
+      if (!state.etiquetaPrecisaNormalizar.includes(filePath)) {
+        state.etiquetaPrecisaNormalizar.push(filePath);
+      }
       save();
     },
 

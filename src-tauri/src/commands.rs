@@ -385,6 +385,11 @@ pub fn write_tags(
     letra_origem: Option<String>,
 ) -> Result<Song> {
     let conn = state.lock()?;
+    // V10.8 — o `aviso` da gravação (a etiqueta que precisou ser normalizada)
+    // NÃO chega ao editor: este comando devolve a Song, e é o que o formulário
+    // usa. A escolha está registrada na DECISIONS #152(b), com o motivo — e a
+    // GARANTIA do áudio conferido vale igual aqui, porque ela mora no writer, e
+    // não no caminho que chamou.
     crate::writer::write_tags_com_origem(
         &conn,
         song_id,
@@ -395,6 +400,7 @@ pub fn write_tags(
         instrumental,
         letra_origem.as_deref(),
     )
+    .map(|g| g.song)
 }
 
 /// Para onde uma requisição do funil pode ir. A lista é FECHADA, e é o que

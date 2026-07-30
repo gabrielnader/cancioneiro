@@ -293,6 +293,25 @@ pub const ERRO_ETIQUETAS_FORA_DO_PADRAO: &str =
 pub const ERRO_ANOTACOES_INDISTINGUIVEIS: &str =
     "este MP3 tem duas anotações que ficariam idênticas ao serem consertadas, e gravar apagaria \
      uma delas — nada foi alterado no arquivo";
+/// V10.8 — a conferência do áudio reprovou, e o arquivo VOLTOU ao que era.
+///
+/// Não é uma promessa: o conserto da etiqueta calcula o resumo (SHA-256) dos
+/// bytes de áudio antes de mexer e o confere depois de gravar. Se um único byte
+/// mudou, os bytes originais — que ficaram na memória exatamente para isto —
+/// são regravados e a gravação vira recusa. Nunca sai daqui um arquivo alterado.
+pub const ERRO_AUDIO_MUDARIA: &str =
+    "gravar neste MP3 mudaria o som da música, então o programa desfez tudo e o arquivo voltou a \
+     ser o que era — não há como gravar etiquetas nele, e não há nada que você possa fazer por aqui";
+/// V10.8 — o desfecho mais raro: a conferência reprovou E devolver os bytes
+/// originais ao arquivo também falhou (o disco encheu, o arquivo saiu do lugar
+/// no meio da operação).
+///
+/// Ela existe porque é a única situação de todo o produto em que o arquivo pode
+/// ter ficado diferente do que era, e calar sobre isso seria a pior mentira
+/// possível para quem não tem a quem perguntar.
+pub const ERRO_ARQUIVO_NAO_VOLTOU: &str =
+    "o programa desfez uma gravação que não deu certo, mas não conseguiu devolver este arquivo ao \
+     que ele era — não mexa nele por enquanto, e recupere a música de uma cópia se você tiver uma";
 /// Depois da gravação bem-sucedida. A frase NÃO diz "não foi possível
 /// salvar" porque salvou: a mentira faria a pessoa refazer o trabalho.
 pub const ERRO_LISTA_DESATUALIZADA: &str =
@@ -414,6 +433,403 @@ fn erro_de_gravacao(caminho: &str, frase: &str) -> AppError {
     AppError(format!("não foi possível salvar em {caminho}: {frase}"))
 }
 
+// ---------------------------------------------------------------------------
+// V10.8 — a SOBRA entre o fim declarado da etiqueta e o primeiro quadro MPEG,
+// e por que o conserto acontece JUNTO com a gravação que a pessoa pediu.
+//
+// # O defeito, medido
+//
+// Sete arquivos de um acervo real recusavam TODA gravação. Eles têm uma região
+// de bytes entre o fim DECLARADO da etiqueta ID3v2 e o primeiro quadro MPEG. No
+// arquivo medido: a etiqueta declarando terminar no byte 4.096 e o primeiro
+// quadro em 5.347 — 1.251 bytes que não são etiqueta declarada, não são
+// cabeçalho de codificador e não são áudio (81% zeros com bytes aleatórios por
+// cima).
+//
+// O que a medição no lofty 0.22.4 mostrou, e o que dá a razão de cada linha
+// daqui:
+//
+// 1. a LEITURA passa. `MpegFile::read_from` procura o sync de MPEG sem teto
+//    nenhum (`find_next_frame`), acha o quadro 1.251 bytes adiante e devolve a
+//    etiqueta inteira. É por isso que estes arquivos tocam, aparecem na lista
+//    com título e artista, e nada avisa que há algo errado neles;
+// 2. a GRAVAÇÃO falha com `UnknownFormat`. Ao gravar, o lofty reexamina o
+//    formato pelo CONTEÚDO (`Probe::guess_file_type` dentro de `write_id3v2`),
+//    e ali a busca do sync tem teto: `ParseOptions::DEFAULT_MAX_JUNK_BYTES`,
+//    que é 1.024. 1.251 > 1.024, o sync não é encontrado, e o formato fica
+//    "desconhecido". **É por isso que uma sobra MENOR grava sem reclamar**, e é
+//    por isso que uma etiqueta de 4.096 bytes sem sobra nenhuma também grava:
+//    o tamanho da etiqueta nunca foi o problema;
+// 3. na falha, nada é escrito — o arquivo fica byte a byte igual, porque a
+//    recusa acontece antes de o lofty tocar nele;
+// 4. corrigir o CAMPO DE TAMANHO do cabeçalho ID3v2 para alcançar o primeiro
+//    quadro (4086 → 5337, dois bytes trocados) faz o lofty ler E gravar. A
+//    região passa a ser enchimento DECLARADO dentro da etiqueta, que é o que
+//    todo editor de etiqueta escreve depois dos quadros;
+// 5. o áudio sobrevive idêntico: conferido pelo SHA-256 dos bytes de áudio
+//    antes e depois (16.508 bytes, o mesmo resumo nos dois).
+//
+// # Por que o conserto não pergunta nada
+//
+// A pessoa já decidiu: ela mandou gravar esta letra neste arquivo. Corrigir o
+// número da etiqueta é o MEIO de fazer o que ela pediu, não uma segunda
+// decisão — e perguntar "seu arquivo tem uma anomalia estrutural, posso
+// corrigir 2 bytes?" é uma pergunta técnica para quem não tem como respondê-la:
+// exatamente o pedágio que a DECISIONS #102 existe para eliminar. O que ela
+// recebe é o DESFECHO, dito em português (`AVISO_ETIQUETA_NORMALIZADA`).
+//
+// # Por que o gatilho é a FALHA, e nunca a suspeita
+//
+// O detector de anomalia erra. Num MP3 feito com LAME o primeiro quadro de
+// áudio carrega o cabeçalho Xing/Info, com enchimento `0x55` e a assinatura do
+// codificador; um detector que procura o primeiro `FF Fx` depois da etiqueta
+// pode achar o SEGUNDO quadro e chamar o miolo do primeiro de "sobra". O
+// `tools/diagnosticar_mp3.py` já acusou um arquivo PERFEITO por isso (ver a
+// função `sobra_e_inocente`, que documenta o erro).
+//
+// Com o gatilho sendo a falha real, esse falso positivo fica **inalcançável**:
+// arquivo que grava não passa por aqui, e nem o campo de tamanho dele é lido.
+// Nenhuma varredura procura anomalia, e nenhum arquivo são é examinado.
+// ---------------------------------------------------------------------------
+
+/// O desfecho a contar quando a gravação só foi possível depois de normalizar o
+/// cabeçalho da etiqueta.
+///
+/// Régua da DECISIONS #100 (no máximo duas frases, 210 caracteres) e o mesmo
+/// compromisso das frases de erro: **diz o que aconteceu** ("o programa corrigiu
+/// uma medida errada"), **responde ao medo de quem lê** ("a música em si não foi
+/// alterada") e **não promete: conta o que foi conferido**. Sem pedágio antes e
+/// sem segredo depois.
+pub const AVISO_ETIQUETA_NORMALIZADA: &str =
+    "para conseguir gravar, o programa corrigiu uma medida errada por dentro da etiqueta deste \
+     MP3 — a música em si não foi alterada, e o programa conferiu isso depois de gravar";
+
+/// Marcas de OUTRA etiqueta dentro da sobra. Achar qualquer uma delas cancela o
+/// conserto.
+///
+/// Absorver a sobra no tamanho declarado da primeira etiqueta faz o lofty
+/// reescrever aquela região na gravação seguinte — e se o que estava ali era uma
+/// SEGUNDA etiqueta (ID3v2 grudada, o rodapé de uma, uma etiqueta APE, uma
+/// ID3v1 no lugar errado), isso apagaria a anotação de alguém. "Nunca apagar
+/// dado existente" é a regra inviolável, e a diferença entre enchimento e dado
+/// é justamente a assinatura: dado de etiqueta sempre tem uma.
+///
+/// A lista é a mesma do `MARCAS_DA_SOBRA` do `tools/diagnosticar_mp3.py`, menos
+/// as marcas de codificador (`Xing`/`Info`/`LAME`), que são a sobra INOCENTE que
+/// nunca chega aqui — arquivo com cabeçalho de codificador grava, e o gatilho é
+/// a falha.
+const MARCAS_DE_OUTRA_ETIQUETA: &[&[u8]] = &[b"ID3", b"3DI", b"APETAGEX", b"TAG"];
+
+/// Tabelas do cabeçalho de quadro MPEG, na ordem dos índices do próprio
+/// cabeçalho. São as tabelas do padrão, e existem aqui por uma razão só: achar o
+/// primeiro quadro com CERTEZA. Um palpite errado sobre onde o áudio começa é a
+/// única forma de este código estragar uma música — e é a conferência do
+/// SHA-256, não esta tabela, que garante que isso não sai daqui.
+const BITRATES_MPEG1: [[u32; 15]; 3] = [
+    // camada I
+    [32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, 0],
+    // camada II
+    [32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 0],
+    // camada III
+    [32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0],
+];
+const BITRATES_MPEG2: [[u32; 15]; 3] = [
+    // camada I
+    [32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256, 0],
+    // camadas II e III compartilham a tabela
+    [8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0],
+    [8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0],
+];
+const AMOSTRAGENS: [[u32; 3]; 4] = [
+    [11025, 12000, 8000], // versão 0 = MPEG 2.5
+    [0, 0, 0],            // versão 1 = reservada
+    [22050, 24000, 16000], // versão 2 = MPEG 2
+    [44100, 48000, 32000], // versão 3 = MPEG 1
+];
+
+/// Comprimento em bytes do quadro cujo cabeçalho são estes quatro bytes;
+/// `None` quando eles não são um cabeçalho de quadro MPEG válido.
+fn tamanho_do_quadro_mpeg(h: [u8; 4]) -> Option<usize> {
+    // 11 bits de sync
+    if h[0] != 0xFF || h[1] & 0xE0 != 0xE0 {
+        return None;
+    }
+    let versao = ((h[1] >> 3) & 0x03) as usize; // 1 é reservada
+    let camada = ((h[1] >> 1) & 0x03) as usize; // 0 é reservada
+    if versao == 1 || camada == 0 {
+        return None;
+    }
+    let i_camada = 3 - camada; // 3=I → 0, 2=II → 1, 1=III → 2
+    let i_bitrate = ((h[2] >> 4) & 0x0F) as usize; // 0 = livre, 15 = inválido
+    let i_amostragem = ((h[2] >> 2) & 0x03) as usize; // 3 = inválido
+    if i_bitrate == 0 || i_bitrate == 15 || i_amostragem == 3 {
+        return None;
+    }
+    let bitrate = if versao == 3 {
+        BITRATES_MPEG1[i_camada][i_bitrate - 1]
+    } else {
+        BITRATES_MPEG2[i_camada][i_bitrate - 1]
+    } * 1000;
+    let amostragem = AMOSTRAGENS[versao][i_amostragem];
+    if bitrate == 0 || amostragem == 0 {
+        return None;
+    }
+    let enchimento = ((h[2] >> 1) & 0x01) as usize;
+    let tamanho = match camada {
+        // camada I conta em blocos de 4 bytes
+        3 => (12 * bitrate as usize / amostragem as usize + enchimento) * 4,
+        // camada III de MPEG 2 / 2.5 tem metade das amostras por quadro
+        1 if versao != 3 => 72 * bitrate as usize / amostragem as usize + enchimento,
+        _ => 144 * bitrate as usize / amostragem as usize + enchimento,
+    };
+    (tamanho > 4).then_some(tamanho)
+}
+
+/// Os bits que dois quadros do MESMO fluxo têm sempre iguais: sync, versão,
+/// camada e taxa de amostragem. É a máscara que o próprio lofty usa
+/// (`HEADER_MASK`), e é ela que transforma "achei um `FF Fx`" em "achei um
+/// quadro".
+const MASCARA_DO_CABECALHO: u32 = 0xFFFE_0C00;
+
+/// Posição do PRIMEIRO quadro MPEG a partir de `inicio` — conferida por dois
+/// quadros, e não por um.
+///
+/// Um `FF Fx` solto aparece dentro de qualquer bloco de bytes; o que identifica
+/// um quadro de verdade é o quadro SEGUINTE cair exatamente no comprimento
+/// calculado, com a mesma versão, camada e taxa de amostragem. É a mesma
+/// conferência do `cmp_header` do lofty, e é o que torna o resultado utilizável
+/// para decidir onde o áudio começa.
+fn primeiro_quadro_mpeg(bytes: &[u8], inicio: usize) -> Option<usize> {
+    let mut i = inicio;
+    while i + 4 <= bytes.len() {
+        let cabecalho: [u8; 4] = bytes[i..i + 4].try_into().unwrap();
+        if let Some(tamanho) = tamanho_do_quadro_mpeg(cabecalho) {
+            let seguinte = i + tamanho;
+            if seguinte + 4 <= bytes.len() {
+                let proximo: [u8; 4] = bytes[seguinte..seguinte + 4].try_into().unwrap();
+                let a = u32::from_be_bytes(cabecalho) & MASCARA_DO_CABECALHO;
+                let b = u32::from_be_bytes(proximo) & MASCARA_DO_CABECALHO;
+                if a == b && tamanho_do_quadro_mpeg(proximo).is_some() {
+                    return Some(i);
+                }
+            } else if seguinte <= bytes.len() {
+                // o último quadro do arquivo não tem um seguinte para conferir
+                return Some(i);
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Fim DECLARADO do bloco ID3v2 do começo do arquivo, quando há um que dá para
+/// interpretar com segurança.
+///
+/// Recusa (devolvendo `None`) tudo que não é o caso simples: arquivo que não
+/// começa com `ID3`, campo de tamanho com bit alto aceso (não é synchsafe: o
+/// número não quer dizer nada), tamanho que passa do fim do arquivo, e
+/// **etiqueta com RODAPÉ** — o rodapé desloca o fim do bloco em 10 bytes, e
+/// errar essa conta aqui é a única forma de o conserto mirar no lugar errado.
+/// Nenhum dos arquivos do relato tem rodapé, e recusar custa uma gravação que já
+/// estava recusada de qualquer jeito.
+fn fim_declarado_do_id3v2(bytes: &[u8]) -> Option<usize> {
+    if bytes.len() < 10 || &bytes[..3] != b"ID3" {
+        return None;
+    }
+    // bit 0x10 dos sinalizadores = rodapé presente (só existe no ID3v2.4)
+    if bytes[5] & 0x10 != 0 {
+        return None;
+    }
+    let tamanho = &bytes[6..10];
+    if tamanho.iter().any(|b| b & 0x80 != 0) {
+        return None;
+    }
+    let fim = 10
+        + (((tamanho[0] as usize) << 21)
+            | ((tamanho[1] as usize) << 14)
+            | ((tamanho[2] as usize) << 7)
+            | (tamanho[3] as usize));
+    (fim <= bytes.len()).then_some(fim)
+}
+
+/// Os quatro bytes synchsafe do campo de tamanho para um bloco ID3v2 que termina
+/// em `fim` (cabeçalho incluído). `None` se o valor não cabe nos 28 bits do
+/// campo.
+fn tamanho_synchsafe(fim: usize) -> Option<[u8; 4]> {
+    let corpo = fim.checked_sub(10)?;
+    if corpo >= 1 << 28 {
+        return None;
+    }
+    Some([
+        ((corpo >> 21) & 0x7F) as u8,
+        ((corpo >> 14) & 0x7F) as u8,
+        ((corpo >> 7) & 0x7F) as u8,
+        (corpo & 0x7F) as u8,
+    ])
+}
+
+/// Resumo SHA-256 de um bloco de bytes. É o mesmo algoritmo com que o
+/// `acessorios.rs` confere os binários baixados: aqui ele confere que o ÁUDIO
+/// que estava no arquivo é o áudio que continua nele.
+fn resumo(bytes: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes).into()
+}
+
+/// Devolve os bytes originais ao arquivo. `Err` só quando nem isso foi
+/// possível — a única situação de todo o produto em que o arquivo pode ter
+/// ficado diferente do que era.
+fn restaurar(path: &Path, original: &[u8], caminho: &str) -> Result<()> {
+    std::fs::write(path, original)
+        .map_err(|_| erro_de_gravacao(caminho, ERRO_ARQUIVO_NAO_VOLTOU))
+}
+
+/// Grava a etiqueta e devolve a frase do desfecho: `None` para a gravação
+/// comum, `Some` quando ela só foi possível depois de normalizar o cabeçalho.
+///
+/// **O gatilho é a falha.** Arquivo que grava normalmente sai daqui pelo
+/// primeiro `Ok` e não tem um único byte examinado — nenhuma suspeita, nenhuma
+/// varredura, nenhum falso positivo possível.
+fn salvar_etiqueta(
+    tag: &Id3v2Tag,
+    path: &Path,
+    caminho: &str,
+) -> Result<Option<&'static str>> {
+    match tag.save_to_path(path, WriteOptions::default()) {
+        Ok(()) => Ok(None),
+        Err(e) if matches!(e.kind(), ErrorKind::UnknownFormat) => {
+            gravar_normalizando_a_etiqueta(tag, path, caminho)
+        }
+        Err(e) => Err(erro_de_gravacao(caminho, frase_de_lofty(&e))),
+    }
+}
+
+/// Segunda tentativa, depois de o lofty ter recusado o arquivo com
+/// `UnknownFormat`: normaliza o campo de tamanho da etiqueta e grava.
+///
+/// A ordem das coisas aqui é a garantia, e cada passo existe por um motivo:
+///
+/// 1. os bytes originais vão para a MEMÓRIA. É a cópia que devolve o arquivo ao
+///    que era se algo der errado — e é memória, não um arquivo temporário, porque
+///    **nada é criado dentro da pasta do acervo**, que é promessa do produto.
+///    Música tem alguns MB; a cópia cabe;
+/// 2. o resumo do ÁUDIO é calculado ANTES de qualquer alteração. Áudio aqui é
+///    "do primeiro quadro MPEG até o fim do arquivo": inclui o que vier depois
+///    dele (uma ID3v1 no fim, por exemplo), e essa conferência mais larga é de
+///    graça;
+/// 3. se o arquivo não é a anomalia que este código sabe consertar, a recusa
+///    original vale e nada é tocado;
+/// 4. o campo de tamanho é corrigido — dois a quatro bytes, nas posições 6 a 9.
+///    Nenhum byte é removido, nenhum byte é movido;
+/// 5. a gravação que a pessoa pediu acontece. Se ela falhar, o arquivo VOLTA;
+/// 6. o áudio é CONFERIDO contra o resumo do passo 2. Mudou um byte, o arquivo
+///    volta e a gravação vira recusa: o desfecho nunca é um arquivo alterado.
+fn gravar_normalizando_a_etiqueta(
+    tag: &Id3v2Tag,
+    path: &Path,
+    caminho: &str,
+) -> Result<Option<&'static str>> {
+    let original =
+        std::fs::read(path).map_err(|e| erro_de_gravacao(caminho, frase_de_io(&e)))?;
+
+    // O arquivo é a anomalia da sobra? A recusa original é o desfecho de tudo
+    // que não for exatamente ela — inclusive do `.mp3` que nunca foi MPEG, que
+    // é a outra causa conhecida de `UnknownFormat` e não tem conserto nenhum.
+    let Some(fim) = fim_declarado_do_id3v2(&original) else {
+        return Err(erro_de_gravacao(caminho, ERRO_ESTRUTURA_DO_MP3));
+    };
+    let Some(primeiro_quadro) = primeiro_quadro_mpeg(&original, fim) else {
+        return Err(erro_de_gravacao(caminho, ERRO_ESTRUTURA_DO_MP3));
+    };
+    if primeiro_quadro <= fim {
+        // não há sobra: a recusa vem de outra coisa, e mexer no tamanho
+        // declarado só encolheria a etiqueta por cima do áudio
+        return Err(erro_de_gravacao(caminho, ERRO_ESTRUTURA_DO_MP3));
+    }
+    let sobra = &original[fim..primeiro_quadro];
+    if MARCAS_DE_OUTRA_ETIQUETA.iter().any(|m| contem(sobra, m)) {
+        // a sobra é (ou carrega) outra etiqueta: absorvê-la apagaria dado de
+        // alguém na regravação. Recusar é ruim; apagar é inviolável.
+        return Err(erro_de_gravacao(caminho, ERRO_ESTRUTURA_DO_MP3));
+    }
+    let Some(novo_tamanho) = tamanho_synchsafe(primeiro_quadro) else {
+        return Err(erro_de_gravacao(caminho, ERRO_ESTRUTURA_DO_MP3));
+    };
+
+    let resumo_do_audio = resumo(&original[primeiro_quadro..]);
+
+    let mut normalizado = original.clone();
+    normalizado[6..10].copy_from_slice(&novo_tamanho);
+    std::fs::write(path, &normalizado)
+        .map_err(|e| erro_de_gravacao(caminho, frase_de_io(&e)))?;
+
+    if let Err(e) = tag.save_to_path(path, WriteOptions::default()) {
+        // a gravação falhou mesmo com a etiqueta normalizada: o arquivo volta a
+        // ser o que era, e a pessoa recebe a frase da falha de verdade
+        let frase = frase_de_lofty(&e);
+        restaurar(path, &original, caminho)?;
+        return Err(erro_de_gravacao(caminho, frase));
+    }
+
+    conferir_o_audio_ou_restaurar(path, &original, resumo_do_audio, caminho)?;
+    Ok(Some(AVISO_ETIQUETA_NORMALIZADA))
+}
+
+/// `bytes` contém a sequência `marca`?
+fn contem(bytes: &[u8], marca: &[u8]) -> bool {
+    bytes.len() >= marca.len() && bytes.windows(marca.len()).any(|j| j == marca)
+}
+
+/// **O áudio é conferido, não prometido.**
+///
+/// Depois da gravação, relê o arquivo, acha onde o áudio começa agora (o fim do
+/// bloco ID3v2 que o lofty acabou de escrever) e compara o resumo com o de
+/// antes. Se não bater — ou se o arquivo não puder mais ser lido —, os bytes
+/// originais voltam e a gravação vira recusa em pt-BR.
+///
+/// É público dentro do crate para poder ser testado com um resumo que NÃO bate:
+/// a restauração é a parte que precisa de prova, e provocá-la pelo caminho de
+/// fora exigiria um arquivo que faz o lofty estragar o áudio — que é justamente
+/// o que ninguém sabe construir.
+fn conferir_o_audio_ou_restaurar(
+    path: &Path,
+    original: &[u8],
+    resumo_esperado: [u8; 32],
+    caminho: &str,
+) -> Result<()> {
+    let Ok(depois) = std::fs::read(path) else {
+        // não deu para reler o que acabamos de gravar: não há como afirmar que o
+        // áudio está intacto, e o que não se confere não se aceita
+        restaurar(path, original, caminho)?;
+        return Err(erro_de_gravacao(caminho, ERRO_AUDIO_MUDARIA));
+    };
+    // o lofty escreveu a etiqueta inteira, então o tamanho declarado dela é
+    // exato e o áudio começa logo depois. Arquivo sem etiqueta (a gravação que
+    // remove tudo) tem áudio desde o byte 0.
+    let inicio = fim_declarado_do_id3v2(&depois).unwrap_or(0);
+    if inicio <= depois.len() && resumo(&depois[inicio..]) == resumo_esperado {
+        return Ok(());
+    }
+    restaurar(path, original, caminho)?;
+    Err(erro_de_gravacao(caminho, ERRO_AUDIO_MUDARIA))
+}
+
+/// O que uma gravação bem-sucedida devolve: a Song reindexada e, quando houve,
+/// a frase que conta o que precisou ser feito no arquivo para a gravação caber.
+///
+/// **O `aviso` existe porque o desfecho tem de DIZER o que foi feito** (V10.8).
+/// Sem pedágio antes — nenhuma pergunta técnica para quem não tem a quem
+/// perguntar — e sem segredo depois: um conserto silencioso no arquivo de alguém
+/// é a mesma falta de respeito que uma pergunta impossível, com sinal trocado.
+///
+/// `None` é a esmagadora maioria das gravações: nada fora do comum aconteceu, e
+/// não há nada a contar.
+#[derive(Debug, Clone)]
+pub struct Gravacao {
+    pub song: Song,
+    pub aviso: Option<&'static str>,
+}
+
 /// Grava TIT2/TPE1/USLT/TXXX:TEMAS/TXXX:INSTRUMENTAL no MP3 da música
 /// `song_id` (ID3v2.4), reindexa o arquivo (upsert — FTS atualizada pelos
 /// triggers) e devolve a Song atualizada. `None`/vazio em artist/lyrics/temas
@@ -433,7 +849,7 @@ pub fn write_tags(
     lyrics: Option<&str>,
     temas: Option<&str>,
     instrumental: Option<bool>,
-) -> Result<Song> {
+) -> Result<Gravacao> {
     write_tags_com_origem(conn, song_id, title, artist, lyrics, temas, instrumental, None)
 }
 
@@ -465,7 +881,7 @@ pub fn write_tags_com_origem(
     temas: Option<&str>,
     instrumental: Option<bool>,
     letra_origem: Option<&str>,
-) -> Result<Song> {
+) -> Result<Gravacao> {
     let song = db::get_song(conn, song_id)?
         .ok_or_else(|| AppError(format!("música não encontrada: {song_id}")))?;
 
@@ -578,8 +994,11 @@ pub fn write_tags_com_origem(
 
     // save_to_path regrava SOMENTE o bloco ID3v2 (mesmo arquivo, mesmo nome);
     // ID3v2.4 é o default de escrita do lofty.
-    tag.save_to_path(path, WriteOptions::default())
-        .map_err(|e| erro_de_gravacao(&song.file_path, frase_de_lofty(&e)))?;
+    //
+    // V10.8 — e quando ele recusa o arquivo com `UnknownFormat`, o
+    // `salvar_etiqueta` tenta uma segunda vez, normalizando o campo de tamanho
+    // da etiqueta. O `aviso` é o desfecho a contar quando isso aconteceu.
+    let aviso = salvar_etiqueta(&tag, path, &song.file_path)?;
 
     // Re-stata mtime/size e upserta — banco/FTS em sincronia na hora, e o
     // próximo rescan não precisa reler o arquivo.
@@ -592,8 +1011,9 @@ pub fn write_tags_com_origem(
         AppError(format!("{}: {ERRO_LISTA_DESATUALIZADA}", song.file_path))
     })?;
 
-    db::get_song(conn, song_id)?
-        .ok_or_else(|| AppError(format!("música não encontrada: {song_id}")))
+    let song = db::get_song(conn, song_id)?
+        .ok_or_else(|| AppError(format!("música não encontrada: {song_id}")))?;
+    Ok(Gravacao { song, aviso })
 }
 
 #[cfg(test)]
@@ -884,6 +1304,13 @@ mod tests {
             ERRO_ANOTACOES_INDISTINGUIVEIS,
             ERRO_LISTA_DESATUALIZADA,
             ERRO_GRAVACAO,
+            // V10.8 — os dois desfechos do conserto da etiqueta e o AVISO da
+            // gravação que deu certo entram na mesma régua: o que a pessoa lê é
+            // a tela, e a tela não distingue mensagem de erro de mensagem de
+            // desfecho.
+            ERRO_AUDIO_MUDARIA,
+            ERRO_ARQUIVO_NAO_VOLTOU,
+            AVISO_ETIQUETA_NORMALIZADA,
         ];
         let distintas: HashSet<&str> = todas.iter().copied().collect();
         assert_eq!(
@@ -896,6 +1323,29 @@ mod tests {
             assert!(n <= 210, "{n} caracteres, o teto é 210: {frase}");
             assert!(!frase.is_empty());
         }
+    }
+
+    /// **A metade RUST do par contra a divergência mock×backend.**
+    ///
+    /// A frase do aviso é a única do `writer.rs` que existe também no
+    /// `mockBackend.ts` — porque lá existe um PRODUTOR dela (o mock decide, por
+    /// arquivo ensinado, que aquela gravação normalizou a etiqueta), e sem isso o
+    /// E2E não teria como ver na tela o desfecho que esta versão promete.
+    ///
+    /// Não dá para chamar o TypeScript daqui, então vale a convenção da
+    /// DECISIONS #88: a frase é fixada como DADO nos dois lados, letra por letra.
+    /// A outra metade está no `mockBackend.contrato.test.ts`
+    /// ("a frase do mock é a MESMA do writer.rs"). Mudar a frase quebra o teste
+    /// de cada lado — divergir passa a exigir apagar um teste, em vez de
+    /// acontecer por esquecimento.
+    #[test]
+    fn a_frase_do_aviso_e_a_mesma_que_o_mock_do_frontend_mostra() {
+        assert_eq!(
+            AVISO_ETIQUETA_NORMALIZADA,
+            "para conseguir gravar, o programa corrigiu uma medida errada por dentro da \
+             etiqueta deste MP3 — a música em si não foi alterada, e o programa conferiu \
+             isso depois de gravar"
+        );
     }
 
     /// Códigos do sistema que têm frase própria. "erro de gravação" genérico
@@ -923,6 +1373,172 @@ mod tests {
         let e = erro_de_gravacao(caminho, ERRO_ESTRUTURA_DO_MP3);
         assert!(e.to_string().contains(caminho));
         assert!(e.to_string().starts_with("não foi possível salvar em "));
+    }
+
+    // -----------------------------------------------------------------------
+    // V10.8 — o conserto da etiqueta, peça por peça.
+    //
+    // A parte que precisa de prova unitária é a que o caminho de fora não
+    // alcança: a RESTAURAÇÃO. Provocá-la por um teste de integração exigiria um
+    // arquivo que faz o lofty estragar o áudio — e ninguém sabe construir um,
+    // porque a biblioteca não faz isso. A garantia, então, é testada onde ela
+    // mora: dando à conferência um resumo que não bate.
+    // -----------------------------------------------------------------------
+
+    /// Um cabeçalho de quadro MPEG 1 camada III, 64 kbps, 44,1 kHz — o mesmo do
+    /// `lame -b 64` que gera as fixtures.
+    const QUADRO_64K_44K: [u8; 4] = [0xFF, 0xFB, 0x50, 0xC4];
+
+    #[test]
+    fn o_tamanho_do_quadro_sai_da_tabela_do_padrao() {
+        // 144 * 64000 / 44100 = 208 (sem enchimento)
+        assert_eq!(tamanho_do_quadro_mpeg(QUADRO_64K_44K), Some(208));
+        // o mesmo quadro COM o bit de enchimento aceso tem um byte a mais
+        let mut com_enchimento = QUADRO_64K_44K;
+        com_enchimento[2] |= 0x02;
+        assert_eq!(tamanho_do_quadro_mpeg(com_enchimento), Some(209));
+
+        // e o que não é cabeçalho não vira quadro nenhum
+        assert_eq!(tamanho_do_quadro_mpeg([0x00, 0x00, 0x00, 0x00]), None);
+        assert_eq!(tamanho_do_quadro_mpeg([0xFF, 0x00, 0x50, 0xC4]), None, "sync incompleto");
+        assert_eq!(tamanho_do_quadro_mpeg([0xFF, 0xEB, 0x50, 0xC4]), None, "versão reservada");
+        assert_eq!(tamanho_do_quadro_mpeg([0xFF, 0xF9, 0x50, 0xC4]), None, "camada reservada");
+        assert_eq!(tamanho_do_quadro_mpeg([0xFF, 0xFB, 0x00, 0xC4]), None, "bitrate livre");
+        assert_eq!(tamanho_do_quadro_mpeg([0xFF, 0xFB, 0xF0, 0xC4]), None, "bitrate inválido");
+        assert_eq!(tamanho_do_quadro_mpeg([0xFF, 0xFB, 0x5C, 0xC4]), None, "amostragem inválida");
+    }
+
+    /// **Um `FF Fx` solto não é um quadro, e é isso que evita mirar no lugar
+    /// errado.** O par de quadros é a conferência; sem ela, qualquer byte
+    /// aleatório da sobra poderia ser confundido com o começo do áudio — que é
+    /// exatamente o erro que o `tools/diagnosticar_mp3.py` já cometeu.
+    #[test]
+    fn o_primeiro_quadro_exige_o_quadro_seguinte_batendo() {
+        let tamanho = tamanho_do_quadro_mpeg(QUADRO_64K_44K).unwrap();
+
+        // um cabeçalho sozinho, seguido de lixo: não conta
+        let mut sozinho = vec![0u8; 3 * tamanho];
+        sozinho[10..14].copy_from_slice(&QUADRO_64K_44K);
+        sozinho[10 + tamanho] = 0x13; // onde o próximo quadro deveria estar
+        assert_eq!(primeiro_quadro_mpeg(&sozinho, 0), None);
+
+        // dois quadros encadeados: o primeiro é achado, na posição exata
+        let mut encadeados = vec![0u8; 3 * tamanho];
+        encadeados[10..14].copy_from_slice(&QUADRO_64K_44K);
+        let seguinte = 10 + tamanho;
+        encadeados[seguinte..seguinte + 4].copy_from_slice(&QUADRO_64K_44K);
+        assert_eq!(primeiro_quadro_mpeg(&encadeados, 0), Some(10));
+        // e a busca começa onde se manda: nada antes de `inicio` é olhado
+        assert_eq!(primeiro_quadro_mpeg(&encadeados, 11), None);
+    }
+
+    #[test]
+    fn o_fim_declarado_recusa_tudo_que_nao_e_o_caso_simples() {
+        // o caso do relato: 10 + 4086 = 4096
+        let mut bytes = vec![0u8; 6000];
+        bytes[..3].copy_from_slice(b"ID3");
+        bytes[3] = 4;
+        bytes[6..10].copy_from_slice(&[0, 0, 31, 118]);
+        assert_eq!(fim_declarado_do_id3v2(&bytes), Some(4096));
+
+        // arquivo que não começa com etiqueta
+        assert_eq!(fim_declarado_do_id3v2(b"\xff\xfbnada disso"), None);
+        // bit alto aceso: o campo não é synchsafe e o número não quer dizer nada
+        let mut alto = bytes.clone();
+        alto[8] = 0x9F;
+        assert_eq!(fim_declarado_do_id3v2(&alto), None);
+        // etiqueta com RODAPÉ: o fim do bloco fica 10 bytes adiante, e errar essa
+        // conta é a única forma de o conserto mirar no lugar errado
+        let mut rodape = bytes.clone();
+        rodape[5] = 0x10;
+        assert_eq!(fim_declarado_do_id3v2(&rodape), None);
+        // etiqueta que diz ser maior que o arquivo (download interrompido)
+        assert_eq!(fim_declarado_do_id3v2(&bytes[..1000]), None);
+    }
+
+    /// **O conserto muda DOIS bytes, e são os que foram medidos em campo.**
+    ///
+    /// 4086 → 5337, nas posições 8 e 9 do arquivo. Nada é removido e nada é
+    /// movido: o número que descreve a etiqueta passa a alcançar o primeiro
+    /// quadro, e a região do meio vira enchimento declarado.
+    #[test]
+    fn o_conserto_do_tamanho_e_o_medido_em_campo() {
+        let antigo = tamanho_synchsafe(4096).unwrap();
+        let novo = tamanho_synchsafe(5347).unwrap();
+        assert_eq!(antigo, [0, 0, 31, 118], "4086 em synchsafe");
+        assert_eq!(novo, [0, 0, 41, 89], "5337 em synchsafe");
+        let diferentes: Vec<usize> = (0..4).filter(|i| antigo[*i] != novo[*i]).collect();
+        assert_eq!(diferentes, vec![2, 3], "só as posições 8 e 9 do arquivo mudam");
+
+        // e o campo tem 28 bits: um valor que não cabe não é consertado às cegas
+        assert_eq!(tamanho_synchsafe(9), None);
+        assert_eq!(tamanho_synchsafe(10 + (1 << 28)), None);
+    }
+
+    /// **A garantia (a), provada: se o áudio mudaria, o arquivo VOLTA.**
+    ///
+    /// A conferência recebe os bytes originais e o resumo do áudio de antes. Aqui
+    /// o arquivo em disco é outro — como se a gravação tivesse estragado o áudio
+    /// —, e o desfecho tem de ser: arquivo idêntico ao original, byte a byte, e
+    /// uma recusa em pt-BR. Nunca um arquivo alterado.
+    #[test]
+    fn a_conferencia_do_audio_restaura_o_arquivo_quando_o_audio_mudaria() {
+        let dir = std::env::temp_dir().join(format!("cancioneiro-conferencia-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("musica.mp3");
+
+        // o arquivo como ele era: uma etiqueta declarada de 20 bytes + "áudio"
+        let mut original = vec![0u8; 34];
+        original[..3].copy_from_slice(b"ID3");
+        original[3] = 4;
+        original[6..10].copy_from_slice(&tamanho_synchsafe(20).unwrap());
+        original[20..].copy_from_slice(b"AUDIO ORIGINAL");
+        let resumo_do_audio = resumo(&original[20..]);
+
+        // e o arquivo como ele ficou depois de uma gravação que estragou o áudio
+        let mut estragado = original.clone();
+        estragado[20..].copy_from_slice(b"AUDIO ESTRAGAD");
+        std::fs::write(&path, &estragado).unwrap();
+
+        let err = conferir_o_audio_ou_restaurar(&path, &original, resumo_do_audio, "/acervo/x.mp3")
+            .expect_err("áudio diferente é recusa, e não um arquivo alterado no disco");
+        assert_eq!(
+            err.to_string(),
+            format!("não foi possível salvar em /acervo/x.mp3: {ERRO_AUDIO_MUDARIA}")
+        );
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            original,
+            "o arquivo tem de voltar a ser EXATAMENTE o que era"
+        );
+
+        // e o caminho feliz: áudio igual, nada acontece
+        std::fs::write(&path, &original).unwrap();
+        conferir_o_audio_ou_restaurar(&path, &original, resumo_do_audio, "/acervo/x.mp3").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+
+        // o resumo do áudio é do ÁUDIO, e não do arquivo: mexer na ETIQUETA
+        // passa na conferência, porque é isso que a gravação existe para fazer
+        let mut outra_etiqueta = original.clone();
+        outra_etiqueta[10..20].copy_from_slice(b"TIT2 outro");
+        std::fs::write(&path, &outra_etiqueta).unwrap();
+        conferir_o_audio_ou_restaurar(&path, &original, resumo_do_audio, "/acervo/x.mp3").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), outra_etiqueta, "a etiqueta nova fica");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A marca de outra etiqueta é procurada em toda a sobra, e não só no começo
+    /// dela: uma etiqueta APE grudada 400 bytes adiante é dado de alguém do mesmo
+    /// jeito.
+    #[test]
+    fn as_marcas_de_outra_etiqueta_sao_achadas_em_qualquer_posicao() {
+        let mut sobra = vec![0u8; 500];
+        assert!(!MARCAS_DE_OUTRA_ETIQUETA.iter().any(|m| contem(&sobra, m)));
+        sobra[400..408].copy_from_slice(b"APETAGEX");
+        assert!(MARCAS_DE_OUTRA_ETIQUETA.iter().any(|m| contem(&sobra, m)));
+        // e a busca não estoura em sobra menor que a marca
+        assert!(!contem(b"AP", b"APETAGEX"));
     }
 
     #[test]

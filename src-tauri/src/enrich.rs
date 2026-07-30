@@ -522,6 +522,18 @@ pub struct EnrichApplyResult {
     pub song_id: i64,
     pub song: Option<Song>,
     pub error: Option<String>,
+    /// V10.8 — a gravação DEU CERTO e há algo a contar sobre ela: hoje, a
+    /// etiqueta que precisou ser normalizada para o arquivo aceitar a gravação
+    /// (`writer::AVISO_ETIQUETA_NORMALIZADA`).
+    ///
+    /// **Não é um erro, e por isso não é o `error`.** A linha gravou, o áudio
+    /// foi conferido, e não há nada a refazer — o que existe é uma informação
+    /// que a pessoa tem direito de ler, porque o programa mexeu num byte do
+    /// arquivo dela que ela não pediu explicitamente para mexer. Sem pedágio
+    /// antes, sem segredo depois.
+    ///
+    /// Vem junto com `song` Some, sempre: aviso sem gravação não existe.
+    pub aviso: Option<String>,
 }
 
 /// Uma aplicação aceita pelo usuário. `None` em artist/lyrics/add_temas
@@ -2436,15 +2448,19 @@ pub fn apply(conn: &Connection, aplicacoes: &[EnrichApply]) -> Result<Vec<Enrich
     let mut resultados = Vec::with_capacity(aplicacoes.len());
     for ap in aplicacoes {
         resultados.push(match apply_one(conn, ap) {
-            Ok(song) => EnrichApplyResult {
+            Ok(gravacao) => EnrichApplyResult {
                 song_id: ap.song_id,
-                song: Some(song),
+                song: Some(gravacao.song),
                 error: None,
+                // V10.8 — o desfecho DIZ o que foi feito: a frase do writer
+                // viaja daqui até a linha da revisão sem ninguém a reescrever
+                aviso: gravacao.aviso.map(str::to_string),
             },
             Err(e) => EnrichApplyResult {
                 song_id: ap.song_id,
                 song: None,
                 error: Some(e.to_string()),
+                aviso: None,
             },
         });
     }
@@ -2460,9 +2476,10 @@ fn mesmo_valor(a: Option<&str>, b: Option<&str>) -> bool {
     efetivo(a) == efetivo(b)
 }
 
-/// Grava UMA aplicação (regras de preservação do lote) e devolve a Song
-/// atualizada — o apply converte o Err em `EnrichApplyResult::error`.
-fn apply_one(conn: &Connection, ap: &EnrichApply) -> Result<Song> {
+/// Grava UMA aplicação (regras de preservação do lote) e devolve o desfecho do
+/// writer — o apply converte o Err em `EnrichApplyResult::error` e o `aviso` em
+/// `EnrichApplyResult::aviso`.
+fn apply_one(conn: &Connection, ap: &EnrichApply) -> Result<writer::Gravacao> {
     let song = db::get_song(conn, ap.song_id)?.ok_or_else(|| {
         crate::error::AppError(format!("música não encontrada: {}", ap.song_id))
     })?;

@@ -152,12 +152,12 @@ function abrirDobrado() {
   fireEvent.click(screen.getByRole("button", { name: /abrir para ver/i }));
 }
 
-function ok(song: Song): EnrichApplyResult {
-  return { song_id: song.id, song, error: null };
+function ok(song: Song, aviso: string | null = null): EnrichApplyResult {
+  return { song_id: song.id, song, error: null, aviso };
 }
 
 function failed(songId: number, error: string): EnrichApplyResult {
-  return { song_id: songId, song: null, error };
+  return { song_id: songId, song: null, error, aviso: null };
 }
 
 function renderReview(
@@ -195,6 +195,7 @@ function renderReview(
     applyErrors: {},
     aplicadas: [],
     gravadas: {},
+    avisosDaGravacao: {},
   });
   return render(<EnrichReview />);
 }
@@ -239,6 +240,7 @@ describe("EnrichReview (V5 — F13)", () => {
       applyErrors: {},
       aplicadas: [],
       gravadas: {},
+      avisosDaGravacao: {},
       scanInFlight: false,
     });
     useToastStore.setState({ toasts: [] });
@@ -2684,6 +2686,56 @@ describe("EnrichReview (V5 — F13)", () => {
         screen.getByRole("button", { name: "Aplicar selecionadas (0)" }),
       ).toBeDisabled();
       expect(screen.getByText("Não há nada a aplicar nesta lista.")).toBeVisible();
+    });
+
+    /*
+      V10.8 — O DESFECHO DIZ O QUE FOI FEITO, NA LINHA.
+
+      A gravação que só foi possível depois de normalizar a etiqueta do MP3 (a
+      sobra entre a etiqueta declarada e o primeiro quadro, medida em sete
+      arquivos de um acervo real) devolve uma frase no `aviso` do resultado. Ela
+      tem de CHEGAR À TELA: sem isso o programa teria mexido num byte do arquivo
+      de alguém sem pedir e sem contar — e sem pedir é a decisão do produto (a
+      pessoa já mandou gravar), mas sem contar é segredo.
+    */
+    it("a gravação que normalizou a etiqueta conta isso na linha", async () => {
+      const frase =
+        "para conseguir gravar, o programa corrigiu uma medida errada por dentro " +
+        "da etiqueta deste MP3";
+      setBackendForTests({
+        enrichApply: vi.fn(async (aplicacoes: EnrichApply[]) =>
+          aplicacoes.map((a) =>
+            ok({ ...song(a.song_id, a.title), artist: a.artist }, frase),
+          ),
+        ),
+      } as unknown as Backend);
+      renderReview([ALTA]);
+      await aplicar();
+
+      abrirGravadas();
+      // deu certo é a primeira coisa a ler; o que foi preciso fazer vem depois
+      expect(screen.getByText(ROTULO_DA_LINHA_GRAVADA)).toBeVisible();
+      expect(screen.getByText(frase)).toBeVisible();
+      // e continua sendo uma linha gravada: nada a decidir, nada desabilitado
+      // por erro
+      expect(screen.getByRole("checkbox", { name: /faixa 1/ })).toBeDisabled();
+      expect(screen.getByText(tituloDoGrupo("gravadas", 1))).toBeVisible();
+      expect(
+        screen.queryByText(tituloDoGrupo("nao-gravadas", 1)),
+        "a linha gravou: dizer que ela não pôde ser gravada é a #139 outra vez",
+      ).not.toBeInTheDocument();
+    });
+
+    it("a gravação comum não mostra frase nenhuma além do desfecho", async () => {
+      backendQueGrava();
+      renderReview([ALTA]);
+      await aplicar();
+      abrirGravadas();
+      expect(screen.getByText(ROTULO_DA_LINHA_GRAVADA)).toBeVisible();
+      expect(
+        screen.queryByText(/corrigiu uma medida errada/),
+        "aviso que aparece sempre é ruído que se aprende a ignorar",
+      ).not.toBeInTheDocument();
     });
 
     it("a linha gravada sai do grupo dela e vai para o fim, num grupo próprio", async () => {

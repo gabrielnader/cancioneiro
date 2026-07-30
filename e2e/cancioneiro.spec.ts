@@ -1945,6 +1945,65 @@ test.describe("V10 — a etapa que resolve (F18 fase 3)", () => {
     expect(errors).toEqual([]);
   });
 
+  /*
+    V10.8 — O ARQUIVO QUE RECUSAVA TODA GRAVAÇÃO, E O DESFECHO QUE CONTA.
+
+    Sete arquivos de um acervo real recusavam toda gravação de etiqueta: a
+    etiqueta ID3v2 declarava terminar antes do primeiro quadro MPEG, e a
+    biblioteca de etiquetas, que reexamina o formato pelo conteúdo ao gravar, não
+    achava o áudio. As músicas saíam da curadoria PARA SEMPRE, porque toda
+    tentativa falhava igual.
+
+    O conserto acontece junto com a gravação que a pessoa pediu — sem pergunta e
+    sem clique a mais, porque ela já decidiu gravar e "seu arquivo tem uma
+    anomalia estrutural, posso corrigir 2 bytes?" é pergunta técnica para quem não
+    tem a quem perguntar (DECISIONS #102). O que ela recebe é o DESFECHO, e é isso
+    que este teste percorre até a tela.
+  */
+  test("o arquivo que recusava toda gravação grava — e a linha conta o que foi feito", async ({
+    page,
+  }) => {
+    const errors = trackErrors(page);
+    await resetApp(page);
+    await addMockFolder(page);
+    // ensina ao mock que a etiqueta DESTE arquivo precisa ser normalizada (o
+    // mock não tem leitor de MP3: a anomalia é ensinada, como o que o som
+    // responde)
+    await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__CANCIONEIRO_MOCK__._marcarEtiquetaParaNormalizar(
+        "/musicas/mock/sem_tags.mp3",
+      );
+    });
+
+    await page.getByRole("button", { name: "Configurações" }).click();
+    await page.getByRole("button", { name: "Buscar dados desta pasta" }).click();
+
+    const dialog = page.getByRole("dialog", { name: "Completar dados" });
+    await dialog.getByRole("button", { name: /Aplicar selecionadas \(\d+\)/ }).click();
+
+    // 1) GRAVOU: o grupo é o das gravadas, e não o das que não puderam ser
+    //    gravadas — dizer o contrário do que aconteceu é a DECISIONS #139
+    await expect(dialog.getByText(/gravadas? no arquivo/)).toBeVisible();
+    await expect(
+      dialog.getByText(/não puderam ser gravadas|não pôde ser gravada/),
+    ).toHaveCount(0);
+
+    // 2) e a linha DIZ o que foi preciso fazer para gravar, em português, com o
+    //    áudio conferido — o grupo das gravadas nasce fechado, e abri-lo é o que
+    //    a pessoa faz para conferir
+    const gravadas = dialog.getByRole("button", { name: /abrir para ver/i });
+    await gravadas.last().click();
+    await expect(
+      dialog.getByText(
+        "para conseguir gravar, o programa corrigiu uma medida errada por dentro da " +
+          "etiqueta deste MP3 — a música em si não foi alterada, e o programa conferiu " +
+          "isso depois de gravar",
+      ),
+    ).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
   // Fechar com a oferta na tela AVISA, e diz para onde ela foi. Informativo, e
   // não uma confirmação: a lista já não se perde.
   test("fechar com a oferta pendente avisa que ela continua em Configurações", async ({

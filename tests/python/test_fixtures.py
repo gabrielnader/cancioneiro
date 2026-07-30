@@ -34,8 +34,14 @@ def gerar_fixtures():
     assert result.returncode == 0, result.stderr
 
 
-def test_quatro_arquivos_existem():
-    for nome in ("com_letra.mp3", "sem_letra.mp3", "sem_tags.mp3", "corrompido.mp3"):
+def test_os_arquivos_existem():
+    for nome in (
+        "com_letra.mp3",
+        "sem_letra.mp3",
+        "sem_tags.mp3",
+        "corrompido.mp3",
+        "sobra_antes_do_audio.mp3",
+    ):
         assert (FIXTURES_DIR / nome).is_file(), f"fixture ausente: {nome}"
 
 
@@ -104,6 +110,81 @@ def test_corrompido_deterministico():
 def test_duracao_dos_mp3s_validos(nome):
     mp3 = MP3(str(FIXTURES_DIR / nome))
     assert 1.5 <= mp3.info.length <= 5.5
+
+
+# ---------------------------------------------------------------------------
+# V10.8 — a fixture da SOBRA entre a etiqueta declarada e o primeiro quadro.
+#
+# Ela existe para reproduzir a recusa de gravação medida em sete arquivos de um
+# acervo real, e a reprodução depende de NÚMEROS: se a sobra encolher para menos
+# que o teto de bytes de lixo da biblioteca de etiquetas (1.024 no lofty 0.22), o
+# arquivo passa a gravar sozinho e o teste do conserto vira um teste de nada.
+#
+# É o mesmo cuidado do teste de fumaça que "passava" sem passar o modelo, e que
+# custou uma versão inteira: fixture que não reproduz o defeito certifica o
+# contrário do que se quer garantir.
+# ---------------------------------------------------------------------------
+
+SOBRA_FIM_DA_ETIQUETA = 4096
+SOBRA_PRIMEIRO_QUADRO = 5347
+SOBRA_TETO_DE_LIXO_DO_LOFTY = 1024
+
+
+def _fim_declarado_do_id3(dados: bytes) -> int:
+    """Fim declarado do bloco ID3v2: 10 de cabeçalho + o tamanho synchsafe."""
+    assert dados[:3] == b"ID3"
+    return 10 + (
+        (dados[6] << 21) | (dados[7] << 14) | (dados[8] << 7) | dados[9]
+    )
+
+
+def test_sobra_tem_a_estrutura_medida_em_campo():
+    dados = (FIXTURES_DIR / "sobra_antes_do_audio.mp3").read_bytes()
+    fim = _fim_declarado_do_id3(dados)
+    assert fim == SOBRA_FIM_DA_ETIQUETA
+
+    # o primeiro quadro MPEG de verdade vem depois da sobra
+    quadro = dados.index(b"\xff\xfb", fim)
+    assert quadro == SOBRA_PRIMEIRO_QUADRO
+    sobra = quadro - fim
+    assert sobra == 1251
+    assert sobra > SOBRA_TETO_DE_LIXO_DO_LOFTY, (
+        f"a sobra ({sobra}) precisa passar do teto de lixo do lofty "
+        f"({SOBRA_TETO_DE_LIXO_DO_LOFTY}): abaixo dele a gravação funciona e a "
+        "fixture deixa de reproduzir o defeito"
+    )
+
+
+def test_sobra_e_quase_toda_de_zeros_e_nao_tem_sync_de_mpeg():
+    dados = (FIXTURES_DIR / "sobra_antes_do_audio.mp3").read_bytes()
+    regiao = dados[SOBRA_FIM_DA_ETIQUETA:SOBRA_PRIMEIRO_QUADRO]
+    assert regiao.count(0) / len(regiao) >= 0.75  # como no arquivo medido
+    # nenhum 0xFF: um sync por sorte da semente faria a biblioteca achar um
+    # quadro DENTRO da sobra, e a fixture pararia de reproduzir a recusa
+    assert 0xFF not in regiao
+
+
+def test_sobra_e_um_mp3_legivel_com_titulo():
+    """Ela TOCA e aparece na lista — é por isso que ninguém suspeita dela."""
+    caminho = FIXTURES_DIR / "sobra_antes_do_audio.mp3"
+    tags = ID3(str(caminho))
+    assert str(tags["TIT2"]) == "Sobra Antes do Áudio"
+    assert str(tags["TPE1"]) == "Banda Fixture"
+    mp3 = MP3(str(caminho))
+    assert 1.5 <= mp3.info.length <= 5.5
+
+
+def test_sobra_deterministica():
+    """Duas gerações dão o mesmo arquivo (o retrato dos testes Rust depende)."""
+    primeiro = (FIXTURES_DIR / "sobra_antes_do_audio.mp3").read_bytes()
+    result = subprocess.run(
+        [sys.executable, str(FIXTURES_SCRIPT)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+    )
+    assert result.returncode == 0, result.stderr
+    assert (FIXTURES_DIR / "sobra_antes_do_audio.mp3").read_bytes() == primeiro
 
 
 def test_idempotente():

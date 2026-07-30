@@ -1729,3 +1729,187 @@ opção mais simples que passa nos Acceptance Checks do PRD.
     trechos de documentação que citavam a frase antiga como se ela ainda
     existisse. Texto que mente sobre o próprio produto é defeito mesmo quando
     quem lê é o próximo programador.
+
+## V10.8 — o arquivo que recusava toda gravação, e o conserto que vem junto com o clique
+
+145. **A causa foi medida, e não deduzida: uma SOBRA entre o fim declarado da
+    etiqueta e o primeiro quadro MPEG.**
+    Sete arquivos de um acervo real recusavam TODA gravação de etiqueta —
+    aquelas músicas saíam da curadoria para sempre, porque toda tentativa
+    falhava igual e em silêncio. A #144(b) registrou a suspeita e disse que a
+    mensagem que a nomeia viria com a medição. Ela veio.
+    Os arquivos têm uma região de bytes entre o **fim DECLARADO da etiqueta
+    ID3v2** e o **primeiro quadro MPEG**. No arquivo medido: a etiqueta
+    declarando terminar no byte 4.096 e o primeiro quadro em 5.347 — **1.251
+    bytes** que não são etiqueta declarada, não são cabeçalho de codificador e
+    não são áudio (81% zeros com bytes aleatórios por cima).
+    O que a medição contra o lofty 0.22.4 mostrou, e o que cada número decide:
+    - a **LEITURA passa**. `MpegFile::read_from` procura o sync de MPEG sem teto
+      nenhum (`find_next_frame`), acha o quadro 1.251 bytes adiante e devolve a
+      etiqueta inteira. É por isso que estes arquivos TOCAM, aparecem na lista
+      com título e artista, e nada avisa que há algo errado neles;
+    - a **GRAVAÇÃO falha com `UnknownFormat`**. Ao gravar, o lofty reexamina o
+      formato pelo CONTEÚDO (`Probe::guess_file_type` dentro de `write_id3v2`),
+      e ali a busca do sync tem teto: `ParseOptions::DEFAULT_MAX_JUNK_BYTES`,
+      que é **1.024**. 1.251 > 1.024, o sync não é encontrado, e o formato fica
+      "desconhecido";
+    - **o tamanho da etiqueta nunca foi o problema.** Um arquivo de controle com
+      a MESMA etiqueta de 4.096 bytes e sem a sobra grava normalmente, e uma
+      sobra menor que 1.024 também grava. É a relação com o teto que decide;
+    - na falha, **nada é escrito**: o arquivo fica byte a byte igual, porque a
+      recusa acontece antes de o lofty tocar nele;
+    - as duas rotas de gravação (`TaggedFile` e `Id3v2Tag` direto) falham igual;
+    - **o conserto**: corrigir o campo de tamanho do cabeçalho ID3v2 para
+      alcançar o primeiro quadro (4086 → 5337, **dois bytes**, nas posições 8 e
+      9). Nenhum byte é removido, nenhum byte é movido: a região passa a ser
+      enchimento DECLARADO dentro da etiqueta, que é o que todo editor de
+      etiqueta escreve depois dos quadros. Depois disso o lofty lê **e grava**;
+    - **o áudio sobrevive idêntico** — conferido pelo SHA-256 dos bytes de áudio
+      antes e depois (16.508 bytes, o mesmo resumo nos dois).
+146. **O conserto acontece junto com a gravação que a pessoa pediu, sem linha
+    separada e sem clique a mais.**
+    Ela já decidiu: mandou gravar esta letra neste arquivo. Corrigir o número da
+    etiqueta é o MEIO de fazer o que ela pediu, não uma segunda decisão — e
+    perguntar *"seu arquivo tem uma anomalia estrutural, posso corrigir 2
+    bytes?"* é pergunta técnica para quem não tem como respondê-la: exatamente o
+    pedágio que a #102 existe para eliminar. Uma tela nova, um botão "consertar
+    arquivos" ou uma caixa de confirmação seriam três formas diferentes de
+    transferir para 40 pessoas sem suporte uma decisão que é nossa.
+147. **O gatilho é a FALHA, e nunca a suspeita — e isso é o que torna o falso
+    positivo inalcançável.**
+    O conserto só é tentado DEPOIS de a gravação normal falhar com
+    `UnknownFormat`. Nenhuma varredura procura anomalia, e num arquivo que grava
+    bem nem o campo de tamanho é lido.
+    A razão é medida, e é humilhante: **o nosso próprio detector acusou um
+    arquivo PERFEITO.** Num MP3 feito com LAME o primeiro quadro de áudio
+    carrega o cabeçalho Xing/Info (enchimento `0x55` + a assinatura "LAME"), e
+    um detector que procura o primeiro `FF Fx` depois da etiqueta pode achar o
+    SEGUNDO quadro e chamar o miolo do primeiro de "sobra" — está documentado na
+    função `sobra_e_inocente` do `tools/diagnosticar_mp3.py`, que existe porque
+    ferramenta de diagnóstico que grita lobo é pior que nenhuma.
+    Com o gatilho sendo a falha real, esse falso positivo não tem por onde
+    entrar. É o mesmo raciocínio da #120: **medir antes de mexer**, e mexer só
+    onde a medição aponta.
+148. **As duas garantias, que não são promessas.**
+    **(a) O áudio é CONFERIDO, não prometido.** Antes de mexer, os bytes
+    originais vão para a MEMÓRIA e o SHA-256 dos bytes de áudio (do primeiro
+    quadro MPEG até o fim do arquivo) é calculado. Depois de gravar, o resumo é
+    conferido. Se mudou um byte — ou se o arquivo não puder mais ser lido —, os
+    bytes originais são regravados e a gravação vira recusa em pt-BR
+    (`ERRO_AUDIO_MUDARIA`). **Nunca sai daqui um arquivo alterado.**
+    Memória, e não arquivo temporário: **nada é criado dentro da pasta do
+    acervo**, que é promessa do produto. Música tem alguns MB e a cópia cabe.
+    A restauração tem teste próprio, e ele é unitário de propósito: provocá-la
+    pelo caminho de fora exigiria um arquivo que faz o lofty estragar o áudio, e
+    ninguém sabe construir um. O teste dá à conferência um resumo que NÃO bate e
+    exige o arquivo de volta, byte a byte — e ele fica vermelho quando a
+    restauração é removida (conferido).
+    **(b) O desfecho DIZ o que foi feito.** Sem pedágio antes e sem segredo
+    depois: um conserto silencioso no arquivo de alguém é a mesma falta de
+    respeito que uma pergunta impossível, com o sinal trocado. A frase, na régua
+    da #100 (172 caracteres, uma frase):
+    *"para conseguir gravar, o programa corrigiu uma medida errada por dentro da
+    etiqueta deste MP3 — a música em si não foi alterada, e o programa conferiu
+    isso depois de gravar"*.
+    Ela diz **o que aconteceu**, **responde ao medo de quem lê** ("perdi a
+    música?") e **não promete — conta o que foi conferido**. Atravessa o contrato
+    inteiro: `writer::Gravacao { song, aviso }` → `EnrichApplyResult::aviso` →
+    `mockBackend` → `enrichStore::avisosDaGravacao` → a linha da revisão.
+    O `aviso` **não é o `error`**, e a distinção é a #139 outra vez com outra
+    roupa: no `applyErrors` ele desabilitaria e apagaria justamente a linha que
+    gravou, e o cabeçalho do grupo diria que ela "não pôde ser gravada no
+    arquivo" — o contrário do que aconteceu. Na tela ele fica DEPOIS do "Gravada
+    no arquivo." (a primeira coisa a ler é que deu certo) e em **cinza
+    secundário, não âmbar**: âmbar é ressalva a conferir antes de clicar, e aqui
+    não há nada a decidir. E ele aparece **uma vez só** — a anomalia cai do
+    arquivo na primeira gravação, e repetir o aviso sobre um arquivo já são
+    ensinaria a ignorá-lo.
+149. **Onde o conserto se RECUSA a agir, e por quê.**
+    O gatilho `UnknownFormat` é compartilhado com outras causas, e um conserto
+    cego ali estragaria arquivo. Cada recusa abaixo devolve a frase de sempre
+    (`ERRO_ESTRUTURA_DO_MP3`) e não escreve nada:
+    - **a sobra que carrega OUTRA ETIQUETA** (`ID3`, `3DI`, `APETAGEX`, `TAG` —
+      a mesma lista do `MARCAS_DA_SOBRA` do diagnóstico, menos as marcas de
+      codificador, que nunca chegam aqui). Absorver a sobra faz o lofty
+      reescrever aquela região, e se o que estava ali era a etiqueta APE de
+      alguém o conserto apagaria dado existente para poder gravar. Recusar é
+      ruim; apagar é a regra que não se quebra. A diferença entre enchimento e
+      dado é justamente a assinatura;
+    - **a etiqueta com RODAPÉ** (sinalizador `0x10`): o rodapé desloca o fim do
+      bloco em 10 bytes, e errar essa conta é a única forma de o conserto mirar
+      no lugar errado. Nenhum arquivo do relato tem rodapé, e recusar custa uma
+      gravação que já estava recusada;
+    - **campo de tamanho não synchsafe, tamanho maior que o arquivo, e ausência
+      de sobra**: nos três o número não descreve o arquivo, e mexer nele seria
+      chutar;
+    - **o `.mp3` que nunca foi MPEG** — a outra causa conhecida de
+      `UnknownFormat` (#143), que não tem conserto nenhum: não há primeiro
+      quadro para alcançar.
+    E o **primeiro quadro é achado por dois quadros, não por um**: sync válido,
+    versão/camada/bitrate/amostragem válidos, e o quadro seguinte caindo
+    exatamente no comprimento calculado, com a mesma versão, camada e taxa (a
+    mesma conferência do `cmp_header` do lofty). Um `FF Fx` solto aparece dentro
+    de qualquer bloco de bytes, e mirar nele seria declarar áudio como etiqueta.
+150. **O que a fixture prova, e por que os números dela são intocáveis.**
+    `fixtures/sobra_antes_do_audio.mp3` é montada pelo `tools/make_fixtures.py` a
+    partir de um MP3 de verdade (o mesmo tom do `sem_tags.mp3`, gerado pelo
+    lame), com a estrutura medida em campo: etiqueta declarando terminar em
+    4.096, primeiro quadro em 5.347, 1.251 bytes de sobra, 82% zeros. Só o CAMPO
+    DE TAMANHO mente — o áudio é áudio de verdade e os quadros da etiqueta são
+    quadros de verdade.
+    **O primeiro teste é o que prova que ela reproduz o defeito**: a leitura
+    passa e devolve o título, e a gravação falha com `UnknownFormat` sem tocar no
+    arquivo. Sem essa prova, todo o resto da seção poderia passar por qualquer
+    outro motivo — que é o erro do teste de fumaça que "passava" sem passar o
+    modelo, e custou uma versão inteira.
+    Daí duas travas explícitas, uma em cada suíte: **a sobra tem de continuar
+    maior que 1.024** (abaixo do teto de lixo do lofty o arquivo passa a gravar
+    sozinho e o teste do conserto vira um teste de nada) e **a região não pode
+    conter nenhum `0xFF`** (um sync por sorte da semente faria a biblioteca achar
+    um quadro DENTRO da sobra, e a fixture pararia de reproduzir a recusa — o
+    teste passaria a medir a semente). A região do arquivo medido também não
+    tinha nenhum.
+151. **O que a sobra sofre está medido e escrito, não escondido.**
+    Depois do conserto a região está DENTRO do bloco declarado — e o bloco
+    declarado é o que a biblioteca reescreve em toda gravação de etiqueta, em
+    qualquer arquivo. Então **a sobra não sobrevive à gravação**. Medido na
+    fixture: 21.855 bytes antes, 17.554 depois; a etiqueta de 4.096 e a sobra de
+    1.251 dão lugar à etiqueta nova de 1.046 (com o enchimento de 1.024 que o
+    lofty escreve por padrão), e o áudio é **o mesmo byte a byte, os mesmos
+    16.508**. Encolher assim é o que acontece com QUALQUER etiqueta grande que se
+    regrave, com sobra ou sem ela.
+    Isto está num teste com nome próprio para não poder mudar em silêncio. O que
+    a regra inviolável protege é **dado**: quadro de etiqueta, áudio, anotação de
+    alguém. Enchimento não declarado não é dado — e a única forma de ele ser dado
+    é carregar assinatura de etiqueta, que é exatamente o caso em que o conserto
+    se recusa a agir (#149).
+152. **O que NÃO se fez, e fica escrito.**
+    **(a) Nenhuma varredura, nenhum relatório, nenhum "consertar meus
+    arquivos".** O conserto existe só dentro da gravação que alguém pediu. Uma
+    varredura de anomalias precisaria de um detector que sabemos falível (#147) e
+    de uma tela que pergunta o que ninguém pode responder.
+    **(b) O EDITOR do player não conta o conserto.** O comando `write_tags`
+    continua devolvendo a `Song`, e o `aviso` chega só pelo caminho do
+    `enrich_apply` — que é o do relato de campo, onde as sete falhas apareceram.
+    Levá-lo ao editor exigiria mudar o tipo de retorno de `writeTags` no
+    frontend, consumido em mais de cem lugares, e a troca não caberia nesta
+    versão sem risco desproporcional. **A GARANTIA do áudio conferido vale igual
+    nos dois caminhos**, porque ela mora no `writer` e não em quem o chama: o
+    editor nunca deixa um arquivo alterado. O que falta ali é a frase, e isso é
+    dívida registrada, não decisão de esconder.
+    **(c) A linha que falhou continua sem "tentar de novo"** — a #144(a) vale
+    inteira, e agora com uma razão a menos: a causa mais comum de recusa
+    permanente naquele acervo deixou de existir.
+    **(d) As frases de ERRO do `writer.rs` continuam não espelhadas no mock**
+    (#144c). A única frase espelhada é o AVISO, e só porque no mock existe um
+    PRODUTOR dela — ele decide, por arquivo ensinado
+    (`_marcarEtiquetaParaNormalizar`), que aquela gravação normalizou a etiqueta.
+    Sem isso o E2E não teria como ver na tela o desfecho que esta versão promete.
+    As duas cópias são fixadas como DADO nos dois lados (um teste no Rust, um no
+    `mockBackend.contrato.test.ts`), que é a convenção da #88 para o que não dá
+    para chamar de um processo só: mudar a frase quebra o teste de cada lado, e
+    divergir passa a exigir apagar um teste em vez de acontecer por esquecimento.
+    **(e) O `tools/diagnosticar_mp3.py` não teve a lógica tocada** — só a
+    documentação, que passou a dizer que a sobra tem conserto no produto e quais
+    duas sobras continuam sem. Texto que mente sobre o próprio produto é defeito
+    mesmo quando quem lê é o próximo programador (#144d).

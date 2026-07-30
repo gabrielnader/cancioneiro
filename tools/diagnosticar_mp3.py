@@ -20,6 +20,11 @@ Este script não conserta nada e **não escreve em nenhum arquivo**: abre para
 leitura, mede, e imprime. É a mesma promessa do produto (a reprodução nunca
 escreve; nada é gravado sem alguém conferir e clicar).
 
+A medição que este script fez sobre a SOBRA entre a etiqueta declarada e o
+primeiro quadro MPEG virou conserto no produto (V10.8): ver
+`descreve_a_sobra`. Ele continua sendo o que separa a sobra que tem conserto
+das duas que não têm.
+
 Uso:
 
     python3 tools/diagnosticar_mp3.py "/caminho/da/pasta"
@@ -133,6 +138,16 @@ def descreve_a_sobra(dados: bytes, inicio: int, sync: int) -> None:
     mal-declarada (o arquivo está bom, o TAMANHO está errado), lixo de um
     editor antigo, ou áudio de outro formato — e cada um desses casos merece
     uma frase diferente na tela de quem não tem a quem perguntar.
+
+    **V10.8 — o primeiro desses casos passou a ter conserto no produto**, e ele
+    acontece junto com a gravação que a pessoa pediu: quando a gravação falha
+    por não reconhecer o formato, o aplicativo corrige o campo de tamanho da
+    etiqueta para alcançar o primeiro quadro, grava, e CONFERE que o áudio não
+    mudou (se mudou, o arquivo volta ao que era e a gravação vira recusa). O
+    desfecho é dito na linha da revisão.
+    Duas sobras continuam SEM conserto, e este script é o que as separa: a que
+    carrega outra etiqueta (`ID3`, `3DI`, `APETAGEX`, `TAG` abaixo — absorvê-la
+    apagaria dado de alguém) e a de um arquivo que nunca foi MPEG.
     """
     sobra = dados[inicio:sync]
     inocente = sobra_e_inocente(sobra)

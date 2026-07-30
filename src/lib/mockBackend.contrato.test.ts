@@ -3,6 +3,7 @@ import type { EnrichProposal } from "./api";
 import { grupoDaProposta } from "./curadoria";
 
 import {
+  AVISO_ETIQUETA_NORMALIZADA,
   ERRO_FPCALC,
   ERRO_FPCALC_NAO_EXECUTA,
   createMockBackend,
@@ -1060,5 +1061,116 @@ describe("contrato mock × Rust — a porta permanente da etapa 5 (V10.6)", () =
     expect(dentro.musicas.length).toBeGreaterThan(0);
     expect(fora.musicas).toEqual([]);
     expect(fora.segundos_estimados).toBe(0);
+  });
+});
+
+/*
+  V10.8 — O DESFECHO QUE DIZ O QUE FOI FEITO.
+
+  Sete arquivos de um acervo real recusavam toda gravação: a etiqueta ID3v2
+  declarava terminar antes do primeiro quadro MPEG, e o lofty, que reexamina o
+  formato pelo conteúdo ao gravar, não achava o áudio dentro do teto de bytes de
+  lixo dele. O conserto (corrigir o campo de tamanho da etiqueta) acontece JUNTO
+  com a gravação que a pessoa pediu, sem pergunta e sem clique a mais — e o
+  desfecho conta que aconteceu.
+
+  Este bloco é a metade TypeScript do par: a FRASE é fixada aqui como dado, e a
+  mesma frase é fixada no Rust (`cada_familia_tem_a_sua_frase_e_ela_cabe_na_regua`
+  em `src-tauri/src/writer.rs`). Mudar a frase de um lado quebra o teste daquele
+  lado, e divergir passa a exigir apagar um teste em vez de acontecer por
+  esquecimento (DECISIONS #88).
+*/
+describe("V10.8 — a etiqueta normalizada, e o desfecho que a conta", () => {
+  let backend: MockBackend;
+
+  beforeEach(() => {
+    localStorage.clear();
+    backend = createMockBackend();
+  });
+
+  /** A frase, letra por letra, como o Rust a escreve. */
+  const FRASE_DO_RUST =
+    "para conseguir gravar, o programa corrigiu uma medida errada por dentro da " +
+    "etiqueta deste MP3 — a música em si não foi alterada, e o programa conferiu " +
+    "isso depois de gravar";
+
+  it("a frase do mock é a MESMA do writer.rs, letra por letra", () => {
+    expect(AVISO_ETIQUETA_NORMALIZADA).toBe(FRASE_DO_RUST);
+    // a régua da DECISIONS #100 vale para ela como para as frases de erro: ela é
+    // a tela de quem não tem a quem perguntar
+    expect(AVISO_ETIQUETA_NORMALIZADA.length).toBeLessThanOrEqual(210);
+  });
+
+  it("a gravação PASSA e o resultado traz a frase; a segunda é comum", async () => {
+    await backend.addFolder("/musicas/teste");
+    const songs = await backend.listSongs();
+    const song = songs.find(
+      (s) => s.file_path === "/musicas/teste/sem_letra.mp3",
+    )!;
+    backend._marcarEtiquetaParaNormalizar(song.file_path);
+
+    const aplicacao = {
+      song_id: song.id,
+      title: "Nome Novo",
+      artist: null,
+      lyrics: null,
+      add_temas: null,
+      fonte: null,
+      current_title: song.title,
+      current_artist: song.artist,
+    };
+    const [primeira] = await backend.enrichApply([aplicacao]);
+    // gravou — o conserto existe para isto
+    expect(primeira.song).not.toBeNull();
+    expect(primeira.error).toBeNull();
+    expect(primeira.aviso).toBe(AVISO_ETIQUETA_NORMALIZADA);
+
+    // a anomalia caiu do arquivo: a segunda gravação não tem nada a contar
+    const [segunda] = await backend.enrichApply([
+      { ...aplicacao, title: "Outro Nome", current_title: "Nome Novo" },
+    ]);
+    expect(segunda.song).not.toBeNull();
+    expect(segunda.aviso).toBeNull();
+  });
+
+  it("a gravação comum não avisa nada, e a que FALHOU também não", async () => {
+    await backend.addFolder("/musicas/teste");
+    const songs = await backend.listSongs();
+    const normal = songs.find(
+      (s) => s.file_path === "/musicas/teste/sem_letra.mp3",
+    )!;
+    const sumida = songs.find(
+      (s) => s.file_path === "/musicas/teste/sem_tags.mp3",
+    )!;
+    backend._removeFileFromDisk(sumida.file_path);
+
+    const resultados = await backend.enrichApply([
+      {
+        song_id: normal.id,
+        title: "Nome Novo",
+        artist: null,
+        lyrics: null,
+        add_temas: null,
+        fonte: null,
+        current_title: normal.title,
+        current_artist: normal.artist,
+      },
+      {
+        song_id: sumida.id,
+        title: "Não Vai",
+        artist: null,
+        lyrics: null,
+        add_temas: null,
+        fonte: null,
+        current_title: sumida.title,
+        current_artist: sumida.artist,
+      },
+    ]);
+    expect(resultados[0].aviso).toBeNull();
+    expect(resultados[1].song).toBeNull();
+    expect(
+      resultados[1].aviso,
+      "aviso sem gravação não existe: ele descreve o que foi FEITO",
+    ).toBeNull();
   });
 });

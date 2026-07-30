@@ -146,7 +146,7 @@ fn write_tags_roundtrip_via_indexer_preserving_audio_and_filename() {
         Some("Água, CURA; esperança, agua"),
         None,
     )
-    .unwrap();
+    .unwrap().song;
 
     // Song devolvida já atualizada (mesmo id — upsert, nunca re-cria)
     assert_eq!(updated.id, song.id);
@@ -261,7 +261,7 @@ fn write_tags_none_or_empty_removes_artist_lyrics_and_temas() {
         Some(" ; , "),
         None,
     )
-    .unwrap();
+    .unwrap().song;
     assert_eq!(updated.title, "Só Título");
     assert_eq!(updated.artist, None);
     assert!(!updated.has_lyrics);
@@ -271,7 +271,7 @@ fn write_tags_none_or_empty_removes_artist_lyrics_and_temas() {
     // regrava com tudo e depois remove com None
     writer::write_tags(&conn, song.id, "Cheio", Some("A"), Some("letra"), Some("tema"), None)
         .unwrap();
-    let cleared = writer::write_tags(&conn, song.id, "Cheio", None, None, None, None).unwrap();
+    let cleared = writer::write_tags(&conn, song.id, "Cheio", None, None, None, None).unwrap().song;
     assert_eq!(cleared.artist, None);
     assert!(!cleared.has_lyrics);
     assert_eq!(cleared.temas, None);
@@ -430,7 +430,7 @@ fn write_tags_creates_id3_tag_on_untagged_file() {
         Some("João; João, joao"),
         None,
     )
-    .unwrap();
+    .unwrap().song;
     assert_eq!(updated.title, "Título Novo");
     assert_eq!(updated.artist.as_deref(), Some("Artista Ção"));
     assert_eq!(updated.temas.as_deref(), Some("joão"));
@@ -492,7 +492,8 @@ fn write_tags_drops_letra_origem_when_lyrics_are_cleared() {
 
     let updated =
         writer::write_tags(&conn, song.id, &song.title, song.artist.as_deref(), None, None, None)
-            .unwrap();
+            .unwrap()
+            .song;
     assert!(!updated.has_lyrics);
 
     assert_eq!(letra_origem(&path), None, "letra apagada derruba a marca");
@@ -521,7 +522,7 @@ fn write_tags_keeps_letra_origem_when_lyrics_pass_through_unchanged() {
         Some("novo tema"),
         None,
     )
-    .unwrap();
+    .unwrap().song;
 
     assert_eq!(
         letra_origem(&path).as_deref(),
@@ -569,7 +570,7 @@ fn write_tags_clears_letra_origem_in_the_reindexed_song() {
         None,
         None,
     )
-    .unwrap();
+    .unwrap().song;
 
     assert_eq!(
         updated.letra_origem, None,
@@ -621,7 +622,7 @@ fn write_tags_sets_and_clears_instrumental_preserving_foreign_frames() {
         None,
         Some(false),
     )
-    .unwrap();
+    .unwrap().song;
     assert!(!desmarcada.instrumental);
     assert_eq!(instrumental_frame(&path), None, "desmarcar remove o frame");
     frames_alheios_intactos(&path);
@@ -636,7 +637,7 @@ fn write_tags_sets_and_clears_instrumental_preserving_foreign_frames() {
         None,
         Some(true),
     )
-    .unwrap();
+    .unwrap().song;
     assert!(marcada.instrumental);
     assert_eq!(instrumental_frame(&path).as_deref(), Some("1"));
     frames_alheios_intactos(&path);
@@ -667,7 +668,7 @@ fn write_tags_leaves_the_human_mark_untouched_when_instrumental_is_none() {
         Some("prelúdio"),
         None, // não mexe na marca
     )
-    .unwrap();
+    .unwrap().song;
 
     assert_eq!(instrumental_frame(&path).as_deref(), Some("1"));
     assert!(updated.instrumental, "a Song reindexada continua marcada");
@@ -703,7 +704,7 @@ fn write_tags_keeps_instrumental_when_lyrics_change_or_are_cleared() {
         None,
         None,
     )
-    .unwrap();
+    .unwrap().song;
     assert_eq!(letra_origem(&path), None, "letra trocada derruba a procedência");
     assert_eq!(
         instrumental_frame(&path).as_deref(),
@@ -725,7 +726,7 @@ fn write_tags_keeps_instrumental_when_lyrics_change_or_are_cleared() {
         None,
         None,
     )
-    .unwrap();
+    .unwrap().song;
     assert!(!sem_letra.has_lyrics);
     assert!(sem_letra.instrumental);
     assert_eq!(instrumental_frame(&path).as_deref(), Some("1"));
@@ -744,8 +745,9 @@ fn write_tags_never_invents_instrumental() {
     writer::write_tags(&conn, song.id, "T", None, Some("letra nova"), None, None).unwrap();
     assert_eq!(instrumental_frame(&path), None);
 
-    let updated =
-        writer::write_tags(&conn, song.id, "T", None, None, None, Some(false)).unwrap();
+    let updated = writer::write_tags(&conn, song.id, "T", None, None, None, Some(false))
+        .unwrap()
+        .song;
     assert_eq!(instrumental_frame(&path), None);
     assert!(!updated.instrumental);
 }
@@ -778,7 +780,7 @@ fn write_tags_com_origem_records_the_declared_provenance() {
         None,
         Some(writer::ORIGEM_VAGALUME),
     )
-    .unwrap();
+    .unwrap().song;
     assert_eq!(letra_origem(&path), Some("vagalume".into()));
     assert_eq!(atualizada.letra_origem.as_deref(), Some("vagalume"));
     frames_alheios_intactos(&path);
@@ -808,7 +810,7 @@ fn write_tags_com_origem_records_the_declared_provenance() {
         None,
         Some(""),
     )
-    .unwrap();
+    .unwrap().song;
     assert_eq!(letra_origem(&path), None);
     assert_eq!(limpa.letra_origem, None);
     frames_alheios_intactos(&path);
@@ -884,7 +886,7 @@ fn the_editor_can_declare_the_provenance_of_the_lyric_it_saves() {
         Some(true), // e a marca de instrumental do mesmo formulário
         Some(writer::ORIGEM_VAGALUME),
     )
-    .unwrap();
+    .unwrap().song;
 
     assert_eq!(letra_origem(&path), Some("vagalume".into()));
     assert_eq!(atualizada.letra_origem.as_deref(), Some("vagalume"));
@@ -902,7 +904,7 @@ fn the_editor_can_declare_the_provenance_of_the_lyric_it_saves() {
         Some("água; esperança"),
         None,
     )
-    .unwrap();
+    .unwrap().song;
     assert_eq!(de_novo.letra_origem.as_deref(), Some("vagalume"));
 }
 
@@ -978,7 +980,7 @@ fn a_marca_herdada_do_vagalume_sobrevive_a_gravacao_de_nome() {
         None,
         None,
     )
-    .unwrap();
+    .unwrap().song;
     assert_eq!(
         letra_origem(&path),
         Some("vagalume".into()),
@@ -1116,7 +1118,7 @@ fn write_tags_conserta_idioma_invalido_em_vez_de_recusar_o_arquivo() {
         Some("humor"),
         None,
     )
-    .expect("um idioma inválido não pode impedir a curadoria da música");
+    .expect("um idioma inválido não pode impedir a curadoria da música").song;
 
     assert_eq!(atualizada.title, "Apologia ao Jumento");
 
@@ -1288,3 +1290,385 @@ fn write_tags_explica_em_portugues_um_mp3_que_nao_da_para_ler() {
 // falharia conforme quem o rodou — a "falha fantasma" que a DECISIONS #77 saiu
 // para acabar. A ponte entre a falha real e a frase é o `map_err` de cada
 // chamada, e ela é curta o bastante para ser lida.
+
+// ---------------------------------------------------------------------------
+// V10.8 — a SOBRA entre o fim declarado da etiqueta e o primeiro quadro MPEG.
+//
+// Sete arquivos de um acervo real recusavam TODA gravação, e a causa foi medida
+// arquivo por arquivo: a etiqueta ID3v2 declara terminar num byte que não
+// alcança o primeiro quadro MPEG, e no meio sobra uma região que não é etiqueta
+// declarada, não é cabeçalho de codificador e não é áudio. No arquivo medido: a
+// etiqueta declarando terminar em 4.096 e o primeiro quadro em 5.347.
+//
+// O que decide a recusa é a relação com o teto de "bytes de lixo" da biblioteca
+// (`ParseOptions::DEFAULT_MAX_JUNK_BYTES` = 1.024 no lofty 0.22): ao GRAVAR, o
+// lofty reexamina o formato pelo CONTEÚDO, procura o sync de MPEG só dentro
+// desse teto depois do fim declarado da etiqueta, não acha, e devolve
+// `UnknownFormat`. Ao LER não há teto nenhum — é por isso que estes arquivos
+// tocam, aparecem na lista com título e artista, e só a gravação falha.
+//
+// Os testes desta seção são a prova de que a fixture reproduz o defeito ANTES
+// do conserto. Sem essa prova o resto da seção poderia passar por qualquer
+// outro motivo, que é o erro que já nos custou uma versão inteira (o teste de
+// fumaça que "passava" sem passar o modelo).
+// ---------------------------------------------------------------------------
+
+/// A fixture da anomalia, num acervo só dela.
+///
+/// Acervo próprio, e não um item a mais no `setup()`: metade dos testes deste
+/// arquivo conta as músicas indexadas, e um arquivo novo na pasta comum mudaria
+/// a contagem de todos eles.
+fn setup_da_sobra() -> (tempfile::TempDir, Connection, db::Song) {
+    let dir = tempfile::tempdir().unwrap();
+    copy_fixture(
+        "sobra_antes_do_audio.mp3",
+        &dir.path().join("sobra_antes_do_audio.mp3"),
+    );
+    let conn = db::open_in_memory().unwrap();
+    let folder_id = db::add_folder(&conn, dir.path().to_str().unwrap()).unwrap();
+    indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
+    let song = song_by_suffix(&conn, "sobra_antes_do_audio.mp3");
+    (dir, conn, song)
+}
+
+/// Fim DECLARADO do bloco ID3v2 (10 de cabeçalho + o tamanho synchsafe).
+fn fim_declarado_da_etiqueta(bytes: &[u8]) -> usize {
+    assert_eq!(&bytes[..3], b"ID3", "a fixture precisa começar com uma etiqueta");
+    10 + (((bytes[6] as usize) << 21)
+        | ((bytes[7] as usize) << 14)
+        | ((bytes[8] as usize) << 7)
+        | (bytes[9] as usize))
+}
+
+/// A ESTRUTURA da fixture é a que foi medida em campo — e é ela, não o tamanho
+/// da etiqueta, que causa a recusa.
+///
+/// Este teste não exercita nada do produto: ele existe para que a fixture não
+/// possa envelhecer em silêncio. Se um dia o gerador encolher a sobra para
+/// menos que o teto de lixo do lofty, a gravação passará a funcionar sozinha e o
+/// teste do conserto viraria um teste de nada.
+#[test]
+fn a_fixture_da_sobra_tem_a_estrutura_medida_em_campo() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("x.mp3");
+    copy_fixture("sobra_antes_do_audio.mp3", &path);
+    let bytes = fs::read(&path).unwrap();
+
+    let fim = fim_declarado_da_etiqueta(&bytes);
+    assert_eq!(fim, 4096, "a etiqueta declara terminar onde ela declarava em campo");
+
+    // o primeiro quadro MPEG de verdade: sync + versão/camada válidas, e o
+    // quadro seguinte batendo no comprimento calculado (a mesma conferência de
+    // dois quadros que o lofty faz — um `FF Fx` solto não é quadro)
+    let primeiro = bytes[fim..]
+        .windows(2)
+        .position(|j| j[0] == 0xFF && j[1] & 0xE0 == 0xE0)
+        .map(|p| fim + p)
+        .expect("a fixture precisa ter áudio MPEG de verdade depois da sobra");
+    assert_eq!(primeiro, 5347, "o primeiro quadro começa onde começava em campo");
+
+    let sobra = primeiro - fim;
+    assert_eq!(sobra, 1251, "a sobra medida em campo tinha 1.251 bytes");
+    assert!(
+        sobra > 1024,
+        "a sobra precisa passar do teto de lixo do lofty ({sobra} bytes): abaixo dele \
+         a gravação funciona e a fixture deixa de reproduzir o defeito"
+    );
+    let zeros = bytes[fim..primeiro].iter().filter(|b| **b == 0).count();
+    assert!(
+        zeros * 100 / sobra >= 75,
+        "a sobra medida era quase toda de zeros, com bytes aleatórios por cima"
+    );
+}
+
+/// **A prova de que a fixture reproduz o defeito.**
+///
+/// Ler passa: é por isso que estes arquivos tocam e aparecem na lista com
+/// título e artista, e é por isso que ninguém suspeita deles até mandar gravar.
+/// Gravar falha com `UnknownFormat` — o mesmo desfecho que os sete arquivos do
+/// relato devolviam, e a razão pela qual aquelas músicas saíam da curadoria
+/// para sempre.
+#[test]
+fn a_fixture_da_sobra_le_mas_recusa_a_gravacao_com_unknown_format() {
+    use lofty::config::{ParseOptions, WriteOptions};
+    use lofty::error::ErrorKind;
+    use lofty::file::AudioFile;
+    use lofty::tag::{Accessor, TagExt};
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sobra_antes_do_audio.mp3");
+    copy_fixture("sobra_antes_do_audio.mp3", &path);
+
+    // 1. a LEITURA passa, e devolve a etiqueta inteira
+    let lido = lofty::mpeg::MpegFile::read_from(
+        &mut fs::File::open(&path).unwrap(),
+        ParseOptions::new(),
+    )
+    .expect("o arquivo do relato é lido sem reclamação — é por isso que ele toca");
+    let tag = lido.id3v2().cloned().expect("a etiqueta declarada é lida");
+    assert_eq!(
+        tag.title().as_deref(),
+        Some("Sobra Antes do Áudio"),
+        "o título chega à lista, e nada na tela sugere que algo está errado"
+    );
+
+    // 2. a GRAVAÇÃO falha, e falha com UnknownFormat
+    let bytes_antes = fs::read(&path).unwrap();
+    let erro = tag
+        .save_to_path(&path, WriteOptions::default())
+        .expect_err("é ESTA recusa que o conserto desta versão existe para resolver");
+    assert!(
+        matches!(erro.kind(), ErrorKind::UnknownFormat),
+        "o defeito medido é UnknownFormat, e não outro: {erro}"
+    );
+
+    // 3. e a recusa não escreve nada: o arquivo fica byte a byte igual
+    assert_eq!(
+        fs::read(&path).unwrap(),
+        bytes_antes,
+        "a recusa do lofty acontece antes de o arquivo ser tocado"
+    );
+}
+
+/// Os bytes de ÁUDIO da fixture, contados do primeiro quadro MPEG até o fim.
+///
+/// Definição diferente da do `audio_bytes` de propósito: neste arquivo o fim
+/// DECLARADO da etiqueta não é onde o áudio começa — é justamente essa diferença
+/// que é o defeito. Depois da gravação as duas contas coincidem, e é assim que a
+/// comparação prova algo.
+fn audio_da_fixture_com_sobra(bytes: &[u8]) -> Vec<u8> {
+    let fim = fim_declarado_da_etiqueta(bytes);
+    let primeiro = bytes[fim..]
+        .windows(2)
+        .position(|j| j[0] == 0xFF && j[1] & 0xE0 == 0xE0)
+        .map(|p| fim + p)
+        .expect("a fixture tem áudio MPEG");
+    bytes[primeiro..].to_vec()
+}
+
+/// **O caso do campo, do começo ao fim.** Gravar uma letra num arquivo com a
+/// sobra PASSA, a letra vai para o disco, e o áudio continua byte a byte o
+/// mesmo — comparado inteiro, e não por um resumo, que é a prova mais forte
+/// disponível num teste.
+#[test]
+fn write_tags_grava_no_arquivo_com_sobra_sem_tocar_no_audio() {
+    let (_dir, conn, song) = setup_da_sobra();
+    let path = PathBuf::from(&song.file_path);
+    let audio_antes = audio_da_fixture_com_sobra(&fs::read(&path).unwrap());
+    assert_eq!(
+        audio_antes.len(),
+        16_508,
+        "o áudio da fixture é o mesmo tom que o sem_tags.mp3"
+    );
+
+    let gravacao = writer::write_tags(
+        &conn,
+        song.id,
+        "Ponto de Oxum",
+        Some("Grupo Fixture"),
+        Some("uma letra que alguém escreveu à mão"),
+        Some("água"),
+        None,
+    )
+    .expect("a sobra entre a etiqueta e o áudio não pode impedir a curadoria da música");
+
+    // 1. o que a pessoa pediu está no arquivo, lido de volta pelo indexador
+    assert_eq!(gravacao.song.title, "Ponto de Oxum");
+    assert_eq!(gravacao.song.artist.as_deref(), Some("Grupo Fixture"));
+    assert!(gravacao.song.has_lyrics);
+    assert_eq!(gravacao.song.temas.as_deref(), Some("água"));
+    assert_eq!(
+        db::get_lyrics(&conn, song.id).unwrap().as_deref(),
+        Some("uma letra que alguém escreveu à mão")
+    );
+
+    // 2. o ÁUDIO é o mesmo. Depois da gravação o fim declarado da etiqueta
+    //    passou a ser onde o áudio começa — o defeito não existe mais no arquivo
+    assert_eq!(
+        audio_bytes(&path),
+        audio_antes,
+        "nenhum byte de áudio pode mudar: é a regra inviolável do projeto"
+    );
+
+    // 3. e o arquivo continua com o mesmo nome, no mesmo lugar
+    assert!(path.is_file());
+    assert!(path.ends_with("sobra_antes_do_audio.mp3"));
+}
+
+/// **O desfecho DIZ o que foi feito.** A gravação que precisou normalizar a
+/// etiqueta devolve a frase; a gravação comum não devolve nada.
+///
+/// O par é o teste: um `aviso` que aparecesse sempre seria ruído que se aprende
+/// a ignorar, e um que nunca aparecesse seria o segredo que esta versão existe
+/// para não guardar.
+#[test]
+fn a_gravacao_que_normalizou_a_etiqueta_conta_isso_e_a_comum_nao() {
+    let (_dir, conn, song) = setup_da_sobra();
+    let gravacao =
+        writer::write_tags(&conn, song.id, "Com Sobra", None, None, None, None).unwrap();
+    assert_eq!(
+        gravacao.aviso,
+        Some(writer::AVISO_ETIQUETA_NORMALIZADA),
+        "quem mexeu num byte que ninguém pediu para mexer precisa dizer isso"
+    );
+
+    // o arquivo normal do acervo: nada aconteceu, e não há nada a contar
+    let (_dir2, conn2, _folder) = setup();
+    let normal = song_by_suffix(&conn2, "com_letra.mp3");
+    let comum = writer::write_tags(
+        &conn2,
+        normal.id,
+        "Sem Sobra",
+        None,
+        db::get_lyrics(&conn2, normal.id).unwrap().as_deref(),
+        None,
+        None,
+    )
+    .unwrap();
+    assert_eq!(comum.aviso, None, "gravação comum não tem nada a avisar");
+}
+
+/// A segunda gravação do MESMO arquivo é comum: o conserto acontece uma vez, e a
+/// anomalia não volta.
+///
+/// Importa porque a curadoria grava a mesma música mais de uma vez (o nome
+/// primeiro, a letra depois), e um aviso repetido a cada gravação viraria ruído
+/// sobre um arquivo que já está são.
+#[test]
+fn depois_do_conserto_o_arquivo_grava_como_qualquer_outro() {
+    let (_dir, conn, song) = setup_da_sobra();
+    let primeira =
+        writer::write_tags(&conn, song.id, "Primeira", None, None, None, None).unwrap();
+    assert_eq!(primeira.aviso, Some(writer::AVISO_ETIQUETA_NORMALIZADA));
+    let audio = audio_bytes(&PathBuf::from(&song.file_path));
+
+    let segunda = writer::write_tags(
+        &conn,
+        song.id,
+        "Segunda",
+        Some("Artista"),
+        Some("a letra, agora"),
+        None,
+        None,
+    )
+    .expect("o arquivo consertado grava como qualquer outro");
+    assert_eq!(
+        segunda.aviso, None,
+        "a anomalia não existe mais: avisar de novo seria ruído"
+    );
+    assert_eq!(segunda.song.title, "Segunda");
+    assert_eq!(
+        audio_bytes(&PathBuf::from(&song.file_path)),
+        audio,
+        "a segunda gravação também não toca no áudio"
+    );
+}
+
+/// **O conserto não é uma desculpa para aceitar qualquer arquivo.** O `.mp3` que
+/// nunca foi MPEG falha com o MESMO `UnknownFormat` e continua recusado, com a
+/// frase da estrutura e sem um byte alterado.
+///
+/// É o teste que impede o conserto de virar "tentar de novo mais forte": ele só
+/// vale para a anomalia que foi medida, e o gatilho compartilhado com outra
+/// causa é exatamente onde um conserto cego estragaria um arquivo.
+#[test]
+fn o_arquivo_que_nunca_foi_mpeg_continua_recusado_em_portugues() {
+    let (_dir, conn, _folder_id) = setup();
+    let song = song_by_suffix(&conn, "sem_letra.mp3");
+    copy_fixture("corrompido.mp3", Path::new(&song.file_path));
+    let bytes_antes = fs::read(&song.file_path).unwrap();
+
+    let err = writer::write_tags(&conn, song.id, "Título", None, None, None, None)
+        .expect_err("arquivo que não é MPEG não tem conserto nenhum");
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "não foi possível salvar em {}: {}",
+            song.file_path,
+            writer::ERRO_ESTRUTURA_DO_MP3
+        )
+    );
+    assert_eq!(
+        fs::read(&song.file_path).unwrap(),
+        bytes_antes,
+        "a recusa não pode deixar o arquivo diferente do que era"
+    );
+}
+
+/// A sobra que carrega OUTRA ETIQUETA não é absorvida: recusa, e o arquivo fica
+/// intacto.
+///
+/// Absorver a sobra faz o lofty reescrever aquela região na gravação — e se o
+/// que estava ali era a etiqueta APE de alguém, o conserto apagaria dado
+/// existente para poder gravar. Recusar é ruim (a música continua sem poder ser
+/// curada); apagar é a regra que não se quebra.
+#[test]
+fn a_sobra_que_carrega_outra_etiqueta_nao_e_absorvida() {
+    let (_dir, conn, song) = setup_da_sobra();
+    let path = PathBuf::from(&song.file_path);
+
+    // planta a assinatura de uma etiqueta APE no meio da sobra, sem mudar o
+    // tamanho do arquivo nem a posição de nada
+    let mut bytes = fs::read(&path).unwrap();
+    let fim = fim_declarado_da_etiqueta(&bytes);
+    bytes[fim + 400..fim + 408].copy_from_slice(b"APETAGEX");
+    fs::write(&path, &bytes).unwrap();
+
+    let err = writer::write_tags(&conn, song.id, "Título", None, None, None, None)
+        .expect_err("uma etiqueta alheia na sobra não pode ser absorvida");
+    assert_eq!(
+        err.to_string(),
+        format!(
+            "não foi possível salvar em {}: {}",
+            song.file_path,
+            writer::ERRO_ESTRUTURA_DO_MP3
+        )
+    );
+    assert_eq!(
+        fs::read(&path).unwrap(),
+        bytes,
+        "a recusa não escreve nada, nem o campo de tamanho"
+    );
+}
+/// **O que acontece com a sobra, medido e escrito.**
+///
+/// Depois do conserto, a região passa a estar DENTRO do bloco declarado — e o
+/// bloco declarado é exatamente o que a biblioteca reescreve em toda gravação de
+/// etiqueta, em qualquer arquivo. Então a sobra não sobrevive à gravação.
+///
+/// Isso está registrado aqui, e não escondido, porque é a única coisa que o
+/// conserto muda no arquivo além do que a pessoa pediu. O que se afirma é o que
+/// foi medido: o áudio é o mesmo byte a byte, a etiqueta é a nova, e o arquivo
+/// fica MENOR — a etiqueta de 4.096 bytes vira a etiqueta enxuta que o lofty
+/// escreve (com o enchimento de 1.024 que ele usa por padrão), que é o que
+/// acontece com QUALQUER arquivo de etiqueta grande que se grave, com sobra ou
+/// sem ela.
+#[test]
+fn o_conserto_absorve_a_sobra_e_o_audio_e_o_unico_intocado() {
+    let (_dir, conn, song) = setup_da_sobra();
+    let path = PathBuf::from(&song.file_path);
+    let antes = fs::read(&path).unwrap();
+    let audio_antes = audio_da_fixture_com_sobra(&antes);
+
+    writer::write_tags(&conn, song.id, "T", None, None, None, None).unwrap();
+
+    let depois = fs::read(&path).unwrap();
+    let fim = fim_declarado_da_etiqueta(&depois);
+    assert_eq!(
+        &depois[fim..],
+        &audio_antes[..],
+        "o áudio é o mesmo, e agora começa exatamente onde a etiqueta termina"
+    );
+    assert_eq!(
+        depois.len() - fim,
+        16_508,
+        "o áudio continua tendo o tamanho que tinha"
+    );
+    assert!(
+        depois.len() < antes.len(),
+        "o arquivo encolhe: a etiqueta de 4.096 bytes e a sobra de 1.251 dão lugar \
+         à etiqueta nova ({} bytes) — o mesmo que acontece com qualquer etiqueta \
+         grande que se regrave",
+        fim
+    );
+}

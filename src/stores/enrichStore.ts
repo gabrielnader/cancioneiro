@@ -136,6 +136,20 @@ interface EnrichState {
    */
   gravadas: Record<number, Song>;
   /**
+   * V10.8 — o que o backend teve a CONTAR sobre uma gravação que deu certo, por
+   * música: hoje, a etiqueta do MP3 que precisou ser normalizada para o arquivo
+   * aceitar a gravação.
+   *
+   * Fica separado do `applyErrors` porque não é erro: a linha gravou, o áudio foi
+   * conferido, e não há nada a refazer. Pôr isto em `applyErrors` desabilitaria e
+   * apagaria justamente a linha que deu certo, e o cabeçalho do grupo diria que
+   * ela "não pôde ser gravada" — o contrário do que aconteceu (a #139 outra vez).
+   *
+   * Por `song_id`, e não por posição: o aviso descreve o ARQUIVO, e o arquivo é o
+   * mesmo nas duas linhas da mesma música.
+   */
+  avisosDaGravacao: Record<number, string>;
+  /**
    * Um invoke de varredura ainda não respondeu — inclusive DEPOIS de cancelar
    * (o backend só para na próxima música). Enquanto for true, disparar outra
    * varredura sobreporia as duas (M4).
@@ -237,6 +251,7 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
   applyErrors: {},
   aplicadas: [],
   gravadas: {},
+  avisosDaGravacao: {},
   scanInFlight: false,
 
   startScan: async (folderPrefix, transcricao = SEM_TRANSCRICAO) => {
@@ -264,6 +279,7 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
       applyErrors: {},
       aplicadas: [],
       gravadas: {},
+      avisosDaGravacao: {},
       scanInFlight: true,
     });
 
@@ -519,6 +535,7 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
       applyErrors: {},
       aplicadas: [],
       gravadas: {},
+      avisosDaGravacao: {},
     });
     // Cancelar de verdade: a guarda de corrida acima só descarta o RESULTADO;
     // sem isto a varredura seguia consultando o LRCLIB até o fim (M4) — e a
@@ -539,6 +556,7 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
 
   registrarAplicacao: (linhas, resultados) => {
     const gravadasAgora: Record<number, Song> = {};
+    const avisosAgora: Record<number, string> = {};
     set((s) => {
       // O mapa de erros é ATUALIZADO, não substituído: um erro de linha que não
       // foi retentada nesta rodada continua descrevendo o que aconteceu com
@@ -548,6 +566,9 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
       for (const r of resultados) {
         if (r.song !== null) {
           gravadasAgora[r.song_id] = r.song;
+          // V10.8 — o desfecho DIZ o que foi feito: a frase do backend chega
+          // pronta e é guardada como veio, para a linha a mostrar
+          if (r.aviso !== null) avisosAgora[r.song_id] = r.aviso;
           // gravou depois de falhar: o erro descrevia a tentativa anterior
           delete applyErrors[r.song_id];
         } else {
@@ -565,6 +586,10 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
         // fechamento que jogava fora a oferta de transcrição.
         aplicadas: [...s.aplicadas, ...novas],
         gravadas: { ...s.gravadas, ...gravadasAgora },
+        // ACUMULA, como o mapa de erros: um aviso de uma gravação anterior
+        // continua descrevendo o que aconteceu com aquele arquivo, e a linha
+        // dele continua na tela (aplicar não fecha mais a caixa)
+        avisosDaGravacao: { ...s.avisosDaGravacao, ...avisosAgora },
         applyErrors,
       };
     });
