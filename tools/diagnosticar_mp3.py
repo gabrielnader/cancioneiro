@@ -4,10 +4,17 @@
 Nasceu de um relato de campo: 7 músicas de uma pasta falharam todas com a
 mesma frase — "não foi possível ler este MP3 até o fim [...] o arquivo pode
 estar danificado, ou o disco onde ele está pode ter sido desconectado". Essa
-frase cobre OITO situações diferentes da biblioteca de etiquetas, e algumas
+frase cobria OITO situações diferentes da biblioteca de etiquetas, e algumas
 delas não têm nada a ver com arquivo danificado nem com disco. Quem lê não
 tem como saber qual aconteceu — e é justamente quem não tem a quem
 perguntar.
+
+A frase citada acima **não existe mais no produto** (V10.7): as oito situações
+foram separadas em duas famílias, com frases que dizem a verdade de cada uma —
+a estrutura do arquivo que a biblioteca não entende e o texto de etiqueta que
+não pôde ser decodificado —, e nenhuma delas fala de disco, porque o disco
+tem caminho próprio. O que este script continua fazendo é o que a mensagem
+não pode fazer sozinha: dizer QUAL das situações aconteceu neste arquivo.
 
 Este script não conserta nada e **não escreve em nenhum arquivo**: abre para
 leitura, mede, e imprime. É a mesma promessa do produto (a reprodução nunca
@@ -152,11 +159,13 @@ def descreve_a_sobra(dados: bytes, inicio: int, sync: int) -> None:
 
 
 def texto_das_etiquetas(caminho: Path) -> list[str]:
-    """Problemas de TEXTO nas etiquetas — a outra família da mesma frase.
+    """Problemas de TEXTO nas etiquetas — uma família inteira, sozinha.
 
-    `StringFromUtf8`, `StrFromUtf8` e `TextDecode` caem na mesma mensagem que
-    fala de arquivo danificado, e não são isso: são bytes de texto que não
-    correspondem à codificação declarada no quadro.
+    `StringFromUtf8`, `StrFromUtf8` e `TextDecode` caíam na mensagem que falava
+    de arquivo danificado, e não são isso: são bytes de texto que não
+    correspondem à codificação declarada no quadro. Desde a V10.7 elas têm frase
+    própria no produto (`writer::ERRO_TEXTO_DA_ETIQUETA`), que diz que o
+    problema é só do texto — o que este bloco confere arquivo por arquivo.
     """
     achados: list[str] = []
     try:

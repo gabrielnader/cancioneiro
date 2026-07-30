@@ -56,6 +56,7 @@ import {
   tituloDoGrupo,
   type EstadoDaContagem,
   type EstadoDoAcessorio,
+  type GrupoDaRevisao,
 } from "./curadoria";
 import { FONTE_TRANSCRICAO, type Folder, type Song } from "./types";
 
@@ -559,9 +560,45 @@ describe("grupoDaProposta — o corte é por risco, não por confiança", () => 
   // Uma linha com erro não é proposta: ela informa que a música foi tentada e
   // falhou. Se caísse no grupo dobrado, seria dobrada E pré-marcada.
   it("linha com erro nunca entra no grupo dobrado", () => {
-    expect(grupoDaProposta(proposta({ error: "sem conexão" }), null)).toBe("erros");
-    // erro devolvido pelo APPLY (não pela varredura) vale o mesmo
-    expect(grupoDaProposta(proposta(), "a música mudou")).toBe("erros");
+    expect(grupoDaProposta(proposta({ error: "sem conexão" }), null)).toBe(
+      "nao-consultadas",
+    );
+    expect(grupoDaProposta(proposta(), "a música mudou")).toBe("nao-gravadas");
+  });
+
+  /*
+    V10.7 — CONSULTA e GRAVAÇÃO são dois desfechos, e o cabeçalho de um afirmava
+    o outro. Relato de campo: 7 músicas com proposta e selo MÉDIA — consultadas
+    com sucesso, portanto — falharam ao GRAVAR, e a tela disse "7 músicas não
+    puderam ser consultadas". O que a pessoa faz é diferente em cada caso, e é
+    isso que separa os grupos.
+  */
+  it("a falha da varredura é de CONSULTA: não há proposta a aplicar", () => {
+    expect(grupoDaProposta(proposta({ error: "sem conexão" }), null)).toBe(
+      "nao-consultadas",
+    );
+  });
+
+  it("a falha do apply é de GRAVAÇÃO: a proposta existe, o arquivo recusou", () => {
+    expect(
+      grupoDaProposta(
+        proposta({ confidence: "media", lyrics: "uma letra achada" }),
+        "não foi possível salvar em /acervo/a.mp3: …",
+      ),
+    ).toBe("nao-gravadas");
+  });
+
+  /*
+    Os dois ao mesmo tempo: a linha que a varredura nem conseguiu consultar
+    continua sendo "não consultada", mesmo que OUTRA linha da mesma música tenha
+    falhado ao gravar (o `applyErrors` é por música, e `rowError` devolve o erro
+    da varredura primeiro). Dizer "não pôde ser gravada" de uma linha que não
+    tem nada para gravar seria trocar uma mentira por outra.
+  */
+  it("sem consulta não há gravação: a falha da varredura vence", () => {
+    expect(
+      grupoDaProposta(proposta({ error: "sem conexão" }), "sem conexão"),
+    ).toBe("nao-consultadas");
   });
 
   // A confiança continua existindo como INFORMAÇÃO na linha, mas não decide
@@ -577,17 +614,59 @@ describe("grupoDaProposta — o corte é por risco, não por confiança", () => 
 });
 
 describe("agruparPorRisco — a ordem de cima para baixo", () => {
-  it("a ordem é conflitos, letras, sem voz, nomes escritos, dobrado, erros, gravadas", () => {
+  it("a ordem é conflitos, letras, sem voz, nomes escritos, dobrado, os dois erros, gravadas", () => {
     expect(ORDEM_DOS_GRUPOS).toEqual([
       "conflitos",
       "letras",
       "sem-voz",
       "nomes-escritos",
       "preenchimentos",
-      "erros",
+      // V10.7 — a falha da GRAVAÇÃO vem antes da falha da CONSULTA: nela a
+      // pessoa acabou de clicar, e há o que fazer com o arquivo
+      "nao-gravadas",
+      "nao-consultadas",
       // V10.6 — fecha a lista: é o único grupo sem nada a decidir
       "gravadas",
     ]);
+  });
+
+  /*
+    A EXAUSTIVIDADE, e por que ela é uma tabela e não um `for`.
+
+    Omitir um grupo aqui não quebra teste nenhum por si: `agruparPorRisco`
+    percorre `ORDEM_DOS_GRUPOS`, então um grupo fora da ordem simplesmente
+    DESAPARECE da tela — com as linhas dele. O `satisfies` abaixo é o que faz o
+    TypeScript exigir uma entrada nova a cada grupo novo, e a comparação com a
+    ordem é o que impede que ele exista no tipo e não na tela.
+  */
+  const UMA_LINHA_DE_CADA_GRUPO = {
+    conflitos: () =>
+      grupoDaProposta(
+        proposta({ conflito: { titulo: "t", artista: "a", confianca: "alta" } }),
+        null,
+      ),
+    letras: () => grupoDaProposta(proposta({ lyrics: "ai" }), null),
+    "sem-voz": () => grupoDaProposta(proposta({ marcar_instrumental: true }), null),
+    "nomes-escritos": () =>
+      grupoDaProposta(proposta({ substitui_nome_escrito: true }), null),
+    preenchimentos: () => grupoDaProposta(proposta(), null),
+    "nao-gravadas": () => grupoDaProposta(proposta(), "o arquivo recusou"),
+    "nao-consultadas": () =>
+      grupoDaProposta(proposta({ error: "sem conexão" }), null),
+    gravadas: () => grupoDaProposta(proposta(), null, true),
+  } satisfies Record<GrupoDaRevisao, () => GrupoDaRevisao>;
+
+  it("todo grupo do tipo é alcançável, e a ordem lista todos eles", () => {
+    for (const [grupo, produzir] of Object.entries(UMA_LINHA_DE_CADA_GRUPO)) {
+      expect(produzir(), grupo).toBe(grupo);
+    }
+    expect([...ORDEM_DOS_GRUPOS].sort()).toEqual(
+      Object.keys(UMA_LINHA_DE_CADA_GRUPO).sort(),
+    );
+  });
+
+  it("nenhum grupo aparece duas vezes na ordem", () => {
+    expect(new Set(ORDEM_DOS_GRUPOS).size).toBe(ORDEM_DOS_GRUPOS.length);
   });
 
   /*
@@ -639,19 +718,21 @@ describe("agruparPorRisco — a ordem de cima para baixo", () => {
       proposta({ song_id: 5, lyrics: "oh" }),
       proposta({ song_id: 6, error: "sem conexão" }),
       proposta({ song_id: 7, marcar_instrumental: true }),
+      proposta({ song_id: 8, lyrics: "ah" }),
     ];
     expect(
-      agruparPorRisco(propostas, () => null).map((g) => [
-        g.grupo,
-        g.propostas.map((p) => p.song_id),
-      ]),
+      agruparPorRisco(propostas, (p) =>
+        // V10.7 — a 8 foi consultada, tem letra achada, e a GRAVAÇÃO recusou
+        p.song_id === 8 ? "não foi possível salvar em /acervo/h.mp3: …" : null,
+      ).map((g) => [g.grupo, g.propostas.map((p) => p.song_id)]),
     ).toEqual([
       ["conflitos", [4]],
       ["letras", [2, 5]],
       ["sem-voz", [7]],
       ["nomes-escritos", [3]],
       ["preenchimentos", [1]],
-      ["erros", [6]],
+      ["nao-gravadas", [8]],
+      ["nao-consultadas", [6]],
     ]);
   });
 
@@ -680,12 +761,31 @@ describe("os títulos dos grupos", () => {
     expect(tituloDoGrupo("nomes-escritos", 1)).toBe(
       "1 troca de nome que já estava escrito",
     );
-    expect(tituloDoGrupo("erros", 4)).toBe(
+    expect(tituloDoGrupo("nao-consultadas", 4)).toBe(
       "4 músicas não puderam ser consultadas — o motivo está em cada linha",
     );
-    expect(tituloDoGrupo("erros", 1)).toBe(
+    expect(tituloDoGrupo("nao-consultadas", 1)).toBe(
       "1 música não pôde ser consultada — o motivo está na linha dela",
     );
+  });
+
+  /*
+    V10.7 — o cabeçalho do grupo de GRAVAÇÃO não pode dizer "consultada".
+
+    Foi o defeito do relato: 7 músicas com proposta e selo MÉDIA — consultadas,
+    portanto — falharam ao gravar, e o cabeçalho afirmou o contrário do que
+    aconteceu. Ele diz "no arquivo" porque é o par exato do grupo das gravadas
+    ("gravada no arquivo"): as duas metades do mesmo clique, com o mesmo
+    vocabulário.
+  */
+  it("o grupo da gravação diz GRAVADA, e nunca 'consultada'", () => {
+    expect(tituloDoGrupo("nao-gravadas", 7)).toBe(
+      "7 músicas não puderam ser gravadas no arquivo — o motivo está em cada linha",
+    );
+    expect(tituloDoGrupo("nao-gravadas", 1)).toBe(
+      "1 música não pôde ser gravada no arquivo — o motivo está na linha dela",
+    );
+    expect(tituloDoGrupo("nao-gravadas", 7)).not.toContain("consultad");
   });
 
   it("nenhum título usa o vocabulário de confiança", () => {
@@ -693,6 +793,20 @@ describe("os títulos dos grupos", () => {
       const t = tituloDoGrupo(grupo, 3).toLowerCase();
       expect(t, t).not.toContain("confiança");
       expect(t, t).not.toContain("baixa");
+    }
+  });
+
+  /*
+    Dois grupos com o MESMO título são dois cabeçalhos que a pessoa não tem como
+    distinguir — e é o modo de falha exato desta rodada, com "erros" servindo a
+    duas coisas diferentes. Vale para o singular também: é o número mais comum
+    numa revisão pequena.
+  */
+  it("dois grupos nunca dizem a mesma coisa", () => {
+    for (const n of [1, 3]) {
+      const titulos = ORDEM_DOS_GRUPOS.map((g) => tituloDoGrupo(g, n));
+      expect(new Set(titulos).size, titulos.join(" | ")).toBe(titulos.length);
+      for (const t of titulos) expect(t.trim()).not.toBe("");
     }
   });
 });

@@ -370,43 +370,64 @@ export const SEM_RESULTADO_INSTRUMENTAL =
 // letra, arrumar nome pelo arquivo é a principal coisa que o app faz por este
 // repertório.
 
-/** Os grupos da revisão, do mais arriscado ao mais inócuo. */
-export type GrupoDaRevisao =
-  | "conflitos"
-  | "letras"
-  | "sem-voz"
-  | "nomes-escritos"
-  | "preenchimentos"
-  | "erros"
-  | "gravadas";
-
 /**
- * A ordem de cima para baixo. É a ordem do PRD V10, com dois acréscimos que
- * ele não tinha como prever:
+ * A ordem de cima para baixo, do mais arriscado ao mais inócuo — e ela **é** a
+ * lista dos grupos que existem (`GrupoDaRevisao` sai daqui).
+ *
+ * Ser a mesma coisa é de propósito, e é a V10.7 fechando um buraco de omissão:
+ * `agruparPorRisco` percorre esta lista para montar a tela, então um grupo que
+ * esteja no tipo e não aqui não aparece — ele e as linhas dele DESAPARECEM, sem
+ * quebrar teste nenhum. Derivando o tipo da ordem, esquecer de listar um grupo
+ * novo deixou de ser possível.
+ *
+ * É a ordem do PRD V10, com os acréscimos que ele não tinha como prever:
  *
  * - **sem-voz** ficou entre as letras e as trocas de nome. Não cabia em
  *   "letras encontradas" (não há letra) nem no grupo dobrado (a marca tira o
  *   arquivo da fila para sempre, e dobrada+pré-marcada ela seria gravada sem
  *   ninguém ver);
- * - **erros** vem perto do fim. Linha com erro não é proposta e não pode cair
- *   no grupo dobrado, que é pré-marcado — mas também não pode sumir: ela é a
- *   única informação de que aquela música foi tentada (DECISIONS #47);
+ * - **os dois grupos de falha** vêm perto do fim. Linha com falha não é
+ *   proposta e não pode cair no grupo dobrado, que é pré-marcado — mas também
+ *   não pode sumir: ela é a única informação de que aquela música foi tentada
+ *   (DECISIONS #47);
  * - **gravadas** fecha a lista (V10.6). Aplicar deixou de fechar a caixa, então
  *   as linhas gravadas continuam na tela — e elas são as ÚNICAS sem nada a
  *   decidir. Ficam no fim por isso, e num grupo próprio por dois motivos
  *   práticos: a frase do grupo dobrado diz "vão receber", que passa a ser
  *   mentira sobre uma linha já gravada, e a contagem de cada grupo volta a
  *   medir o que falta em vez do que já foi.
+ *
+ * # V10.7 — por que `nao-gravadas` vem ANTES de `nao-consultadas`
+ *
+ * As duas são falhas, e nenhuma delas é uma decisão a tomar; o que as ordena é
+ * o que a pessoa faz em seguida.
+ *
+ * - **`nao-gravadas`** é consequência direta do clique que ela ACABOU de dar. É
+ *   informação nova, que ela está procurando na tela naquele segundo — e é a
+ *   única cujo motivo aponta para algo do computador dela (arquivo aberto em
+ *   outro programa, disco cheio, pasta sincronizada), que ela pode conferir e
+ *   refazer a busca depois. Fica em cima das duas por isso.
+ * - **`nao-consultadas`** é só registro: o programa não descobriu nada sobre
+ *   aquela música, não há proposta, e repetir o clique não muda nada — o que
+ *   pode mudar é a internet, mais tarde. Ela existe para a música não sumir em
+ *   silêncio (DECISIONS #47), e é o penúltimo lugar da lista.
+ *
+ * As duas continuam DEPOIS do grupo dobrado: o alto da lista é para o que um
+ * clique distraído estraga, e nestas duas não há clique nenhum.
  */
-export const ORDEM_DOS_GRUPOS: GrupoDaRevisao[] = [
+export const ORDEM_DOS_GRUPOS = [
   "conflitos",
   "letras",
   "sem-voz",
   "nomes-escritos",
   "preenchimentos",
-  "erros",
+  "nao-gravadas",
+  "nao-consultadas",
   "gravadas",
-];
+] as const;
+
+/** Um grupo da revisão. A lista — e a ordem — é a `ORDEM_DOS_GRUPOS`. */
+export type GrupoDaRevisao = (typeof ORDEM_DOS_GRUPOS)[number];
 
 /**
  * Em que grupo esta linha entra. `erro` é o erro EFETIVO da linha — o da
@@ -416,6 +437,18 @@ export const ORDEM_DOS_GRUPOS: GrupoDaRevisao[] = [
  * A confiança não entra nesta decisão em momento nenhum. Ela continua na linha
  * como informação (a mesma ALTA vinda do LRCLIB e de um palpite de nome de
  * arquivo não se decidem igual), mas não organiza mais nada.
+ *
+ * **V10.7 — as duas falhas deixaram de ser uma só.** Elas caíam juntas em
+ * `"erros"`, e o cabeçalho daquele grupo dizia "não puderam ser consultadas".
+ * Relato de campo: 7 músicas com proposta e selo MÉDIA — consultadas com
+ * sucesso, portanto — falharam ao GRAVAR, e a tela afirmou o oposto do que
+ * aconteceu, para quem não tem a quem perguntar. O que separa os dois grupos é
+ * o que sobra para a pessoa fazer:
+ *
+ * - **consulta**: o programa não descobriu nada sobre a música. Não há proposta
+ *   e não há o que aplicar;
+ * - **gravação**: o programa descobriu, a pessoa mandou gravar, e o arquivo
+ *   recusou. A sugestão continua ali, e o que falhou foi escrever.
  */
 export function grupoDaProposta(
   p: EnrichProposal,
@@ -427,7 +460,16 @@ export function grupoDaProposta(
   gravada = false,
 ): GrupoDaRevisao {
   if (gravada) return "gravadas";
-  if (erro !== null || p.error !== null) return "erros";
+  /*
+    A ORDEM destes dois testes é a do `rowError` de quem chama, e não um
+    detalhe: quando a mesma música tem uma linha que a varredura não conseguiu
+    consultar e outra que falhou ao gravar, o `applyErrors` (que é por MÚSICA)
+    alcança as duas. A linha sem proposta continua sendo "não consultada" —
+    dizer que ela não pôde ser GRAVADA seria prometer que havia algo para
+    gravar.
+  */
+  if (p.error !== null) return "nao-consultadas";
+  if (erro !== null) return "nao-gravadas";
   if (p.conflito !== null) return "conflitos";
   if (p.lyrics !== null) return "letras";
   if (p.marcar_instrumental) return "sem-voz";
@@ -489,7 +531,23 @@ export function tituloDoGrupo(grupo: GrupoDaRevisao, n: number): string {
       return um
         ? "1 música sem título ou artista"
         : `${n} músicas sem título ou artista`;
-    case "erros":
+    case "nao-gravadas":
+      /*
+        V10.7 — este cabeçalho dizia "não puderam ser CONSULTADAS", e era
+        mentira: a consulta funcionou (a linha tem proposta e selo de
+        confiança), a pessoa mandou gravar, e o arquivo recusou.
+
+        "no arquivo" é o par exato do grupo das gravadas ("1 música gravada no
+        arquivo"): são as duas metades do mesmo clique, e usar o mesmo
+        vocabulário nas duas é o que deixa a tela legível de relance. O motivo
+        fica em cada linha porque ele é por ARQUIVO — sete músicas podem falhar
+        por sete razões diferentes, e um motivo só no cabeçalho seria um palpite
+        sobre seis delas.
+      */
+      return um
+        ? "1 música não pôde ser gravada no arquivo — o motivo está na linha dela"
+        : `${n} músicas não puderam ser gravadas no arquivo — o motivo está em cada linha`;
+    case "nao-consultadas":
       return um
         ? "1 música não pôde ser consultada — o motivo está na linha dela"
         : `${n} músicas não puderam ser consultadas — o motivo está em cada linha`;
@@ -497,6 +555,16 @@ export function tituloDoGrupo(grupo: GrupoDaRevisao, n: number): string {
       // V10.6 — o que já foi para o disco nesta revisão. Diz o FATO, e não uma
       // tarefa: não há nada a fazer com estas linhas.
       return um ? "1 música gravada no arquivo" : `${n} músicas gravadas no arquivo`;
+    default: {
+      /*
+        Grupo novo sem título é um cabeçalho VAZIO na tela — e, antes desta
+        linha, `undefined` silencioso: sem `noImplicitReturns`, o TypeScript não
+        acusava o `case` que faltava, e nenhum teste olhava um grupo que ninguém
+        tinha lembrado de acrescentar. Aqui ele passa a não compilar.
+      */
+      const naoTratado: never = grupo;
+      return naoTratado;
+    }
   }
 }
 

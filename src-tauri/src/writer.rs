@@ -250,9 +250,43 @@ pub const ERRO_SEM_PERMISSAO: &str =
      ou protegida por antivírus, pause e tente de novo";
 pub const ERRO_ARQUIVO_EM_USO: &str =
     "o arquivo está aberto em outro programa — feche esse programa e salve de novo";
-pub const ERRO_ARQUIVO_ILEGIVEL: &str =
-    "não foi possível ler este MP3 até o fim, e por isso nada foi gravado — o arquivo pode estar \
-     danificado, ou o disco onde ele está pode ter sido desconectado";
+/// O arquivo saiu de baixo do programa entre a conferência e a abertura: pen
+/// drive arrancado, compartilhamento de rede que caiu, HD externo que dormiu.
+///
+/// **É a ÚNICA frase que fala do aparelho, e é de propósito** (V10.7). Disco
+/// desconectado e leitura interrompida produzem `std::io::Error`, e é só aqui
+/// que conferir o cabo responde a alguma coisa. A frase antiga dizia isso para
+/// oito variantes de PARSE do lofty, em que o arquivo já tinha sido lido com
+/// sucesso — mandava mexer no que estava certo.
+pub const ERRO_ARQUIVO_SUMIU: &str =
+    "o arquivo não está mais onde estava, e nada foi gravado — se ele fica num HD externo ou num \
+     pen drive, confira se o aparelho continua ligado e conectado";
+/// A ESTRUTURA do arquivo: o lofty abriu, leu, e não entendeu o que achou
+/// (`UnknownFormat`, `FileDecoding`, `SizeMismatch`, `TooMuchData`, `FakeTag`).
+///
+/// A frase não chuta a causa. A hipótese mais provável — um arquivo que na
+/// verdade nunca foi MPEG, com nome de `.mp3`, que TOCA no aplicativo porque
+/// quem decodifica o áudio é o WebView — é justamente a que não se afirma sem
+/// medir: o `tools/diagnosticar_mp3.py` existe para separá-la das outras, e
+/// acusar o arquivo errado é a DECISIONS #97.
+///
+/// E ela não promete que a música continua tocando: com o arquivo realmente
+/// corrompido, pode não continuar. O que se afirma é só o que se sabe — que
+/// **nós** não mexemos em nada.
+pub const ERRO_ESTRUTURA_DO_MP3: &str =
+    "o programa não entendeu como este MP3 está montado por dentro, e nada foi alterado no \
+     arquivo — não há como gravar etiquetas nele, e não há nada que você possa fazer por aqui";
+/// O TEXTO de uma etiqueta: os bytes não correspondem à codificação que o
+/// próprio quadro declara (`StringFromUtf8`, `StrFromUtf8`, `TextDecode`).
+///
+/// **Isto não é arquivo danificado, e chamar de danificado é acusação falsa**
+/// (V10.7): o áudio não está em questão, e o arquivo pode estar perfeito. O que
+/// existe é um pedaço de texto — o comentário de alguém, um título gravado por
+/// um programa antigo — que não dá para reler do jeito que foi escrito.
+pub const ERRO_TEXTO_DA_ETIQUETA: &str =
+    "o texto de uma etiqueta deste MP3 está escrito de um jeito que o programa não conseguiu ler, \
+     e nada foi alterado no arquivo — o problema é só nesse texto, e não há nada que você possa \
+     fazer por aqui";
 pub const ERRO_ETIQUETAS_FORA_DO_PADRAO: &str =
     "as etiquetas deste MP3 estão num formato que o programa não conseguiu regravar, e o arquivo \
      não foi alterado";
@@ -304,7 +338,7 @@ fn frase_de_io(e: &std::io::Error) -> &'static str {
         std::io::ErrorKind::PermissionDenied => ERRO_SEM_PERMISSAO,
         // o arquivo sumiu entre a conferência e a abertura (pen drive
         // arrancado, compartilhamento de rede que caiu)
-        std::io::ErrorKind::NotFound => ERRO_ARQUIVO_ILEGIVEL,
+        std::io::ErrorKind::NotFound => ERRO_ARQUIVO_SUMIU,
         _ => ERRO_GRAVACAO,
     }
 }
@@ -319,15 +353,50 @@ fn frase_de_io(e: &std::io::Error) -> &'static str {
 fn frase_de_lofty(e: &LoftyError) -> &'static str {
     match e.kind() {
         ErrorKind::Io(io) => frase_de_io(io),
-        // o arquivo não é (mais) um MP3 legível
+        /*
+          V10.7 — A ESTRUTURA do arquivo, e não "o arquivo está danificado ou o
+          disco foi desconectado".
+
+          As cinco acontecem DEPOIS de o arquivo ter sido aberto e lido com
+          sucesso: são falhas de PARSE, e o disco nunca está em questão nelas —
+          quando ele está, o erro é um `io::Error` e o braço de cima o pega.
+          Mandar conferir o cabo do HD externo por um problema que não é do cabo
+          faz a pessoa mexer no que está certo, e num produto sem suporte é a
+          pior mensagem possível.
+
+          O que foi MEDIDO na fonte do lofty 0.22.4 sobre estas cinco:
+          `UnknownFormat` é o arquivo cujo formato não foi reconhecido (o caso do
+          `.mp3` que na verdade é m4a — ele TOCA, porque quem decodifica o áudio
+          é o WebView, e só a gravação de etiqueta exige fluxo MPEG);
+          `FileDecoding`, `SizeMismatch` e `FakeTag` são um tamanho ou um bloco
+          declarado que não corresponde ao que está no arquivo; `TooMuchData`, no
+          caminho do MP3, é um tamanho declarado absurdo na leitura.
+
+          Ressalva registrada do `TooMuchData`: no lofty ele também pode sair da
+          ESCRITA, se a etiqueta a gravar passar de 256 MB (o teto do campo
+          synchsafe) ou se um quadro de imagem alheio passar do limite de
+          alocação. Nenhum dos dois é alcançável neste acervo — a etiqueta que
+          gravamos tem uma letra de música dentro —, e se um dia for, a frase
+          continua não acusando nada que a pessoa tenha feito.
+        */
         ErrorKind::UnknownFormat
         | ErrorKind::FileDecoding(_)
         | ErrorKind::SizeMismatch
         | ErrorKind::TooMuchData
-        | ErrorKind::FakeTag
-        | ErrorKind::StringFromUtf8(_)
+        | ErrorKind::FakeTag => ERRO_ESTRUTURA_DO_MP3,
+        /*
+          V10.7 — o TEXTO de uma etiqueta, que não é arquivo danificado.
+
+          As três são bytes de texto que não correspondem à codificação declarada
+          no próprio quadro: um comentário gravado em Latin-1 e anunciado como
+          UTF-8, um título de um programa antigo, um UTF-16 sem a marca de ordem
+          dos bytes. O áudio não está envolvido e o arquivo pode estar perfeito —
+          dizer "pode estar danificado" aqui é acusar o arquivo errado
+          (DECISIONS #97), e quem lê não tem a quem perguntar se é verdade.
+        */
+        ErrorKind::StringFromUtf8(_)
         | ErrorKind::StrFromUtf8(_)
-        | ErrorKind::TextDecode(_) => ERRO_ARQUIVO_ILEGIVEL,
+        | ErrorKind::TextDecode(_) => ERRO_TEXTO_DA_ETIQUETA,
         // o áudio está bom; são as etiquetas que o lofty recusa a regravar
         ErrorKind::Id3v2(_)
         | ErrorKind::FileEncoding(_)
@@ -663,10 +732,24 @@ mod tests {
     /// Nenhuma falha do lofty pode chegar à tela em inglês: o desfecho padrão
     /// é uma frase nossa. `ErrorKind` é `#[non_exhaustive]`, então esta é a
     /// garantia que sobrevive à próxima versão da biblioteca.
+    ///
+    /// **V10.7 — e a tabela passou a ser COMPLETA**, variante por variante. Oito
+    /// delas caíam na mesma frase, que falava de arquivo danificado e de disco
+    /// desconectado; nenhuma das oito tem a ver com disco, e três nem com
+    /// arquivo danificado. Uma tabela que só visita duas variantes é a
+    /// DECISIONS #113: ela certifica o caso fácil e cala sobre o resto.
     #[test]
     fn toda_falha_do_lofty_vira_frase_em_portugues() {
         use lofty::error::{FileDecodingError, Id3v2Error, Id3v2ErrorKind};
         use lofty::file::FileType;
+
+        /// Dois bytes que não são UTF-8 — o começo de um texto de etiqueta
+        /// gravado em Latin-1 e anunciado como UTF-8. Montados em tempo de
+        /// execução de propósito: sobre um literal, o próprio compilador avisa
+        /// que a conversão sempre falha, e aviso é o que esta suíte não tem.
+        fn bytes_invalidos() -> Vec<u8> {
+            vec![0xff, 0xfe]
+        }
 
         let casos: Vec<(LoftyError, &str)> = vec![
             (
@@ -674,13 +757,40 @@ mod tests {
                 LoftyError::from(Id3v2Error::new(Id3v2ErrorKind::InvalidLanguage([0, 0, 0]))),
                 ERRO_ETIQUETAS_FORA_DO_PADRAO,
             ),
+            // A ESTRUTURA do arquivo: o que a biblioteca não conseguiu ler do
+            // jeito que está montado. O arquivo foi ABERTO com sucesso nos
+            // cinco casos — não há disco em questão em nenhum deles.
             (
                 LoftyError::from(FileDecodingError::new(FileType::Mpeg, "qualquer coisa")),
-                ERRO_ARQUIVO_ILEGIVEL,
+                ERRO_ESTRUTURA_DO_MP3,
             ),
             (
                 LoftyError::new(ErrorKind::UnknownFormat),
-                ERRO_ARQUIVO_ILEGIVEL,
+                ERRO_ESTRUTURA_DO_MP3,
+            ),
+            (
+                LoftyError::new(ErrorKind::SizeMismatch),
+                ERRO_ESTRUTURA_DO_MP3,
+            ),
+            (
+                LoftyError::new(ErrorKind::TooMuchData),
+                ERRO_ESTRUTURA_DO_MP3,
+            ),
+            (LoftyError::new(ErrorKind::FakeTag), ERRO_ESTRUTURA_DO_MP3),
+            // O TEXTO de uma etiqueta: bytes que não correspondem à codificação
+            // que o próprio quadro declara. O arquivo pode estar perfeito, e
+            // chamá-lo de danificado é acusação falsa (DECISIONS #97).
+            (
+                LoftyError::from(String::from_utf8(bytes_invalidos()).unwrap_err()),
+                ERRO_TEXTO_DA_ETIQUETA,
+            ),
+            (
+                LoftyError::from(std::str::from_utf8(&bytes_invalidos()).unwrap_err()),
+                ERRO_TEXTO_DA_ETIQUETA,
+            ),
+            (
+                LoftyError::new(ErrorKind::TextDecode("expected a UTF-16 BOM")),
+                ERRO_TEXTO_DA_ETIQUETA,
             ),
             (
                 LoftyError::from(std::io::Error::from(std::io::ErrorKind::PermissionDenied)),
@@ -688,7 +798,7 @@ mod tests {
             ),
             (
                 LoftyError::from(std::io::Error::from(std::io::ErrorKind::NotFound)),
-                ERRO_ARQUIVO_ILEGIVEL,
+                ERRO_ARQUIVO_SUMIU,
             ),
             (
                 // sem tradução prevista: cai no desfecho padrão, em pt-BR
@@ -705,6 +815,86 @@ mod tests {
                 erro.to_string(),
                 "a frase não pode ser o repasse do texto da biblioteca"
             );
+        }
+    }
+
+    /// V10.7 — **a falha de PARSE não pode acusar o disco.**
+    ///
+    /// A frase antiga mandava conferir se "o disco onde ele está pode ter sido
+    /// desconectado" para oito variantes que só acontecem depois de o arquivo
+    /// ter sido lido com sucesso. Num produto sem suporte, essa é a pior
+    /// mensagem possível: ela faz a pessoa mexer no que está certo — desligar e
+    /// religar o HD externo por um problema que não é do cabo.
+    ///
+    /// Disco desconectado e leitura interrompida por I/O produzem
+    /// `std::io::Error`, que tem caminho próprio (`frase_de_io`), e é lá que
+    /// esse vocabulário mora.
+    #[test]
+    fn a_falha_de_parse_nao_acusa_o_disco_nem_manda_mexer_no_aparelho() {
+        let de_parse = [
+            ERRO_ESTRUTURA_DO_MP3,
+            ERRO_TEXTO_DA_ETIQUETA,
+            ERRO_ETIQUETAS_FORA_DO_PADRAO,
+            ERRO_ANOTACOES_INDISTINGUIVEIS,
+        ];
+        for frase in de_parse {
+            for palavra in ["disco", "desconect", "cabo", "pen drive", "conectad"] {
+                assert!(
+                    !frase.contains(palavra),
+                    "falha de parse não pode falar de {palavra:?}: {frase}"
+                );
+            }
+            // e as quatro acontecem ANTES de o arquivo ser tocado: dizer isso é
+            // a única coisa que responde ao medo de quem lê ("perdi a música?")
+            assert!(
+                frase.contains("não foi alterado") || frase.contains("nada foi alterado"),
+                "toda recusa de parse precisa dizer que o arquivo ficou intacto: {frase}"
+            );
+        }
+    }
+
+    /// O aparelho só é citado onde ele está em questão: o arquivo que saiu de
+    /// baixo do programa entre a conferência e a abertura (pen drive arrancado,
+    /// compartilhamento de rede que caiu) é um `io::Error` de `NotFound`.
+    #[test]
+    fn o_aparelho_desconectado_e_do_caminho_de_io_e_so_dele() {
+        let sumiu = std::io::Error::from(std::io::ErrorKind::NotFound);
+        assert_eq!(frase_de_io(&sumiu), ERRO_ARQUIVO_SUMIU);
+        assert!(
+            ERRO_ARQUIVO_SUMIU.contains("conectado"),
+            "é aqui que conferir o aparelho faz sentido: {ERRO_ARQUIVO_SUMIU}"
+        );
+    }
+
+    /// **Duas famílias com a MESMA frase são uma família só na tela** — e é
+    /// exatamente assim que as oito variantes viraram uma. Este teste é o que
+    /// faz a próxima fusão exigir uma justificativa em vez de acontecer por
+    /// distração, e a régua da DECISIONS #100 vale para as frases do backend
+    /// como para as da tela: elas SÃO a tela.
+    #[test]
+    fn cada_familia_tem_a_sua_frase_e_ela_cabe_na_regua() {
+        let todas = [
+            ERRO_DISCO_CHEIO,
+            ERRO_SEM_PERMISSAO,
+            ERRO_ARQUIVO_EM_USO,
+            ERRO_ARQUIVO_SUMIU,
+            ERRO_ESTRUTURA_DO_MP3,
+            ERRO_TEXTO_DA_ETIQUETA,
+            ERRO_ETIQUETAS_FORA_DO_PADRAO,
+            ERRO_ANOTACOES_INDISTINGUIVEIS,
+            ERRO_LISTA_DESATUALIZADA,
+            ERRO_GRAVACAO,
+        ];
+        let distintas: HashSet<&str> = todas.iter().copied().collect();
+        assert_eq!(
+            distintas.len(),
+            todas.len(),
+            "duas famílias diferentes não podem dizer a mesma coisa"
+        );
+        for frase in todas {
+            let n = frase.chars().count();
+            assert!(n <= 210, "{n} caracteres, o teto é 210: {frase}");
+            assert!(!frase.is_empty());
         }
     }
 
@@ -730,7 +920,7 @@ mod tests {
     #[test]
     fn a_mensagem_cita_o_arquivo() {
         let caminho = "/Users/alguem/Downloads/musicas/Humor/Apologia ao jumento.mp3";
-        let e = erro_de_gravacao(caminho, ERRO_ARQUIVO_ILEGIVEL);
+        let e = erro_de_gravacao(caminho, ERRO_ESTRUTURA_DO_MP3);
         assert!(e.to_string().contains(caminho));
         assert!(e.to_string().starts_with("não foi possível salvar em "));
     }

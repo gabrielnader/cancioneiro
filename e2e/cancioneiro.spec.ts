@@ -981,6 +981,63 @@ test.describe("V5 — Completar dados em lote (F13)", () => {
     expect(errors).toEqual([]);
   });
 
+  /*
+    V10.7 — o cabeçalho do grupo de falhas dizia o CONTRÁRIO do que aconteceu.
+
+    Relato de campo: 7 músicas falharam ao GRAVAR — todas com proposta e selo
+    MÉDIA na tela, portanto consultadas com sucesso — e o cabeçalho anunciou
+    "7 músicas não puderam ser consultadas". Num produto sem ninguém a quem
+    perguntar, o cabeçalho é a explicação inteira.
+
+    Aqui a varredura acha as duas propostas, e o arquivo de uma delas sai do
+    lugar ANTES do clique (pen drive arrancado, pasta sincronizada com a nuvem
+    mexendo no arquivo): a consulta funcionou, a gravação é que foi recusada. A
+    tela fica com as duas metades do mesmo clique, no mesmo vocabulário.
+  */
+  test("gravação recusada: o cabeçalho fala de gravação, e nunca de consulta", async ({
+    page,
+  }) => {
+    await resetApp(page);
+    await addMockFolder(page);
+    await dispararCuradoria(page);
+
+    const dialog = page.getByRole("dialog", { name: "Completar dados" });
+    await expect(dialog.getByText("2 propostas para conferir")).toBeVisible();
+
+    // o arquivo sai do lugar DEPOIS da varredura: a proposta continua na tela
+    await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__CANCIONEIRO_MOCK__._removeFileFromDisk(
+        "/musicas/mock/sem_letra.mp3",
+      );
+    });
+
+    // a linha da letra (MÉDIA, nunca pré-marcada) mais o grupo dobrado, que
+    // chega marcado: uma grava e a outra é recusada
+    await dialog
+      .getByRole("checkbox", { name: "Aplicar proposta: Instrumental Sem Letra" })
+      .check();
+    await dialog
+      .getByRole("button", { name: "Aplicar selecionadas (2)" })
+      .click();
+
+    await expect(
+      dialog.getByRole("heading", {
+        level: 3,
+        name: "1 música não pôde ser gravada no arquivo — o motivo está na linha dela",
+      }),
+    ).toBeVisible();
+    await expect(dialog.getByText(/não pôde ser consultada/)).toHaveCount(0);
+    // o motivo é por ARQUIVO, e mora na linha
+    await expect(
+      dialog.getByText("arquivo não encontrado: /musicas/mock/sem_letra.mp3"),
+    ).toBeVisible();
+    // e a outra metade do clique, com o mesmo vocabulário
+    await expect(
+      dialog.getByRole("heading", { level: 3, name: "1 música gravada no arquivo" }),
+    ).toBeVisible();
+  });
+
   test("progresso determinado, segundo plano e reabrir pelo indicador", async ({
     page,
   }) => {

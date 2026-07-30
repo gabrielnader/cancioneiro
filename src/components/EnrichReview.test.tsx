@@ -677,6 +677,20 @@ describe("EnrichReview (V5 — F13)", () => {
     expect(
       screen.getByText("arquivo não encontrado: /acervo/2.mp3"),
     ).toBeInTheDocument();
+    /*
+      V10.7 — e o cabeçalho dela fala de GRAVAÇÃO. A linha foi consultada com
+      sucesso (é a proposta que está ali); o cabeçalho antigo dizia "não pôde ser
+      consultada", que é o oposto do que aconteceu.
+    */
+    expect(
+      screen.getByRole("heading", {
+        level: 3,
+        name: "1 música não pôde ser gravada no arquivo — o motivo está na linha dela",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/não pôde ser consultada/),
+    ).not.toBeInTheDocument();
     expect(
       screen.queryByRole("checkbox", { name: /faixa 1/ }),
     ).not.toBeInTheDocument();
@@ -749,6 +763,16 @@ describe("EnrichReview (V5 — F13)", () => {
     expect(
       screen.getByText("arquivo não encontrado: /acervo/2.mp3"),
     ).toBeInTheDocument();
+    // V10.7 — as duas falharam ao GRAVAR, e o cabeçalho diz isso
+    expect(
+      screen.getByRole("heading", {
+        level: 3,
+        name: "2 músicas não puderam ser gravadas no arquivo — o motivo está em cada linha",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/não puderam ser consultadas/),
+    ).not.toBeInTheDocument();
     // linhas com erro: desmarcadas e desabilitadas (mesmo estilo das com error)
     const cb1 = screen.getByRole("checkbox", { name: /faixa 1/ });
     const cb2 = screen.getByRole("checkbox", { name: /faixa 2/ });
@@ -1611,6 +1635,35 @@ describe("EnrichReview (V5 — F13)", () => {
     it("grupo que não tem linha não vira cabeçalho vazio", () => {
       renderReview([VAZIO]);
       expect(gruposNaTela()).toHaveLength(1);
+    });
+
+    /*
+      V10.7 — as duas falhas na MESMA tela, cada uma com o seu cabeçalho.
+
+      A que falhou ao GRAVAR vem primeiro: é consequência do clique que a pessoa
+      acabou de dar, e é a única cujo motivo aponta para algo que ela pode
+      conferir no computador dela. A que não pôde ser CONSULTADA é registro de
+      que a música foi tentada (DECISIONS #47) — não há o que aplicar nela.
+    */
+    it("a falha da gravação e a da consulta são dois grupos, e a da gravação vem antes", () => {
+      useEnrichStore.setState({
+        status: "review",
+        overlayOpen: true,
+        proposals: [COM_ERRO, VAZIO, COM_LETRA],
+        // a linha da letra foi consultada com sucesso e recusada na gravação
+        applyErrors: { [COM_LETRA.song_id]: "o arquivo recusou" },
+        aplicadas: [],
+        gravadas: {},
+      });
+      render(<EnrichReview />);
+      const grupos = gruposNaTela();
+      expect(grupos[0]).toContain("sem título ou artista");
+      expect(grupos[1]).toBe(
+        "1 música não pôde ser gravada no arquivo — o motivo está na linha dela",
+      );
+      expect(grupos[2]).toBe(
+        "1 música não pôde ser consultada — o motivo está na linha dela",
+      );
     });
 
     // O grupo dobrado é a resposta ao "não deu vontade de ler": 72 linhas

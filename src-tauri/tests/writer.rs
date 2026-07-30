@@ -1239,31 +1239,45 @@ fn write_tags_recusa_em_vez_de_fundir_duas_anotacoes_no_conserto() {
 // fazer, e DE QUAL MÚSICA se trata (o caminho do arquivo fica).
 // ---------------------------------------------------------------------------
 
-/// MP3 ilegível: a mensagem é pt-BR inteira, cita o arquivo e não repassa o
-/// texto da biblioteca.
+/// Arquivo que o lofty não entende: a mensagem é pt-BR inteira, cita o arquivo
+/// e não repassa o texto da biblioteca.
+///
+/// **V10.7 — e ela não fala mais de disco desconectado.** O arquivo está aqui,
+/// foi aberto e foi lido; o que falhou foi entender o que há dentro dele. A
+/// frase antiga mandava conferir o cabo do HD externo neste caminho, que é
+/// mexer no que está certo — e o disco, quando ele é o problema, chega como
+/// `io::Error` e tem frase própria (`ERRO_ARQUIVO_SUMIU`).
 #[test]
-fn write_tags_explica_em_portugues_um_mp3_ilegivel() {
+fn write_tags_explica_em_portugues_um_mp3_que_nao_da_para_ler() {
     let (_dir, conn, _folder_id) = setup();
     let song = song_by_suffix(&conn, "sem_letra.mp3");
-    // o arquivo continua existindo e com o mesmo nome — o conteúdo é que não
-    // é mais um MP3 (disco com setor ruim, cópia interrompida, HD que dormiu)
+    // o arquivo continua existindo e com o mesmo nome — o conteúdo é que não é
+    // um MP3 (cópia interrompida, ou um arquivo de outro formato com nome de
+    // .mp3, que TOCA no aplicativo e só a gravação de etiqueta recusa)
     copy_fixture("corrompido.mp3", Path::new(&song.file_path));
 
     let err = writer::write_tags(&conn, song.id, "Título", None, None, None, None)
-        .expect_err("arquivo ilegível não pode ser gravado");
+        .expect_err("arquivo que o lofty não entende não pode ser gravado");
 
     assert_eq!(
         err.to_string(),
         format!(
             "não foi possível salvar em {}: {}",
             song.file_path,
-            writer::ERRO_ARQUIVO_ILEGIVEL
+            writer::ERRO_ESTRUTURA_DO_MP3
         )
     );
     assert!(
         err.to_string().contains(&song.file_path),
         "sem o caminho, a pessoa não sabe de qual música a mensagem fala"
     );
+    // e a mensagem inteira não manda ninguém mexer no HD externo
+    for palavra in ["disco", "desconect", "cabo"] {
+        assert!(
+            !err.to_string().contains(palavra),
+            "o arquivo foi lido com sucesso: nada aqui é do aparelho ({palavra})"
+        );
+    }
 }
 
 // Falta de permissão, disco cheio e as demais falhas de sistema são traduzidas

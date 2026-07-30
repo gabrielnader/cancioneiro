@@ -1582,3 +1582,150 @@ opção mais simples que passa nos Acceptance Checks do PRD.
     **(d) A `razao_desta_maquina` continua sem consumidor no frontend.** A #112
     a deixou informativa de propósito, e a porta nova não mudou isso: quem diz à
     tela o que ela pode afirmar continua sendo o booleano.
+
+## V10.7 — as duas mensagens que diziam o contrário do que aconteceu (teste em campo da v0.10.3)
+
+139. **O cabeçalho anunciou "7 músicas não puderam ser CONSULTADAS" sobre 7
+    músicas que foram consultadas com sucesso.**
+    Relato de campo: o dono rodou a varredura, mandou gravar as letras, e 7
+    músicas falharam. Cada linha trazia o motivo da GRAVAÇÃO, e o cabeçalho do
+    grupo dizia *"7 músicas não puderam ser consultadas — o motivo está em cada
+    linha"*. As sete tinham proposta e selo MÉDIA na tela: a consulta funcionou
+    perfeitamente, e foi a gravação que caiu.
+    A causa era um grupo só (`"erros"`) para dois desfechos: o `grupoDaProposta`
+    devolvia `"erros"` tanto para o erro que vem da VARREDURA (`p.error`) quanto
+    para o que vem do `applyErrors`, e o título daquele grupo tinha de escolher
+    uma das duas verdades. Escolheu a errada para o caso que apareceu em campo —
+    e num produto sem suporte o cabeçalho é a explicação inteira.
+    **O que separa os dois não é a origem do erro: é o que sobra para a pessoa
+    fazer.** Falha de CONSULTA quer dizer que o programa não descobriu nada
+    sobre a música, e não há o que aplicar. Falha de GRAVAÇÃO quer dizer que o
+    programa descobriu, a pessoa mandou gravar, e o arquivo recusou — a sugestão
+    continua ali, e o que falhou foi escrever. São `"nao-consultadas"` e
+    `"nao-gravadas"`, com título próprio cada um:
+    *"1 música não pôde ser gravada no arquivo — o motivo está na linha dela"*.
+    O "no arquivo" é o par exato do grupo das gravadas ("1 música gravada no
+    arquivo"): são as duas metades do mesmo clique, e o mesmo vocabulário nas
+    duas é o que deixa a tela legível de relance. **O motivo continua por
+    LINHA** porque ele é por arquivo — sete músicas podem falhar por sete razões
+    diferentes, e um motivo só no cabeçalho seria um palpite sobre seis delas.
+140. **`nao-gravadas` vem ANTES de `nao-consultadas`, e as duas continuam
+    depois do grupo dobrado.**
+    O alto da lista é para o que um clique distraído estraga (a #79 e a régua da
+    V10), e em nenhuma das duas há clique a dar. O que as ordena entre si é a
+    urgência do que a pessoa faz em seguida:
+    - `nao-gravadas` é consequência DIRETA do clique que ela acabou de dar. É a
+      informação nova da tela naquele segundo, e é a única cujo motivo aponta
+      para algo do computador dela — arquivo aberto em outro programa, disco
+      cheio, pasta sincronizada com a nuvem —, que ela pode conferir e refazer a
+      busca depois;
+    - `nao-consultadas` é registro: repetir o clique não muda nada, porque não
+      há proposta nenhuma naquela linha. O que pode mudar é a internet, mais
+      tarde. Ela existe para a música não sumir em silêncio (#47), e fica no
+      penúltimo lugar — antes só das gravadas, que são as únicas sem nada a
+      decidir (#135).
+141. **A ordem passou a SER o tipo, porque a omissão não quebrava teste
+    nenhum.**
+    `GrupoDaRevisao` era uma união escrita à mão e `ORDEM_DOS_GRUPOS` uma lista
+    à parte — e `agruparPorRisco` monta a tela percorrendo a LISTA. Um grupo no
+    tipo e fora da lista não aparece: ele e as linhas dele desaparecem, sem erro
+    de compilação e sem teste vermelho. Era a divergência por omissão da #88 com
+    outra roupa, dentro de um arquivo só.
+    Agora o tipo sai da lista (`(typeof ORDEM_DOS_GRUPOS)[number]`), e esquecer
+    de listar um grupo novo deixou de ser possível. Duas guardas se somam a
+    isso: o `default` do `tituloDoGrupo` atribui o grupo a um `never` — sem
+    `noImplicitReturns` no `tsconfig`, um `case` que falte devolvia `undefined`
+    em silêncio, e agora não compila —, e uma tabela de testes com `satisfies
+    Record<GrupoDaRevisao, …>` prova que **todo grupo do tipo é alcançável a
+    partir de uma proposta de verdade**, além de que dois grupos nunca dizem a
+    mesma coisa no singular nem no plural.
+142. **A frase da gravação mandava conferir o cabo do HD por um problema que
+    não é do cabo.**
+    O `frase_de_lofty` mandava OITO variantes de erro do lofty para o mesmo
+    `ERRO_ARQUIVO_ILEGIVEL`: *"não foi possível ler este MP3 até o fim, e por
+    isso nada foi gravado — o arquivo pode estar danificado, ou o disco onde ele
+    está pode ter sido desconectado"*. As oito são falhas de PARSE: acontecem
+    DEPOIS de o arquivo ter sido aberto e lido com sucesso. **Disco desconectado
+    e leitura interrompida produzem `std::io::Error`**, que já tinha caminho
+    próprio (`ErrorKind::Io(io) => frase_de_io(io)`) — então a única coisa que a
+    frase garantia era mandar a pessoa mexer no que estava certo. Num parque de
+    máquinas que ninguém pode olhar, essa é a pior mensagem possível: ela custa
+    o tempo de quem desliga e religa um HD que nunca esteve em questão.
+    O diagnóstico de campo confirmou o quadro: os arquivos são MPEG legítimos,
+    não estão danificados, e o disco estava conectado.
+    A frase antiga **não existe mais**. No lugar dela, três:
+    - **estrutura do arquivo** (`UnknownFormat`, `FileDecoding`, `SizeMismatch`,
+      `TooMuchData`, `FakeTag`) — *"o programa não entendeu como este MP3 está
+      montado por dentro, e nada foi alterado no arquivo — não há como gravar
+      etiquetas nele, e não há nada que você possa fazer por aqui"*;
+    - **texto de etiqueta** (`StringFromUtf8`, `StrFromUtf8`, `TextDecode`) —
+      *"o texto de uma etiqueta deste MP3 está escrito de um jeito que o
+      programa não conseguiu ler, e nada foi alterado no arquivo — o problema é
+      só nesse texto, e não há nada que você possa fazer por aqui"*;
+    - **o arquivo que saiu de baixo do programa** (`io::ErrorKind::NotFound`,
+      que herdou a frase do disco por ser o único lugar onde ela responde algo) —
+      *"o arquivo não está mais onde estava, e nada foi gravado — se ele fica num
+      HD externo ou num pen drive, confira se o aparelho continua ligado e
+      conectado"*.
+    Três coisas estão em cada frase de propósito: **o que aconteceu**, que
+    **nada foi alterado no arquivo** — é a resposta ao medo de quem lê ("perdi a
+    música?") e é verdade porque as duas famílias falham antes de o arquivo ser
+    tocado — e **o que fazer**. Onde não há o que fazer, a frase diz isso: "não
+    há nada que você possa fazer por aqui" é informação, e um "tente de novo"
+    ali seria uma ação inútil pedida a quem não tem a quem perguntar.
+143. **As três de TEXTO não são "arquivo danificado", e chamá-las disso é
+    acusação falsa.**
+    `StringFromUtf8`, `StrFromUtf8` e `TextDecode` são bytes de texto de
+    etiqueta que não correspondem à codificação declarada no próprio quadro: um
+    comentário gravado em Latin-1 e anunciado como UTF-8, um título de um
+    programa antigo, um UTF-16 sem a marca de ordem dos bytes. **O áudio não
+    está envolvido e o arquivo pode estar perfeito.** Dizer "pode estar
+    danificado" é a #97 aplicada a um arquivo em vez de a um acessório — e a
+    frase nova diz o contrário, que o problema é só naquele texto.
+    A separação também **não afirma a causa** que ainda está sendo medida. A
+    hipótese mais provável da família da estrutura — um arquivo que nunca foi
+    MPEG, com nome de `.mp3`, que TOCA no aplicativo porque quem decodifica o
+    áudio é o WebView e só a gravação de etiqueta exige fluxo MPEG — é
+    justamente a que não se escreve na tela sem medição: quem separa isso
+    arquivo por arquivo é o `tools/diagnosticar_mp3.py`.
+    Fica registrada uma ressalva medida na fonte do lofty 0.22.4: `TooMuchData`
+    também pode sair da ESCRITA, se a etiqueta a gravar passar de 256 MB (o teto
+    do campo synchsafe) ou se um quadro de imagem alheio passar do limite de
+    alocação. Nenhum dos dois é alcançável neste acervo — a etiqueta que
+    gravamos tem uma letra de música dentro —, e se um dia for, a frase continua
+    não acusando nada que a pessoa tenha feito.
+    **Guardas para a próxima fusão.** Um teste percorre as dez frases do módulo
+    e exige que sejam TODAS distintas: duas famílias com a mesma frase são uma
+    família só na tela, que é exatamente como as oito variantes viraram uma. Um
+    segundo teste exige que nenhuma frase de parse contenha "disco",
+    "desconect", "cabo", "pen drive" ou "conectad", e que todas digam que o
+    arquivo ficou intacto. E a tabela de tradução deixou de visitar duas
+    variantes: ela cita as doze, uma por uma — tabela que só visita o caso fácil
+    certifica o contrário do que o código faz (#113).
+144. **O que NÃO se fez, e fica escrito.**
+    **(a) A linha que falhou ao gravar continua sem "tentar de novo".** Ela
+    segue desabilitada, como toda linha com erro desde a A5. Reabrir o clique
+    exigiria decidir o que fazer com o eco do arquivo (a #135 mostrou que a
+    segunda gravação da mesma música é recusada com "a música mudou depois da
+    busca" quando o eco é o da varredura), e o motivo da recusa é quase sempre
+    de fora do aplicativo — arquivo em uso, pasta sincronizada, arquivo que não
+    é MPEG. O caminho honesto continua sendo: resolver o que a linha diz e
+    repetir a busca. Por isso o título do grupo não promete um clique que não
+    existe.
+    **(b) Não se inventou frase para a causa específica da sobra entre a
+    etiqueta declarada e o primeiro quadro MPEG** (8 dos 53 arquivos da pasta do
+    relato, com a etiqueta declarando 4.096 bytes e o quadro 1.251 bytes
+    adiante). A medição não terminou, e a mensagem que a nomeia vem com ela. Os
+    dois consertos desta seção valem independentemente do resultado.
+    **(c) O frontend NÃO ganhou uma tabela espelhada das frases do writer.** As
+    do `acessorios.rs` estão espelhadas no `mockBackend` (`ERROS_DE_GRAVACAO`)
+    porque a tela de Configurações as MOSTRA e o E2E precisa delas; as do
+    `writer.rs` chegam à linha da revisão como texto opaco vindo do `apply`, e o
+    mock não tem um leitor de MP3 para as produzir. Espelhá-las criaria uma
+    segunda versão da verdade sem um segundo produtor — o oposto do que a #88
+    pede. O E2E cobre o GRUPO com a falha de gravação que o mock sabe produzir
+    (o arquivo que sai do lugar entre a varredura e o clique).
+    **(d) O `tools/diagnosticar_mp3.py` não teve a lógica tocada** — só os dois
+    trechos de documentação que citavam a frase antiga como se ela ainda
+    existisse. Texto que mente sobre o próprio produto é defeito mesmo quando
+    quem lê é o próximo programador.
