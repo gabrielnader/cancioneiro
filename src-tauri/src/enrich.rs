@@ -1344,6 +1344,85 @@ pub fn contar(
     })
 }
 
+/// O que a etapa 5 tem para fazer AGORA — sem varredura nenhuma.
+///
+/// **V10.6 — "quais músicas estão sem letra" é fato PERMANENTE da biblioteca,
+/// e não resultado de varredura.** O relato de campo que trouxe isto: a oferta
+/// de transcrição só existia dentro da caixa de revisão, aplicar fechava a
+/// caixa, e a lista morria com ela. Quem quisesse transcrever depois de aplicar
+/// tinha de pagar a varredura inteira outra vez — minutos, numa biblioteca
+/// grande. O erro de projeto foi amarrar um fato permanente a uma tela
+/// temporária: o banco sempre soube responder isto.
+///
+/// A pergunta do fim **continua existindo** — ela é o momento natural, feita
+/// quando pode ser respondida com informação. O que muda é que ela deixa de ser
+/// a ÚNICA porta.
+///
+/// Os campos são os MESMOS três que `EnrichScanResult` já devolvia, de
+/// propósito: a tela lê a oferta de um jeito só, venha ela de onde vier.
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct PendentesDaTranscricao {
+    /// Os ids que `transcrever_musicas` recebe, na ordem em que estão na
+    /// biblioteca. É a mesma lista que `sem_letra_no_fim`, pela mesma regra.
+    pub musicas: Vec<i64>,
+    /// Segundos estimados para transcrever essas músicas NESTA máquina.
+    pub segundos_estimados: u64,
+    /// A estimativa acima é medição desta máquina, ou número de fábrica? É o
+    /// que autoriza a frase a dizer "neste computador" (DECISIONS #86 e #112).
+    pub estimativa_medida_nesta_maquina: bool,
+    /// A etapa 5 pode rodar nesta máquina (transcritor E modelo prontos)?
+    ///
+    /// Vem junto para esta porta responder a pergunta INTEIRA — "posso
+    /// transcrever, e o quê?" — em vez de obrigar quem chama a combinar duas
+    /// respostas. É o mesmo `EtapasLigadas::transcricao` que a `Contagem`
+    /// reporta: a REGRA mora num lugar só, e aqui ela só é repetida.
+    pub disponivel: bool,
+}
+
+/// As músicas que a etapa 5 transcreveria em `folder_prefix` (vazio =
+/// biblioteca inteira), com a estimativa de tempo.
+///
+/// **Não gasta rede, não grava nada e não propõe nada.** O único disco que ela
+/// toca é o `is_file` de cada candidata, que é o portão da QA M3 — e ele está
+/// aqui porque a regra é `a_etapa_5_tem_o_que_fazer`, a MESMA da pergunta do
+/// fim (DECISIONS #80). Reescrevê-la aqui como "não tem letra" faria esta tela
+/// prometer trabalho sobre arquivos que já não existem, e a fila devolveria
+/// linhas de erro para a pessoa que confiou no número.
+///
+/// **O que difere da pergunta do fim é o MOMENTO, não a regra.** A varredura
+/// desconta de `sem_letra_no_fim` quem acabou de ganhar uma proposta de letra
+/// naquela rodada: oferecer minutos de CPU para uma música cuja letra está ali
+/// na lista esperando um clique seria cobrar caro por algo que um clique
+/// resolve. Aqui não há varredura a descontar — esta porta responde o fato de
+/// AGORA, que é o que uma tela permanente pode afirmar. Aplicada a proposta, o
+/// fato muda e o número cai sozinho.
+pub fn pendentes_da_transcricao(
+    conn: &Connection,
+    folder_prefix: &str,
+    modelo: &crate::transcricao::Modelo,
+    disponivel: bool,
+) -> Result<PendentesDaTranscricao> {
+    let pendentes: Vec<(i64, f64)> = db::list_songs(conn)?
+        .into_iter()
+        .filter(|s| under_prefix(&s.file_path, folder_prefix))
+        .filter_map(candidata)
+        .filter(|c| a_etapa_5_tem_o_que_fazer(&c.song))
+        .map(|c| (c.song.id, c.song.duration_seconds.unwrap_or(0) as f64))
+        .collect();
+    let (segundos_estimados, estimativa_medida_nesta_maquina) =
+        crate::transcricao::estimativa_da_transcricao(
+            conn,
+            modelo,
+            pendentes.iter().map(|(_, d)| *d),
+        );
+    Ok(PendentesDaTranscricao {
+        musicas: pendentes.into_iter().map(|(id, _)| id).collect(),
+        segundos_estimados,
+        estimativa_medida_nesta_maquina,
+        disponivel,
+    })
+}
+
 /// Passa UMA música pelo funil e devolve a proposta. `None` significa
 /// CANCELADA no meio do caminho — a varredura volta cedo sem contabilizar
 /// esta música (nem proposta, nem progresso).
@@ -1943,23 +2022,26 @@ where
     // duas constantes de referência, e a comparação escolheria a errada — além
     // de já mentir, antes disso, na máquina que medisse exatamente a constante.
     let modelo = fontes.modelo_da_transcricao();
-    let medido = crate::transcricao::razao_medida_desta_maquina(conn, modelo);
-    let razao = medido.unwrap_or(modelo.razao_de_referencia);
-    let medida = medido.is_some();
     let fechar = |propostas: Vec<EnrichProposal>| {
         let restantes = sobraram.take();
+        // QA A1 — a razão MEDIDA nesta máquina, quando ela já existe. Era aqui
+        // que a `RAZAO_DE_REFERENCIA` declarada entrava e nunca saía, e é esta
+        // linha que faz a promessa da DECISIONS #106 ("a primeira transcrição
+        // desta máquina devolve a razão real, e é ela que passa a valer")
+        // deixar de ser só uma frase.
+        //
+        // V10.6 — a conta e o fato sobre ela saem de UMA função, porque a etapa
+        // 5 passou a ter duas portas (esta e o bloco de Configurações), e duas
+        // contas dariam dois tempos para a mesma biblioteca.
+        let (segundos, medida) = crate::transcricao::estimativa_da_transcricao(
+            conn,
+            modelo,
+            restantes.iter().map(|(_, d)| *d),
+        );
         EnrichScanResult {
             propostas,
             sem_perguntar_ao_som: estado.sem_perguntar_ao_som.get(),
-            // QA A1 — a razão MEDIDA nesta máquina, quando ela já existe. Era
-            // aqui que a `RAZAO_DE_REFERENCIA` declarada entrava e nunca saía,
-            // e é esta linha que faz a promessa da DECISIONS #106 ("a primeira
-            // transcrição desta máquina devolve a razão real, e é ela que passa
-            // a valer") deixar de ser só uma frase.
-            segundos_de_transcricao: crate::transcricao::segundos_para_transcrever(
-                restantes.iter().map(|(_, d)| *d),
-                razao,
-            ),
+            segundos_de_transcricao: segundos,
             estimativa_medida_nesta_maquina: medida,
             sem_letra_no_fim: restantes.into_iter().map(|(id, _)| id).collect(),
         }

@@ -956,6 +956,14 @@ test.describe("V5 — Completar dados em lote (F13)", () => {
     await expect(
       page.getByText("1 música ganhou letra. A biblioteca já está atualizada."),
     ).toBeVisible();
+    /*
+      V10.6 — aplicar NÃO fecha mais a caixa: era o fechamento que jogava fora a
+      lista das músicas sem letra, e recuperá-la custava a varredura inteira. A
+      linha gravada fica na tela, marcada, e quem fecha é o "Fechar".
+    */
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText(/1 música gravada no arquivo/)).toBeVisible();
+    await dialog.getByRole("button", { name: "Fechar" }).click();
     // e NÃO existe popup nenhum pedindo reindexação ou reinício: a curadoria
     // feita dentro do app já reindexou
     await expect(dialog).toHaveCount(0);
@@ -1377,6 +1385,8 @@ test.describe("V8 — O funil dentro do app (F18)", () => {
       .click();
     await dialog.getByRole("button", { name: /Aplicar selecionadas/ }).click();
     await expect(page.getByText(/A biblioteca já está atualizada/)).toBeVisible();
+    // V10.6 — aplicar não fecha mais a caixa; quem fecha é o "Fechar"
+    await dialog.getByRole("button", { name: "Fechar" }).click();
 
     // a letra escrita à mão continua no arquivo, letra por letra
     await page.getByRole("button", { name: "Biblioteca", exact: true }).click();
@@ -1486,6 +1496,8 @@ test.describe("V9/V10 — o acessório do som e o conflito (F18 fases 2 e 3)", (
         "1 música teve título ou artista corrigido. A biblioteca já está atualizada.",
       ),
     ).toBeVisible();
+    // V10.6 — aplicar não fecha mais a caixa; quem fecha é o "Fechar"
+    await dialog.getByRole("button", { name: "Fechar" }).click();
 
     // e a música passou a se chamar o que o som disse
     await page.getByRole("button", { name: "Biblioteca", exact: true }).click();
@@ -1731,6 +1743,8 @@ test.describe("V10 — a etapa que resolve (F18 fase 3)", () => {
       .check();
     await dialog.getByRole("button", { name: /Aplicar selecionadas/ }).click();
     await expect(page.getByText(/A biblioteca já está atualizada/)).toBeVisible();
+    // V10.6 — aplicar não fecha mais a caixa; quem fecha é o "Fechar"
+    await dialog.getByRole("button", { name: "Fechar" }).click();
 
     // UMA gravação, com as duas decisões juntas: esta música tinha o nome
     // pendente do grupo dobrado (que chega marcado) MAIS a letra da etapa 5.
@@ -1831,6 +1845,106 @@ test.describe("V10 — a etapa que resolve (F18 fase 3)", () => {
     const search = page.getByPlaceholder("Buscar por letra, título ou artista…");
     await search.fill(LETRA_TRECHO);
     await expect(page.getByText("1 resultados")).toBeVisible();
+  });
+
+  // =========================================================================
+  // V10.6 — o defeito de campo: aplicar fechava a caixa e a oferta ia com ela
+  // =========================================================================
+  //
+  // Relato verbatim do dono do produto: *"Achei que eu poderia clicar em aplicar
+  // e depois trabalhar nas transcrições, mas não aconteceu… Simplesmente fechou
+  // a caixa e aplicou essas 28… Mas agora tenho que começar de novo pra chegar
+  // na parte de transcrição de novo."*
+  //
+  // O que se perdia não era um clique: era a varredura inteira.
+  test("aplicar NÃO fecha a caixa, e a transcrição continua ali (o caminho do relato)", async ({
+    page,
+  }) => {
+    const errors = trackErrors(page);
+    await resetApp(page);
+    await addMockFolder(page);
+    await comTranscricao(page);
+
+    await page.getByRole("button", { name: "Configurações" }).click();
+    await page.getByRole("button", { name: "Buscar dados desta pasta" }).click();
+
+    const dialog = page.getByRole("dialog", { name: "Completar dados" });
+    await expect(dialog.getByText(/Sobrou 1 música sem letra/)).toBeVisible();
+
+    // 1) APLICAR as propostas que chegaram marcadas
+    await dialog.getByRole("button", { name: /Aplicar selecionadas \(\d+\)/ }).click();
+    await expect(page.getByText(/A biblioteca já está atualizada/)).toBeVisible();
+
+    // 2) a caixa CONTINUA ABERTA, com o desfecho e a oferta intactos
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText(/músicas? gravadas? no arquivo/)).toBeVisible();
+    await expect(dialog.getByText(/Sobrou 1 música sem letra/)).toBeVisible();
+
+    // 3) e a transcrição roda daqui, sem varrer de novo
+    await dialog.getByRole("button", { name: "Começar agora" }).click();
+    await expect(
+      dialog.getByText("Letra escrita pela máquina ouvindo o áudio — confira antes de aplicar."),
+    ).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
+  // Fechar com a oferta na tela AVISA, e diz para onde ela foi. Informativo, e
+  // não uma confirmação: a lista já não se perde.
+  test("fechar com a oferta pendente avisa que ela continua em Configurações", async ({
+    page,
+  }) => {
+    await resetApp(page);
+    await addMockFolder(page);
+    await comTranscricao(page);
+
+    await page.getByRole("button", { name: "Configurações" }).click();
+    await page.getByRole("button", { name: "Buscar dados desta pasta" }).click();
+    const dialog = page.getByRole("dialog", { name: "Completar dados" });
+    await expect(dialog.getByText(/Sobrou 1 música sem letra/)).toBeVisible();
+
+    await dialog.getByRole("button", { name: "Fechar" }).click();
+    await expect(dialog).toHaveCount(0);
+    await expect(
+      page.getByText(/Ainda há 1 música sem letra\. Escrever a letra ouvindo o áudio continua em Configurações/),
+    ).toBeVisible();
+  });
+
+  // =========================================================================
+  // V10.6 — e a porta permanente: a transcrição existe em Configurações
+  // =========================================================================
+  //
+  // A pergunta do fim continua sendo o momento natural. O que muda é que ela
+  // deixou de ser a única porta: "quais músicas estão sem letra" é fato da
+  // biblioteca, e o backend responde a qualquer momento.
+  test("Configurações diz quantas estão sem letra e transcreve sem varredura nenhuma", async ({
+    page,
+  }) => {
+    const errors = trackErrors(page);
+    await resetApp(page);
+    await addMockFolder(page);
+    await comTranscricao(page);
+
+    await page.getByRole("button", { name: "Configurações" }).click();
+    const secao = page.getByRole("region", { name: "Curadoria do acervo" });
+    // o bloco existe SEM ninguém ter varrido nada
+    await expect(
+      secao.getByText(/músicas da biblioteca estão sem letra/),
+    ).toBeVisible();
+    await expect(
+      secao.getByText(/Escrever a letra ouvindo o áudio leva/),
+    ).toBeVisible();
+
+    await secao.getByRole("button", { name: "Começar agora" }).click();
+
+    // e é a MESMA revisão do fim da varredura: a letra de máquina, com o aviso
+    const dialog = page.getByRole("dialog", { name: "Completar dados" });
+    await expect(
+      dialog.getByText("Letra escrita pela máquina ouvindo o áudio — confira antes de aplicar."),
+    ).toBeVisible();
+    // a porta permanente cobre TODAS as músicas sem letra da pasta — são duas
+    // no acervo de teste, daí o `.first()`
+    await expect(dialog.getByText("via transcrição do áudio").first()).toBeVisible();
+    expect(errors).toEqual([]);
   });
 });
 

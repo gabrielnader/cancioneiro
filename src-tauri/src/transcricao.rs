@@ -404,6 +404,30 @@ pub fn segundos_para_transcrever(duracoes: impl Iterator<Item = f64>, razao: f64
     (audio * razao.max(0.0)).ceil() as u64
 }
 
+/// A estimativa da etapa 5 para estas músicas, **e o fato sobre o número**:
+/// `(segundos, medida_nesta_maquina)`.
+///
+/// Existe porque a etapa 5 passou a ter DUAS portas (V10.6): a pergunta do fim
+/// da varredura e o bloco permanente de Configurações. As duas precisam do
+/// mesmo par — o número e a procedência dele —, e montá-lo em cada uma seria a
+/// DECISIONS #80 outra vez: a mesma biblioteca mostraria dois tempos diferentes
+/// na mesma tela, e ninguém saberia qual acreditar.
+///
+/// O `bool` não é `razao != referencia`: com o `Option` da medição a resposta é
+/// direta, e a comparação mentiria na máquina que medisse exatamente a
+/// constante (DECISIONS #119).
+pub fn estimativa_da_transcricao(
+    conn: &rusqlite::Connection,
+    modelo: &Modelo,
+    duracoes: impl Iterator<Item = f64>,
+) -> (u64, bool) {
+    let medido = razao_medida_desta_maquina(conn, modelo);
+    (
+        segundos_para_transcrever(duracoes, medido.unwrap_or(modelo.razao_de_referencia)),
+        medido.is_some(),
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Mensagens (pt-BR, curtas) — TEXTO FIXO, como no resto do produto
 // ---------------------------------------------------------------------------

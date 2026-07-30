@@ -20,6 +20,9 @@ import {
   LABEL_SUA_ETIQUETA_DIZ,
   LABEL_SUBSTITUIR_LETRA,
   ROTULO_COMECAR_TRANSCRICAO,
+  ROTULO_DA_LINHA_GRAVADA,
+  SELO_DA_LINHA_GRAVADA,
+  avisoDeTranscricaoPendente,
   avisoLetraExistente,
   avisoSemPerguntarAoSom,
   rotuloAceitarSom,
@@ -29,6 +32,7 @@ import {
   textoDaTranscricaoIndisponivel,
   textoDoTempoDaTranscricao,
   textoSemPropostas,
+  tituloDoGrupo,
 } from "../lib/curadoria";
 import { FONTE_TRANSCRICAO, type Song } from "../lib/types";
 import { useEnrichStore } from "../stores/enrichStore";
@@ -189,6 +193,8 @@ function renderReview(
     transcricaoDispensada: false,
     transcricaoProgress: null,
     applyErrors: {},
+    aplicadas: [],
+    gravadas: {},
   });
   return render(<EnrichReview />);
 }
@@ -231,6 +237,8 @@ describe("EnrichReview (V5 — F13)", () => {
       transcricaoProgress: null,
       transcricaoDispensada: false,
       applyErrors: {},
+      aplicadas: [],
+      gravadas: {},
       scanInFlight: false,
     });
     useToastStore.setState({ toasts: [] });
@@ -585,7 +593,13 @@ describe("EnrichReview (V5 — F13)", () => {
     expect(useLibraryStore.getState().results[0].song.title).toBe("Faixa Um");
     expect(usePlaylistStore.getState().items[0].song.title).toBe("Faixa Um");
     expect(usePlayerStore.getState().current?.title).toBe("Faixa Um");
-    expect(useEnrichStore.getState().status).toBe("idle");
+    /*
+      V10.6 — aplicar NÃO FECHA a caixa. Era o fechamento que jogava fora a
+      lista das músicas sem letra, e recuperá-la custava a varredura inteira.
+    */
+    expect(useEnrichStore.getState().status).toBe("review");
+    expect(useEnrichStore.getState().overlayOpen).toBe(true);
+    expect(useEnrichStore.getState().aplicadas).toEqual([0]);
   });
 
   it("sucesso de várias: o aviso conta quantas ganharam letra", async () => {
@@ -615,7 +629,8 @@ describe("EnrichReview (V5 — F13)", () => {
       }),
     );
     expect(toasts[0].kind).toBe("success");
-    expect(useEnrichStore.getState().status).toBe("idle");
+    expect(useEnrichStore.getState().status).toBe("review");
+    expect(useEnrichStore.getState().aplicadas).toEqual([0, 1]);
   });
 
   it("falha parcial: sincroniza as gravadas e MANTÉM na tela só a que falhou, com o erro", async () => {
@@ -2531,6 +2546,332 @@ describe("EnrichReview (V5 — F13)", () => {
       renderTranscrevendo({ done: 1, total: 47, atual: "a.mp3" });
       fireEvent.click(screen.getByRole("button", { name: "Cancelar" }));
       expect(useEnrichStore.getState().status).toBe("idle");
+    });
+  });
+  // =========================================================================
+  // V10.6 — aplicar não fecha a caixa, e a oferta de transcrição sobrevive
+  // =========================================================================
+  //
+  // Relato de campo, verbatim: *"Achei que eu poderia clicar em aplicar e depois
+  // trabalhar nas transcrições, mas não aconteceu… Simplesmente fechou a caixa e
+  // aplicou essas 28… Mas agora tenho que começar de novo pra chegar na parte de
+  // transcrição de novo."*
+  //
+  // O que se perdia não era um clique: era a varredura inteira — minutos, numa
+  // biblioteca grande. As duas ações competiam, e a ordem importava de um jeito
+  // que ninguém adivinha.
+  describe("aplicar não fecha a caixa (V10.6)", () => {
+    function backendQueGrava() {
+      setBackendForTests({
+        enrichApply: vi.fn(async (aplicacoes: EnrichApply[]) =>
+          aplicacoes.map((a) => ok({ ...song(a.song_id, a.title), artist: a.artist })),
+        ),
+      } as unknown as Backend);
+    }
+
+    /*
+      O grupo das gravadas nasce FECHADO, como o dobrado — 28 linhas "Gravada no
+      arquivo." empurrariam a oferta de transcrição para fora da tela, que é
+      justamente o que esta versão veio consertar. Ele é o ÚLTIMO da ordem.
+    */
+    function abrirGravadas() {
+      const botoes = screen.getAllByRole("button", { name: /abrir para ver/i });
+      fireEvent.click(botoes[botoes.length - 1]);
+    }
+
+    async function aplicar() {
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: /Aplicar selecionadas/ }),
+        );
+      });
+    }
+
+    it("a caixa continua aberta, e a oferta de transcrição continua nela", async () => {
+      backendQueGrava();
+      renderReview([ALTA], 0, 0, {
+        semLetraNoFim: [10, 11, 12],
+        segundosDeTranscricao: 10_800,
+        disponivel: true,
+      });
+      expect(
+        screen.getByText(textoDaOfertaDeTranscricao(3, 10_800)),
+      ).toBeVisible();
+
+      await aplicar();
+
+      // a caixa NÃO fechou
+      expect(screen.getByRole("dialog", { name: "Completar dados" })).toBeVisible();
+      // e a oferta está lá, com o MESMO número: `sem_letra_no_fim` exclui, no
+      // backend, quem a varredura achou letra — nenhuma linha aplicável pode
+      // tirar alguém dessa lista
+      expect(
+        screen.getByText(textoDaOfertaDeTranscricao(3, 10_800)),
+      ).toBeVisible();
+      expect(
+        screen.getByRole("button", { name: ROTULO_COMECAR_TRANSCRICAO }),
+      ).toBeEnabled();
+    });
+
+    it("a linha gravada fica na tela, marcada e sem poder ser aplicada de novo", async () => {
+      backendQueGrava();
+      renderReview([ALTA]);
+      await aplicar();
+
+      // dobrado não é escondido: a frase do grupo já diz o desfecho
+      expect(screen.getByText(tituloDoGrupo("gravadas", 1))).toBeVisible();
+      abrirGravadas();
+      expect(screen.getByText(ROTULO_DA_LINHA_GRAVADA)).toBeVisible();
+      expect(screen.getByText(SELO_DA_LINHA_GRAVADA)).toBeVisible();
+      const caixa = screen.getByRole("checkbox", { name: /faixa 1/ });
+      expect(caixa).toBeDisabled();
+      expect(caixa).not.toBeChecked();
+      // e o botão não oferece mais nada a aplicar
+      expect(
+        screen.getByRole("button", { name: "Aplicar selecionadas (0)" }),
+      ).toBeDisabled();
+      expect(screen.getByText("Não há nada a aplicar nesta lista.")).toBeVisible();
+    });
+
+    it("a linha gravada sai do grupo dela e vai para o fim, num grupo próprio", async () => {
+      backendQueGrava();
+      renderReview([ALTA, MEDIA]);
+      fireEvent.click(screen.getByRole("checkbox", { name: /faixa 2/ }));
+      await aplicar();
+
+      expect(screen.getByText(tituloDoGrupo("gravadas", 2))).toBeVisible();
+      // e o grupo das letras encontradas sumiu: não sobrou nada nele
+      expect(screen.queryByText(tituloDoGrupo("letras", 2))).not.toBeInTheDocument();
+    });
+
+    it("'Marcar todas' não ressuscita a linha gravada", async () => {
+      backendQueGrava();
+      renderReview([ALTA, MEDIA]);
+      await aplicar(); // só a ALTA vem pré-marcada
+      fireEvent.click(screen.getByRole("button", { name: "Marcar todas" }));
+      expect(
+        screen.getByRole("button", { name: "Aplicar selecionadas (1)" }),
+        "só a MÉDIA, que ainda não foi gravada",
+      ).toBeEnabled();
+    });
+
+    /*
+      O caso que o relato de campo descreve inteiro: aplicar as 28 propostas de
+      nome e DEPOIS mandar transcrever, na mesma caixa, sem varredura nova.
+    */
+    it("aplicar e depois transcrever, na mesma caixa e sem varrer de novo", async () => {
+      const transcreverMusicas = vi.fn(async () => ({
+        propostas: [
+          proposal({
+            song_id: 10,
+            file_path: "/acervo/10.mp3",
+            current_title: "AudioTrack 10",
+            proposed_title: "AudioTrack 10",
+            proposed_artist: null,
+            lyrics: "na beira do mar",
+            fonte: FONTE_TRANSCRICAO,
+            confidence: "media",
+          }),
+        ],
+        razao_medida: 1.2,
+        razao_desta_maquina: 1.2,
+      }));
+      setBackendForTests({
+        enrichApply: vi.fn(async (aplicacoes: EnrichApply[]) =>
+          aplicacoes.map((a) => ok(song(a.song_id, a.title))),
+        ),
+        transcreverMusicas,
+        onTranscricaoProgresso: vi.fn(async () => () => {}),
+      } as unknown as Backend);
+      renderReview([ALTA], 0, 0, {
+        semLetraNoFim: [10],
+        segundosDeTranscricao: 600,
+        disponivel: true,
+      });
+
+      await aplicar();
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: ROTULO_COMECAR_TRANSCRICAO }),
+        );
+      });
+
+      expect(transcreverMusicas).toHaveBeenCalledWith([10], expect.any(String));
+      // a letra escrita entra na MESMA revisão, ao lado da linha gravada
+      expect(screen.getByText(AVISO_LETRA_DE_MAQUINA)).toBeVisible();
+      abrirGravadas();
+      expect(screen.getByText(ROTULO_DA_LINHA_GRAVADA)).toBeVisible();
+      // e a linha gravada continua sendo a única gravada
+      expect(useEnrichStore.getState().aplicadas).toEqual([0]);
+    });
+
+    /*
+      A segunda linha da MESMA música continua aplicável — e é o caso típico:
+      a música que sobrou sem letra tem uma proposta de NOME pendente, e ganha a
+      linha da letra quando a etapa 5 termina.
+
+      Sem o eco fresco, esta segunda aplicação seria recusada com "a música mudou
+      depois da busca" (QA A5) — e ela mudou, sim: mudamos nós, um clique antes.
+    */
+    it("aplicar o nome e depois a letra da MESMA música manda o eco do arquivo", async () => {
+      const enrichApply = vi.fn(async (aplicacoes: EnrichApply[]) =>
+        aplicacoes.map((a) => ok({ ...song(a.song_id, a.title), artist: a.artist })),
+      );
+      setBackendForTests({ enrichApply } as unknown as Backend);
+      const nome = proposal({
+        song_id: 7,
+        file_path: "/acervo/7.mp3",
+        current_title: "AudioTrack 07",
+        proposed_title: "Oh! Chuva",
+        proposed_artist: "Falamansa",
+        lyrics: null,
+        confidence: "baixa",
+      });
+      const letra = proposal({
+        song_id: 7,
+        file_path: "/acervo/7.mp3",
+        current_title: "AudioTrack 07",
+        proposed_title: "AudioTrack 07",
+        proposed_artist: null,
+        lyrics: "na beira do mar",
+        fonte: FONTE_TRANSCRICAO,
+        confidence: "media",
+      });
+      renderReview([letra, nome]);
+
+      // a linha do NOME chega pré-marcada (grupo dobrado); a da letra, não
+      await aplicar();
+      expect(enrichApply.mock.calls[0][0][0].current_title).toBe("AudioTrack 07");
+      expect(enrichApply.mock.calls[0][0][0].title).toBe("Oh! Chuva");
+
+      // agora a letra, na mesma caixa
+      fireEvent.click(
+        screen.getByRole("checkbox", { name: /Aplicar a letra escrita/ }),
+      );
+      await aplicar();
+      expect(enrichApply).toHaveBeenCalledTimes(2);
+      expect(
+        enrichApply.mock.calls[1][0][0].current_title,
+        "o eco é o do ARQUIVO agora, e não o do instante da varredura",
+      ).toBe("Oh! Chuva");
+      expect(enrichApply.mock.calls[1][0][0].lyrics).toBe("na beira do mar");
+    });
+
+    // A5 — o que NÃO gravou fica na tela com o motivo, agora ao lado do que
+    // gravou. Antes as gravadas saíam da lista, e quem visse só as recusadas não
+    // tinha como saber que o resto foi.
+    it("a que falhou fica com o erro, ao lado da que gravou", async () => {
+      setBackendForTests({
+        enrichApply: vi.fn(async () => [
+          ok(song(1, "Faixa Um")),
+          failed(2, "a música mudou depois da busca"),
+        ]),
+      } as unknown as Backend);
+      renderReview([ALTA, MEDIA]);
+      fireEvent.click(screen.getByRole("checkbox", { name: /faixa 2/ }));
+      await aplicar();
+
+      expect(screen.getByText("a música mudou depois da busca")).toBeVisible();
+      abrirGravadas();
+      expect(screen.getByText(ROTULO_DA_LINHA_GRAVADA)).toBeVisible();
+    });
+
+    // Só o "Fechar" (e o Esc) fecham a caixa.
+    it("o Fechar continua fechando", async () => {
+      backendQueGrava();
+      renderReview([ALTA]);
+      await aplicar();
+      fireEvent.click(screen.getByRole("button", { name: "Fechar" }));
+      expect(useEnrichStore.getState().status).toBe("idle");
+    });
+
+    it("o Esc continua fechando a revisão", async () => {
+      backendQueGrava();
+      renderReview([ALTA]);
+      await aplicar();
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(useEnrichStore.getState().status).toBe("idle");
+    });
+
+    /*
+      V10.6, item 2 — fechar com a oferta na tela AVISA. Informativo, e não uma
+      confirmação: com o bloco permanente de Configurações a lista já não se
+      perde.
+    */
+    it("fechar com a oferta na tela avisa onde ela continua", () => {
+      renderReview([ALTA], 0, 0, {
+        semLetraNoFim: [10, 11],
+        segundosDeTranscricao: 600,
+        disponivel: true,
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Fechar" }));
+      const toasts = useToastStore.getState().toasts;
+      expect(toasts).toHaveLength(1);
+      expect(toasts[0].message).toBe(avisoDeTranscricaoPendente(2));
+    });
+
+    it("o Esc avisa igual — a mesma saída, o mesmo aviso", () => {
+      renderReview([ALTA], 0, 0, {
+        semLetraNoFim: [10, 11],
+        segundosDeTranscricao: 600,
+        disponivel: true,
+      });
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(useToastStore.getState().toasts[0].message).toBe(
+        avisoDeTranscricaoPendente(2),
+      );
+    });
+
+    // "Agora não" é uma resposta: quem respondeu não é avisado de novo.
+    it("respondida a oferta com 'Agora não', fechar não avisa nada", () => {
+      renderReview([ALTA], 0, 0, {
+        semLetraNoFim: [10, 11],
+        segundosDeTranscricao: 600,
+        disponivel: true,
+      });
+      fireEvent.click(screen.getByRole("button", { name: "Agora não" }));
+      fireEvent.click(screen.getByRole("button", { name: "Fechar" }));
+      expect(useToastStore.getState().toasts).toHaveLength(0);
+    });
+
+    /*
+      Contraste AA no estado NOVO. A linha gravada NÃO recebe opacidade: ela é o
+      registro do que a pessoa acabou de fazer, e é o que ela vai reler para
+      conferir — opacidade em cima do cinza secundário derrubaria o contraste
+      abaixo de AA (DECISIONS #69). O apagado fica para a linha com ERRO, cuja
+      informação é a frase vermelha.
+    */
+    it("o selo e a frase da linha gravada passam em AA", async () => {
+      backendQueGrava();
+      renderReview([ALTA]);
+      await aplicar();
+      abrirGravadas();
+
+      const selo = screen.getByText(SELO_DA_LINHA_GRAVADA);
+      expect(
+        contrastRatio(corDoTexto(selo.className), "#CCFBF1"),
+        "o selo GRAVADA",
+      ).toBeGreaterThanOrEqual(AA_TEXTO_NORMAL);
+
+      const frase = screen.getByText(ROTULO_DA_LINHA_GRAVADA);
+      for (const fundo of Object.values(FUNDOS_DA_LINHA)) {
+        expect(
+          contrastRatio(corDoTexto(frase.className), fundo),
+          `a frase sobre ${fundo}`,
+        ).toBeGreaterThanOrEqual(AA_TEXTO_NORMAL);
+      }
+      // e a linha inteira fica em tinta cheia
+      expect(frase.closest("li")!.className).not.toContain("opacity");
+    });
+
+    // Esc DURANTE a varredura continua sendo "segundo plano", não fechar — e
+    // segundo plano não descarta nada, então não avisa nada.
+    it("Esc durante a varredura continua mandando para segundo plano", () => {
+      renderScanning({ done: 3, total: 10, atual: "a.mp3", etapa: "" });
+      fireEvent.keyDown(window, { key: "Escape" });
+      expect(useEnrichStore.getState().status).toBe("scanning");
+      expect(useEnrichStore.getState().overlayOpen).toBe(false);
+      expect(useToastStore.getState().toasts).toHaveLength(0);
     });
   });
 });

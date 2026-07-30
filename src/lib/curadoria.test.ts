@@ -17,11 +17,14 @@ import {
   LABEL_SUA_ETIQUETA_DIZ,
   ORDEM_DOS_GRUPOS,
   ROTULO_COMECAR_TRANSCRICAO,
+  ROTULO_DA_LINHA_GRAVADA,
   ROTULO_DO_DISPARO,
+  SELO_DA_LINHA_GRAVADA,
   SEM_RESULTADO_INDIVIDUAL,
   SEM_RESULTADO_INSTRUMENTAL,
   TRANSCRICAO_NO_FIM,
   agruparPorRisco,
+  avisoDeTranscricaoPendente,
   avisoLetraExistente,
   avisoSemPerguntarAoSom,
   compararConflito,
@@ -42,6 +45,7 @@ import {
   textoDaOfertaDeTranscricao,
   textoDaTranscricaoIndisponivel,
   textoDoAcessorioAusente,
+  textoDoBlocoDeTranscricao,
   textoDoCabecalho,
   textoDoDownload,
   textoDoGrupoDobrado,
@@ -187,6 +191,32 @@ describe("a régua da copy (DECISIONS #100)", () => {
     ["aviso de letra de máquina", AVISO_LETRA_DE_MAQUINA],
     ["explicação da confiança do som", EXPLICACAO_DA_CONFIANCA_DO_SOM],
     ["transcrição no fim", TRANSCRICAO_NO_FIM],
+    // V10.6 — a porta permanente da etapa 5 e o aviso de fechar a revisão
+    // entram na MESMA régua: são textos de tela sem suporte, como os outros.
+    [
+      "bloco de transcrição",
+      textoDoBlocoDeTranscricao({
+        quantas: 47,
+        segundos: 10_800,
+        medidaNestaMaquina: false,
+        disponivel: true,
+        download: null,
+        todaABiblioteca: true,
+      }),
+    ],
+    [
+      "bloco de transcrição sem os acessórios",
+      textoDoBlocoDeTranscricao({
+        quantas: 47,
+        segundos: 10_800,
+        medidaNestaMaquina: false,
+        disponivel: false,
+        download: { bytes: 1_533_763_059, segundos: 512 },
+        todaABiblioteca: true,
+      }),
+    ],
+    ["aviso de transcrição pendente", avisoDeTranscricaoPendente(27)!],
+    ["linha gravada", ROTULO_DA_LINHA_GRAVADA],
   ];
 
   for (const [nome, texto] of desfechos) {
@@ -235,6 +265,9 @@ describe("o caminho único (DECISIONS #102)", () => {
     expect(TRANSCRICAO_NO_FIM.toLowerCase()).toContain("no fim");
     // e o texto não pode mais dizer que isso "não é feito aqui": passou a ser
     expect(TRANSCRICAO_NO_FIM.toLowerCase()).not.toContain("não é feito");
+    // V10.6 — e ele não pode mais dizer que a pergunta do fim é a ÚNICA porta:
+    // texto que mente sobre o próprio produto é defeito (DECISIONS #100)
+    expect(TRANSCRICAO_NO_FIM.toLowerCase()).toContain("qualquer momento");
   });
 });
 
@@ -544,7 +577,7 @@ describe("grupoDaProposta — o corte é por risco, não por confiança", () => 
 });
 
 describe("agruparPorRisco — a ordem de cima para baixo", () => {
-  it("a ordem é conflitos, letras, sem voz, nomes escritos, dobrado, erros", () => {
+  it("a ordem é conflitos, letras, sem voz, nomes escritos, dobrado, erros, gravadas", () => {
     expect(ORDEM_DOS_GRUPOS).toEqual([
       "conflitos",
       "letras",
@@ -552,7 +585,49 @@ describe("agruparPorRisco — a ordem de cima para baixo", () => {
       "nomes-escritos",
       "preenchimentos",
       "erros",
+      // V10.6 — fecha a lista: é o único grupo sem nada a decidir
+      "gravadas",
     ]);
+  });
+
+  /*
+    V10.6 — a linha JÁ GRAVADA sai do grupo dela e vai para o fim, e isso não é
+    arrumação: a frase do grupo dobrado diz "vão receber o nome que está no
+    arquivo", e sobre uma linha já gravada isso é mentira. Com o grupo próprio, a
+    contagem de cada grupo volta a medir o que FALTA.
+  */
+  it("gravada vence qualquer outro grupo, e o dobrado volta a contar só o que falta", () => {
+    const propostas = [
+      proposta({ song_id: 1 }),
+      proposta({ song_id: 2 }),
+      proposta({ song_id: 3, lyrics: "ai" }),
+    ];
+    const grupos = agruparPorRisco(
+      propostas,
+      () => null,
+      (i) => i === 0,
+    );
+    expect(grupos.map((g) => g.grupo)).toEqual([
+      "letras",
+      "preenchimentos",
+      "gravadas",
+    ]);
+    expect(grupos.find((g) => g.grupo === "preenchimentos")!.propostas).toHaveLength(
+      1,
+    );
+    expect(textoDoGrupoDobrado(
+      grupos.find((g) => g.grupo === "preenchimentos")!.propostas,
+    )).toContain("1 música sem título ou artista vai receber");
+    expect(tituloDoGrupo("gravadas", 1)).toBe("1 música gravada no arquivo");
+    expect(tituloDoGrupo("gravadas", 28)).toBe("28 músicas gravadas no arquivo");
+  });
+
+  // Gravada vence até o ERRO: a linha que falhou e depois gravou tem um
+  // desfecho só, e é o último.
+  it("gravada vence o erro", () => {
+    expect(
+      grupoDaProposta(proposta({ error: "sem conexão" }), "falhou", true),
+    ).toBe("gravadas");
   });
 
   it("agrupa preservando a ordem de risco e a ordem dentro de cada grupo", () => {
@@ -1533,5 +1608,174 @@ describe("EstadoDoAcessorio", () => {
     expect(new Set(TODOS_OS_ESTADOS).size).toBe(7);
     expect(TODOS_OS_ESTADOS).toContain("perguntando");
     expect(TODOS_OS_ESTADOS).toContain("indeterminado");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V10.6 — a etapa 5 tem DUAS portas, e a segunda é permanente
+// ---------------------------------------------------------------------------
+//
+// Relato de campo: *"Achei que eu poderia clicar em aplicar e depois trabalhar
+// nas transcrições, mas não aconteceu… Simplesmente fechou a caixa e aplicou
+// essas 28… Mas agora tenho que começar de novo pra chegar na parte de
+// transcrição de novo."*
+//
+// O que se perdia não era um clique: era a varredura inteira. E a causa era de
+// projeto — "quais músicas estão sem letra" é fato PERMANENTE da biblioteca, e
+// estava amarrado a uma tela temporária.
+
+describe("o bloco permanente da transcrição (V10.6)", () => {
+  const CHEIO = {
+    quantas: 47,
+    segundos: 10_800,
+    medidaNestaMaquina: false,
+    disponivel: true,
+    download: null,
+    todaABiblioteca: true,
+  };
+
+  it("a SEGUNDA frase é a MESMA da pergunta do fim, letra por letra", () => {
+    // o número e o tempo são a mesma informação; muda só quem abre a frase,
+    // porque "sobraram" só é verdade logo depois de uma varredura
+    const doFim = textoDaOfertaDeTranscricao(47, 10_800, false);
+    const daTela = textoDoBlocoDeTranscricao(CHEIO);
+    const segunda = "Escrever a letra ouvindo o áudio leva cerca de 3 horas — pode levar mais nesta máquina.";
+    expect(doFim).toContain(segunda);
+    expect(daTela).toContain(segunda);
+  });
+
+  it("não diz 'sobraram': aqui nada acabou de acontecer", () => {
+    expect(textoDoBlocoDeTranscricao(CHEIO).toLowerCase()).not.toContain("sobrar");
+  });
+
+  it("diz o ESCOPO, porque o seletor de pasta fica logo acima", () => {
+    expect(textoDoBlocoDeTranscricao(CHEIO)).toContain(
+      "47 músicas da biblioteca estão sem letra",
+    );
+    expect(
+      textoDoBlocoDeTranscricao({ ...CHEIO, todaABiblioteca: false }),
+    ).toContain("47 músicas desta pasta estão sem letra");
+  });
+
+  it("singular", () => {
+    expect(textoDoBlocoDeTranscricao({ ...CHEIO, quantas: 1 })).toContain(
+      "1 música da biblioteca está sem letra",
+    );
+    expect(
+      textoDoBlocoDeTranscricao({ ...CHEIO, quantas: 1, todaABiblioteca: false }),
+    ).toContain("1 música desta pasta está sem letra");
+  });
+
+  // Zero é RESPOSTA, e não a ausência do bloco: quem abre a tela para saber
+  // quantas faltam precisa ler que não falta nenhuma.
+  it("zero é uma resposta, e não oferece trabalho nenhum", () => {
+    const t = textoDoBlocoDeTranscricao({ ...CHEIO, quantas: 0, segundos: 0 });
+    expect(t).toBe("Nenhuma música da biblioteca está sem letra.");
+    expect(
+      textoDoBlocoDeTranscricao({
+        ...CHEIO,
+        quantas: 0,
+        segundos: 0,
+        todaABiblioteca: false,
+      }),
+    ).toBe("Nenhuma música desta pasta está sem letra.");
+  });
+
+  // A medição desta máquina vale nas duas portas: seria a mesma biblioteca com
+  // dois tempos na mesma tela.
+  it("com a estimativa medida, o 'neste computador' vale aqui também", () => {
+    const t = textoDoBlocoDeTranscricao({ ...CHEIO, medidaNestaMaquina: true });
+    expect(t).toContain("leva cerca de 3 horas neste computador.");
+    expect(t).not.toContain("pode levar mais");
+  });
+
+  /*
+    Sem os acessórios, a saída NÃO é "vá em Configurações": já estamos nela, e
+    os blocos de download estão a poucos pixels acima. Repetir o tamanho e o
+    tempo que eles já dizem seria o ruído que a régua da #100 proíbe — o que
+    falta responder é "por que não posso, e o que faço".
+  */
+  it("indisponível aqui aponta para cima, e não para Configurações", () => {
+    const t = textoDoBlocoDeTranscricao({
+      ...CHEIO,
+      disponivel: false,
+      download: { bytes: 1_533_763_059, segundos: 512 },
+    });
+    expect(t).toContain("47 músicas da biblioteca estão sem letra.");
+    expect(t).toContain("1,4 GB");
+    expect(t.toLowerCase()).toContain("acima");
+    expect(t).not.toContain("em Configurações");
+  });
+
+  it("indisponível sem saber o tamanho não inventa número (DECISIONS #86)", () => {
+    const t = textoDoBlocoDeTranscricao({ ...CHEIO, disponivel: false });
+    expect(t).toContain("47 músicas da biblioteca estão sem letra.");
+    expect(t.toLowerCase()).toContain("acima");
+    expect(t).not.toMatch(/\d+(,\d)? (kB|MB|GB)/);
+  });
+
+  // Zero vence a indisponibilidade: oferecer 1,4 GB de download para transcrever
+  // nada é pedir um trabalho que não existe.
+  it("zero não oferece download nenhum", () => {
+    expect(
+      textoDoBlocoDeTranscricao({
+        ...CHEIO,
+        quantas: 0,
+        segundos: 0,
+        disponivel: false,
+        download: { bytes: 1_533_763_059, segundos: 512 },
+      }),
+    ).toBe("Nenhuma música da biblioteca está sem letra.");
+  });
+});
+
+describe("fechar a revisão com transcrição pendente (V10.6)", () => {
+  /*
+    O aviso é INFORMATIVO, e de propósito: com a porta permanente em
+    Configurações a lista já não se perde, então uma confirmação bloqueante
+    seria um pop-up cobrando uma decisão por um prejuízo que deixou de existir —
+    e pop-up que se aprende a fechar sem ler é pop-up que não avisa mais nada.
+    O que ficou é a frase que diz PARA ONDE a oferta foi.
+  */
+  it("diz quantas faltam e onde a oferta continua", () => {
+    expect(avisoDeTranscricaoPendente(27)).toBe(
+      "Ainda há 27 músicas sem letra. Escrever a letra ouvindo o áudio continua" +
+        " em Configurações, quando você quiser.",
+    );
+  });
+
+  it("singular", () => {
+    expect(avisoDeTranscricaoPendente(1)).toContain("Ainda há 1 música sem letra");
+  });
+
+  it("zero não avisa nada: não há oferta pendente", () => {
+    expect(avisoDeTranscricaoPendente(0)).toBeNull();
+  });
+
+  // O aviso não pode acusar quem fechou: fechar é uma ação legítima, e a
+  // varredura foi só leitura.
+  it("não fala em perder nem em descartar", () => {
+    const t = avisoDeTranscricaoPendente(27)!;
+    expect(t.toLowerCase()).not.toContain("perd");
+    expect(t.toLowerCase()).not.toContain("descart");
+  });
+});
+
+describe("a linha já gravada (V10.6)", () => {
+  /*
+    Aplicar deixou de fechar a caixa, então as linhas gravadas continuam na
+    tela — e a tela precisa dizer o que aconteceu com elas. Sem isto a mesma
+    lista voltaria a oferecer o clique que acabou de acontecer, e o `apply`
+    recusaria a segunda tentativa com "a música mudou depois da busca": um erro
+    inventado por nós, para quem não tem a quem perguntar.
+  */
+  it("a linha diz que foi gravada, e o selo troca a confiança", () => {
+    expect(ROTULO_DA_LINHA_GRAVADA).toBe("Gravada no arquivo.");
+    expect(SELO_DA_LINHA_GRAVADA).toBe("GRAVADA");
+  });
+
+  it("não fala em erro nem pede ação nenhuma", () => {
+    expect(ROTULO_DA_LINHA_GRAVADA.toLowerCase()).not.toContain("erro");
+    expect(ROTULO_DA_LINHA_GRAVADA.toLowerCase()).not.toContain("confira");
   });
 });

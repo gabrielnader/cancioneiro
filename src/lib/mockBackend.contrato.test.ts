@@ -955,3 +955,110 @@ describe("contrato mock × Rust — sem_letra_no_fim (QA M3)", () => {
     expect([...r.sem_letra_no_fim].sort()).toEqual([...semLetra].sort());
   });
 });
+
+// ---------------------------------------------------------------------------
+// Regra 8 — a SEGUNDA porta da etapa 5 (V10.6)
+// ---------------------------------------------------------------------------
+//
+// `transcricaoPendentes` responde "quais músicas estão sem letra" sem varredura
+// nenhuma, porque isso é fato permanente da biblioteca e não resultado de uma
+// tela. Se o mock aplicasse aqui uma regra diferente da do `sem_letra_no_fim`,
+// o E2E certificaria um bloco de Configurações que oferece um trabalho que a
+// fila não vai fazer — a família de divergências da DECISIONS #88.
+describe("contrato mock × Rust — a porta permanente da etapa 5 (V10.6)", () => {
+  let backend: MockBackend;
+
+  beforeEach(() => {
+    localStorage.clear();
+    backend = createMockBackend();
+  });
+
+  it("devolve exatamente o que a varredura devolveria, sem varrer", async () => {
+    await backend.addFolder("/musicas/teste");
+    // sem rede a varredura não acha letra nenhuma, e é aí que as duas portas
+    // descrevem o MESMO instante — a comparação de maçã com maçã
+    backend._offline = true;
+    const r = await backend.enrichFolderScan("", "s1");
+    const p = await backend.transcricaoPendentes("");
+    expect(p.musicas).toEqual(r.sem_letra_no_fim);
+    expect(p.segundos_estimados).toBe(r.segundos_de_transcricao);
+    expect(p.estimativa_medida_nesta_maquina).toBe(
+      r.estimativa_medida_nesta_maquina,
+    );
+  });
+
+  /**
+   * **O que difere entre as duas portas é o MOMENTO, não a regra.**
+   *
+   * A pergunta do fim desconta quem acabou de ganhar uma proposta de letra
+   * naquela varredura (`proposta.lyrics !== null`): oferecer a transcrição de
+   * uma música cuja letra está ali na lista, esperando um clique, seria cobrar
+   * minutos de CPU por algo que um clique resolve.
+   *
+   * A porta permanente não tem varredura a descontar: ela responde o fato de
+   * AGORA, que é o que uma tela permanente pode afirmar. Aplicada a proposta, o
+   * fato muda e o número dela cai sozinho — é o mesmo predicado, num instante
+   * diferente.
+   */
+  it("a pergunta do fim desconta a letra que a varredura ACHOU; a porta permanente responde o agora", async () => {
+    await backend.addFolder("/musicas/teste");
+    const r = await backend.enrichFolderScan("", "s1");
+    const p = await backend.transcricaoPendentes("");
+    const achou = r.propostas.filter((x) => x.lyrics !== null).map((x) => x.song_id);
+    expect(achou.length).toBeGreaterThan(0);
+    for (const id of achou) {
+      expect(r.sem_letra_no_fim).not.toContain(id);
+      expect(p.musicas).toContain(id);
+    }
+    // aplicada a letra, as duas voltam a dizer a mesma coisa
+    const proposta = r.propostas.find((x) => x.lyrics !== null)!;
+    await backend.enrichApply([
+      {
+        song_id: proposta.song_id,
+        title: proposta.proposed_title,
+        artist: proposta.proposed_artist,
+        lyrics: proposta.lyrics,
+        add_temas: null,
+        current_title: proposta.current_title,
+        current_artist: proposta.current_artist,
+        fonte: proposta.fonte,
+      },
+    ]);
+    expect((await backend.transcricaoPendentes("")).musicas).toEqual(
+      r.sem_letra_no_fim,
+    );
+  });
+
+  it("os portões da etapa 5 valem inteiros: instrumental, letra e arquivo", async () => {
+    await backend.addFolder("/musicas/teste");
+    const songs = await backend.listSongs();
+    const sumida = songs.find((s) => s.file_path === "/musicas/teste/sem_letra.mp3")!;
+    const fica = songs.find((s) => s.file_path === "/musicas/teste/sem_tags.mp3")!;
+    backend._removeFileFromDisk(sumida.file_path);
+    const p = await backend.transcricaoPendentes("");
+    expect(p.musicas).toEqual([fica.id]);
+    // com letra escrita, ela sai da lista — o fato mudou, e a porta responde
+    // o fato de AGORA
+    await backend.writeTags(fica.id, "Oh! Chuva", "Falamansa", "chove chuva", null);
+    expect((await backend.transcricaoPendentes("")).musicas).toEqual([]);
+  });
+
+  it("`disponivel` é o mesmo fato que a contagem reporta", async () => {
+    await backend.addFolder("/musicas/teste");
+    expect((await backend.transcricaoPendentes("")).disponivel).toBe(false);
+    expect((await backend.enrichCount("")).transcricao_disponivel).toBe(false);
+    backend._estadoDoAcessorio("whisper-cli", "pronto");
+    backend._estadoDoAcessorio("modelo-de-transcricao-grande", "pronto");
+    expect((await backend.transcricaoPendentes("")).disponivel).toBe(true);
+    expect((await backend.enrichCount("")).transcricao_disponivel).toBe(true);
+  });
+
+  it("o prefixo de pasta é o mesmo da varredura e da contagem", async () => {
+    await backend.addFolder("/musicas/teste");
+    const dentro = await backend.transcricaoPendentes("/musicas/teste");
+    const fora = await backend.transcricaoPendentes("/lugar/nenhum");
+    expect(dentro.musicas.length).toBeGreaterThan(0);
+    expect(fora.musicas).toEqual([]);
+    expect(fora.segundos_estimados).toBe(0);
+  });
+});

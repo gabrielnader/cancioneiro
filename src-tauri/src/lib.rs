@@ -61,6 +61,7 @@ pub fn run() {
             commands::enrich_song_scan,
             commands::enrich_cancel_scan,
             commands::enrich_apply,
+            commands::transcricao_pendentes,
             commands::transcrever_musicas,
             commands::acessorios_estado,
             commands::acessorio_baixar,

@@ -1412,3 +1412,173 @@ opção mais simples que passa nos Acceptance Checks do PRD.
     lá. A que sobra, diante de um cartão só e de 1,4 GB, é *o que eu perco se
     não baixar?* — daí *"entender o que é cantado — sem ele o aplicativo não
     escreve letra nenhuma"*.
+
+## V10.6 — a transcrição deixou de morar dentro de uma tela temporária
+
+134. **"Quais músicas estão sem letra" é fato PERMANENTE da biblioteca, e
+    estava amarrado ao resultado de uma varredura. O erro de projeto era esse,
+    e é ele que esta rodada conserta.**
+    Relato de campo, verbatim, depois de rodar "Buscar dados desta pasta" na
+    biblioteca inteira e receber 1 conflito + 27 propostas de nome com dois
+    botões — "Aplicar selecionadas (28)" e "Começar agora": *"Achei que eu
+    poderia clicar em aplicar e depois trabalhar nas transcrições, mas não
+    aconteceu… Simplesmente fechou a caixa e aplicou essas 28… Mas agora tenho
+    que começar de novo pra chegar na parte de transcrição de novo… Acho que a
+    experiencia pro usuario fica confusa assim."*
+    O sintoma era que as duas ações COMPETIAM: a oferta de transcrição vivia
+    dentro da caixa de revisão, aplicar fechava a caixa, e dava para aplicar OU
+    transcrever, com a ordem importando de um jeito que ninguém adivinha. **O
+    que se perdia não era um clique: era a varredura inteira** — minutos num
+    acervo grande, e o mesmo estrago para qualquer fechamento (o botão, o Esc,
+    mandar para segundo plano).
+    A causa mais funda é que resultado de varredura é EFÊMERO, e a lista das
+    músicas sem letra não é resultado de varredura: o banco sempre soube
+    respondê-la. Três correções, e a terceira é a que torna as outras duas
+    baratas.
+135. **Aplicar não fecha a caixa, e cada linha passa a carregar o seu
+    desfecho.**
+    A caixa continua aberta depois do apply: o aviso do desfecho é o mesmo, as
+    linhas gravadas ficam na tela com o selo `GRAVADA` e a frase "Gravada no
+    arquivo.", e a oferta de transcrição continua ali. Fechar é só do "Fechar" e
+    do Esc — e o Esc durante a varredura ou a transcrição continua sendo
+    "mandar para segundo plano", como era.
+    **O `retainFailures` virou `registrarAplicacao`, e a troca é de propósito.**
+    Aquele mantinha na revisão SÓ as linhas que falharam, e isso só fazia
+    sentido enquanto aplicar fechava a caixa: as gravadas saíam da lista porque
+    a lista ia embora de qualquer jeito. Agora a lista inteira fica, e o que a
+    A5 garantia continua garantido — a linha recusada fica com o motivo do
+    backend —, com uma melhora: ela fica AO LADO das que gravaram, e antes quem
+    visse só as recusadas não tinha como saber que o resto foi.
+    **A garantia de não aplicar duas vezes a mesma linha mora em quatro lugares
+    que se somam**, e nenhum deles é "o usuário não vai clicar": a linha gravada
+    entra em `aplicadas` (por POSIÇÃO, não por música — a mesma música pode ter
+    duas linhas e gravar uma não grava a outra), a caixa fica desabilitada e
+    desmarcada, o `handleApply` filtra `!aplicadas.has(i)` antes de montar o
+    lote, e "Marcar todas" e a pré-marcação a ignoram.
+    **E o eco do `apply` passou a ser o do ARQUIVO, não o do instante da
+    varredura.** É o que a caixa aberta obrigou a consertar: aplicar o nome e
+    depois a letra da MESMA música é o caso TÍPICO (a música que sobra sem letra
+    é justamente a que tem uma proposta de nome pendente), e a segunda gravação
+    seria recusada com "a música mudou depois da busca" (A5) — e ela mudou, sim:
+    mudamos nós, um clique antes. O `apply` devolve a `Song` gravada; ela vira o
+    eco das outras linhas daquela música, com `has_lyrics` e `letra_origem`
+    junto, que é o que decide o aviso de substituição de letra.
+    **As gravadas ganharam GRUPO PRÓPRIO, no fim da lista**, e isso não é
+    arrumação: a frase do grupo dobrado diz "27 músicas sem título ou artista
+    vão receber o nome que está no arquivo", e sobre uma linha já gravada isso é
+    mentira. Com o grupo próprio a contagem de cada grupo volta a medir o que
+    FALTA, e o cabeçalho volta a contar decisões em aberto. Ele nasce FECHADO,
+    como o dobrado: 28 linhas "Gravada no arquivo." empurrariam a oferta de
+    transcrição para fora da tela, que é exatamente o defeito que esta versão
+    veio consertar.
+    **A linha gravada NÃO recebe opacidade.** O apagado é da linha com ERRO,
+    cuja informação é a frase vermelha; a gravada é o registro do que a pessoa
+    acabou de fazer, e é o que ela vai reler para conferir — opacidade sobre o
+    cinza secundário derrubaria o contraste abaixo de AA (#69). O que sai dela
+    são os avisos que PEDEM ação ("confira antes de aplicar", "Aplicar marca a
+    música como instrumental", "confira antes de marcar"): não há mais o que
+    conferir antes de quê.
+136. **A porta permanente: `transcricao_pendentes(folder_prefix)`, e a
+    `Contagem` NÃO ganhou a lista.**
+    O contrato:
+    ```
+    transcricao_pendentes(folderPrefix: String) -> PendentesDaTranscricao {
+      musicas: Vec<i64>,                        // os ids que transcrever_musicas recebe
+      segundos_estimados: u64,
+      estimativa_medida_nesta_maquina: bool,
+      disponivel: bool,
+    }
+    ```
+    São os MESMOS três campos que `EnrichScanResult` já devolvia
+    (`sem_letra_no_fim`, `segundos_de_transcricao`,
+    `estimativa_medida_nesta_maquina`) mais o `disponivel` que a `Contagem` já
+    reportava, de propósito: **a tela lê a oferta de um jeito só, venha ela da
+    pergunta do fim ou de Configurações**, e o `startTranscricao` recebe a fila
+    por parâmetro em vez de ganhar um segundo caminho — mesma store, mesma
+    barra, mesmo cancelamento, mesma revisão no fim. Um segundo caminho seria um
+    segundo lugar onde os três divergem (a lição do M4).
+    **Pendurar os ids na `Contagem` foi recusado.** Ela descreve o custo da
+    VARREDURA, e a tela a pede a cada troca de pasta — poria milhares de ids na
+    resposta do caminho quente que a #125 acabou de desafogar. São duas
+    perguntas ("quanto vai custar varrer" e "o que a etapa 5 tem para fazer"), e
+    cada uma tem a sua porta. O `is_file` por candidata (o portão da QA M3) fica
+    na porta nova, e não na contagem.
+    **A regra é `a_etapa_5_tem_o_que_fazer`, a mesma da pergunta do fim** —
+    instrumental não é transcrito, música com letra não entra, arquivo que sumiu
+    do disco não é trabalho. Reescrevê-la aqui como "não tem letra" seria a #80
+    pela terceira vez, e com consequência concreta: a tela prometeria trabalho
+    sobre arquivos que já não existem, e a fila devolveria linhas de erro para
+    quem confiou no número. Há teste, nos dois lados do par da #88, comparando
+    as duas portas campo a campo.
+    **A estimativa também saiu de UMA função** (`estimativa_da_transcricao`):
+    ela devolve `(segundos, medida_nesta_maquina)`, e é ela que as duas portas
+    chamam. Duas contas dariam dois tempos para a mesma biblioteca na mesma
+    tela, e ninguém saberia qual acreditar.
+    **O que DIFERE entre as duas portas é o MOMENTO, não a regra, e isso está
+    escrito nos dois lados.** A pergunta do fim desconta quem acabou de ganhar
+    uma proposta de letra naquela varredura: cobrar minutos de CPU por uma letra
+    que está ali na lista esperando um clique seria cobrar caro por algo que o
+    clique resolve. A porta permanente não tem varredura a descontar — responde
+    o fato de AGORA, que é o que uma tela permanente pode afirmar. Aplicada a
+    proposta, o fato muda e as duas voltam a dizer a mesma coisa.
+    **O bloco fica no fim da seção "Curadoria do acervo", sob o MESMO seletor de
+    pasta**, e o texto diz de qual escopo o número fala ("da biblioteca" /
+    "desta pasta"): a seção não pode inventar um segundo vocabulário de pastas,
+    e um número sem escopo é a pergunta que ninguém vai poder tirar com ninguém.
+    Ele é reperguntado nas mesmas condições da contagem — troca de pasta,
+    mudança do acervo, acessório instalado —, então aplicar uma letra faz o
+    número cair sozinho. Resposta que não voltou ou que falhou **não vira zero
+    nem promessa** (#86): o bloco não desenha nada.
+    **A segunda frase é literalmente a mesma da pergunta do fim**
+    (`fraseDoTempoDaTranscricao`), com a ressalva de procedência do número
+    inclusive. Só a abertura muda, porque "sobraram" só é verdade logo depois de
+    uma varredura. **Zero é RESPOSTA** — "Nenhuma música da biblioteca está sem
+    letra." —, e vence a indisponibilidade: oferecer 1,4 GB de download para
+    transcrever nada seria pedir um trabalho que não existe.
+    **E sem os acessórios o texto aponta para CIMA, não para "Configurações"**:
+    já estamos nela, e os blocos de download estão a poucos pixels acima.
+    Repetir o TEMPO que eles já dizem seria o ruído que a #100 proíbe; o TAMANHO
+    fica, porque é ele que responde à pergunta daquele segundo — *por que não
+    posso, e o que faço?*.
+    O `TRANSCRICAO_NO_FIM` mudou junto: ele dizia que a etapa 5 "é oferecida no
+    fim", e passou a dizer "no fim da busca — e aqui embaixo, a qualquer
+    momento". Texto que mente sobre o próprio produto é defeito, e este é o
+    mesmo texto que a V10 já corrigiu uma vez pelo mesmo motivo.
+137. **O aviso de fechar com a oferta pendente é INFORMATIVO, e não uma
+    confirmação — e essa escolha depende da #136 estar completa.**
+    A alternativa era um "tem certeza?" bloqueante. Ela foi recusada porque,
+    **com a porta permanente, a lista já não se perde**: a caixa cobraria uma
+    decisão por um prejuízo que deixou de existir, e pop-up que se aprende a
+    fechar sem ler é pop-up que não avisa mais nada — é o mesmo argumento que
+    fez a pergunta do fim não voltar depois do "Agora não".
+    O que ficou é uma frase, na régua da #100, dizendo PARA ONDE a oferta foi:
+    *"Ainda há 27 músicas sem letra. Escrever a letra ouvindo o áudio continua
+    em Configurações, quando você quiser."* Ela não fala em perder nem em
+    descartar: fechar é ação legítima, e a varredura foi só leitura.
+    O tom é `warning`, e não um quarto tom de toast: é um aviso, do mesmo peso
+    do da etapa 2 que parou no meio. Vocabulário visual novo para uma frase é
+    custo sem pergunta nova a responder.
+    A condição é EXATAMENTE a que desenha a oferta (revisão, gente sobrando,
+    etapa 5 possível nesta máquina, pergunta não dispensada). Avisar sobre uma
+    oferta que a pessoa não viu, ou que ela já respondeu, é ruído — e ruído numa
+    tela sem suporte é dúvida. Cancelar uma varredura ou uma transcrição em
+    curso não passa por aqui: não há oferta ainda, e a frase falaria de uma
+    lista que nem terminou de ser montada.
+138. **O que NÃO se fez, e fica escrito.**
+    **(a) A oferta dentro da revisão não é reperguntada ao backend depois do
+    apply**, e o número dela continua exato por construção: `sem_letra_no_fim`
+    exclui, no Rust, toda música para a qual a varredura ACHOU letra, então
+    nenhuma linha aplicável pode dar letra a quem está nessa lista. Reperguntar
+    seria pior: a porta permanente responde o fato de AGORA, e a oferta pularia
+    de 20 para 25 ao aplicar — um número mudando por um motivo que a pessoa não
+    tem como ver.
+    **(b) O bloco permanente não é uma seção nova de Configurações.** Ele mora
+    dentro de "Curadoria do acervo" porque reusa o seletor de pasta e a leitura
+    dos acessórios que já estão ali; uma seção própria duplicaria os dois, e a
+    #80 é sobre exatamente isso.
+    **(c) `Contagem.sem_letra` NÃO foi reusado como o número do bloco.** Ele
+    conta `etapas_de_letra_valem_a_pena`, sem o `is_file` da QA M3: seria um
+    número parecido, e diferente do que a fila vai fazer.
+    **(d) A `razao_desta_maquina` continua sem consumidor no frontend.** A #112
+    a deixou informativa de propósito, e a porta nova não mudou isso: quem diz à
+    tela o que ela pode afirmar continua sendo o booleano.

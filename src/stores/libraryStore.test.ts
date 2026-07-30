@@ -79,6 +79,12 @@ function fakeBackend(overrides: Partial<Backend> = {}): Backend {
       segundos_de_transcricao: 0,
       estimativa_medida_nesta_maquina: false,
     })),
+    transcricaoPendentes: vi.fn(async () => ({
+      musicas: [],
+      segundos_estimados: 0,
+      estimativa_medida_nesta_maquina: false,
+      disponivel: false,
+    })),
     transcreverMusicas: vi.fn(async () => ({
       propostas: [],
       razao_medida: null,

@@ -9,6 +9,7 @@ import type {
   EnrichProgress,
   EnrichProposal,
   EnrichScanResult,
+  PendentesDaTranscricao,
   TranscricaoProgresso,
   TranscricaoResultado,
 } from "./api";
@@ -2181,6 +2182,34 @@ export function createMockBackend(): MockBackend {
         segundos_estimados: candidatas.length * porMusica + semLetra * porMusicaSemLetra,
         etapas,
         transcricao_disponivel: transcricaoPronta(),
+      };
+    },
+
+    /**
+     * **A segunda porta da etapa 5** (V10.6) — porte do
+     * `enrich::pendentes_da_transcricao`.
+     *
+     * Ela responde o MESMO fato que `sem_letra_no_fim`, pelo MESMO predicado
+     * (`aEtapa5TemOQueFazer`) e com a MESMA conta de tempo. É o ponto inteiro
+     * de ela existir: a lista das músicas sem letra não é resultado de
+     * varredura, é fato da biblioteca — e amarrá-la a uma tela temporária foi o
+     * defeito que esta porta conserta.
+     */
+    async transcricaoPendentes(
+      folderPrefix: string,
+    ): Promise<PendentesDaTranscricao> {
+      const pendentes = state.songs
+        .filter((song) => candidataDoFunil(song, folderPrefix))
+        .filter(aEtapa5TemOQueFazer);
+      const razao = razaoDestaMaquina();
+      return {
+        musicas: pendentes.map((s) => s.id),
+        segundos_estimados: segundosParaTranscrever(
+          pendentes.map((s) => s.duration_seconds ?? 0),
+          razao,
+        ),
+        estimativa_medida_nesta_maquina: razao !== RAZAO_DE_REFERENCIA,
+        disponivel: transcricaoPronta(),
       };
     },
 

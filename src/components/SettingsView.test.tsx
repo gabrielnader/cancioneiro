@@ -14,11 +14,13 @@ import {
   ACESSORIO_INDISPONIVEL,
   ACESSORIO_PRONTO,
   ACESSORIO_SEM_BINARIO,
+  ROTULO_COMECAR_TRANSCRICAO,
   ROTULO_DO_DISPARO,
   TRANSCRICAO_NO_FIM,
   estimativaTexto,
   rotuloBaixarAcessorio,
   textoDoAcessorioAusente,
+  textoDoBlocoDeTranscricao,
   textoDoDownload,
   tituloDoAcessorio,
 } from "../lib/curadoria";
@@ -140,6 +142,7 @@ function song(id: number, filePath: string, over: Partial<Song> = {}): Song {
 
 /** enrichCount da vez — cada teste pode trocá-lo antes de renderizar. */
 let enrichCount: ReturnType<typeof vi.fn>;
+let transcricaoPendentes: ReturnType<typeof vi.fn>;
 let acessoriosEstado: ReturnType<typeof vi.fn>;
 let acessorioBaixar: ReturnType<typeof vi.fn>;
 let acessorioCancelar: ReturnType<typeof vi.fn>;
@@ -157,6 +160,14 @@ function estadoBase() {
     ),
   );
   acessoriosEstado = vi.fn(async () => [acessorio("ausente")]);
+  // V10.6 — a porta permanente da etapa 5. Instalação nova: há músicas sem
+  // letra, e a etapa 5 não roda aqui (nada baixado).
+  transcricaoPendentes = vi.fn(async () => ({
+    musicas: [2, 3],
+    segundos_estimados: 600,
+    estimativa_medida_nesta_maquina: false,
+    disponivel: false,
+  }));
   acessorioBaixar = vi.fn(async () => ({
     cancelado: false,
     acessorio: acessorio("pronto"),
@@ -166,6 +177,7 @@ function estadoBase() {
   setBackendForTests({
     onScanProgress: vi.fn(async () => () => {}),
     enrichCount,
+    transcricaoPendentes,
     acessoriosEstado,
     acessorioBaixar,
     acessorioCancelar,
@@ -205,6 +217,7 @@ function estadoBase() {
     applyErrors: {},
     scanInFlight: false,
     startScan: vi.fn(async () => {}),
+    startTranscricao: vi.fn(async () => {}),
   });
 }
 
@@ -1414,6 +1427,183 @@ describe("SettingsView — acessibilidade da seção nova", () => {
     expect(controles.length).toBeGreaterThanOrEqual(2);
     for (const c of controles) {
       expect(c.getAttribute("tabindex")).not.toBe("-1");
+    }
+  });
+});
+
+// ===========================================================================
+// V10.6 — a etapa 5 vive em Configurações, permanentemente
+// ===========================================================================
+//
+// Relato de campo, verbatim: *"Achei que eu poderia clicar em aplicar e depois
+// trabalhar nas transcrições, mas não aconteceu… Simplesmente fechou a caixa e
+// aplicou essas 28… Mas agora tenho que começar de novo pra chegar na parte de
+// transcrição de novo."*
+//
+// A oferta vivia DENTRO da caixa de revisão, e resultado de varredura é
+// efêmero. Mas "quais músicas estão sem letra" é fato PERMANENTE da biblioteca:
+// o backend responde a qualquer momento (`transcricaoPendentes`).
+
+describe("SettingsView — o bloco permanente da transcrição (V10.6)", () => {
+  beforeEach(estadoBase);
+
+  /** O texto que a tela deve mostrar, montado com os mesmos parâmetros dela. */
+  function bloco(over: Partial<Parameters<typeof textoDoBlocoDeTranscricao>[0]> = {}) {
+    return textoDoBlocoDeTranscricao({
+      quantas: 2,
+      segundos: 600,
+      medidaNestaMaquina: false,
+      disponivel: false,
+      download: null,
+      todaABiblioteca: true,
+      ...over,
+    });
+  }
+
+  it("diz quantas estão sem letra sem varredura nenhuma, e pergunta pela pasta escolhida", async () => {
+    render(<SettingsView />);
+    await screen.findByText(bloco());
+    expect(transcricaoPendentes).toHaveBeenCalledWith("");
+  });
+
+  it("com os acessórios prontos, oferece o trabalho com o tempo desta máquina", async () => {
+    acessoriosEstado.mockResolvedValue([
+      acessorio("pronto"),
+      whisper("pronto"),
+      modelo("pronto"),
+    ]);
+    transcricaoPendentes.mockResolvedValue({
+      musicas: [2, 3, 4],
+      segundos_estimados: 10_800,
+      estimativa_medida_nesta_maquina: true,
+      disponivel: true,
+    });
+    render(<SettingsView />);
+    await screen.findByText(
+      bloco({
+        quantas: 3,
+        segundos: 10_800,
+        medidaNestaMaquina: true,
+        disponivel: true,
+      }),
+    );
+    expect(
+      screen.getByRole("button", { name: ROTULO_COMECAR_TRANSCRICAO }),
+    ).toBeEnabled();
+  });
+
+  /*
+    É o MESMO caminho da pergunta do fim: mesma store, mesma barra, mesmo
+    cancelamento, mesma revisão. E a fila é a que o BACKEND devolveu — deduzi-la
+    aqui seria a DECISIONS #80.
+  */
+  it("começar manda ao backend exatamente os ids que a porta devolveu", async () => {
+    const startTranscricao = vi.fn(async () => {});
+    useEnrichStore.setState({ startTranscricao });
+    transcricaoPendentes.mockResolvedValue({
+      musicas: [21, 22, 23],
+      segundos_estimados: 600,
+      estimativa_medida_nesta_maquina: false,
+      disponivel: true,
+    });
+    render(<SettingsView />);
+    await screen.findByText(
+      bloco({ quantas: 3, segundos: 600, disponivel: true }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: ROTULO_COMECAR_TRANSCRICAO }));
+    expect(startTranscricao).toHaveBeenCalledWith([21, 22, 23]);
+  });
+
+  it("zero é uma resposta, e não oferece trabalho nenhum", async () => {
+    transcricaoPendentes.mockResolvedValue({
+      musicas: [],
+      segundos_estimados: 0,
+      estimativa_medida_nesta_maquina: false,
+      disponivel: true,
+    });
+    render(<SettingsView />);
+    await screen.findByText(bloco({ quantas: 0, segundos: 0, disponivel: true }));
+    expect(
+      screen.queryByRole("button", { name: ROTULO_COMECAR_TRANSCRICAO }),
+    ).not.toBeInTheDocument();
+  });
+
+  // Sem os acessórios não há o que começar, e o caminho é o download que está
+  // logo acima nesta mesma tela.
+  it("sem os acessórios, aponta para o download acima e não oferece o botão", async () => {
+    acessoriosEstado.mockResolvedValue([
+      acessorio("pronto"),
+      whisper("ausente"),
+      modelo("ausente"),
+    ]);
+    render(<SettingsView />);
+    await screen.findByText(
+      bloco({
+        disponivel: false,
+        download: { bytes: 183_000_000, segundos: 183 },
+      }),
+    );
+    expect(
+      screen.queryByRole("button", { name: ROTULO_COMECAR_TRANSCRICAO }),
+    ).not.toBeInTheDocument();
+  });
+
+  // A pasta escolhida manda: o bloco fica embaixo do MESMO seletor, e um número
+  // sem escopo é a pergunta que ninguém vai poder tirar com ninguém.
+  it("trocar a pasta repergunta, e o texto diz que o escopo é a pasta", async () => {
+    render(<SettingsView />);
+    await screen.findByText(bloco());
+    fireEvent.change(screen.getByLabelText("Pasta a curar"), {
+      target: { value: "/acervo/1" },
+    });
+    await screen.findByText(bloco({ todaABiblioteca: false }));
+    expect(transcricaoPendentes).toHaveBeenCalledWith("/acervo/1");
+  });
+
+  // Enquanto a resposta não chega, nada é afirmado — nem que falta, nem que não
+  // falta (DECISIONS #86).
+  it("a pergunta que falhou não vira zero nem promessa", async () => {
+    transcricaoPendentes.mockRejectedValue(new Error("sem banco"));
+    render(<SettingsView />);
+    await screen.findByText(estimativa(pronta(), 3));
+    expect(screen.queryByText(/está sem letra/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/estão sem letra/)).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: ROTULO_COMECAR_TRANSCRICAO }),
+    ).not.toBeInTheDocument();
+  });
+
+  // Com a etapa 5 rodando, o bloco não oferece uma segunda fila: duas filas
+  // disputariam a CPU e embaralhariam as duas barras (a disciplina do M4).
+  it("com a etapa 5 em curso, o botão não convida a uma segunda fila", async () => {
+    transcricaoPendentes.mockResolvedValue({
+      musicas: [2, 3],
+      segundos_estimados: 600,
+      estimativa_medida_nesta_maquina: false,
+      disponivel: true,
+    });
+    useEnrichStore.setState({ status: "transcribing" });
+    render(<SettingsView />);
+    await screen.findByText(bloco({ disponivel: true }));
+    expect(
+      screen.getByRole("button", { name: ROTULO_COMECAR_TRANSCRICAO }),
+    ).toBeDisabled();
+  });
+
+  it("o texto do bloco passa em AA sobre o fundo de Configurações", async () => {
+    transcricaoPendentes.mockResolvedValue({
+      musicas: [2, 3],
+      segundos_estimados: 600,
+      estimativa_medida_nesta_maquina: false,
+      disponivel: true,
+    });
+    render(<SettingsView />);
+    const frase = await screen.findByText(bloco({ disponivel: true }));
+    for (const fundo of [FUNDO_CONFIGURACOES, "#FFFFFF", "#F0FDFA"]) {
+      expect(
+        contrastRatio(corDoTexto(frase.className), fundo),
+        `sobre ${fundo}`,
+      ).toBeGreaterThanOrEqual(AA_TEXTO_NORMAL);
     }
   });
 });

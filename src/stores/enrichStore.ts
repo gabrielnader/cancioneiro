@@ -6,7 +6,12 @@ import {
   type EnrichProposal,
   type TranscricaoProgresso,
 } from "../lib/api";
-import { textoSemPropostas, type DownloadPendente } from "../lib/curadoria";
+import {
+  avisoDeTranscricaoPendente,
+  textoSemPropostas,
+  type DownloadPendente,
+} from "../lib/curadoria";
+import type { Song } from "../lib/types";
 import { useToastStore } from "./toastStore";
 
 /**
@@ -101,6 +106,36 @@ interface EnrichState {
   /** Erros do último apply, por song_id — a linha fica visível com o erro (A5). */
   applyErrors: Record<number, string>;
   /**
+   * V10.6 — as linhas JÁ GRAVADAS nesta revisão, pela POSIÇÃO na lista.
+   *
+   * Existe porque aplicar deixou de fechar a caixa. Era o fechamento que jogava
+   * fora a lista das músicas sem letra, e recuperá-la custava a varredura
+   * inteira — o relato de campo que trouxe esta versão. Com a caixa aberta, a
+   * lista continua na tela, e a tela precisa dizer o que já aconteceu com cada
+   * linha: sem isto ela ofereceria de novo o clique que acabou de acontecer, e
+   * o `apply` recusaria a segunda tentativa com "a música mudou depois da
+   * busca" — um erro inventado por nós.
+   *
+   * Por POSIÇÃO, e não por `song_id`, pelo mesmo motivo da seleção: a mesma
+   * música pode ter duas linhas (o nome pendente e a letra da etapa 5), e cada
+   * uma é uma decisão. Aplicar uma não decide a outra.
+   */
+  aplicadas: number[];
+  /**
+   * O que o disco tem AGORA, por música gravada nesta revisão.
+   *
+   * É o eco fresco: o `apply` recusa uma proposta cujo `current_title` não bate
+   * mais com o arquivo (QA A5), e depois de gravar o nome de uma música o eco da
+   * OUTRA linha dela ficou velho. Sem isto, aplicar a letra da etapa 5 depois de
+   * aplicar o nome falharia com "a música mudou depois da busca" — e a música
+   * mudou, sim: mudamos nós, um clique antes.
+   *
+   * Guarda a `Song` que o backend devolveu, e não campos escolhidos a dedo:
+   * `has_lyrics` e `letra_origem` decidem o aviso de substituição de letra, e a
+   * próxima coisa que precisar do estado real já vai estar aqui.
+   */
+  gravadas: Record<number, Song>;
+  /**
    * Um invoke de varredura ainda não respondeu — inclusive DEPOIS de cancelar
    * (o backend só para na próxima música). Enquanto for true, disparar outra
    * varredura sobreporia as duas (M4).
@@ -120,10 +155,16 @@ interface EnrichState {
     transcricao?: EstadoDaTranscricao,
   ) => Promise<void>;
   /**
-   * A etapa 5, sobre `semLetraNoFim`. Roda em segundo plano, é cancelável pelo
-   * mesmo `close()` e acrescenta as propostas à revisão que já está aberta.
+   * A etapa 5. Roda em segundo plano, é cancelável pelo mesmo `close()` e
+   * acrescenta as propostas à revisão que já está aberta.
+   *
+   * Sem argumento, a fila é o `semLetraNoFim` da varredura — a pergunta do fim.
+   * Com argumento, é a lista que a porta permanente de Configurações devolveu
+   * (V10.6). É o MESMO caminho de propósito: mesma barra, mesmo cancelamento,
+   * mesma revisão no fim. Um segundo caminho seria um segundo lugar onde os
+   * três podem divergir (a lição do M4).
    */
-  startTranscricao: () => Promise<void>;
+  startTranscricao: (musicas?: readonly number[]) => Promise<void>;
   /** "Agora não": a pergunta do fim some desta revisão, e não volta sozinha. */
   dispensarTranscricao: () => void;
   /** Esconde o overlay — o trabalho CONTINUA rodando em segundo plano. */
@@ -133,11 +174,23 @@ interface EnrichState {
   /** Cancela: para o trabalho no backend e/ou descarta as propostas na tela. */
   close: () => void;
   /**
-   * Depois de um apply com falhas: mantém na revisão SÓ as músicas que não
-   * gravaram, cada uma com o erro devolvido (A5 — o usuário precisa ver que a
-   * sugestão foi recusada, não silenciosamente perdida).
+   * Registra o desfecho de um apply: cada linha enviada fica gravada ou fica com
+   * o erro que o backend devolveu (A5 — o usuário precisa ver que a sugestão foi
+   * recusada, não silenciosamente perdida).
+   *
+   * **V10.6 — substituiu o `retainFailures`, e a troca é de propósito.** Aquele
+   * mantinha na revisão SÓ as linhas que falharam, e isso só fazia sentido
+   * enquanto aplicar FECHAVA a caixa: as gravadas saíam da lista porque a lista
+   * ia embora de qualquer jeito. Como aplicar não fecha mais, a lista inteira
+   * fica — e cada linha carrega o seu desfecho.
+   *
+   * `linhas` são as POSIÇÕES enviadas neste apply. Uma linha da mesma música que
+   * não foi enviada continua sendo uma decisão em aberto.
    */
-  retainFailures: (falhas: EnrichApplyResult[]) => void;
+  registrarAplicacao: (
+    linhas: readonly number[],
+    resultados: readonly EnrichApplyResult[],
+  ) => void;
 }
 
 // Guarda de corrida (mesmo padrão do runSearch do libraryStore): cancelar
@@ -182,6 +235,8 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
   transcricaoProgress: null,
   transcricaoDispensada: false,
   applyErrors: {},
+  aplicadas: [],
+  gravadas: {},
   scanInFlight: false,
 
   startScan: async (folderPrefix, transcricao = SEM_TRANSCRICAO) => {
@@ -207,6 +262,8 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
       transcricaoProgress: null,
       transcricaoDispensada: false,
       applyErrors: {},
+      aplicadas: [],
+      gravadas: {},
       scanInFlight: true,
     });
 
@@ -314,9 +371,12 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
     }
   },
 
-  startTranscricao: async () => {
+  startTranscricao: async (musicas) => {
     const { semLetraNoFim, status, scanInFlight } = get();
-    if (semLetraNoFim.length === 0) return;
+    // V10.6 — a fila vem de Configurações quando ela é passada, e da pergunta
+    // do fim quando não é. O resto do caminho é UM só.
+    const fila = musicas ?? semLetraNoFim;
+    if (fila.length === 0) return;
     // a etapa 5 leva horas: duas filas ao mesmo tempo disputariam a CPU e
     // embaralhariam as duas barras (mesma disciplina do M4)
     if (status === "scanning" || status === "transcribing" || scanInFlight) return;
@@ -362,7 +422,7 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
       // que ela pode afirmar é o booleano da PRÓXIMA varredura: guardar aqui
       // seria uma segunda cópia de um estado que já tem dono (DECISIONS #80).
       const { propostas } = await getBackend().transcreverMusicas(
-        semLetraNoFim,
+        [...fila],
         scanId,
       );
       if (seq !== scanSeq) return; // cancelado no meio: descarta
@@ -408,7 +468,36 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
 
   close: () => {
     scanSeq++;
-    const { status, scanId } = get();
+    const anterior = get();
+    const { status, scanId } = anterior;
+    /*
+      V10.6 — fechar a revisão com a oferta de transcrição na tela AVISA, em vez
+      de descartá-la em silêncio.
+
+      A condição é a MESMA que desenha a oferta (revisão, gente sobrando, etapa
+      5 possível aqui, pergunta não dispensada): avisar sobre uma oferta que a
+      pessoa não viu, ou que ela já respondeu com "agora não", seria ruído — e
+      ruído numa tela sem suporte é dúvida.
+
+      É INFORMATIVO, e não uma confirmação. Com o bloco permanente de
+      Configurações a lista já não se perde: uma caixa perguntando "tem certeza?"
+      cobraria uma decisão por um prejuízo que deixou de existir, e pop-up que se
+      aprende a fechar sem ler é pop-up que não avisa mais nada.
+
+      Cancelar uma varredura ou uma transcrição EM CURSO não passa por aqui: não
+      há oferta ainda, e a frase falaria de uma lista que nem terminou de ser
+      montada.
+    */
+    if (
+      status === "review" &&
+      anterior.transcricao.disponivel &&
+      !anterior.transcricaoDispensada
+    ) {
+      const aviso = avisoDeTranscricaoPendente(anterior.semLetraNoFim.length);
+      // "warning" e não um tom novo: é um aviso, do mesmo peso do da etapa 2
+      // que parou no meio (`avisoSemPerguntarAoSom`).
+      if (aviso !== null) useToastStore.getState().push(aviso, "warning");
+    }
     set({
       status: "idle",
       overlayOpen: false,
@@ -423,6 +512,8 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
       estimativaMedidaNestaMaquina: false,
       transcricaoProgress: null,
       applyErrors: {},
+      aplicadas: [],
+      gravadas: {},
     });
     // Cancelar de verdade: a guarda de corrida acima só descarta o RESULTADO;
     // sem isto a varredura seguia consultando o LRCLIB até o fim (M4) — e a
@@ -441,16 +532,36 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
     }
   },
 
-  retainFailures: (falhas) => {
-    const errors: Record<number, string> = {};
-    for (const f of falhas) {
-      errors[f.song_id] = f.error ?? "não foi possível gravar";
-    }
-    set((s) => ({
-      status: "review",
-      overlayOpen: true,
-      proposals: s.proposals.filter((p) => p.song_id in errors),
-      applyErrors: errors,
-    }));
+  registrarAplicacao: (linhas, resultados) => {
+    const gravadasAgora: Record<number, Song> = {};
+    set((s) => {
+      // O mapa de erros é ATUALIZADO, não substituído: um erro de linha que não
+      // foi retentada nesta rodada continua descrevendo o que aconteceu com
+      // ela. Substituir apagaria a única informação de que aquela sugestão foi
+      // recusada (DECISIONS #47).
+      const applyErrors = { ...s.applyErrors };
+      for (const r of resultados) {
+        if (r.song !== null) {
+          gravadasAgora[r.song_id] = r.song;
+          // gravou depois de falhar: o erro descrevia a tentativa anterior
+          delete applyErrors[r.song_id];
+        } else {
+          applyErrors[r.song_id] = r.error ?? "não foi possível gravar";
+        }
+      }
+      const novas = linhas.filter((i) => {
+        const p = s.proposals[i];
+        return p !== undefined && gravadasAgora[p.song_id] !== undefined;
+      });
+      return {
+        status: "review",
+        overlayOpen: true,
+        // A LISTA INTEIRA FICA. Aplicar não fecha mais a caixa, e era o
+        // fechamento que jogava fora a oferta de transcrição.
+        aplicadas: [...s.aplicadas, ...novas],
+        gravadas: { ...s.gravadas, ...gravadasAgora },
+        applyErrors,
+      };
+    });
   },
 }));

@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -15,6 +16,8 @@ import {
   LABEL_SUA_ETIQUETA_DIZ,
   LABEL_SUBSTITUIR_LETRA,
   ROTULO_COMECAR_TRANSCRICAO,
+  ROTULO_DA_LINHA_GRAVADA,
+  SELO_DA_LINHA_GRAVADA,
   agruparPorRisco,
   avisoLetraExistente,
   avisoSemPerguntarAoSom,
@@ -69,10 +72,14 @@ import { useToastStore } from "../stores/toastStore";
 function defaultSelection(
   proposals: EnrichProposal[],
   applyErrors: Record<number, string>,
+  aplicadas: ReadonlySet<number>,
 ): Set<number> {
   const marcadas = new Set<number>();
   proposals.forEach((p, i) => {
     if (p.error !== null || applyErrors[p.song_id] !== undefined) return;
+    // V10.6 — linha já gravada não é decisão: pré-marcá-la ofereceria de novo o
+    // clique que acabou de acontecer
+    if (aplicadas.has(i)) return;
     const grupo = grupoDaProposta(p, null);
     if (grupo === "preenchimentos" || (grupo === "letras" && p.confidence === "alta")) {
       marcadas.add(i);
@@ -92,10 +99,20 @@ function erroPedeConsentimento(erro: string | null): boolean {
   return erro.toLowerCase().includes(LABEL_SUBSTITUIR_LETRA.toLowerCase());
 }
 
-/** Esta linha gravaria letra NOVA por cima de uma letra que já existe? */
-function substituiriaLetra(p: EnrichProposal, erro: string | null): boolean {
+/**
+ * Esta linha gravaria letra NOVA por cima de uma letra que já existe?
+ *
+ * `atual` é o estado do ARQUIVO, e não o eco da proposta: uma gravação anterior
+ * DESTA revisão pode ter posto letra ali (V10.6 — aplicar não fecha mais a
+ * caixa), e a linha que vem depois tem de avisar sobre a letra que existe agora.
+ */
+function substituiriaLetra(
+  p: Pick<EnrichProposal, "lyrics">,
+  atual: { has_lyrics: boolean },
+  erro: string | null,
+): boolean {
   if (p.lyrics === null) return false;
-  return p.has_lyrics || erroPedeConsentimento(erro);
+  return atual.has_lyrics || erroPedeConsentimento(erro);
 }
 
 const BADGES: Record<
@@ -123,6 +140,18 @@ const BADGE_CONFLITO = {
 const BADGE_SEM_VOZ = {
   label: "SEM VOZ",
   className: "bg-[#FEF3C7] text-[#854D0E]",
+};
+
+/**
+ * V10.6 — a linha já foi gravada nesta revisão.
+ *
+ * Ela existe porque aplicar deixou de fechar a caixa (era o fechamento que
+ * jogava fora a lista das músicas sem letra). #115E59 sobre #CCFBF1 dá 6,7:1 —
+ * o mesmo verde do resto do produto, acima de AA.
+ */
+const BADGE_GRAVADA = {
+  label: SELO_DA_LINHA_GRAVADA,
+  className: "bg-[#CCFBF1] text-[#115E59]",
 };
 
 function nomeCompleto(title: string, artist: string | null): string {
@@ -189,10 +218,18 @@ export function EnrichReview() {
   const dispensarTranscricao = useEnrichStore((s) => s.dispensarTranscricao);
   // erros devolvidos pelo apply, por música (linhas ficam como as com error)
   const applyErrors = useEnrichStore((s) => s.applyErrors);
+  // V10.6 — as linhas já gravadas nesta revisão, e o que o disco tem agora
+  const aplicadasNaOrdem = useEnrichStore((s) => s.aplicadas);
+  const estadoGravado = useEnrichStore((s) => s.gravadas);
   const close = useEnrichStore((s) => s.close);
   const hideOverlay = useEnrichStore((s) => s.hideOverlay);
-  const retainFailures = useEnrichStore((s) => s.retainFailures);
+  const registrarAplicacao = useEnrichStore((s) => s.registrarAplicacao);
   const push = useToastStore((s) => s.push);
+  /** As linhas gravadas, para consulta por posição. */
+  const aplicadas = useMemo(
+    () => new Set(aplicadasNaOrdem),
+    [aplicadasNaOrdem],
+  );
   /**
    * As linhas marcadas, pela POSIÇÃO na lista — não pelo `song_id`.
    *
@@ -245,14 +282,21 @@ export function EnrichReview() {
       "Acrescentou" é reconhecido por REFERÊNCIA: o `startTranscricao` faz
       `[...anteriores, ...novas]`, então as antigas continuam sendo os MESMOS
       objetos nas MESMAS posições — e a seleção é por posição. Qualquer outra
-      mudança (varredura nova, `retainFailures`, fechar) cai no caminho de
-      baixo e recomeça do padrão, que é o comportamento de sempre.
+      mudança (varredura nova, fechar) cai no caminho de baixo e recomeça do
+      padrão, que é o comportamento de sempre.
+
+      V10.6 — e a LISTA IGUAL não mexe em nada. Aplicar deixou de fechar a
+      caixa, então o que muda depois de um apply é `applyErrors`/`aplicadas`, com
+      `proposals` continuando o MESMO array. Recalcular o padrão aqui apagaria a
+      conferência da pessoa a cada gravação — a mesma perda do M2, por outra
+      porta.
     */
+    if (proposals === anteriores) return;
     const acrescentou =
       anteriores.length > 0 &&
       proposals.length > anteriores.length &&
       anteriores.every((p, i) => proposals[i] === p);
-    const padrao = defaultSelection(proposals, applyErrors);
+    const padrao = defaultSelection(proposals, applyErrors, aplicadas);
     if (acrescentou) {
       // o padrão vale só para as propostas NOVAS — ninguém as viu ainda
       setSelected((atual) => {
@@ -268,7 +312,7 @@ export function EnrichReview() {
     setSubstituir(new Set());
     setConsentidos(new Set());
     setAbertos(new Set());
-  }, [proposals, applyErrors]);
+  }, [proposals, applyErrors, aplicadas]);
 
   const visible = status !== "idle" && overlayOpen;
 
@@ -343,6 +387,39 @@ export function EnrichReview() {
   }, [visible, busy, close, hideOverlay]);
 
   if (!visible) return null;
+
+  /**
+   * O que o ARQUIVO tem agora para esta música (V10.6).
+   *
+   * A proposta carrega o eco do instante da varredura, e aplicar deixou de
+   * fechar a caixa: uma gravação desta mesma revisão pode ter mudado o nome e a
+   * letra do arquivo. Quem manda o eco velho no apply seguinte é recusado com "a
+   * música mudou depois da busca" (QA A5) — e ela mudou, sim: mudamos nós, um
+   * clique antes. A `Song` que o backend devolveu é a verdade mais nova que
+   * existe aqui.
+   */
+  function estadoAtual(p: EnrichProposal): {
+    current_title: string;
+    current_artist: string | null;
+    has_lyrics: boolean;
+    letra_origem: string | null;
+  } {
+    const g = estadoGravado[p.song_id];
+    if (g === undefined) {
+      return {
+        current_title: p.current_title,
+        current_artist: p.current_artist,
+        has_lyrics: p.has_lyrics,
+        letra_origem: p.letra_origem,
+      };
+    }
+    return {
+      current_title: g.title,
+      current_artist: g.artist,
+      has_lyrics: g.has_lyrics,
+      letra_origem: g.letra_origem ?? null,
+    };
+  }
 
   /** Erro da linha: o da proposta (varredura) ou o devolvido pelo apply. */
   function rowError(p: EnrichProposal): string | null {
@@ -425,9 +502,16 @@ export function EnrichReview() {
   }
 
   async function handleApply() {
-    const chosen = proposals.filter(
-      (p, i) => rowError(p) === null && selected.has(i),
+    /*
+      As POSIÇÕES enviadas neste apply — é por elas que a linha vira "gravada".
+      A linha já gravada nunca entra: aplicar duas vezes a mesma linha
+      escreveria o mesmo dado por cima e, quando o nome mudou, seria recusada
+      com "a música mudou depois da busca" (V10.6).
+    */
+    const linhas = proposals.flatMap((p, i) =>
+      rowError(p) === null && selected.has(i) && !aplicadas.has(i) ? [i] : [],
     );
+    const chosen = linhas.map((i) => proposals[i]);
     if (chosen.length === 0) return;
 
     // Se a música tocando está entre as selecionadas, pausa ANTES de gravar
@@ -457,8 +541,8 @@ export function EnrichReview() {
      */
     const porMusica = new Map<number, EnrichApply>();
     for (const p of chosen) {
-      const indice = proposals.indexOf(p);
-      const trocaLetra = substituiriaLetra(p, applyErrors[p.song_id] ?? null);
+      const atual = estadoAtual(p);
+      const trocaLetra = substituiriaLetra(p, atual, applyErrors[p.song_id] ?? null);
       const consentida = substituir.has(p.song_id);
       const letra = trocaLetra && !consentida ? null : (p.lyrics ?? null);
       // V9 — aceitar um conflito é aceitar o que o SOM disse: `proposed_*`
@@ -470,8 +554,10 @@ export function EnrichReview() {
         artist: p.conflito ? p.conflito.artista : (p.proposed_artist ?? null),
         lyrics: p.conflito ? null : letra,
         add_temas: null,
-        current_title: p.current_title,
-        current_artist: p.current_artist,
+        // V10.6 — o eco é o do ARQUIVO agora, e não o do instante da varredura:
+        // uma gravação desta mesma revisão pode ter mudado o nome
+        current_title: atual.current_title,
+        current_artist: atual.current_artist,
         // a procedência viaja junto: é ela que decide o TXXX:LETRA_ORIGEM
         fonte: p.fonte || null,
         ...(trocaLetra && consentida ? { substituir_letra: true } : {}),
@@ -483,7 +569,6 @@ export function EnrichReview() {
       const anterior = porMusica.get(p.song_id);
       if (!anterior) {
         porMusica.set(p.song_id, daLinha);
-        void indice;
         continue;
       }
       // Junta as decisões: o NOME é o da primeira linha que propôs um (ela vem
@@ -544,6 +629,11 @@ export function EnrichReview() {
           const p = proposals.find((x) => x.song_id === r.song_id);
           const a = enviado.get(r.song_id);
           if (!p || !a) continue;
+          // V10.6 — o "antes" desta gravação é o estado do ARQUIVO, e não o eco
+          // da varredura: numa segunda aplicação da mesma música o nome já é o
+          // que gravamos, e comparar com o eco velho contaria uma correção que
+          // não houve
+          const atual = estadoAtual(p);
           // conta pelo que FOI ENVIADO: a linha marcada sem substituição não
           // mandou letra nenhuma, e dizer que ela "ganhou letra" seria contar
           // uma mudança que não houve
@@ -561,8 +651,8 @@ export function EnrichReview() {
             // compara com o que FOI ENVIADO, não com `proposed_*`: na linha de
             // conflito o proposto repete o atual, e contar por ele diria
             // "gravada, sem mudança no conteúdo" sobre uma troca de nome
-            a.title !== p.current_title ||
-            (a.artist ?? null) !== (p.current_artist ?? null)
+            a.title !== atual.current_title ||
+            (a.artist ?? null) !== (atual.current_artist ?? null)
           ) {
             nomeCorrigido++;
           }
@@ -587,14 +677,28 @@ export function EnrichReview() {
         );
       }
 
-      if (falhas.length === 0) {
-        close();
-      } else {
-        // A5: o que NÃO gravou fica na tela com o erro (uma proposta recusada
-        // por estar velha some do lote sem que ninguém perceba, e o usuário
-        // acharia que a sugestão foi aplicada). As que gravaram saem da lista.
-        retainFailures(falhas);
-      }
+      /*
+        V10.6 — APLICAR NÃO FECHA A CAIXA.
+
+        Era isto que jogava fora a lista das músicas sem letra: a oferta de
+        transcrição vivia dentro desta caixa, e recuperá-la custava a varredura
+        inteira — minutos, numa biblioteca grande. Agora a caixa fica, cada linha
+        recebe o seu desfecho (gravada, ou o erro do backend) e a oferta continua
+        onde estava. Fechar passou a ser só do botão "Fechar" e do Esc.
+
+        A5 continua valendo, e melhor: a linha que não gravou fica na tela com o
+        motivo, ao lado das que gravaram — antes as gravadas saíam da lista, e
+        quem visse só as recusadas não tinha como saber que o resto foi.
+      */
+      registrarAplicacao(linhas, results);
+      // as linhas gravadas saem da seleção (não há o que aplicar nelas), e as
+      // que falharam também: quem responde a um erro é a marcação de
+      // consentimento, e o "Aplicar" volta a valer com ela
+      setSelected((prev) => {
+        const next = new Set(prev);
+        for (const i of linhas) next.delete(i);
+        return next;
+      });
     } catch {
       // defensivo: invoke rejeitado (erro de infraestrutura, não por música)
       push("Não foi possível aplicar as alterações.", "error");
@@ -604,9 +708,13 @@ export function EnrichReview() {
   }
 
   // MÉDIO-12 — o cabeçalho conta OFERTAS. Linha com erro não é proposta: ela
-  // existe para informar que a música foi tentada e falhou.
-  const ofertas = proposals.filter((p) => rowError(p) === null);
-  const grupos = agruparPorRisco(proposals, rowError);
+  // existe para informar que a música foi tentada e falhou. V10.6 — nem linha
+  // JÁ GRAVADA: ela não é mais uma decisão, e contá-la faria o cabeçalho pedir
+  // uma conferência que já aconteceu.
+  const ofertas = proposals.filter(
+    (p, i) => rowError(p) === null && !aplicadas.has(i),
+  );
+  const grupos = agruparPorRisco(proposals, rowError, (i) => aplicadas.has(i));
   const tituloDoCabecalho = textoDoCabecalho(ofertas.length);
 
   /** As linhas de um grupo que podem ser marcadas em massa. */
@@ -614,8 +722,8 @@ export function EnrichReview() {
     return (
       grupos
         .find((g) => g.grupo === grupo)
-        ?.propostas.filter((p) => rowError(p) === null)
-        .map((p) => proposals.indexOf(p)) ?? []
+        ?.propostas.map((p) => proposals.indexOf(p))
+        .filter((i) => rowError(proposals[i]) === null && !aplicadas.has(i)) ?? []
     );
   }
 
@@ -626,13 +734,21 @@ export function EnrichReview() {
   /** Uma linha da revisão — a mesma para todos os grupos. */
   function Linha({ p, linha }: { p: EnrichProposal; linha: number }) {
     const error = rowError(p);
-    const disabled = error !== null;
-    const badge = p.conflito
-      ? BADGE_CONFLITO
-      : p.marcar_instrumental
-        ? BADGE_SEM_VOZ
-        : BADGES[p.confidence];
-    const trocaLetra = substituiriaLetra(p, applyErrors[p.song_id] ?? null);
+    /** V10.6 — esta linha já foi gravada nesta revisão. */
+    const gravada = aplicadas.has(linha);
+    const disabled = error !== null || gravada;
+    const atual = estadoAtual(p);
+    const badge = gravada
+      ? // a confiança descrevia um palpite a decidir, e não há mais nada a
+        // decidir nesta linha: deixá-la ali a faria parecer pendente
+        BADGE_GRAVADA
+      : p.conflito
+        ? BADGE_CONFLITO
+        : p.marcar_instrumental
+          ? BADGE_SEM_VOZ
+          : BADGES[p.confidence];
+    const trocaLetra =
+      !gravada && substituiriaLetra(p, atual, applyErrors[p.song_id] ?? null);
     const comparacao = p.conflito
       ? compararConflito(
           { titulo: p.current_title, artista: p.current_artist },
@@ -640,7 +756,16 @@ export function EnrichReview() {
         )
       : null;
     return (
-      <li className={`flex items-start gap-3 py-2 ${disabled ? "opacity-60" : ""}`}>
+      <li
+        className={`flex items-start gap-3 py-2 ${
+          // a linha com ERRO fica apagada: ela não é acionável e o que importa
+          // nela é a frase vermelha. A GRAVADA fica em tinta cheia — ela é o
+          // registro do que a pessoa acabou de fazer, e é o que ela vai reler
+          // para conferir; opacidade em cima do cinza secundário derrubaria o
+          // contraste abaixo de AA (DECISIONS #69)
+          error !== null ? "opacity-60" : ""
+        }`}
+      >
         <input
           type="checkbox"
           // o rótulo diz o que ESTA linha decide: a mesma música pode ter duas
@@ -701,7 +826,16 @@ export function EnrichReview() {
           {error !== null && (
             <span className="block text-[13px] text-[#B91C1C]">{error}</span>
           )}
-          {error === null && (
+          {/*
+            V10.6 — o desfecho da linha, para quem acabou de aplicar e continua
+            olhando a mesma caixa. Ela não pede nada: é registro.
+          */}
+          {gravada && (
+            <span className="block text-[13px] font-medium text-[#0F766E]">
+              {ROTULO_DA_LINHA_GRAVADA}
+            </span>
+          )}
+          {error === null && !gravada && (
             // V8/F18 — procedência sempre à vista: ALTA vinda do LRCLIB (que
             // confere a duração) e ALTA vinda de um palpite de nome de arquivo
             // não se decidem igual.
@@ -724,7 +858,7 @@ export function EnrichReview() {
           )}
           {/* V5/F14 — letra de transcrição é letra de MÁQUINA, e a revisão diz
               isso ANTES de aplicar (o painel de letra avisa depois). */}
-          {error === null && p.lyrics !== null && ehLetraDeMaquina(p.fonte) && (
+          {error === null && !gravada && p.lyrics !== null && ehLetraDeMaquina(p.fonte) && (
             <span className="mt-0.5 block text-[13px] text-[#854D0E]">
               {AVISO_LETRA_DE_MAQUINA}
             </span>
@@ -734,7 +868,7 @@ export function EnrichReview() {
             sempre, e só o editor a desfaz: a linha diz o que o clique faz, e o
             `aviso` do backend traz a medição que sustenta a conclusão.
           */}
-          {error === null && p.marcar_instrumental && (
+          {error === null && !gravada && p.marcar_instrumental && (
             <span className="mt-0.5 block text-[13px] text-[#854D0E]">
               {AVISO_MARCAR_INSTRUMENTAL}
             </span>
@@ -772,7 +906,7 @@ export function EnrichReview() {
             DESMARCADA, e a linha diz por quê: sem isto o selo verde ao lado de
             uma caixa vazia não se explica.
           */}
-          {error === null && p.substitui_nome_escrito && (
+          {error === null && !gravada && p.substitui_nome_escrito && (
             <span className="mt-0.5 block text-[13px] text-[#854D0E]">
               {AVISO_NOME_ESCRITO}
             </span>
@@ -1014,11 +1148,14 @@ export function EnrichReview() {
                   // real (V9) e marcar uma música como instrumental (V10) —
                   // esta última some da fila de letra para sempre e só o
                   // editor a desfaz.
+                  // V10.6 — e a linha JÁ GRAVADA também não: não há o que
+                  // marcar nela.
                   onClick={() =>
                     setSelected(
                       new Set(
                         proposals.flatMap((p, i) =>
                           rowError(p) === null &&
+                          !aplicadas.has(i) &&
                           p.conflito === null &&
                           !p.marcar_instrumental
                             ? [i]
@@ -1048,10 +1185,20 @@ export function EnrichReview() {
 
             <div className="min-h-0 flex-1 overflow-y-auto">
               {grupos.map(({ grupo, propostas }) => {
-                // O grupo dobrado nasce FECHADO; os outros, abertos. Dobrado
-                // não é escondido: a frase diz o número e o que o clique fará,
-                // e o grupo continua abrível e desmarcável.
-                const dobravel = grupo === "preenchimentos";
+                /*
+                  Nascem FECHADOS o grupo dobrado e — desde a V10.6 — o das
+                  GRAVADAS; os outros, abertos.
+
+                  Dobrado não é escondido: a frase diz o número e o que aquelas
+                  linhas são, e o grupo continua abrível. No grupo dobrado ela
+                  diz também o que o clique fará, e por isso ele tem a marcação
+                  em massa; no das gravadas não há clique nenhum a descrever —
+                  28 linhas "Gravada no arquivo." empurrariam a oferta de
+                  transcrição para fora da tela, que é justamente o que esta
+                  versão veio consertar.
+                */
+                const dobravel = grupo === "preenchimentos" || grupo === "gravadas";
+                const comMarcacaoEmMassa = grupo === "preenchimentos";
                 const aberto = !dobravel || abertos.has(grupo);
                 const marcaveis = marcaveisDoGrupo(grupo);
                 const todasMarcadas =
@@ -1059,7 +1206,7 @@ export function EnrichReview() {
                 return (
                   <section key={grupo} className="border-t border-[#F3F4F6] pt-2">
                     <div className="flex flex-wrap items-center gap-2 pb-1">
-                      {dobravel && (
+                      {comMarcacaoEmMassa && (
                         <input
                           type="checkbox"
                           aria-label={textoDoGrupoDobrado(propostas)}
@@ -1079,7 +1226,7 @@ export function EnrichReview() {
                         />
                       )}
                       <h3 className="text-[14px] font-medium text-[#111827]">
-                        {dobravel
+                        {comMarcacaoEmMassa
                           ? textoDoGrupoDobrado(propostas)
                           : tituloDoGrupo(grupo, propostas.length)}
                       </h3>

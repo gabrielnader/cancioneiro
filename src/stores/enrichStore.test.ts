@@ -7,7 +7,7 @@ import {
   type EnrichScanResult,
   type TranscricaoProgresso,
 } from "../lib/api";
-import { textoSemPropostas } from "../lib/curadoria";
+import { avisoDeTranscricaoPendente, textoSemPropostas } from "../lib/curadoria";
 import { useEnrichStore } from "./enrichStore";
 import { useToastStore } from "./toastStore";
 
@@ -80,6 +80,8 @@ describe("enrichStore (V5 — F13)", () => {
       scanId: "",
       scannedTotal: 0,
       applyErrors: {},
+      aplicadas: [],
+      gravadas: {},
       scanInFlight: false,
       semLetraNoFim: [],
       segundosDeTranscricao: 0,
@@ -651,8 +653,39 @@ describe("enrichStore (V5 — F13)", () => {
     });
   });
 
-  describe("retainFailures — o que não gravou fica na tela (A5)", () => {
-    it("mantém só as linhas que falharam, com o erro devolvido pelo backend", async () => {
+  /*
+    V10.6 — `retainFailures` virou `registrarAplicacao`, e o nome mudou porque
+    a operação mudou de propósito.
+
+    Ela existia para MANTER na tela só as linhas que falharam, e isso só fazia
+    sentido enquanto aplicar FECHAVA a caixa: as gravadas saíam da lista porque
+    a lista ia embora de qualquer jeito. Aplicar deixou de fechar (era o
+    fechamento que jogava fora a lista das músicas sem letra), então a lista
+    inteira fica — e o que a operação faz agora é REGISTRAR o desfecho de cada
+    linha: gravada, ou falhou com o motivo.
+
+    O que a A5 garantia continua garantido, e mais: a linha que não gravou fica
+    na tela com o erro devolvido pelo backend, e a que gravou não pode ser
+    aplicada de novo.
+  */
+  describe("registrarAplicacao — cada linha fica com o seu desfecho (A5; V10.6)", () => {
+    const gravada = (id: number, title = "A Canção") => ({
+      song_id: id,
+      song: {
+        id,
+        file_path: `/acervo/${id}.mp3`,
+        folder_id: 1,
+        title,
+        artist: "Artista",
+        album: null,
+        duration_seconds: 240,
+        has_lyrics: true,
+        available: true,
+      },
+      error: null,
+    });
+
+    it("a lista INTEIRA fica; quem gravou sai da decisão, quem falhou fica com o erro", async () => {
       setBackendForTests({
         enrichFolderScan: vi.fn(async () =>
           scanResult([proposal({ song_id: 1 }), proposal({ song_id: 2 })]),
@@ -660,16 +693,45 @@ describe("enrichStore (V5 — F13)", () => {
       } as unknown as Backend);
       await useEnrichStore.getState().startScan("");
 
-      useEnrichStore.getState().retainFailures([
-        { song_id: 2, song: null, error: "a música mudou depois da busca" },
-      ]);
+      useEnrichStore
+        .getState()
+        .registrarAplicacao([0, 1], [
+          gravada(1),
+          { song_id: 2, song: null, error: "a música mudou depois da busca" },
+        ]);
 
       const state = useEnrichStore.getState();
       expect(state.status).toBe("review");
-      expect(state.proposals.map((p) => p.song_id)).toEqual([2]);
+      expect(state.overlayOpen).toBe(true);
+      expect(
+        state.proposals.map((p) => p.song_id),
+        "nenhuma linha sai da tela: aplicar não fecha mais a caixa",
+      ).toEqual([1, 2]);
+      expect(state.aplicadas).toEqual([0]);
       expect(state.applyErrors).toEqual({
         2: "a música mudou depois da busca",
       });
+      // e o que o disco tem AGORA fica guardado: é o eco que uma segunda
+      // aplicação de outra linha da mesma música precisa mandar
+      expect(state.gravadas[1].title).toBe("A Canção");
+      expect(state.gravadas[2]).toBeUndefined();
+    });
+
+    it("só as linhas ENVIADAS entram em `aplicadas`", async () => {
+      setBackendForTests({
+        enrichFolderScan: vi.fn(async () =>
+          // duas linhas da MESMA música: o nome e a letra da etapa 5
+          scanResult([proposal({ song_id: 1 }), proposal({ song_id: 1 })]),
+        ),
+      } as unknown as Backend);
+      await useEnrichStore.getState().startScan("");
+
+      // só a primeira foi marcada e enviada
+      useEnrichStore.getState().registrarAplicacao([0], [gravada(1)]);
+      expect(
+        useEnrichStore.getState().aplicadas,
+        "a segunda linha da mesma música continua sendo uma decisão em aberto",
+      ).toEqual([0]);
     });
 
     it("erro nulo vira uma mensagem genérica (nunca uma linha sem explicação)", async () => {
@@ -679,26 +741,87 @@ describe("enrichStore (V5 — F13)", () => {
       await useEnrichStore.getState().startScan("");
       useEnrichStore
         .getState()
-        .retainFailures([{ song_id: 1, song: null, error: null }]);
+        .registrarAplicacao([0], [{ song_id: 1, song: null, error: null }]);
       expect(useEnrichStore.getState().applyErrors[1]).toBe(
         "não foi possível gravar",
       );
     });
 
-    it("close e uma nova varredura limpam os erros do apply anterior", async () => {
+    it("gravar depois de falhar apaga o erro daquela música", async () => {
       setBackendForTests({
         enrichFolderScan: vi.fn(async () => scanResult([proposal({ song_id: 1 })])),
       } as unknown as Backend);
       await useEnrichStore.getState().startScan("");
       useEnrichStore
         .getState()
-        .retainFailures([{ song_id: 1, song: null, error: "falhou" }]);
+        .registrarAplicacao([0], [{ song_id: 1, song: null, error: "falhou" }]);
+      expect(useEnrichStore.getState().applyErrors[1]).toBe("falhou");
+
+      useEnrichStore.getState().registrarAplicacao([0], [gravada(1)]);
+      expect(
+        useEnrichStore.getState().applyErrors,
+        "o erro descrevia a tentativa anterior, e ela deixou de ser a última",
+      ).toEqual({});
+    });
+
+    it("o erro de uma linha que não foi retentada NÃO é apagado", async () => {
+      setBackendForTests({
+        enrichFolderScan: vi.fn(async () =>
+          scanResult([proposal({ song_id: 1 }), proposal({ song_id: 2 })]),
+        ),
+      } as unknown as Backend);
+      await useEnrichStore.getState().startScan("");
+      useEnrichStore.getState().registrarAplicacao([0, 1], [
+        { song_id: 1, song: null, error: "falhou a um" },
+        { song_id: 2, song: null, error: "falhou a dois" },
+      ]);
+      // segunda rodada: só a 1 foi retentada, e gravou
+      useEnrichStore.getState().registrarAplicacao([0], [gravada(1)]);
+      expect(useEnrichStore.getState().applyErrors).toEqual({
+        2: "falhou a dois",
+      });
+    });
+
+    /*
+      A oferta de transcrição NÃO muda ao aplicar, e isso é garantia de
+      construção: `sem_letra_no_fim` exclui, no backend, toda música para a qual
+      a varredura ACHOU letra. Então nenhuma linha aplicável pode dar letra a
+      quem está nessa lista, e o número da pergunta continua exato.
+    */
+    it("a oferta de transcrição sobrevive ao apply, com o mesmo número", async () => {
+      setBackendForTests({
+        enrichFolderScan: vi.fn(async () =>
+          scanResult([proposal({ song_id: 1 })], 0, [7, 9], 600, false),
+        ),
+      } as unknown as Backend);
+      await useEnrichStore.getState().startScan("");
+      useEnrichStore.getState().registrarAplicacao([0], [gravada(1)]);
+
+      const s = useEnrichStore.getState();
+      expect(s.semLetraNoFim).toEqual([7, 9]);
+      expect(s.segundosDeTranscricao).toBe(600);
+      expect(s.transcricaoDispensada).toBe(false);
+    });
+
+    it("close e uma nova varredura limpam os desfechos do apply anterior", async () => {
+      setBackendForTests({
+        enrichFolderScan: vi.fn(async () => scanResult([proposal({ song_id: 1 })])),
+      } as unknown as Backend);
+      await useEnrichStore.getState().startScan("");
+      useEnrichStore
+        .getState()
+        .registrarAplicacao([0], [{ song_id: 1, song: null, error: "falhou" }]);
+      useEnrichStore.getState().registrarAplicacao([0], [gravada(1)]);
 
       useEnrichStore.getState().close();
       expect(useEnrichStore.getState().applyErrors).toEqual({});
+      expect(useEnrichStore.getState().aplicadas).toEqual([]);
+      expect(useEnrichStore.getState().gravadas).toEqual({});
 
       await useEnrichStore.getState().startScan("");
       expect(useEnrichStore.getState().applyErrors).toEqual({});
+      expect(useEnrichStore.getState().aplicadas).toEqual([]);
+      expect(useEnrichStore.getState().gravadas).toEqual({});
     });
 
     it("fim com o overlay ABERTO não emite toast (o overlay já mostra o resultado)", async () => {
@@ -846,6 +969,88 @@ describe("enrichStore (V5 — F13)", () => {
       useEnrichStore.getState().dispensarTranscricao();
       expect(useEnrichStore.getState().transcricaoDispensada).toBe(true);
     });
+
+    /*
+      V10.6 — fechar com a oferta na tela AVISA, em vez de descartá-la em
+      silêncio.
+
+      O aviso é informativo, e não uma confirmação: com a porta permanente de
+      Configurações a lista já não se perde, então uma caixa perguntando "tem
+      certeza?" cobraria uma decisão por um prejuízo que deixou de existir. O
+      que ela faz é dizer para onde a oferta foi.
+    */
+    it("fechar com a oferta na tela avisa onde ela continua", async () => {
+      setBackendForTests({
+        enrichFolderScan: vi.fn(async () => comSobra()),
+      } as unknown as Backend);
+      await useEnrichStore.getState().startScan("", {
+        disponivel: true,
+        download: null,
+      });
+
+      useEnrichStore.getState().close();
+
+      const toasts = useToastStore.getState().toasts;
+      expect(toasts).toHaveLength(1);
+      expect(toasts[0].message).toBe(avisoDeTranscricaoPendente(3));
+      // "warning" e não um tom novo: é um aviso, como o da etapa 2 que parou no
+      // meio. Um quarto tom de toast para uma frase seria vocabulário visual
+      // novo sem pergunta nova a responder.
+      expect(toasts[0].kind).toBe("warning");
+    });
+
+    it("dispensada a oferta, fechar não avisa nada", async () => {
+      setBackendForTests({
+        enrichFolderScan: vi.fn(async () => comSobra()),
+      } as unknown as Backend);
+      await useEnrichStore.getState().startScan("", {
+        disponivel: true,
+        download: null,
+      });
+      useEnrichStore.getState().dispensarTranscricao();
+      useEnrichStore.getState().close();
+      expect(useToastStore.getState().toasts).toHaveLength(0);
+    });
+
+    // Sem os acessórios não há oferta a preservar: o que a caixa mostrava era o
+    // caminho do download, e ele continua em Configurações de qualquer jeito.
+    it("sem a etapa 5 nesta máquina, fechar não avisa nada", async () => {
+      setBackendForTests({
+        enrichFolderScan: vi.fn(async () => comSobra()),
+      } as unknown as Backend);
+      await useEnrichStore.getState().startScan("", {
+        disponivel: false,
+        download: { bytes: 1_533_763_059, segundos: 512 },
+      });
+      useEnrichStore.getState().close();
+      expect(useToastStore.getState().toasts).toHaveLength(0);
+    });
+
+    it("sem ninguém sobrando, fechar não avisa nada", async () => {
+      setBackendForTests({
+        enrichFolderScan: vi.fn(async () => scanResult([proposal()])),
+      } as unknown as Backend);
+      await useEnrichStore.getState().startScan("");
+      useEnrichStore.getState().close();
+      expect(useToastStore.getState().toasts).toHaveLength(0);
+    });
+
+    // Cancelar uma varredura ou uma transcrição EM CURSO não é fechar uma
+    // oferta: não há oferta ainda, e um aviso ali falaria de uma lista que a
+    // varredura interrompida nem terminou de montar.
+    it("cancelar a varredura em curso não avisa nada", async () => {
+      let resolver: (v: EnrichScanResult) => void = () => {};
+      setBackendForTests({
+        enrichFolderScan: vi.fn(
+          () => new Promise<EnrichScanResult>((r) => (resolver = r)),
+        ),
+      } as unknown as Backend);
+      const pending = useEnrichStore.getState().startScan("");
+      useEnrichStore.getState().close();
+      expect(useToastStore.getState().toasts).toHaveLength(0);
+      resolver(scanResult([]));
+      await pending;
+    });
   });
 
   describe("startTranscricao — horas de trabalho em segundo plano", () => {
@@ -878,6 +1083,37 @@ describe("enrichStore (V5 — F13)", () => {
         [10, 11],
         expect.any(String),
       );
+    });
+
+    /*
+      V10.6 — a etapa 5 também é disparada de Configurações, com a lista que a
+      porta permanente devolveu. É o MESMO caminho: mesma store, mesmo
+      progresso, mesmo cancelamento, mesma revisão no fim — só a origem da fila
+      muda. Um segundo caminho seria um segundo lugar onde a barra, o
+      cancelamento e a revisão podem divergir (a lição do M4).
+    */
+    it("aceita a fila vinda de Configurações, sem varredura nenhuma", async () => {
+      const backend = backendComTranscricao();
+      setBackendForTests(backend);
+
+      await useEnrichStore.getState().startTranscricao([21, 22, 23]);
+
+      expect(backend.transcreverMusicas).toHaveBeenCalledWith(
+        [21, 22, 23],
+        expect.any(String),
+      );
+      expect(backend.enrichFolderScan).not.toHaveBeenCalled();
+      expect(useEnrichStore.getState().status).toBe("review");
+      expect(useEnrichStore.getState().overlayOpen).toBe(true);
+      expect(useEnrichStore.getState().proposals).toHaveLength(1);
+    });
+
+    it("fila vazia vinda de Configurações não dispara nada", async () => {
+      const backend = backendComTranscricao();
+      setBackendForTests(backend);
+      await useEnrichStore.getState().startTranscricao([]);
+      expect(backend.transcreverMusicas).not.toHaveBeenCalled();
+      expect(useEnrichStore.getState().status).toBe("idle");
     });
 
     it("as propostas da etapa 5 entram na MESMA revisão", async () => {

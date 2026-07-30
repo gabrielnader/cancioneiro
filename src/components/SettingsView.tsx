@@ -1,11 +1,16 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { getBackend, type AcessorioInfo } from "../lib/api";
+import {
+  getBackend,
+  type AcessorioInfo,
+  type PendentesDaTranscricao,
+} from "../lib/api";
 import {
   ACESSORIO_CORROMPIDO,
   ACESSORIO_INDETERMINADO,
   ACESSORIO_INDISPONIVEL,
   ACESSORIO_PRONTO,
   ACESSORIO_SEM_BINARIO,
+  ROTULO_COMECAR_TRANSCRICAO,
   ROTULO_DO_DISPARO,
   TRANSCRICAO_NO_FIM,
   downloadParaTranscrever,
@@ -16,6 +21,7 @@ import {
   opcoesDePasta,
   rotuloBaixarAcessorio,
   textoDoAcessorioAusente,
+  textoDoBlocoDeTranscricao,
   textoDoDownload,
   textoDoProgressoDaTranscricao,
   tituloDoAcessorio,
@@ -205,6 +211,7 @@ function CuradoriaSection() {
   const folders = useLibraryStore((s) => s.folders);
   const folderFilter = useLibraryStore((s) => s.folderFilter);
   const startScan = useEnrichStore((s) => s.startScan);
+  const startTranscricao = useEnrichStore((s) => s.startTranscricao);
   const openOverlay = useEnrichStore((s) => s.openOverlay);
   const status = useEnrichStore((s) => s.status);
   const progress = useEnrichStore((s) => s.progress);
@@ -322,6 +329,42 @@ function CuradoriaSection() {
       .catch(() => {
         // contagem é conveniência; a busca não depende dela para rodar
         if (atual) setContagem({ estado: "indisponivel" });
+      });
+    return () => {
+      atual = false;
+    };
+  }, [pasta, allSongs, acessorios]);
+
+  /**
+   * **V10.6 — a etapa 5, permanentemente.**
+   *
+   * "Quais músicas estão sem letra" é fato da BIBLIOTECA, e estava amarrado ao
+   * resultado de uma varredura: a oferta só existia dentro da caixa de revisão,
+   * e qualquer fechamento (aplicar, Esc, segundo plano) jogava a lista fora —
+   * recuperá-la custava a varredura inteira. O relato de campo que trouxe isto:
+   * *"agora tenho que começar de novo pra chegar na parte de transcrição de
+   * novo"*.
+   *
+   * `undefined` = a pergunta ainda não voltou; `null` = ela falhou. Nenhum dos
+   * dois vira zero, e nenhum vira promessa (DECISIONS #86): sem resposta, o
+   * bloco não desenha nada.
+   *
+   * Reperguntada nas MESMAS condições da contagem — troca de pasta, mudança do
+   * acervo (aplicar uma letra tira a música da lista) e acessório instalado.
+   */
+  const [pendentes, setPendentes] = useState<
+    PendentesDaTranscricao | null | undefined
+  >(undefined);
+  useEffect(() => {
+    let atual = true;
+    getBackend()
+      .transcricaoPendentes(pasta)
+      .then((p) => {
+        if (atual) setPendentes(p);
+      })
+      .catch(() => {
+        // "não sabemos" é um estado: o bloco desaparece em vez de afirmar zero
+        if (atual) setPendentes(null);
       });
     return () => {
       atual = false;
@@ -521,6 +564,52 @@ function CuradoriaSection() {
         </div>
       )}
 
+      {/*
+        V10.6 — A SEGUNDA PORTA DA ETAPA 5, e ela é permanente.
+
+        A pergunta do fim da varredura continua existindo: ela é o momento
+        natural, feita quando pode ser respondida com informação. O que muda é
+        que ela deixou de ser a ÚNICA porta — e era isso que fazia "aplicar as 28
+        propostas" e "transcrever as que sobraram" competirem, com a varredura
+        inteira como preço de escolher a ordem errada.
+
+        Mora no fim da seção de curadoria, embaixo do MESMO seletor de pasta: a
+        seção não pode inventar um segundo vocabulário de pastas, e o texto diz
+        de qual escopo o número fala.
+      */}
+      {pendentes != null && (
+        <div className="mt-6 border-t border-[#E5E7EB] pt-4">
+          <h3 className="text-[14px] font-medium text-[#111827]">
+            Escrever a letra ouvindo o áudio
+          </h3>
+          <p className="mt-1 text-[14px] leading-relaxed text-[#374151]">
+            {textoDoBlocoDeTranscricao({
+              quantas: pendentes.musicas.length,
+              segundos: pendentes.segundos_estimados,
+              medidaNestaMaquina: pendentes.estimativa_medida_nesta_maquina,
+              disponivel: pendentes.disponivel,
+              // o que falta baixar sai da MESMA leitura dos acessórios que a
+              // pergunta do fim usa
+              download: downloadParaTranscrever(acessorios),
+              todaABiblioteca: pasta === "",
+            })}
+          </p>
+          {pendentes.disponivel && pendentes.musicas.length > 0 && (
+            <button
+              type="button"
+              // duas filas ao mesmo tempo disputariam a CPU e embaralhariam as
+              // duas barras (a disciplina do M4): a store recusaria, e um botão
+              // que não faz nada é pior que um botão desabilitado com motivo
+              disabled={bloqueado}
+              aria-describedby={motivo ? "curadoria-motivo" : undefined}
+              onClick={() => void startTranscricao(pendentes.musicas)}
+              className="mt-2 rounded-md bg-[#0F766E] px-4 py-2 text-[15px] font-medium text-white hover:bg-[#115E59] disabled:cursor-not-allowed disabled:bg-[#9CA3AF]"
+            >
+              {ROTULO_COMECAR_TRANSCRICAO}
+            </button>
+          )}
+        </div>
+      )}
     </section>
   );
 }

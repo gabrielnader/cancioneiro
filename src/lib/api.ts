@@ -236,6 +236,34 @@ export interface Contagem {
 }
 
 /**
+ * **A segunda porta da etapa 5** — o que `transcricao_pendentes` devolve
+ * (V10.6).
+ *
+ * "Quais músicas estão sem letra" é fato PERMANENTE da biblioteca, e estava
+ * amarrado ao resultado de uma varredura: a oferta de transcrição só existia
+ * dentro da caixa de revisão, e qualquer fechamento (aplicar, Esc, mandar para
+ * segundo plano) jogava a lista fora. Recuperá-la custava a varredura inteira —
+ * minutos, num acervo grande.
+ *
+ * Os campos são os MESMOS que `EnrichScanResult` já traz, de propósito: a tela
+ * lê a oferta de um jeito só, venha ela da pergunta do fim ou de Configurações.
+ */
+export interface PendentesDaTranscricao {
+  /** Os ids que `transcreverMusicas` recebe — a mesma regra de `sem_letra_no_fim`. */
+  musicas: number[];
+  /** Segundos estimados para transcrever essas músicas NESTA máquina. */
+  segundos_estimados: number;
+  /** O número acima é medição desta máquina, ou palpite de fábrica? */
+  estimativa_medida_nesta_maquina: boolean;
+  /**
+   * A etapa 5 pode rodar nesta máquina? Mesmo fato que
+   * `Contagem.transcricao_disponivel`: a REGRA mora no Rust, num lugar só, e
+   * as duas respostas apenas a reportam.
+   */
+  disponivel: boolean;
+}
+
+/**
  * Progresso da varredura do "Completar dados" (F13): o backend emite o evento
  * Tauri `enrich:progress` a cada música (chaves snake_case, como o serde do
  * struct Rust). O PRIMEIRO evento chega com done=0, antes de o trabalho
@@ -499,9 +527,25 @@ export interface Backend {
    */
   enrichCount(folderPrefix: string): Promise<Contagem>;
   /**
+   * **Quais músicas de `folderPrefix` estão sem letra, a qualquer momento**
+   * (V10.6) — sem varredura, sem rede e sem gravar nada.
+   *
+   * Existe porque a oferta de transcrição vivia só no fim da varredura, e
+   * fechar a caixa de revisão jogava a lista fora: quem quisesse transcrever
+   * depois de aplicar pagava a varredura inteira de novo. A pergunta do fim
+   * continua existindo — ela é o momento natural —, mas deixou de ser a única
+   * porta.
+   *
+   * A regra é a MESMA que produz `sem_letra_no_fim`, e mora no Rust: deduzi-la
+   * aqui de `Contagem.sem_letra` seria a DECISIONS #80 outra vez (aquele número
+   * não olha se o arquivo ainda está no disco).
+   */
+  transcricaoPendentes(folderPrefix: string): Promise<PendentesDaTranscricao>;
+  /**
    * A etapa 5 (V10): escreve a letra ouvindo o áudio das músicas pedidas.
    *
-   * `songIds` é exatamente o `sem_letra_no_fim` que a varredura devolveu.
+   * `songIds` é o `sem_letra_no_fim` da varredura ou o `musicas` da porta
+   * permanente — a mesma lista, pela mesma regra.
    * Custa MINUTOS por música e horas por acervo, roda em segundo plano e é
    * cancelável pelo MESMO `enrichCancelScan(scanId)` da varredura. Nada é
    * gravado: o que volta são propostas para a mesma revisão.
@@ -686,6 +730,12 @@ function tauriBackend(): Backend {
     async enrichCount(folderPrefix) {
       const { invoke } = await import("@tauri-apps/api/core");
       return invoke<Contagem>("enrich_count", { folderPrefix });
+    },
+    async transcricaoPendentes(folderPrefix) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<PendentesDaTranscricao>("transcricao_pendentes", {
+        folderPrefix,
+      });
     },
     async transcreverMusicas(songIds, scanId) {
       const { invoke } = await import("@tauri-apps/api/core");

@@ -155,12 +155,18 @@ export function etapasDoFunil(nomes: readonly string[]): EtapaDoFunil[] {
  * salvaguarda de CONFERIR antes de encurtar).
  *
  * Ela não entra na lista numerada de propósito: não é uma etapa da varredura.
- * Custa minutos por música, e a pergunta só pode ser feita quando o app já
- * sabe quantas sobraram.
+ * Custa minutos por música, e a pergunta do fim só pode ser feita quando o app
+ * já sabe quantas sobraram.
+ *
+ * **V10.6 — e a pergunta do fim deixou de ser a ÚNICA porta.** Ela continua
+ * sendo o momento natural, mas o bloco permanente de Configurações responde a
+ * mesma coisa a qualquer hora — porque "quais músicas estão sem letra" é fato
+ * da biblioteca, não resultado de varredura. Este texto tem de dizer as duas,
+ * ou volta a mentir sobre o próprio produto.
  */
 export const TRANSCRICAO_NO_FIM =
-  "Escrever a letra ouvindo o áudio é oferecido no fim, para as músicas que" +
-  " sobrarem sem letra.";
+  "Escrever a letra ouvindo o áudio é oferecido no fim da busca — e aqui" +
+  " embaixo, a qualquer momento.";
 
 // ---------------------------------------------------------------------------
 // A contagem e a estimativa — números do backend, formatados aqui
@@ -371,7 +377,8 @@ export type GrupoDaRevisao =
   | "sem-voz"
   | "nomes-escritos"
   | "preenchimentos"
-  | "erros";
+  | "erros"
+  | "gravadas";
 
 /**
  * A ordem de cima para baixo. É a ordem do PRD V10, com dois acréscimos que
@@ -381,9 +388,15 @@ export type GrupoDaRevisao =
  *   "letras encontradas" (não há letra) nem no grupo dobrado (a marca tira o
  *   arquivo da fila para sempre, e dobrada+pré-marcada ela seria gravada sem
  *   ninguém ver);
- * - **erros** fecha a lista. Linha com erro não é proposta e não pode cair no
- *   grupo dobrado, que é pré-marcado — mas também não pode sumir: ela é a
- *   única informação de que aquela música foi tentada (DECISIONS #47).
+ * - **erros** vem perto do fim. Linha com erro não é proposta e não pode cair
+ *   no grupo dobrado, que é pré-marcado — mas também não pode sumir: ela é a
+ *   única informação de que aquela música foi tentada (DECISIONS #47);
+ * - **gravadas** fecha a lista (V10.6). Aplicar deixou de fechar a caixa, então
+ *   as linhas gravadas continuam na tela — e elas são as ÚNICAS sem nada a
+ *   decidir. Ficam no fim por isso, e num grupo próprio por dois motivos
+ *   práticos: a frase do grupo dobrado diz "vão receber", que passa a ser
+ *   mentira sobre uma linha já gravada, e a contagem de cada grupo volta a
+ *   medir o que falta em vez do que já foi.
  */
 export const ORDEM_DOS_GRUPOS: GrupoDaRevisao[] = [
   "conflitos",
@@ -392,6 +405,7 @@ export const ORDEM_DOS_GRUPOS: GrupoDaRevisao[] = [
   "nomes-escritos",
   "preenchimentos",
   "erros",
+  "gravadas",
 ];
 
 /**
@@ -406,7 +420,13 @@ export const ORDEM_DOS_GRUPOS: GrupoDaRevisao[] = [
 export function grupoDaProposta(
   p: EnrichProposal,
   erro: string | null,
+  /**
+   * V10.6 — esta linha JÁ FOI GRAVADA nesta revisão. Vence tudo: não há mais
+   * nada a decidir nela, e é isso que a pessoa precisa ler.
+   */
+  gravada = false,
 ): GrupoDaRevisao {
+  if (gravada) return "gravadas";
   if (erro !== null || p.error !== null) return "erros";
   if (p.conflito !== null) return "conflitos";
   if (p.lyrics !== null) return "letras";
@@ -425,10 +445,16 @@ export interface GrupoRevisado {
 export function agruparPorRisco(
   propostas: readonly EnrichProposal[],
   erroDe: (p: EnrichProposal) => string | null,
+  /**
+   * A linha da POSIÇÃO `i` já foi gravada nesta revisão (V10.6)? Por posição, e
+   * não por música: a mesma música pode ter duas linhas, e gravar uma não grava
+   * a outra.
+   */
+  gravadaEm: (i: number) => boolean = () => false,
 ): GrupoRevisado[] {
   const porGrupo = new Map<GrupoDaRevisao, EnrichProposal[]>();
-  for (const p of propostas) {
-    const grupo = grupoDaProposta(p, erroDe(p));
+  for (const [i, p] of propostas.entries()) {
+    const grupo = grupoDaProposta(p, erroDe(p), gravadaEm(i));
     const lista = porGrupo.get(grupo);
     if (lista) lista.push(p);
     else porGrupo.set(grupo, [p]);
@@ -467,6 +493,10 @@ export function tituloDoGrupo(grupo: GrupoDaRevisao, n: number): string {
       return um
         ? "1 música não pôde ser consultada — o motivo está na linha dela"
         : `${n} músicas não puderam ser consultadas — o motivo está em cada linha`;
+    case "gravadas":
+      // V10.6 — o que já foi para o disco nesta revisão. Diz o FATO, e não uma
+      // tarefa: não há nada a fazer com estas linhas.
+      return um ? "1 música gravada no arquivo" : `${n} músicas gravadas no arquivo`;
   }
 }
 
@@ -770,14 +800,32 @@ export function textoDaOfertaDeTranscricao(
     quantas === 1
       ? "Sobrou 1 música sem letra"
       : `Sobraram ${quantas} músicas sem letra`;
-  const tempo =
-    segundos < 60
-      ? "leva menos de 1 minuto"
-      : `leva ${cercaDe(segundos)}`;
+  return `${sobraram}. ${fraseDoTempoDaTranscricao(segundos, medidaNestaMaquina)}`;
+}
+
+/**
+ * **A frase que oferece o trabalho, e diz quanto ele custa.** Uma só, para as
+ * duas portas da etapa 5 (V10.6): a pergunta do fim da varredura e o bloco
+ * permanente de Configurações.
+ *
+ * Ela mora aqui em vez de estar escrita duas vezes porque é a frase que carrega
+ * a ressalva da procedência do número — e uma cópia dela é uma cópia que
+ * amanhã diz "neste computador" numa tela e não na outra, sobre a MESMA
+ * medição. É a DECISIONS #80 aplicada a texto.
+ *
+ * O que MUDA entre as duas portas é só quem abre o parágrafo: "sobraram" só é
+ * verdade logo depois de uma varredura, e numa tela permanente nada acabou de
+ * acontecer.
+ */
+function fraseDoTempoDaTranscricao(
+  segundos: number,
+  medidaNestaMaquina: boolean,
+): string {
+  const tempo = segundos < 60 ? "leva menos de 1 minuto" : `leva ${cercaDe(segundos)}`;
   const procedencia = medidaNestaMaquina
     ? " neste computador."
     : " — pode levar mais nesta máquina.";
-  return `${sobraram}. Escrever a letra ouvindo o áudio ${tempo}${procedencia}`;
+  return `Escrever a letra ouvindo o áudio ${tempo}${procedencia}`;
 }
 
 /** O botão da pergunta do fim. */
@@ -814,6 +862,135 @@ export function textoDaTranscricaoIndisponivel(
     ` ${cercaDe(download.segundos)}.`
   );
 }
+
+// ---------------------------------------------------------------------------
+// V10.6 — a etapa 5 em Configurações, permanentemente
+// ---------------------------------------------------------------------------
+//
+// Relato de campo, verbatim: *"Achei que eu poderia clicar em aplicar e depois
+// trabalhar nas transcrições, mas não aconteceu… Simplesmente fechou a caixa e
+// aplicou essas 28… Mas agora tenho que começar de novo pra chegar na parte de
+// transcrição de novo."*
+//
+// O que se perdia não era um clique: era a varredura inteira — minutos, numa
+// biblioteca grande. E a causa era de projeto: a oferta vivia DENTRO da caixa
+// de revisão, e resultado de varredura é efêmero. Mas **"quais músicas estão
+// sem letra" não é resultado de varredura — é fato permanente da biblioteca**,
+// que o backend responde a qualquer momento (`transcricaoPendentes`).
+
+/** O que o bloco permanente precisa saber para se descrever. */
+export interface BlocoDeTranscricao {
+  /** Quantas músicas do escopo estão sem letra (a lista vem em ids). */
+  quantas: number;
+  /** Segundos estimados de transcrição, como o backend os contou. */
+  segundos: number;
+  /** O número acima é medição desta máquina, ou palpite de fábrica? */
+  medidaNestaMaquina: boolean;
+  /** A etapa 5 pode rodar nesta máquina (transcritor E modelo prontos)? */
+  disponivel: boolean;
+  /** O que falta baixar, quando falta e quando se sabe o tamanho. */
+  download: DownloadPendente | null;
+  /**
+   * O escopo é a biblioteca inteira, ou a pasta escolhida?
+   *
+   * Isto está no texto porque o seletor de pasta fica logo acima do bloco: um
+   * "27 músicas estão sem letra" sem dizer de onde é a pergunta que a pessoa
+   * não vai poder tirar com ninguém.
+   */
+  todaABiblioteca: boolean;
+}
+
+/**
+ * O bloco permanente da etapa 5, em Configurações.
+ *
+ * A informação é a MESMA da pergunta do fim, e a segunda frase é literalmente a
+ * mesma (`fraseDoTempoDaTranscricao`). O que muda é a abertura: "sobraram" só é
+ * verdade logo depois de uma varredura.
+ *
+ * Zero é RESPOSTA, e não a ausência do bloco: quem abre esta tela para saber
+ * quantas faltam precisa ler que não falta nenhuma. E zero vence a
+ * indisponibilidade — oferecer 1,4 GB de download para transcrever nada seria
+ * pedir um trabalho que não existe.
+ */
+export function textoDoBlocoDeTranscricao({
+  quantas,
+  segundos,
+  medidaNestaMaquina,
+  disponivel,
+  download,
+  todaABiblioteca,
+}: BlocoDeTranscricao): string {
+  const onde = todaABiblioteca ? "da biblioteca" : "desta pasta";
+  if (quantas <= 0) {
+    return `Nenhuma música ${onde} está sem letra.`;
+  }
+  const quantasFrase =
+    quantas === 1
+      ? `1 música ${onde} está sem letra`
+      : `${quantas} músicas ${onde} estão sem letra`;
+  if (!disponivel) {
+    /*
+      Aqui a saída NÃO é "vá em Configurações": já estamos nela, e os blocos de
+      download estão a poucos pixels acima. Repetir o TEMPO que eles já dizem
+      seria o ruído que a régua da #100 proíbe; o tamanho fica porque é ele que
+      responde à pergunta daquele segundo — "por que não posso, e o que faço?".
+      Sem saber o tamanho, não se inventa número nenhum (DECISIONS #86).
+    */
+    const oQue =
+      download === null
+        ? "de um download oferecido acima"
+        : `de um download de ${formatarTamanho(download.bytes)}, oferecido acima`;
+    return `${quantasFrase}. Escrever a letra ouvindo o áudio precisa ${oQue}.`;
+  }
+  return `${quantasFrase}. ${fraseDoTempoDaTranscricao(segundos, medidaNestaMaquina)}`;
+}
+
+/**
+ * O aviso de quem fecha a revisão com a oferta de transcrição na tela. `null`
+ * quando não há oferta pendente — e zero é o caso normal.
+ *
+ * **É informativo, e não uma confirmação bloqueante.** Com o bloco permanente
+ * em Configurações a lista já não se perde: uma caixa pedindo "tem certeza?"
+ * cobraria uma decisão por um prejuízo que deixou de existir, e pop-up que se
+ * aprende a fechar sem ler é pop-up que não avisa mais nada. O que ficou é a
+ * frase que diz PARA ONDE a oferta foi.
+ *
+ * Ela não acusa quem fechou: fechar é ação legítima, e a varredura foi só
+ * leitura.
+ */
+export function avisoDeTranscricaoPendente(quantas: number): string | null {
+  if (quantas <= 0) return null;
+  const ainda =
+    quantas === 1
+      ? "Ainda há 1 música sem letra"
+      : `Ainda há ${quantas} músicas sem letra`;
+  return (
+    `${ainda}. Escrever a letra ouvindo o áudio continua em Configurações,` +
+    " quando você quiser."
+  );
+}
+
+/**
+ * A linha que JÁ FOI GRAVADA nesta revisão (V10.6).
+ *
+ * Aplicar deixou de fechar a caixa — era o fechamento que jogava fora a lista
+ * das músicas sem letra —, então as linhas gravadas continuam na tela e a tela
+ * precisa dizer o que aconteceu com elas. Sem isto a mesma lista voltaria a
+ * oferecer o clique que acabou de acontecer, e o `apply` recusaria a segunda
+ * tentativa com "a música mudou depois da busca": um erro inventado por nós,
+ * para quem não tem a quem perguntar.
+ *
+ * Não fala em erro e não pede ação: não há nada a fazer com ela.
+ */
+export const ROTULO_DA_LINHA_GRAVADA = "Gravada no arquivo.";
+
+/**
+ * O selo da linha gravada, no lugar da confiança.
+ *
+ * A confiança descrevia um palpite a decidir, e não há mais nada a decidir
+ * naquela linha: deixá-la ali faria a linha parecer pendente.
+ */
+export const SELO_DA_LINHA_GRAVADA = "GRAVADA";
 
 /**
  * Os acessórios que a etapa 5 exige — os dois, e os dois prontos.

@@ -5233,3 +5233,222 @@ fn titulo_diversos_sobrevive_a_varredura_e_o_artista_lixo_e_preenchido() {
         "não troca nome escrito nenhum: o título fica e o artista estava vazio"
     );
 }
+
+// ===========================================================================
+// V10.6 — "quais músicas estão sem letra" é FATO PERMANENTE da biblioteca,
+// não resultado de varredura.
+//
+// O defeito de campo: a oferta de transcrição vivia só dentro da caixa de
+// revisão, e a caixa fechava ao aplicar. Fechá-la jogava fora a lista das
+// músicas sem letra — e recuperá-la custava a varredura inteira, que numa
+// biblioteca grande são minutos.
+//
+// A lista nunca precisou da varredura para existir: o banco responde a
+// qualquer momento. `pendentes_da_transcricao` é essa porta, e a regra que ela
+// aplica é a MESMA `a_etapa_5_tem_o_que_fazer` da pergunta do fim — uma regra
+// só, num lugar só (DECISIONS #80).
+// ===========================================================================
+
+/// A porta sem varredura devolve exatamente o que a varredura devolveria.
+///
+/// Este é o teste que impede as duas de divergirem: se alguém acrescentar um
+/// portão em uma delas, os dois números param de bater e este teste falha.
+#[test]
+fn a_lista_de_quem_esta_sem_letra_existe_sem_varredura_nenhuma() {
+    let (_dir, conn, _f) = setup_with(&[
+        ("sem_tags.mp3", "Pasta/Falamansa - Oh! Chuva.mp3"), // sem letra
+        ("sem_letra.mp3", "Pasta/sem_letra.mp3"),            // sem letra
+        ("com_letra.mp3", "Pasta/com_letra.mp3"),            // já tem letra
+        ("sem_letra.mp3", "Outra/fora.mp3"),                 // fora do prefixo
+    ]);
+    let raiz = song_by_suffix(&conn, "Oh! Chuva.mp3").file_path;
+    let pasta = raiz.trim_end_matches("/Falamansa - Oh! Chuva.mp3").to_string();
+
+    let sem_varredura = enrich::pendentes_da_transcricao(
+        &conn,
+        &pasta,
+        transcricao::modelo_oferecido(),
+        true,
+    )
+    .unwrap();
+
+    // a varredura é a outra porta para o MESMO fato
+    let varrido = enrich::enrich_scan(
+        &conn,
+        &pasta,
+        |_url: &str| Ok("[]".to_string()),
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+
+    assert_eq!(
+        sem_varredura.musicas, varrido.sem_letra_no_fim,
+        "a mesma regra, os mesmos ids, na mesma ordem — sem gastar rede nenhuma"
+    );
+    assert_eq!(sem_varredura.musicas.len(), 2, "só as duas sem letra da pasta");
+    assert_eq!(
+        sem_varredura.segundos_estimados, varrido.segundos_de_transcricao,
+        "e a MESMA estimativa: duas contas seriam duas verdades (DECISIONS #80)"
+    );
+    assert_eq!(
+        sem_varredura.estimativa_medida_nesta_maquina,
+        varrido.estimativa_medida_nesta_maquina,
+        "e o mesmo fato sobre o número"
+    );
+    assert!(sem_varredura.disponivel, "o que a máquina pode fazer viaja junto");
+
+    // prefixo vazio = biblioteca inteira
+    let tudo =
+        enrich::pendentes_da_transcricao(&conn, "", transcricao::modelo_oferecido(), false)
+            .unwrap();
+    assert_eq!(tudo.musicas.len(), 3);
+    assert!(!tudo.disponivel);
+}
+
+/// Os portões da etapa 5 valem aqui INTEIROS, e não pela metade: instrumental
+/// não é transcrito (V8/F17), música com letra não entra, e arquivo que sumiu
+/// do disco não é trabalho — é linha de erro (QA M3).
+#[test]
+fn a_porta_sem_varredura_aplica_os_mesmos_portoes_da_etapa_5() {
+    let (dir, conn, _f) = setup_with(&[
+        ("sem_letra.mp3", "fica.mp3"),
+        ("sem_letra.mp3", "some.mp3"),
+        ("sem_letra.mp3", "instrumental.mp3"),
+        ("com_letra.mp3", "com_letra.mp3"),
+    ]);
+    let fica = song_by_suffix(&conn, "fica.mp3");
+    let instrumental = song_by_suffix(&conn, "instrumental.mp3");
+    fs::remove_file(dir.path().join("some.mp3")).unwrap();
+    writer::write_tags(
+        &conn,
+        instrumental.id,
+        "Chorinho",
+        Some("Regional"),
+        None,
+        None,
+        Some(true),
+    )
+    .unwrap();
+
+    let p =
+        enrich::pendentes_da_transcricao(&conn, "", transcricao::modelo_oferecido(), true)
+            .unwrap();
+    assert_eq!(
+        p.musicas,
+        vec![fica.id],
+        "sobrou uma: o instrumental não é transcrito, a que tem letra não entra, \
+         e a que sumiu do disco não é trabalho"
+    );
+}
+
+/// **A estimativa medida vale nas DUAS portas.** A DECISIONS #112 fechou o
+/// laço da medição pelo backend; abrir uma segunda porta que ignorasse a
+/// medição faria a mesma biblioteca ter dois tempos diferentes na mesma tela.
+#[test]
+fn a_porta_sem_varredura_usa_a_razao_medida_desta_maquina() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
+    let song = song_by_suffix(&conn, "sem_letra.mp3");
+    conn.execute("UPDATE songs SET duration_seconds = 240 WHERE id = ?1", [song.id])
+        .unwrap();
+    let modelo = transcricao::modelo_oferecido();
+
+    let antes = enrich::pendentes_da_transcricao(&conn, "", modelo, true).unwrap();
+    assert!(!antes.estimativa_medida_nesta_maquina);
+    assert_eq!(
+        antes.segundos_estimados,
+        (240.0 * transcricao::RAZAO_DE_REFERENCIA_DO_GRANDE).ceil() as u64
+    );
+
+    enrich::transcricao_scan(
+        &conn,
+        modelo,
+        &[song.id],
+        motor_lento("uma letra bem comprida", 600.0, Duration::from_millis(60)),
+        SEM_PROGRESSO_5,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+
+    let depois = enrich::pendentes_da_transcricao(&conn, "", modelo, true).unwrap();
+    assert!(
+        depois.estimativa_medida_nesta_maquina,
+        "é o que autoriza o \"neste computador\" nesta porta também"
+    );
+    assert_ne!(depois.segundos_estimados, antes.segundos_estimados);
+}
+
+/// **O que difere entre as duas portas é o MOMENTO, não a regra.**
+///
+/// A pergunta do fim desconta quem acabou de ganhar uma proposta de letra na
+/// mesma varredura: cobrar minutos de CPU por uma música cuja letra está ali na
+/// lista, esperando um clique, seria cobrar caro por algo que o clique resolve.
+///
+/// A porta permanente não tem varredura a descontar — ela responde o fato de
+/// AGORA, que é o que uma tela permanente pode afirmar. Aplicada a proposta, o
+/// fato muda e as duas voltam a dizer a mesma coisa.
+///
+/// É a metade Rust do par que a DECISIONS #88 pede; a outra está em
+/// `mockBackend.contrato.test.ts`.
+#[test]
+fn a_porta_permanente_responde_o_agora_e_a_pergunta_do_fim_desconta_o_que_achou() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "sem_letra.mp3")]);
+    let song = song_by_suffix(&conn, "sem_letra.mp3");
+    let dur = song.duration_seconds.expect("fixture tem duração") as f64;
+    let modelo = transcricao::modelo_oferecido();
+    let body = format!(
+        r#"[{{"trackName": "Sem Letra", "artistName": "Banda Fixture",
+             "duration": {dur}, "plainLyrics": "chove chuva"}}]"#
+    );
+
+    let r = enrich::enrich_scan(
+        &conn,
+        "",
+        |_url: &str| Ok(body.clone()),
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+    let p = r
+        .propostas
+        .iter()
+        .find(|p| p.song_id == song.id && p.lyrics.is_some())
+        .expect("a varredura achou letra para esta música");
+    assert!(
+        r.sem_letra_no_fim.is_empty(),
+        "a pergunta do fim não cobra CPU por uma letra que está na lista"
+    );
+
+    let antes = enrich::pendentes_da_transcricao(&conn, "", modelo, true).unwrap();
+    assert_eq!(
+        antes.musicas,
+        vec![song.id],
+        "a porta permanente diz o fato de AGORA: o arquivo continua sem letra"
+    );
+
+    enrich::apply(
+        &conn,
+        &[EnrichApply {
+            song_id: song.id,
+            title: p.proposed_title.clone(),
+            artist: p.proposed_artist.clone(),
+            lyrics: p.lyrics.clone(),
+            add_temas: None,
+            current_title: p.current_title.clone(),
+            current_artist: p.current_artist.clone(),
+            fonte: None,
+            substituir_letra: false,
+            marcar_instrumental: false,
+        }],
+    )
+    .unwrap();
+
+    let depois = enrich::pendentes_da_transcricao(&conn, "", modelo, true).unwrap();
+    assert_eq!(
+        depois.musicas, r.sem_letra_no_fim,
+        "aplicada a proposta, o fato mudou e as duas dizem a mesma coisa"
+    );
+    assert_eq!(depois.segundos_estimados, 0);
+}

@@ -661,6 +661,40 @@ pub fn enrich_count(
     crate::enrich::contar(&conn, &folder_prefix, etapas)
 }
 
+/// **A segunda porta da etapa 5**: quantas e quais músicas de `folder_prefix`
+/// (vazio = biblioteca inteira) estão sem letra, e quanto tempo transcrevê-las
+/// leva NESTA máquina.
+///
+/// V10.6 — existe porque "quais músicas estão sem letra" é fato PERMANENTE da
+/// biblioteca, e estava amarrado ao resultado de uma varredura: a oferta só
+/// vivia dentro da caixa de revisão, e fechar a caixa (aplicar, Esc, mandar
+/// para segundo plano) jogava a lista fora. Recuperá-la custava a varredura
+/// inteira — minutos, num acervo grande. O banco sempre soube responder isto.
+///
+/// Sem rede e sem gravação, como a `enrich_count`. `(async)` e com CONEXÃO
+/// DEDICADA pelo mesmo motivo dela (QA B5): ela lê a biblioteca inteira, e
+/// pegar o lock compartilhado enquanto o `enrich_apply` grava dezenas de MP3s
+/// pararia a thread que desenha a janela (DECISIONS #92).
+#[tauri::command(async)]
+pub fn transcricao_pendentes(
+    app: AppHandle,
+    state: State<'_, Db>,
+    folder_prefix: String,
+) -> Result<crate::enrich::PendentesDaTranscricao> {
+    // O modelo que vale AQUI, porque é dele que sai o tempo: o preferido que
+    // estiver pronto, e o oferecido enquanto nenhum está (V10.2). A mesma
+    // escolha do `fontes_do_funil`, que é quem monta a pergunta do fim.
+    let modelo = diretorio_de_cache(&app).map_or_else(
+        |_| crate::transcricao::modelo_oferecido(),
+        |cache| crate::transcricao::modelo_desta_maquina(&cache),
+    );
+    // e o "posso transcrever" sai da MESMA função que a contagem usa: combinar
+    // dois estados de acessório é regra, e regra duplicada diverge (#80)
+    let disponivel = etapas_ligadas(&app).transcricao;
+    let conn = state.scan_conn()?;
+    crate::enrich::pendentes_da_transcricao(&conn, &folder_prefix, modelo, disponivel)
+}
+
 /// Quais etapas realmente rodam NESTA máquina, nesta build.
 ///
 /// A tela lista o que esta máquina faz, não o que o produto sabe fazer
@@ -1593,6 +1627,42 @@ mod tests {
         assert!(!json.as_object().unwrap().contains_key("modo"));
     }
 
+    /// **V10.6 — a segunda porta da etapa 5 tem contrato próprio, e ele é o
+    /// MESMO trio que a varredura já devolvia.**
+    ///
+    /// A `Contagem` não recebeu os ids: ela descreve o custo da VARREDURA, e
+    /// pendurar nela a lista da etapa 5 poria milhares de ids na resposta que
+    /// a tela pede a cada troca de pasta — a conferência que a DECISIONS #125
+    /// acabou de tirar do caminho. São duas perguntas, e cada uma tem a sua
+    /// porta.
+    #[test]
+    fn o_contrato_da_porta_permanente_da_etapa_5() {
+        let pendentes = crate::enrich::PendentesDaTranscricao {
+            musicas: vec![7, 9, 11],
+            segundos_estimados: 10_800,
+            estimativa_medida_nesta_maquina: true,
+            disponivel: true,
+        };
+        let json = serde_json::to_value(&pendentes).unwrap();
+        let campos: Vec<&String> = json.as_object().unwrap().keys().collect();
+        assert_eq!(
+            campos,
+            [
+                "disponivel",
+                "estimativa_medida_nesta_maquina",
+                "musicas",
+                "segundos_estimados"
+            ],
+            "ids, tempo, procedência do tempo e o que esta máquina pode fazer"
+        );
+        // os ids saem como números, que é o que `transcrever_musicas` recebe
+        assert_eq!(json["musicas"], serde_json::json!([7, 9, 11]));
+
+        // e a `Contagem` NÃO ganhou lista nenhuma
+        let contagem = serde_json::to_value(crate::enrich::Contagem::default()).unwrap();
+        assert!(!contagem.as_object().unwrap().contains_key("musicas"));
+    }
+
     /// O eco de `fonte` é OPCIONAL: um payload sem ele continua válido e vale
     /// como "não sei de onde veio" (a marca de procedência é limpa, nunca
     /// inventada). O mesmo vale para o consentimento de substituir letra:
@@ -1997,6 +2067,7 @@ mod tests {
             "pub fn enrich_count(",
             "pub fn enrich_folder_scan(",
             "pub fn enrich_song_scan(",
+            "pub fn transcricao_pendentes(",
             "pub fn transcrever_musicas(",
         ] {
             let i = fonte.find(comando).expect(comando);
