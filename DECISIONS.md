@@ -2307,3 +2307,256 @@ opção mais simples que passa nos Acceptance Checks do PRD.
     endereço) para decidir se a internet caiu. Seria um destino a mais na lista
     fechada do `funil_fetcher`, para responder uma pergunta que as três fontes já
     respondem entre si.
+
+## V10.11 — os três pedidos dos beta testers (teste em campo da v0.10.4/v0.10.6)
+
+172. **Tema é o vocabulário da própria pessoa. O limite foi RECUSADO, e o
+    problema é de layout.**
+    Os dois beta testers, os primeiros humanos a usar o produto fora do dono,
+    sugeriram limitar a **10 temas por música**. O que eles estavam vendo era
+    real: uma música com vinte temas empurra a linha da lista e o cabeçalho da
+    ficha para fora do que dá para ler.
+    **O dono recusou o limite**, e o motivo entra aqui porque ele vale para
+    todo teto que este produto for tentado a criar: **tema é o vocabulário de
+    quem cura o acervo**, e são quarenta pessoas curando cada uma o seu. Não
+    sabemos como cada uma organiza a cabeça dela — a que separa por tempo
+    litúrgico, a que separa por instrumento, a que separa por quem cantou.
+    Um teto rígido não chega quando alguém está calmo e sobrando: ele chega no
+    décimo primeiro tema, no meio de uma sessão de catalogação, **e não há a
+    quem perguntar por que o programa parou de aceitar**. A mensagem que ele
+    exibiria seria a única explicação que aquela pessoa receberia na vida, e
+    ela diria "não" a uma coisa que não faz mal a ninguém.
+    O que dói é a TELA, e é a tela que se conserta. Nenhum tema deixa de ser
+    aceito, nenhum deixa de ser gravado, nenhum deixa de ser buscável.
+173. **Aparecem 3 chips antes do "+N", e o 3 foi MEDIDO — não escolhido.**
+    A régua é a do `--faixa-detalhes` do `index.css`: medir no Chromium, com o
+    componente no tamanho real que ele tem na tela.
+    O container mais estreito em que um chip de tema aparece é a coluna de
+    texto do painel de letra:
+    ```
+      380 px  o painel (`w-[380px]`, LyricsPanel)
+     −  32 px o `p-4` dos dois lados
+     −   8 px o `gap-2` até os botões
+     − 100 px os botões "Editar" e "Aa"
+     = 240 px
+    ```
+    Chip em 12px, medido sobre o vocabulário que este acervo usa: **28 px** o
+    mais curto ("fé"), **107 px** o mais longo ("ação de graças"), **mediana
+    68 px**. Com o `gap-1.5` de 6 px, `240 ÷ 74 = 3,2`.
+    **Daí o 3: é quantos chips de largura mediana cabem numa LINHA do
+    container mais estreito.** Somado o "+N" (34 px), o bloco dobrado ocupa no
+    máximo DUAS linhas — conferido nas quatro composições possíveis de
+    vocabulário (só curtos, só longos, todos medianos, misto). Com 4 o
+    vocabulário mediano ainda cabe em duas linhas, mas o só-longos vai a três;
+    com 3 nenhuma composição passa de duas.
+    **A régua é UMA para as três telas** — a linha da lista, o cabeçalho da
+    ficha e o formulário de edição —, embora o formulário seja mais largo
+    (348 px, sem botões ao lado, mas dividindo a linha com o campo "Adicionar
+    tema"). Duas réguas seriam duas telas dobrando em pontos diferentes pela
+    mesma lista, e quem contasse os chips de uma na outra acharia que perdeu
+    tema. É a #80 aplicada a layout.
+    **Dobrar UM chip só não economiza nada, e por isso a régua tem folga de
+    um: nada é dobrado até 4 temas.** O "+1" tem quase a largura de um chip
+    mediano — não tira uma linha da tela e cobra um clique por nada. Quase toda
+    música deste acervo tem de um a quatro temas, e para elas **nada muda**.
+    O número está fixado em teste com o cálculo escrito ao lado: mudá-lo passa
+    a exigir refazer a medição, em vez de acontecer por gosto.
+174. **Na ficha o "+N" ABRE; na linha da lista ele INFORMA. A assimetria é a
+    virtualização, e não uma inconsistência.**
+    A altura da linha da lista é **calculada, não medida**
+    (`SongList.rowHeight`, `estimateSize`): expandir chips ali empurraria o
+    conteúdo por cima da linha de baixo. Um "+N" que expande onde não pode
+    expandir seria um botão que estraga a tela de quem o aperta.
+    O que ele faz lá é o que dá para fazer com honestidade: dizer quantos
+    faltam **e onde vê-los** — *"Mais 9 temas — abra a música para ver
+    todos."*. Marca que só informa que há mais, sem dizer onde, é um beco.
+    Na ficha e no formulário ele é botão: *"+9"*, com o nome acessível
+    *"Mostrar os outros 9 temas"*; aberto, aparece **"mostrar menos"** ao lado.
+    O que abriu fecha no mesmo lugar — quem clicou no "+9" procura ali o
+    caminho de volta —, e é palavra e não um "−", porque o sinal sozinho não
+    diz o que ele encolhe.
+    O "+N" é **cinza**, e não o verde-água dos chips: ele não é um tema, e
+    pintá-lo como os outros faria alguém procurar uma música com o tema "+9" —
+    ou, no formulário, tentar removê-lo.
+175. **O chip que a pessoa acabou de criar NÃO nasce escondido.**
+    Com a lista dobrada, o tema novo entra no fim — atrás do "+N". Quem digita
+    e não vê nada acontecer conclui que não funcionou e digita de novo, e num
+    produto sem suporte essa conclusão não tem quem a desminta.
+    Confirmar um tema abre a lista, e é o **único** gesto que a abre sozinho:
+    o resto é clique explícito. Trocar de música fecha de novo — a pergunta
+    "quais são os temas desta aqui?" é feita a cada ficha, e um estado herdado
+    responderia a da anterior.
+    O dobramento é de TELA, e nunca de dado: `handleSave` grava a lista
+    inteira, aberta ou fechada, e há teste dizendo isso.
+176. **Enter no campo de tema confirma o chip E GRAVA A FICHA INTEIRA, numa
+    gravação só.**
+    Relato dos beta testers: *a pessoa digita um tema e sai usando o
+    aplicativo, sem clicar em "Salvar no arquivo" — e perde o que digitou.* O
+    campo parece um lugar onde as coisas ficam guardadas, e não fica: até aqui
+    Enter só transformava o texto em chip, e chip é estado de formulário.
+    **A alternativa "Enter salva só o tema" foi discutida e RECUSADA pelo
+    dono**, e o motivo entra aqui porque é uma régua e não um caso: **meia tela
+    salvando sozinha é pior que nenhuma**. A pessoa corrige o título, digita um
+    tema, aperta Enter e fecha — sairia com o tema gravado e o título perdido,
+    e nada na tela teria dito que só metade foi. Salvar tudo mantém a ficha
+    coerente com o arquivo, e continua sendo **uma tecla explícita**, não
+    gravação invisível.
+    **É o MESMO `handleSave` do botão, chamado inteiro** — e não uma cópia
+    dele. Quatro coisas vêm de graça por isso, e cada uma seria um defeito se
+    tivesse de ser reescrita: o tema pendente é confirmado ANTES de a gravação
+    ser montada (o chip entra nela, e não o estado de antes do Enter); a música
+    em edição é PAUSADA antes de o arquivo ser tocado (no Windows ele pode
+    estar em uso — regra da V4); a recusa do arquivo mostra o MESMO toast de
+    erro de sempre, com a ficha aberta e nada perdido; e o título vazio recusa
+    a gravação com a mesma mensagem, sem perder o tema digitado. Um segundo
+    caminho seria um segundo lugar onde essas quatro divergem (#80).
+    **`busy` trava o Enter como trava o botão**: uma gravação em curso já está
+    fazendo o que ele pediria.
+177. **Enter com o campo de tema VAZIO salva do mesmo jeito.**
+    Não há chip a confirmar, e a tentação é não fazer nada. Ela foi recusada:
+    **uma regra com exceção invisível é a regra que ninguém aprende.** "Enter
+    aqui grava a ficha" cabe na cabeça; "Enter grava a ficha, mas só se você
+    tiver digitado alguma coisa" é o que faz alguém apertar, não ver nada
+    acontecer e não ter a quem perguntar por quê.
+    E o que acontece é exatamente o que o botão ao lado faz — **o botão também
+    não pergunta se algo mudou**. A gravação continua sendo a mesma do produto
+    inteiro: o áudio é conferido e nada de dado existente é apagado (#148a).
+178. **A frase do Enter aparece no segundo em que a pergunta existe, e some
+    depois.**
+    *"Enter confirma este tema e salva a ficha inteira no arquivo."* — 60
+    caracteres, abaixo da régua da #100, e ela diz as DUAS coisas que
+    acontecem, na ordem em que acontecem.
+    Ela é desenhada **só enquanto há texto no campo de tema**, que é quando a
+    pergunta "e agora, o que faço com isto?" existe. Uma linha permanente
+    debaixo do campo seria a prosa que ninguém lê depois da segunda vez — o que
+    a #100 proíbe.
+    Um `title=` foi considerado e não bastou: **Enter que GRAVA NO ARQUIVO é
+    surpreendente demais para depender de um mouse parado em cima do campo.**
+    O deslocamento que a linha causa é absorvido pelo campo de letra (`flex-1`)
+    — os botões não se mexem, e ninguém erra o clique por causa dela.
+179. **O botão de transcrever aparece TAMBÉM na música que já tem letra. A
+    #167 está revertida, e o caso concreto é o argumento.**
+    Relato de campo: um beta tester abriu uma música cuja letra terminava em
+    **`[MÚSICA]`** — a marca que a #122 e a #129 documentam como o modelo
+    desistindo de transcrever trecho cantado. Era letra de transcrição,
+    imperfeita, com estrofe faltando, e ele queria exatamente **refazê-la**. O
+    botão não estava lá.
+    **O caso em que a pessoa mais quer transcrever de novo é justamente aquele
+    em que já existe letra ruim** — e era o único em que o produto escondia o
+    botão. A #167 tinha três argumentos, e o uso respondeu os três:
+    **(a)** *"produziria uma SUBSTITUIÇÃO, e são minutos de CPU para chegar a
+    uma caixa de marcação que a pessoa não tinha como prever ao clicar"* — ela
+    tem como prever: o custo está no RÓTULO desde a V10.10 ("cerca de 4
+    minutos"), e agora a dica diz, antes do clique, o que acontece com a letra
+    atual. O que a #167 descreveu era um botão mudo; este não é.
+    **(b)** *"o #81 é sobre a CONSULTA; minutos de CPU contra uma letra
+    corrigida à mão é outra conversa"* — é outra conversa, e quem a tem é quem
+    está olhando o arquivo. Refazer **não virou rotina**: nenhuma varredura
+    chega aqui (ver #181), e o clique é um, por música, com o preço à vista.
+    **(c)** *"o formulário MOSTRA a letra, editável, ali mesmo"* — mostra, e é
+    ali que o beta tester leu o `[MÚSICA]`. O campo resolve um erro de
+    digitação; ele não devolve a estrofe que a máquina engoliu.
+    **O que NÃO mudou é o que protege a letra**: o resultado vai para a MESMA
+    revisão, a linha diz *"Já tem letra. Sem marcar abaixo, aplica só título e
+    artista."*, e a caixa **"Substituir a letra atual"** chega desmarcada
+    (#79). Sem o clique nela, o `apply` grava só os nomes — e o aviso do
+    desfecho diz "1 música foi gravada, sem mudança no conteúdo". **Nada é
+    sobrescrito sem clique**, e há teste no Rust, no mock e no E2E dizendo isso.
+180. **O rótulo diz "de novo", e a dica diz que a letra atual é PROPOSTA para
+    substituição — não apagada.**
+    São os dois textos lidos antes do clique, e cada um responde uma pergunta
+    diferente.
+    O RÓTULO responde *o que este botão faz, e quanto custa*:
+    *"Escrever a letra **de novo**, ouvindo o áudio (cerca de 4 minutos — pode
+    levar mais nesta máquina)"*. O "de novo" é o que separa este clique do
+    outro: quem lê "escrever a letra" com uma letra na tela para para entender
+    o que o programa acha que está acontecendo. O tempo e a ressalva de
+    procedência continuam vindo da mesma função das outras portas
+    (`tempoDaTranscricao`, #163).
+    A DICA responde *vou perder o que está aqui?*, que é o medo daquele
+    segundo: *"Escreve a letra ouvindo o áudio desta música, sem usar a
+    internet. **A letra que está aqui não é apagada: a nova entra como proposta
+    de substituição, e você decide antes de gravar.**"* Sem letra, ela continua
+    sendo a de sempre — *"…Nada é gravado sem você conferir."* —, porque
+    inventar uma ressalva para um caso que não existe é ruído.
+    Isso **não substitui** o consentimento da revisão; ele existe e continua
+    inteiro. O que a dica resolve é que o consentimento só aparece MINUTOS
+    depois, tarde demais para tranquilizar quem está com o dedo no botão.
+    **A frase não foi para um parágrafo na ficha.** Um bloco permanente dentro
+    de um formulário é o que a #154(a) recusou e a #165 confirmou, e a régua
+    continua a mesma: o botão é uma ação, o parágrafo é prosa.
+    **Quem decide se o botão EXISTE deixou de ser o campo de letra**, e passou
+    a ser só a caixa "esta música é instrumental" (que descreve o FORMULÁRIO, e
+    é mais atual que o banco — #166). O campo de letra agora decide o que o
+    botão DIZ. A #166 dizia "some quando a letra entra no campo"; ela morre com
+    a #167, e pelo mesmo motivo.
+181. **A porta de UMA música ganhou portão próprio. As de LOTE não mudaram —
+    e é isso que a #136 continua garantindo.**
+    `a_etapa_5_tem_o_que_fazer` (lote) e
+    `a_etapa_5_tem_o_que_fazer_nesta_musica` (ficha) diferem em **uma linha
+    só**: música com letra passa na segunda. Instrumental continua fora das
+    duas (a marca é escolha humana afirmando que não há voz no áudio, e
+    transcrever contra ela é gastar minutos para desmentir quem ouviu — #71), e
+    arquivo que sumiu do disco continua fora das duas (não é trabalho, é linha
+    de erro — QA M3).
+    **São duas regras porque são duas perguntas**: "o que vale a pena varrer" e
+    "o que dá para fazer por ESTE arquivo". Não é a #80 sendo quebrada — é o
+    contrário: cada uma mora numa função só, no Rust, e o `pendentes_entre`
+    recebe o portão por PARÂMETRO, para a escolha ficar visível na chamada de
+    cada porta. Um booleano `mesmo_com_letra` na assinatura diria o mesmo de um
+    jeito que não se lê onde a decisão é tomada.
+    **A tela não reescreveu portão nenhum**: a fila continua vindo da PORTA, e
+    não de um `[song.id]` montado no componente (#155).
+    A pergunta do fim da varredura e o bloco permanente de Configurações
+    continuam pulando quem tem letra, com teste próprio para cada um: lá
+    **ninguém pediu por aquela música em particular**, e transcrever em lote o
+    que já tem letra seria a rotina refazendo trabalho humano que a #71 proíbe.
+182. **A trava de "já tem letra" saiu do `transcricao_scan`, e a frase dela
+    deixou de existir nos dois lados.**
+    Ela recusava a fila com *"esta música já tem letra — apague a letra atual
+    no editor se quiser escrevê-la de novo ouvindo o áudio"*, e existia
+    enquanto **ninguém podia pedir isto legitimamente**. Com o botão da ficha,
+    alguém pode — e ela passaria a gastar o clique de quem leu "cerca de 4
+    minutos" no rótulo para devolver um "não" e uma instrução (apagar a letra à
+    mão antes) que é exatamente o pedágio que a #102 existe para eliminar.
+    **O que ela protegia continua no `apply`, que é onde o consentimento sempre
+    morou de verdade** (#79). A trava era economia de CPU, não garantia de
+    dado — e a economia não se perdeu: **ela virou o preço no rótulo**.
+    A frase saiu do `enrich.rs` e do `mockBackend.ts` juntos (o par da #88):
+    texto sem produtor é texto que mente sobre o produto na próxima leitura, e
+    a #144(d)/#152(e) já registraram isso duas vezes.
+    **Três testes mudaram de PROPÓSITO**, e cada um diz isso no próprio
+    comentário: o que guardava as duas recusas do `transcricao_scan` guarda só
+    a do instrumental; o que exigia fila vazia para música com letra na porta
+    da ficha exige a fila COM ela; e o do mock que dizia "não transcreve quem
+    já tem letra nem quem já é instrumental" passou a dizer "não transcreve
+    quem já é instrumental, **e transcreve** quem já tem letra".
+183. **O que NÃO se fez, e fica escrito.**
+    **(a) O bloco de download da ficha continua exigindo o campo de letra
+    vazio**, e não é exceção esquecida: a primeira frase dele é *"Esta música
+    continua sem letra."*, e com o textarea cheio logo acima ela seria
+    desmentida pela tela em volta — o defeito que a #100 chama de texto que
+    mente sobre o próprio produto. Quem tem letra e não tem os 1,4 GB continua
+    com o bloco permanente de Configurações (V10.6), que é a tela onde o
+    download é um clique. Inventar uma segunda frase para um caso que só existe
+    em máquina sem os acessórios seria vocabulário novo para uma pergunta já
+    respondida.
+    **(b) A ficha continua sem reperguntar a porta** (#162d, #171b). A resposta
+    descreve o ARQUIVO, e o que muda no formulário é conferido na hora de
+    desenhar. Depois de aplicar a letra refeita, o botão continua na tela — e
+    agora isso está certo: ele vale para quem tem letra.
+    **(c) O "+N" da linha da lista não virou botão**, e a razão é a #174. Fazer
+    a linha crescer exigiria medir a altura em vez de calculá-la, e a lista é
+    virtualizada para 2.000 músicas.
+    **(d) Não se mexeu no que já estava dobrado por truncamento.** O chip
+    continua com `max-w-32` (`max-w-40` no formulário) e reticências: tema
+    longo demais para um chip é outro problema, e o `title` já o mostra
+    inteiro.
+    **(e) O `aviso` da gravação continua sem chegar ao editor** (#152b, #162e):
+    esta rodada não mexeu no retorno do `writeTags`. O Enter herda o editor
+    inteiro, inclusive essa dívida.
+    **(f) Nenhum atalho novo foi criado.** Enter no campo de TEMA grava; Enter
+    nos campos de título e artista continua não fazendo nada, e não passou a
+    fazer. O relato foi sobre o campo de tema, que é o único cujo conteúdo
+    parecia guardado e não estava — nos outros dois o que está digitado está à
+    vista, e ninguém sai da tela achando que salvou.
