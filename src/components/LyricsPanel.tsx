@@ -91,9 +91,27 @@ export function LyricsPanel() {
                   {nomeArquivo}
                 </p>
               )}
+              {/*
+                V10.11 — os chips DOBRAM aqui (`expansivel`), e este é o
+                container mais estreito em que eles aparecem: 240 px, do que
+                sobra do painel de 380 px depois do `p-4`, do `gap-2` e dos
+                botões "Editar"/"Aa". É essa largura que decide quantos aparecem
+                antes do "+N" (ver `LIMITE_DE_TEMAS_VISIVEIS`).
+
+                Expandir cabe porque o painel ROLA: a lista aberta empurra o
+                conteúdo para baixo e nada é encoberto — ao contrário da linha
+                da lista, cuja altura é calculada pela virtualização.
+              */}
               {selected.temas && (
                 <div className="mt-1.5 flex flex-wrap gap-1.5">
-                  <TemaChips temas={selected.temas} />
+                  <TemaChips
+                    // a lista volta dobrada ao trocar de música: a pergunta
+                    // "quais são os temas desta aqui?" é feita de novo a cada
+                    // ficha, e um estado herdado responderia a da anterior
+                    key={selected.id}
+                    temas={selected.temas}
+                    expansivel
+                  />
                 </div>
               )}
             </div>

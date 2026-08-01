@@ -1102,15 +1102,28 @@ export function textoDoBlocoDeTranscricao({
  *
  * O tempo e a ressalva são os das outras duas portas, letra por letra
  * (`tempoDaTranscricao`).
+ *
+ * **V10.11 — e o verbo muda quando JÁ HÁ letra: "escrever de novo".**
+ *
+ * O botão passou a aparecer também para a música que tem letra (DECISIONS #167
+ * revertida), e o caso que trouxe isso foi o de um beta tester diante de uma
+ * letra que terminava em `[MÚSICA]` — vinda de transcrição, imperfeita. "de
+ * novo" é o que ele estava fazendo, e é a palavra que separa este clique do
+ * outro: quem lê "escrever a letra" com uma letra na tela para para entender o
+ * que o botão acha que está acontecendo.
+ *
+ * O que a letra atual SOFRE não cabe no rótulo sem estourá-lo, e está na dica
+ * (`dicaDeTranscreverEstaMusica`), que é o outro texto lido antes do clique.
  */
 export function rotuloDeTranscreverEstaMusica(
   segundos: number,
   medidaNestaMaquina: boolean,
+  jaTemLetra = false,
 ): string {
-  return `Escrever a letra ouvindo o áudio (${tempoDaTranscricao(
-    segundos,
-    medidaNestaMaquina,
-  )})`;
+  const acao = jaTemLetra
+    ? "Escrever a letra de novo, ouvindo o áudio"
+    : "Escrever a letra ouvindo o áudio";
+  return `${acao} (${tempoDaTranscricao(segundos, medidaNestaMaquina)})`;
 }
 
 /**
@@ -1136,6 +1149,53 @@ export function rotuloDeTranscreverEstaMusica(
 export function textoDaOfertaDestaMusica(download: DownloadPendente | null): string {
   return `Esta música continua sem letra. ${fraseDoDownloadDaTranscricao(download)}`;
 }
+
+/**
+ * **A dica do botão da etapa 5 — e o que ela responde muda quando já HÁ letra.**
+ *
+ * V10.11. A DECISIONS #167 escondia o botão de quem já tem letra, e o dono a
+ * reverteu com um caso concreto: um beta tester abriu uma música cuja letra
+ * terminava em `[MÚSICA]` — letra vinda de transcrição, imperfeita — e queria
+ * exatamente refazê-la. **O caso em que a pessoa mais quer transcrever de novo
+ * é justamente aquele em que já existe letra ruim.**
+ *
+ * Com o botão de volta ali, a pergunta daquele segundo deixa de ser "quanto
+ * custa?" (isso o rótulo já diz) e passa a ser **"vou perder a letra que está
+ * aqui?"**. A resposta é não, e ela precisa estar escrita antes do clique: o
+ * consentimento de substituição (DECISIONS #79) existe e continua valendo, mas
+ * ele só aparece minutos depois, na revisão — tarde demais para tranquilizar
+ * quem está com o dedo no botão.
+ */
+export function dicaDeTranscreverEstaMusica(jaTemLetra: boolean): string {
+  const comum =
+    "Escreve a letra ouvindo o áudio desta música, sem usar a internet.";
+  return jaTemLetra
+    ? `${comum} A letra que está aqui não é apagada: a nova entra como proposta` +
+        " de substituição, e você decide antes de gravar."
+    : `${comum} Nada é gravado sem você conferir.`;
+}
+
+// ---------------------------------------------------------------------------
+// V10.11 — o Enter no campo de tema
+// ---------------------------------------------------------------------------
+
+/**
+ * **O que a tecla Enter faz no campo de tema, dito no segundo em que a pessoa
+ * pode perguntar.**
+ *
+ * Relato dos beta testers: digitar um tema e sair usando o aplicativo sem
+ * clicar em "Salvar no arquivo" perdia o que foi digitado. A decisão do dono é
+ * que Enter confirma o chip **e grava a ficha inteira**, numa gravação só — a
+ * alternativa "Enter salva só o tema" foi recusada porque meia tela salvando
+ * sozinha é pior que nenhuma.
+ *
+ * Gravar no arquivo é surpreendente demais para não estar escrito, e a frase
+ * diz as DUAS coisas que acontecem, na ordem em que acontecem. Ela aparece só
+ * enquanto há texto no campo, que é quando a pergunta existe (a régua da
+ * DECISIONS #100).
+ */
+export const DICA_DO_ENTER_NO_TEMA =
+  "Enter confirma este tema e salva a ficha inteira no arquivo.";
 
 /**
  * O aviso de quem fecha a revisão com a oferta de transcrição na tela. `null`

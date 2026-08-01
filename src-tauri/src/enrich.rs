@@ -1389,13 +1389,12 @@ fn etapas_de_letra_valem_a_pena(song: &Song) -> bool {
     !song.has_lyrics && !song.instrumental
 }
 
-/// A etapa 5 teria o que fazer com esta música?
+/// A etapa 5 teria o que fazer com esta música **EM LOTE**?
 ///
-/// É o predicado da pergunta do fim ("sobraram 47 músicas… cerca de 3 horas"),
-/// e ele espelha exatamente os portões que o `transcricao_scan` aplica antes de
-/// gastar minutos de CPU. **Uma regra só, num lugar só** — é a DECISIONS #80,
-/// que nasceu de uma contagem em TypeScript afirmando espelhar a do Rust e não
-/// espelhando.
+/// É o predicado da pergunta do fim ("sobraram 47 músicas… cerca de 3 horas") e
+/// o do bloco permanente de Configurações. **Uma regra só, num lugar só** — é a
+/// DECISIONS #80, que nasceu de uma contagem em TypeScript afirmando espelhar a
+/// do Rust e não espelhando.
 ///
 /// **QA M3**: faltava o arquivo existir. A música cujo MP3 sumiu do disco
 /// entrava na conta, inflava o total e o tempo estimado, e depois gastava uma
@@ -1405,8 +1404,51 @@ fn etapas_de_letra_valem_a_pena(song: &Song) -> bool {
 /// Erro de REDE não tira ninguém daqui, e é de propósito: a etapa 5 não usa
 /// rede. A música que ficou sem letra porque o LRCLIB não respondeu é
 /// exatamente a que a transcrição resolve.
+///
+/// V10.11 — o "EM LOTE" do título deixou de ser redundante: a porta de UMA
+/// música tem o seu próprio portão (`a_etapa_5_tem_o_que_fazer_nesta_musica`), e
+/// a diferença entre os dois é uma linha só, explicada lá.
 fn a_etapa_5_tem_o_que_fazer(song: &Song) -> bool {
     etapas_de_letra_valem_a_pena(song) && Path::new(&song.file_path).is_file()
+}
+
+/// A etapa 5 teria o que fazer com esta música **quando alguém a PEDE, uma a
+/// uma, na ficha dela**?
+///
+/// **A diferença para o portão de lote é uma só: música com letra passa.** Tudo
+/// o mais é igual, e é igual de propósito — instrumental continua fora (a marca
+/// é escolha humana dizendo que não há voz no áudio: transcrever contra ela
+/// seria desfazer trabalho de gente, DECISIONS #71), e arquivo que sumiu do
+/// disco continua fora (não é trabalho, é linha de erro — QA M3).
+///
+/// V10.11. A DECISIONS #167 tinha decidido o contrário, e o dono a reverteu com
+/// um caso concreto: um beta tester abriu uma música cuja letra terminava em
+/// `[MÚSICA]` — letra de transcrição, imperfeita — e queria exatamente refazê-la.
+/// **O caso em que a pessoa mais quer transcrever de novo é justamente aquele em
+/// que já existe letra ruim.**
+///
+/// Os três argumentos da #167 e o que respondeu cada um:
+/// - *"produziria uma SUBSTITUIÇÃO, e são minutos de CPU para chegar a uma caixa
+///   de marcação que a pessoa não tinha como prever"* — ela tem: o custo está no
+///   RÓTULO do botão ("cerca de 4 minutos"), e a dica diz, antes do clique, que
+///   a letra atual não é apagada e sim proposta para substituição;
+/// - *"o #81 é sobre a CONSULTA, e minutos de CPU contra uma letra corrigida à
+///   mão é outra conversa"* — é, e quem tem essa conversa é quem está olhando o
+///   arquivo. Refazer NÃO é rotina: nenhuma varredura chega aqui;
+/// - *"o formulário MOSTRA a letra, editável"* — mostra, e é ali que o beta
+///   tester leu `[MÚSICA]`. O campo resolve um erro de digitação, não uma
+///   estrofe que a máquina engoliu (DECISIONS #129b).
+///
+/// **A regra continua morando num lugar só.** São duas regras porque são duas
+/// perguntas diferentes — "o que vale a pena varrer" e "o que dá para fazer por
+/// ESTE arquivo" —, e cada uma tem uma função, sem cópia nenhuma na tela
+/// (DECISIONS #80 e #155).
+///
+/// **O que NÃO muda é o consentimento** (DECISIONS #79): o que sai da etapa 5 é
+/// uma PROPOSTA, e o `apply` continua recusando a gravação por cima de letra
+/// existente sem a marcação explícita. Nada é sobrescrito sem clique.
+fn a_etapa_5_tem_o_que_fazer_nesta_musica(song: &Song) -> bool {
+    !song.instrumental && Path::new(&song.file_path).is_file()
 }
 
 /// Entrada da varredura de UMA música: quem clicou sabe o que quer.
@@ -1523,7 +1565,13 @@ pub fn pendentes_da_transcricao(
         .into_iter()
         .filter(|s| under_prefix(&s.file_path, folder_prefix))
         .collect();
-    Ok(pendentes_entre(conn, songs, modelo, disponivel))
+    Ok(pendentes_entre(
+        conn,
+        songs,
+        modelo,
+        disponivel,
+        a_etapa_5_tem_o_que_fazer,
+    ))
 }
 
 /// A MESMA porta, num escopo de UMA música — a ficha do editor (V10.9).
@@ -1539,12 +1587,19 @@ pub fn pendentes_da_transcricao(
 /// oferta de um jeito só, venha ela de onde vier, e o `transcrever_musicas`
 /// recebe a fila do mesmo campo (aqui, com um item).
 ///
-/// **Os portões são os mesmos, e isto decide uma coisa que a ficha poderia
-/// querer reescrever**: o funil de uma música consulta de propósito quem já tem
-/// letra (QA ALTO-3b — quem apertou o botão quer uma segunda opinião), mas a
-/// etapa 5 não transcreve quem tem letra, nem instrumental, nem arquivo que
-/// sumiu do disco. Quem responde "esta música tem o que transcrever?" continua
-/// sendo `a_etapa_5_tem_o_que_fazer`, uma regra só, num lugar só.
+/// **O portão daqui é o `a_etapa_5_tem_o_que_fazer_nesta_musica`, e ele difere
+/// do de lote em uma linha só: música COM LETRA passa** (V10.11).
+///
+/// A DECISIONS #167 tinha decidido o contrário. O dono a reverteu com um caso
+/// concreto: um beta tester abriu uma música cuja letra terminava em `[MÚSICA]`
+/// — letra de transcrição, imperfeita — e queria exatamente refazê-la. O caso em
+/// que a pessoa mais quer transcrever de novo é justamente aquele em que já
+/// existe letra ruim. O argumento inteiro está no portão.
+///
+/// O resto vale igual: instrumental não é transcrito, e arquivo que sumiu do
+/// disco não é trabalho. E a varredura em lote e o bloco de Configurações
+/// continuam pulando quem tem letra (DECISIONS #136), porque lá ninguém pediu
+/// por aquela música em particular.
 ///
 /// Id que não existe no banco devolve fila VAZIA, e não erro: a ficha pode
 /// estar aberta sobre uma música que saiu do acervo entre o clique e a
@@ -1557,25 +1612,39 @@ pub fn pendentes_da_transcricao_da_musica(
     disponivel: bool,
 ) -> Result<PendentesDaTranscricao> {
     let songs = db::get_song(conn, song_id)?.into_iter().collect();
-    Ok(pendentes_entre(conn, songs, modelo, disponivel))
+    Ok(pendentes_entre(
+        conn,
+        songs,
+        modelo,
+        disponivel,
+        a_etapa_5_tem_o_que_fazer_nesta_musica,
+    ))
 }
 
-/// O miolo das duas portas acima: filtra pelos portões da etapa 5 e mede.
+/// O miolo das duas portas acima: filtra pelo portão da etapa 5 e mede.
 ///
-/// Existe para as duas não terem cada uma a sua cópia do predicado e da conta —
-/// é a DECISIONS #80, e aqui ela tem consequência visível: duas contas dariam
-/// dois tempos para a MESMA música, um na ficha e outro em Configurações, e
-/// ninguém saberia qual acreditar.
+/// Existe para as duas não terem cada uma a sua cópia da CONTA — é a DECISIONS
+/// #80, e aqui ela tem consequência visível: duas contas dariam dois tempos para
+/// a MESMA música, um na ficha e outro em Configurações, e ninguém saberia qual
+/// acreditar.
+///
+/// V10.11 — o `portao` passou a entrar por parâmetro, e o que ele carrega é a
+/// única coisa que difere entre a porta de lote e a de uma música: quem já tem
+/// letra entra na segunda e não na primeira. Ele é PARÂMETRO, e não um `if`
+/// aqui dentro, para a escolha ficar visível na chamada de cada porta — um
+/// booleano `mesmo_com_letra` na assinatura seria a mesma coisa escrita de um
+/// jeito que não se lê no lugar em que ela é feita.
 fn pendentes_entre(
     conn: &Connection,
     songs: Vec<Song>,
     modelo: &crate::transcricao::Modelo,
     disponivel: bool,
+    portao: fn(&Song) -> bool,
 ) -> PendentesDaTranscricao {
     let pendentes: Vec<(i64, f64)> = songs
         .into_iter()
         .filter_map(candidata)
-        .filter(|c| a_etapa_5_tem_o_que_fazer(&c.song))
+        .filter(|c| portao(&c.song))
         .map(|c| (c.song.id, c.song.duration_seconds.unwrap_or(0) as f64))
         .collect();
     let (segundos_estimados, estimativa_medida_nesta_maquina) =
@@ -2421,15 +2490,32 @@ where
             Desfecho::Erro {
                 mensagem: AVISO_INSTRUMENTAL_NAO_TRANSCREVE.into(),
             }
-        } else if cand.song.has_lyrics {
-            // Letra existente não é substituída sem consentimento
-            // (DECISIONS #79). A varredura já não manda estas músicas para cá;
-            // esta é a trava para quando alguém mandar mesmo assim — e as
-            // horas de CPU que ela economiza são reais.
-            Desfecho::Erro {
-                mensagem: AVISO_JA_TEM_LETRA.into(),
-            }
-        } else if !Path::new(&cand.song.file_path).is_file() {
+        }
+        /*
+            V10.11 — A TRAVA DE "JÁ TEM LETRA" SAIU DAQUI, E ISTO É DELIBERADO.
+
+            Ela recusava a fila com *"esta música já tem letra — apague a letra
+            atual no editor se quiser escrevê-la de novo ouvindo o áudio"*, e
+            existia enquanto NINGUÉM podia pedir isto legitimamente: a porta de
+            lote nunca manda uma música com letra para cá, e a de uma música
+            também não mandava (DECISIONS #167).
+
+            Com o botão da ficha valendo também para quem tem letra, alguém pode
+            — e a trava passaria a gastar o clique de quem leu "cerca de 4
+            minutos" no rótulo para devolver um "não" e uma instrução (apagar a
+            letra à mão antes) que é exatamente o pedágio que o produto não cobra.
+
+            **O que ela protegia continua protegido, e no lugar onde sempre
+            esteve de verdade: o `apply`** (DECISIONS #79). O que sai daqui é uma
+            PROPOSTA; a gravação por cima de letra existente continua exigindo a
+            marcação "Substituir a letra atual", e sem ela a linha é recusada com
+            a frase que cita o rótulo. Nada é sobrescrito sem clique.
+
+            E a economia de CPU que a trava dava não se perdeu: ela virou o
+            PREÇO NO RÓTULO. Quem clica leu quanto tempo custa; quem varre em
+            lote continua não passando por aqui (DECISIONS #136).
+        */
+        else if !Path::new(&cand.song.file_path).is_file() {
             Desfecho::Erro {
                 mensagem: format!("arquivo não encontrado: {}", cand.song.file_path),
             }
@@ -2526,13 +2612,19 @@ pub struct TranscricaoResultado {
 pub const AVISO_INSTRUMENTAL_NAO_TRANSCREVE: &str =
     "esta música está marcada como instrumental — não há letra a escrever";
 
-/// Mensagem (pt-BR) de quem não é transcrito por já ter letra. É frase
-/// própria, e não a da revisão em lote: aqui não há caixa de "substituir a
-/// letra atual" para marcar, e mandar procurar uma que não existe é pior que
-/// não dizer nada.
-pub const AVISO_JA_TEM_LETRA: &str =
-    "esta música já tem letra — apague a letra atual no editor se quiser \
-     escrevê-la de novo ouvindo o áudio";
+/*
+    V10.11 — A FRASE "esta música já tem letra — apague a letra atual no editor
+    se quiser escrevê-la de novo ouvindo o áudio" NÃO EXISTE MAIS.
+
+    Ela era a recusa da etapa 5 diante de uma música com letra, e a instrução
+    que ela dava (apagar a letra à mão antes) é o pedágio que este produto não
+    cobra de ninguém. Com o botão da ficha valendo também para quem tem letra
+    (DECISIONS #167 revertida), a fila que a produzia deixou de existir — e um
+    texto sem produtor é texto que mente sobre o produto na próxima leitura.
+
+    O que ela protegia continua no `apply`, que recusa a gravação por cima de
+    letra existente sem a marcação "Substituir a letra atual" (DECISIONS #79).
+*/
 
 /// Converte o desfecho da etapa 5 numa proposta da MESMA forma que o resto do
 /// funil: a revisão é uma só.

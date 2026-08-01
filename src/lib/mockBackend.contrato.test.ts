@@ -1106,12 +1106,15 @@ describe("contrato mock × Rust — a porta da etapa 5 numa música só (V10.9)"
   });
 
   /*
-    Os portões valem inteiros, e isto é o que a ficha NÃO pode reescrever: o
-    funil de uma música consulta de propósito quem já tem letra (QA ALTO-3b),
-    mas a etapa 5 não transcreve quem tem letra, nem instrumental, nem arquivo
-    que sumiu do disco.
+    Os portões valem inteiros — MENOS UM, e ele é o item inteiro da V10.11.
+
+    Instrumental e arquivo que sumiu do disco continuam fora, aqui como na porta
+    da pasta. A música que JÁ TEM LETRA passa: a DECISIONS #167 dizia o
+    contrário, e o dono a reverteu com o caso do beta tester que abriu uma
+    música cuja letra terminava em `[MÚSICA]` — letra de transcrição,
+    imperfeita — e queria exatamente refazê-la.
   */
-  it("os portões são os mesmos, e a ficha não inventa nenhum", async () => {
+  it("os portões são os mesmos, menos o da letra — e a ficha não inventa nenhum", async () => {
     await backend.addFolder("/musicas/teste");
     const songs = await backend.listSongs();
     const semLetra = songs.find(
@@ -1126,17 +1129,70 @@ describe("contrato mock × Rust — a porta da etapa 5 numa música só (V10.9)"
     expect((await backend.transcricaoPendentesDaMusica(semLetra.id)).musicas).toEqual(
       [semLetra.id],
     );
-    for (const id of [comLetra.id, sumida.id]) {
-      const p = await backend.transcricaoPendentesDaMusica(id);
-      expect(p.musicas).toEqual([]);
-      expect(p.segundos_estimados).toBe(0);
-    }
+    const sumiu = await backend.transcricaoPendentesDaMusica(sumida.id);
+    expect(sumiu.musicas).toEqual([]);
+    expect(sumiu.segundos_estimados).toBe(0);
 
     // e a marca de instrumental tira a música da fila, como nas outras portas
     await backend.writeTags(semLetra.id, "Chorinho", "Regional", null, null, true);
     expect((await backend.transcricaoPendentesDaMusica(semLetra.id)).musicas).toEqual(
       [],
     );
+
+    // o portão que esta porta NÃO tem (V10.11)
+    expect((await backend.transcricaoPendentesDaMusica(comLetra.id)).musicas).toEqual(
+      [comLetra.id],
+    );
+    // e a porta da PASTA continua pulando essa mesma música (DECISIONS #136)
+    expect((await backend.transcricaoPendentes("")).musicas).not.toContain(
+      comLetra.id,
+    );
+  });
+
+  /*
+    A SOMA SÓ FECHA SOBRE QUEM A PORTA DA PASTA LISTA — e é por isso que o teste
+    de cima ("é a porta da pasta, num escopo de uma música") percorre a lista
+    DELA. Somar a biblioteca inteira, música por música, daria mais que o tempo
+    da pasta a partir da V10.11, e daria de propósito: quem tem letra entra numa
+    porta e não na outra.
+  */
+  it("a fila da ficha transcreve, e a substituição continua pedindo consentimento", async () => {
+    await backend.addFolder("/musicas/teste");
+    backend._estadoDoAcessorio("whisper-cli", "pronto");
+    backend._estadoDoAcessorio("modelo-de-transcricao-grande", "pronto");
+    const songs = await backend.listSongs();
+    const comLetra = songs.find((s) => s.has_lyrics)!;
+    backend._ensinarTranscricao(comLetra.file_path, {
+      letra: "a letra refeita ouvindo o áudio",
+      refrao: null,
+    });
+
+    const { propostas } = await backend.transcreverMusicas(
+      (await backend.transcricaoPendentesDaMusica(comLetra.id)).musicas,
+      "scan-1",
+    );
+    expect(propostas).toHaveLength(1);
+    expect(propostas[0].error).toBeNull();
+    expect(propostas[0].lyrics).toBe("a letra refeita ouvindo o áudio");
+    // o eco diz que já há letra: é ele que faz a revisão pedir a marcação
+    expect(propostas[0].has_lyrics).toBe(true);
+
+    // e sem a marcação o `apply` recusa — nada é sobrescrito sem clique (#79)
+    const [res] = await backend.enrichApply([
+      {
+        song_id: comLetra.id,
+        title: comLetra.title,
+        artist: comLetra.artist,
+        lyrics: "a letra refeita ouvindo o áudio",
+        add_temas: null,
+        current_title: comLetra.title,
+        current_artist: comLetra.artist,
+        fonte: null,
+        substituir_letra: false,
+        marcar_instrumental: false,
+      },
+    ]);
+    expect(res.error).toContain("substituir a letra atual");
   });
 
   // Id que saiu do acervo entre o clique e a resposta não é erro: é uma música

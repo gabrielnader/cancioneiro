@@ -694,16 +694,18 @@ export const AVISO_ETIQUETA_NORMALIZADA =
 
 /**
  * As recusas da etapa 5, com as palavras do Rust
- * (`enrich::AVISO_INSTRUMENTAL_NAO_TRANSCREVE`, `AVISO_JA_TEM_LETRA` e
- * `transcricao::ERRO_SEM_MODELO`). Elas existem porque a etapa 5 NÃO desfaz
- * trabalho humano: marca de instrumental e letra existente são escolha de
- * gente, e horas de CPU contra elas seriam desrespeito, não zelo.
+ * (`enrich::AVISO_INSTRUMENTAL_NAO_TRANSCREVE` e
+ * `transcricao::ERRO_SEM_MODELO`). A primeira existe porque a etapa 5 NÃO
+ * desfaz trabalho humano: a marca de instrumental é escolha de gente dizendo
+ * que não há voz no áudio, e minutos de CPU contra ela seriam desrespeito.
+ *
+ * V10.11 — a terceira frase ("esta música já tem letra — apague a letra atual
+ * no editor…") saiu junto com a trava que a produzia, dos dois lados do par da
+ * DECISIONS #88. Texto sem produtor é texto que mente sobre o produto na
+ * próxima leitura.
  */
 const AVISO_INSTRUMENTAL_NAO_TRANSCREVE =
   "esta música está marcada como instrumental — não há letra a escrever";
-const AVISO_JA_TEM_LETRA =
-  "esta música já tem letra — apague a letra atual no editor se quiser" +
-  " escrevê-la de novo ouvindo o áudio";
 const ERRO_SEM_MODELO =
   "o programa que escreve a letra, ou o modelo dele, não está instalado";
 
@@ -1397,15 +1399,37 @@ export function createMockBackend(): MockBackend {
   }
 
   /**
+   * O portão da etapa 5 quando alguém PEDE, uma a uma, na ficha — porte do
+   * `enrich::a_etapa_5_tem_o_que_fazer_nesta_musica` (V10.11).
+   *
+   * **A diferença para o de lote é uma só: música com letra passa.** A
+   * DECISIONS #167 dizia o contrário, e o dono a reverteu com um caso concreto —
+   * um beta tester abriu uma música cuja letra terminava em `[MÚSICA]` (letra de
+   * transcrição, imperfeita) e queria exatamente refazê-la.
+   *
+   * Instrumental continua fora: a marca é escolha humana dizendo que não há voz
+   * no áudio, e transcrever contra ela é desfazer trabalho de gente (#71).
+   * Arquivo que sumiu do disco continua fora: não é trabalho, é linha de erro.
+   */
+  function aEtapa5TemOQueFazerNestaMusica(song: SongRecord): boolean {
+    return (
+      song.instrumental !== true && !state.deletedFiles.includes(song.file_path)
+    );
+  }
+
+  /**
    * O miolo das TRÊS portas da etapa 5 — porte do `enrich::pendentes_entre`.
    *
-   * As portas diferem só no escopo que entregam aqui (a pasta, a biblioteca
-   * inteira, uma música); os portões e a conta de tempo são estes, e são únicos.
-   * Três cópias dariam três tempos para a mesma música, um por tela, e ninguém
-   * saberia qual acreditar (DECISIONS #80).
+   * As portas diferem no escopo que entregam aqui (a pasta, a biblioteca
+   * inteira, uma música) e no PORTÃO que passam junto; a conta de tempo é esta,
+   * e é única. Três contas dariam três tempos para a mesma música, um por tela,
+   * e ninguém saberia qual acreditar (DECISIONS #80).
    */
-  function pendentesEntre(songs: SongRecord[]): PendentesDaTranscricao {
-    const pendentes = songs.filter(aEtapa5TemOQueFazer);
+  function pendentesEntre(
+    songs: SongRecord[],
+    portao: (song: SongRecord) => boolean = aEtapa5TemOQueFazer,
+  ): PendentesDaTranscricao {
+    const pendentes = songs.filter(portao);
     const razao = razaoDestaMaquina();
     return {
       musicas: pendentes.map((s) => s.id),
@@ -1818,13 +1842,24 @@ export function createMockBackend(): MockBackend {
       proposed_artist: song.artist,
       fonte: FONTE_ERRO,
     };
-    // A etapa 5 NÃO desfaz trabalho humano: marca de instrumental e letra
-    // existente são escolha de gente (DECISIONS #71 e #79), e as horas de CPU
-    // que estas duas travas economizam são reais.
+    // A etapa 5 NÃO desfaz trabalho humano: a marca de instrumental é escolha
+    // de gente dizendo que não há voz no áudio (DECISIONS #71), e transcrever
+    // contra ela seria gastar minutos para desmentir quem ouviu.
     if (song.instrumental === true) {
       return { ...base, error: AVISO_INSTRUMENTAL_NAO_TRANSCREVE };
     }
-    if (song.has_lyrics) return { ...base, error: AVISO_JA_TEM_LETRA };
+    /*
+      V10.11 — A TRAVA DE "JÁ TEM LETRA" SAIU DAQUI, como no Rust.
+
+      Ela recusava a fila de quem já tinha letra e mandava apagá-la à mão antes,
+      e existia enquanto ninguém podia pedir isto legitimamente (DECISIONS
+      #167). Com o botão da ficha valendo também para quem tem letra, ela
+      passaria a gastar o clique de quem leu "cerca de 4 minutos" no rótulo.
+
+      O que ela protegia continua no `enrichApply`, que recusa a gravação por
+      cima de letra existente sem a marcação "Substituir a letra atual"
+      (DECISIONS #79). Nada é sobrescrito sem clique.
+    */
     if (state.deletedFiles.includes(song.file_path)) {
       return { ...base, error: `arquivo não encontrado: ${song.file_path}` };
     }
@@ -2288,6 +2323,11 @@ export function createMockBackend(): MockBackend {
      * editor roda as etapas 1 a 4 e para ali, e com 3% de cobertura medida "não
      * achamos nada" é o desfecho típico daquele clique.
      *
+     * **O portão daqui é o `aEtapa5TemOQueFazerNestaMusica`** (V10.11): a música
+     * que já tem letra passa, porque é ela o caso do relato de campo — letra de
+     * transcrição terminando em `[MÚSICA]`, que a pessoa quer refazer. A porta
+     * da pasta continua pulando essa mesma música (DECISIONS #136).
+     *
      * Id que não existe devolve fila VAZIA, e não erro: a ficha pode estar
      * aberta sobre uma música que saiu do acervo entre o clique e a resposta.
      */
@@ -2295,7 +2335,7 @@ export function createMockBackend(): MockBackend {
       songId: number,
     ): Promise<PendentesDaTranscricao> {
       const song = state.songs.find((s) => s.id === songId);
-      return pendentesEntre(song ? [song] : []);
+      return pendentesEntre(song ? [song] : [], aEtapa5TemOQueFazerNestaMusica);
     },
 
     /**

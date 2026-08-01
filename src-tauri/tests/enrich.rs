@@ -4082,26 +4082,35 @@ fn transcricao_rala_sem_duracao_provada_nao_grava_nada() {
     assert_eq!(p.fonte, enrich::FONTE_ERRO);
 }
 
-/// **Instrumental não é transcrito, e letra existente não é substituída sem
-/// consentimento** (PRD V10, DECISIONS #71 e #79). As duas travas existem
-/// mesmo com a varredura já não mandando essas músicas para cá: o caminho
-/// normal nunca chega nelas, e é por isso que a recusa precisa existir.
+/// **Instrumental não é transcrito** (PRD V10, DECISIONS #71). A trava existe
+/// mesmo com as portas já não mandando essa música para cá: o caminho normal
+/// nunca chega nela, e é por isso que a recusa precisa existir.
+///
+/// **ESTE TESTE MUDOU DE PROPÓSITO NA V10.11, e a metade que saiu é o conserto.**
+/// Ele guardava DUAS recusas — o instrumental e a música que já tem letra —, e a
+/// segunda deixou de existir: com o botão da ficha valendo também para quem tem
+/// letra (DECISIONS #167 revertida), a recusa passaria a gastar o clique de quem
+/// leu "cerca de 4 minutos" no rótulo. O que ela protegia continua no `apply`,
+/// que é onde o consentimento da DECISIONS #79 sempre morou de verdade — e há
+/// teste próprio para isso (`a_letra_refeita_nao_entra_no_arquivo_sem_o_consentimento`).
+///
+/// A assimetria entre as duas é a diferença entre as coisas que elas dizem: a
+/// marca de instrumental afirma que NÃO HÁ VOZ no áudio, e transcrever contra
+/// ela é gastar minutos para desmentir quem ouviu; ter letra não afirma nada
+/// sobre o áudio — e, quando a letra é uma transcrição imperfeita, é o próprio
+/// motivo de querer refazê-la.
 #[test]
-fn a_etapa_5_recusa_o_instrumental_e_a_musica_que_ja_tem_letra() {
-    let (_dir, conn, _f) = setup_with(&[
-        ("sem_letra.mp3", "instrumental.mp3"),
-        ("com_letra.mp3", "com_letra.mp3"),
-    ]);
+fn a_etapa_5_recusa_o_instrumental() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "instrumental.mp3")]);
     let inst = song_by_suffix(&conn, "instrumental.mp3");
     writer::write_tags(&conn, inst.id, "Frevo", Some("Orquestra"), None, None, Some(true))
         .unwrap();
-    let com = song_by_suffix(&conn, "com_letra.mp3");
 
     let chamadas = RefCell::new(0);
     let r = enrich::transcricao_scan(
         &conn,
         transcricao::modelo_oferecido(),
-        &[inst.id, com.id],
+        &[inst.id],
         |_mp3: &Path, _c: &dyn Fn() -> bool, _p: &dyn Fn(u8)| {
             *chamadas.borrow_mut() += 1;
             Ok(Some(SaidaDoMotor {
@@ -4114,23 +4123,15 @@ fn a_etapa_5_recusa_o_instrumental_e_a_musica_que_ja_tem_letra() {
     )
     .unwrap();
 
-    assert_eq!(*chamadas.borrow(), 0, "nenhuma das duas gastou CPU");
+    assert_eq!(*chamadas.borrow(), 0, "não gastou CPU");
     assert_eq!(
         r.propostas[0].error.as_deref(),
         Some(enrich::AVISO_INSTRUMENTAL_NAO_TRANSCREVE)
     );
-    assert_eq!(
-        r.propostas[1].error.as_deref(),
-        Some(enrich::AVISO_JA_TEM_LETRA)
-    );
     assert!(r.propostas.iter().all(|p| p.lyrics.is_none()));
-    // as duas frases são texto corrido, sem a quebra de linha do código
-    for msg in [
-        enrich::AVISO_INSTRUMENTAL_NAO_TRANSCREVE,
-        enrich::AVISO_JA_TEM_LETRA,
-    ] {
-        assert!(!msg.contains("  ") && !msg.contains('\n'), "{msg:?}");
-    }
+    // a frase é texto corrido, sem a quebra de linha do código
+    let msg = enrich::AVISO_INSTRUMENTAL_NAO_TRANSCREVE;
+    assert!(!msg.contains("  ") && !msg.contains('\n'), "{msg:?}");
 }
 
 /// Binário que não sobe é veredito sobre a MÁQUINA: reporta e desliga a etapa
@@ -5509,14 +5510,13 @@ fn a_porta_de_uma_musica_diz_o_mesmo_que_a_porta_da_pasta_diria_dela() {
     assert!(pasta.segundos_estimados > uma.segundos_estimados);
 }
 
-/// Os portões da etapa 5 valem aqui INTEIROS, e não pela metade — os MESMOS da
-/// porta da pasta e da pergunta do fim.
+/// Os portões da etapa 5 valem aqui, e a ficha não reescreve nenhum deles —
+/// **menos um, e é o backend que o decide, não a tela**.
 ///
-/// Note o que isto decide na tela: o funil de UMA música consulta de propósito
-/// quem já tem letra (QA ALTO-3b — quem apertou o botão quer uma segunda
-/// opinião), mas a etapa 5 não. Quem responde "esta música tem o que
-/// transcrever?" continua sendo uma regra só, num lugar só, e a ficha do editor
-/// não reescreve nenhuma delas.
+/// V10.11: a música que já tem letra PASSA nesta porta (teste próprio, logo
+/// abaixo desta seção). Instrumental e arquivo que sumiu do disco continuam
+/// fora, exatamente como na porta da pasta — e é isso que este teste guarda,
+/// para a exceção da letra não virar "o portão desta porta é frouxo".
 #[test]
 fn a_porta_de_uma_musica_aplica_os_mesmos_portoes_da_etapa_5() {
     let (dir, conn, _f) = setup_with(&[
@@ -5550,12 +5550,17 @@ fn a_porta_de_uma_musica_aplica_os_mesmos_portoes_da_etapa_5() {
     for (id, porque) in [
         (some.id, "o arquivo sumiu do disco: não é trabalho, é linha de erro"),
         (instrumental.id, "instrumental não é transcrito (V8/F17)"),
-        (com_letra.id, "quem já tem letra não entra"),
     ] {
         let p = pendentes(id);
         assert!(p.musicas.is_empty(), "{porque}");
         assert_eq!(p.segundos_estimados, 0, "e sem fila não há tempo a anunciar");
     }
+    // e o portão que esta porta NÃO tem, para a assimetria ficar num assert
+    assert_eq!(
+        pendentes(com_letra.id).musicas,
+        vec![com_letra.id],
+        "quem já tem letra entra AQUI — é o caso do relato de campo (V10.11)"
+    );
 }
 
 /// Id que não existe no banco não é erro: é uma música sem nada a transcrever.
@@ -5765,4 +5770,172 @@ fn a_falha_da_etapa_2_nao_derruba_mais_as_etapas_de_letra() {
         "o LRCLIB tinha a letra, e o funil chegou até ele"
     );
     assert!(props[0].error.is_none());
+}
+
+// ===========================================================================
+// V10.11 — O BOTÃO DE TRANSCREVER APARECE MESMO PARA QUEM JÁ TEM LETRA.
+//
+// A DECISIONS #167 escondia o botão da ficha quando a música já tinha letra, e
+// o dono reverteu a decisão com um caso concreto: um beta tester abriu uma
+// música cuja letra terminava em `[MÚSICA]` — letra vinda de transcrição,
+// imperfeita — e queria exatamente refazê-la. **O caso em que a pessoa mais
+// quer transcrever de novo é justamente aquele em que já existe letra ruim.**
+//
+// O que muda, e o que NÃO muda:
+//
+// - muda a porta de UMA MÚSICA (`pendentes_da_transcricao_da_musica`), que
+//   passa a devolver a fila com a música que tem letra;
+// - muda a trava do `transcricao_scan`, que recusava a fila com um erro em
+//   pt-BR — sem isso o botão novo levaria a pessoa a uma linha de erro depois
+//   de nada;
+// - **não muda a varredura em lote nem o bloco de Configurações**: as duas
+//   continuam pulando quem tem letra (DECISIONS #136), porque lá ninguém pediu
+//   por aquela música em particular;
+// - **não muda o consentimento** (DECISIONS #79): o que sai daqui é uma
+//   PROPOSTA, e a substituição continua exigindo a marcação na revisão.
+// ===========================================================================
+
+/// A porta de UMA música oferece a etapa 5 para quem já tem letra — e a porta
+/// da pasta, sobre a MESMA música, continua não oferecendo.
+///
+/// As duas divergem em um portão só, e é este teste que fixa qual: o resto
+/// (instrumental, arquivo que sumiu do disco) vale igual nas duas.
+#[test]
+fn a_porta_de_uma_musica_oferece_a_etapa_5_para_quem_ja_tem_letra() {
+    let (_dir, conn, _f) = setup_with(&[
+        ("com_letra.mp3", "Pasta/com_letra.mp3"),
+        ("sem_letra.mp3", "Pasta/sem_letra.mp3"),
+    ]);
+    let com_letra = song_by_suffix(&conn, "com_letra.mp3");
+    let modelo = transcricao::modelo_oferecido();
+
+    let uma =
+        enrich::pendentes_da_transcricao_da_musica(&conn, com_letra.id, modelo, true)
+            .unwrap();
+    assert_eq!(
+        uma.musicas,
+        vec![com_letra.id],
+        "a letra que já existe é justamente o motivo de querer refazê-la"
+    );
+    assert!(
+        uma.segundos_estimados > 0,
+        "e o tempo é anunciado, porque é ele que vai no rótulo do botão"
+    );
+
+    // a porta da pasta, sobre a mesma biblioteca, continua pulando essa música
+    let pasta = enrich::pendentes_da_transcricao(&conn, "", modelo, true).unwrap();
+    assert!(
+        !pasta.musicas.contains(&com_letra.id),
+        "em lote ninguém pediu por esta música: a regra da #136 vale inteira"
+    );
+    assert_eq!(pasta.musicas.len(), 1, "só a que está sem letra");
+}
+
+/// A varredura em lote NÃO passou a oferecer quem tem letra na pergunta do fim.
+///
+/// `sem_letra_no_fim` é o outro consumidor do portão de lote, e ele alimenta a
+/// mesma fila. Se o portão de uma música tivesse sido escrito por cima do de
+/// lote, este teste ficaria vermelho — que é o ponto de ele existir.
+#[test]
+fn a_pergunta_do_fim_continua_pulando_quem_ja_tem_letra() {
+    let (_dir, conn, _f) = setup_with(&[
+        ("com_letra.mp3", "com_letra.mp3"),
+        ("sem_letra.mp3", "sem_letra.mp3"),
+    ]);
+    let com_letra = song_by_suffix(&conn, "com_letra.mp3");
+    let sem_letra = song_by_suffix(&conn, "sem_letra.mp3");
+
+    let r = enrich::enrich_scan(
+        &conn,
+        "",
+        |_url: &str| Ok("[]".to_string()),
+        ZERO,
+        SEM_PROGRESSO,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+
+    assert_eq!(r.sem_letra_no_fim, vec![sem_letra.id]);
+    assert!(!r.sem_letra_no_fim.contains(&com_letra.id));
+}
+
+/// A fila que chega com uma música que tem letra é TRANSCRITA, e o desfecho é
+/// uma proposta de substituição — não uma linha de erro.
+///
+/// A trava que recusava isto existia enquanto ninguém podia pedir legitimamente
+/// (DECISIONS #167). Com o botão da ficha, alguém pode — e a trava passaria a
+/// gastar o clique de quem leu "cerca de 4 minutos" para devolver um "não".
+///
+/// **O que protege a letra existente continua onde sempre esteve**: o `apply`,
+/// que só grava por cima com o consentimento marcado (DECISIONS #79). A
+/// proposta sai daqui com `has_lyrics` verdadeiro, que é o que faz a revisão
+/// desenhar a caixa.
+#[test]
+fn a_etapa_5_transcreve_quem_ja_tem_letra_quando_a_fila_pede() {
+    let (_dir, conn, _f) = setup_with(&[("com_letra.mp3", "com_letra.mp3")]);
+    let com_letra = song_by_suffix(&conn, "com_letra.mp3");
+
+    let r = transcrever(
+        &conn,
+        &[com_letra.id],
+        motor("a letra refeita inteira ouvindo o áudio de novo", 30.0),
+    );
+
+    assert_eq!(r.propostas.len(), 1);
+    let p = &r.propostas[0];
+    assert_eq!(p.error, None, "não é mais uma recusa");
+    assert_eq!(
+        p.lyrics.as_deref(),
+        Some("a letra refeita inteira ouvindo o áudio de novo")
+    );
+    assert!(
+        p.has_lyrics,
+        "o eco diz que já há letra no arquivo — é ele que faz a revisão \
+         pedir o consentimento de substituição (DECISIONS #79)"
+    );
+    assert_eq!(
+        p.confidence, "media",
+        "letra de máquina nunca chega pré-marcada (DECISIONS #49)"
+    );
+}
+
+/// E o `apply` continua recusando a substituição sem consentimento, mesmo
+/// vindo da etapa 5 pedida na ficha.
+///
+/// É a garantia inteira do item: nada é sobrescrito sem clique. A linha volta
+/// com a frase que cita o rótulo da marcação, que é como a tela a reconhece.
+#[test]
+fn a_letra_refeita_nao_entra_no_arquivo_sem_o_consentimento() {
+    let (_dir, conn, _f) = setup_with(&[("com_letra.mp3", "com_letra.mp3")]);
+    let com_letra = song_by_suffix(&conn, "com_letra.mp3");
+    let antes = db::get_lyrics(&conn, com_letra.id).unwrap();
+
+    let resultados = enrich::apply(
+        &conn,
+        &[EnrichApply {
+            song_id: com_letra.id,
+            title: com_letra.title.clone(),
+            artist: com_letra.artist.clone(),
+            lyrics: Some("a letra refeita ouvindo o áudio".into()),
+            add_temas: None,
+            current_title: com_letra.title.clone(),
+            current_artist: com_letra.artist.clone(),
+            fonte: None,
+            substituir_letra: false,
+            marcar_instrumental: false,
+        }],
+    )
+    .unwrap();
+
+    assert_eq!(resultados.len(), 1);
+    let erro = resultados[0].error.as_deref().expect("a linha foi recusada");
+    assert!(
+        erro.contains("substituir a letra atual"),
+        "a recusa cita o rótulo da marcação: {erro:?}"
+    );
+    assert_eq!(
+        db::get_lyrics(&conn, com_letra.id).unwrap(),
+        antes,
+        "e o arquivo continua com a letra que tinha"
+    );
 }

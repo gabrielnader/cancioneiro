@@ -13,6 +13,7 @@ import { useToastStore } from "../stores/toastStore";
 import {
   SEM_RESULTADO_INDIVIDUAL,
   SEM_RESULTADO_INSTRUMENTAL,
+  dicaDeTranscreverEstaMusica,
 } from "../lib/curadoria";
 import { useEnrichStore } from "../stores/enrichStore";
 import type { Song } from "../lib/types";
@@ -305,10 +306,11 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
     fireEvent.change(screen.getByLabelText("Título"), {
       target: { value: "Título Novo" },
     });
-    // adiciona tema com Enter
+    // adiciona tema saindo do campo (V10.11: Enter aqui GRAVA a ficha inteira,
+    // e este teste é o do clique no botão — o Enter tem o describe dele)
     const temaInput = screen.getByPlaceholderText("Adicionar tema");
     fireEvent.change(temaInput, { target: { value: "fé" } });
-    fireEvent.keyDown(temaInput, { key: "Enter" });
+    fireEvent.blur(temaInput);
     expect(
       screen.getByRole("button", { name: "Remover tema fé" }),
     ).toBeInTheDocument();
@@ -1251,6 +1253,11 @@ describe("LyricsPanel — o botão direto da etapa 5 na ficha (V10.10)", () => {
   const BOTAO =
     "Escrever a letra ouvindo o áudio (cerca de 4 minutos — pode levar mais" +
     " nesta máquina)";
+  /** O rótulo quando JÁ HÁ letra: "de novo" é o que a pessoa veio fazer. */
+  const BOTAO_DE_NOVO =
+    "Escrever a letra de novo, ouvindo o áudio (cerca de 4 minutos — pode" +
+    " levar mais nesta máquina)";
+  const DICA_COM_LETRA = dicaDeTranscreverEstaMusica(true);
   const SEM_LETRA = "Esta música continua sem letra.";
   let startTranscricao: ReturnType<typeof vi.fn>;
   let transcricaoPendentesDaMusica: ReturnType<typeof vi.fn>;
@@ -1397,7 +1404,7 @@ describe("LyricsPanel — o botão direto da etapa 5 na ficha (V10.10)", () => {
     Some, sim, quando a letra ENTRA no campo — aí a música deixou de estar sem
     letra, e é essa a mudança que importa.
   */
-  it("com letra encontrada o botão fica, e some quando ela entra no campo", async () => {
+  it("com letra encontrada o botão fica, e passa a dizer 'de novo' quando ela entra no campo", async () => {
     enrichSongScan = vi.fn(async () => ({
       song_id: 2,
       file_path: "/m/2.mp3",
@@ -1420,9 +1427,17 @@ describe("LyricsPanel — o botão direto da etapa 5 na ficha (V10.10)", () => {
     montar();
     buscar();
     fireEvent.click(await screen.findByRole("button", { name: "Usar estes dados" }));
+    /*
+      V10.11 — o botão NÃO some mais: a DECISIONS #166 o tirava quando a letra
+      entrava no campo, e o dono reverteu a #167 junto. O que muda é o rótulo,
+      que passa a dizer que a letra vai ser REFEITA.
+    */
     expect(
-      screen.queryByRole("button", { name: /Escrever a letra ouvindo o áudio/ }),
+      screen.queryByRole("button", { name: BOTAO }),
     ).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: BOTAO_DE_NOVO }),
+    ).toBeInTheDocument();
   });
 
   /*
@@ -1494,15 +1509,96 @@ describe("LyricsPanel — o botão direto da etapa 5 na ficha (V10.10)", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("escrita a letra no campo, o botão sai da tela", async () => {
+  /*
+    ESTE TESTE MUDOU DE PROPÓSITO NA V10.11, e a mudança é o item inteiro.
+
+    Ele guardava "escrita a letra no campo, o botão sai da tela" (DECISIONS
+    #166). O dono reverteu, com um caso concreto: um beta tester abriu uma
+    música cuja letra terminava em `[MÚSICA]` — letra de transcrição,
+    imperfeita — e queria exatamente refazê-la. **O caso em que a pessoa mais
+    quer transcrever de novo é justamente aquele em que já existe letra ruim.**
+
+    O que aparece no lugar do sumiço é a INFORMAÇÃO: o rótulo diz "de novo" e a
+    dica diz que a letra atual não é apagada, e sim proposta para substituição.
+  */
+  it("com letra no campo, o botão fica e diz que a letra será refeita", async () => {
     montar();
     await screen.findByRole("button", { name: BOTAO });
     fireEvent.change(screen.getByLabelText("Letra"), {
       target: { value: "agora tem letra" },
     });
-    expect(
-      screen.queryByRole("button", { name: /Escrever a letra ouvindo o áudio/ }),
-    ).not.toBeInTheDocument();
+    const botao = screen.getByRole("button", { name: BOTAO_DE_NOVO });
+    expect(botao).toBeInTheDocument();
+    expect(botao).toHaveAttribute("title", DICA_COM_LETRA);
+    expect(DICA_COM_LETRA).toBe(
+      "Escreve a letra ouvindo o áudio desta música, sem usar a internet." +
+        " A letra que está aqui não é apagada: a nova entra como proposta de" +
+        " substituição, e você decide antes de gravar.",
+    );
+  });
+
+  /*
+    A DICA SEM LETRA continua a que sempre foi: não há nada a substituir, e
+    inventar uma ressalva para um caso que não existe seria ruído.
+  */
+  it("sem letra no campo, a dica é a de sempre", async () => {
+    montar();
+    const botao = await screen.findByRole("button", { name: BOTAO });
+    expect(botao).toHaveAttribute(
+      "title",
+      "Escreve a letra ouvindo o áudio desta música, sem usar a internet." +
+        " Nada é gravado sem você conferir.",
+    );
+  });
+
+  /*
+    E A MÚSICA QUE JÁ CHEGA COM LETRA — a do relato — vê o botão desde o
+    primeiro segundo da ficha, sem busca nenhuma antes. Quem responde se há o
+    que transcrever continua sendo a PORTA (DECISIONS #155): a tela não monta
+    `[song.id]` nenhum.
+  */
+  it("música que já tem letra vê o botão ao abrir a ficha, e a fila vem da porta", async () => {
+    const comLetra = { ...semLetra(), has_lyrics: true };
+    setBackendForTests({
+      getLyrics: vi.fn(async () => "uma letra que termina em [MÚSICA]"),
+      writeTags: vi.fn(async () => comLetra),
+      enrichSongScan,
+      transcricaoPendentesDaMusica,
+    } as unknown as Backend);
+    useLibraryStore.setState({
+      results: [{ song: comLetra, snippet: null }],
+      selectedSongId: comLetra.id,
+    });
+    render(<LyricsPanel />);
+    // o "Editar" espera a letra carregar para o formulário não abrir vazio
+    await screen.findByTestId("lyrics-body");
+    fireEvent.click(screen.getByRole("button", { name: "Editar" }));
+
+    const botao = await screen.findByRole("button", { name: BOTAO_DE_NOVO });
+    expect(transcricaoPendentesDaMusica).toHaveBeenCalledWith(2);
+
+    fireEvent.click(botao);
+    expect(startTranscricao).toHaveBeenCalledWith([2]);
+    expect(enrichSongScan).not.toHaveBeenCalled();
+  });
+
+  /*
+    O BLOCO DE DOWNLOAD, ESSE, CONTINUA PRESO AO CAMPO VAZIO — e não é uma
+    exceção esquecida: a primeira frase dele é "Esta música continua sem letra.",
+    e com o textarea cheio logo acima ela seria desmentida pela tela em volta.
+    Quem tem letra e não tem os acessórios continua tendo o bloco permanente de
+    Configurações, que é onde o download mora.
+  */
+  it("com letra no campo e sem acessórios, a frase de download não é dita", async () => {
+    transcricaoPendentesDaMusica = vi.fn(async () => pendente({ disponivel: false }));
+    montar();
+    await waitFor(() => expect(transcricaoPendentesDaMusica).toHaveBeenCalled());
+    fireEvent.change(screen.getByLabelText("Letra"), {
+      target: { value: "agora tem letra" },
+    });
+    buscar();
+    await screen.findByText(SEM_RESULTADO_INDIVIDUAL);
+    expect(screen.queryByText(SEM_LETRA, { exact: false })).not.toBeInTheDocument();
   });
 
   /*
@@ -1662,5 +1758,329 @@ describe("LyricsPanel — o botão direto da etapa 5 na ficha (V10.10)", () => {
         `"${el.textContent?.slice(0, 30)}"`,
       ).toBeGreaterThanOrEqual(AA_TEXTO_NORMAL);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V10.11 — 20, 40 TEMAS SEM QUEBRAR A TELA.
+//
+// Os dois beta testers sugeriram limitar a 10 temas por música. O dono recusou
+// o limite — tema é o vocabulário da própria pessoa, e um teto rígido bate em
+// alguém no pior momento, sem ninguém a quem perguntar — e mandou o layout
+// aguentar. É o que estes testes guardam nas DUAS telas onde os temas de uma
+// música aparecem inteiros: o cabeçalho da ficha e o formulário de edição.
+// ---------------------------------------------------------------------------
+describe("LyricsPanel — os temas dobrados na ficha (V10.11)", () => {
+  /** 12 temas plausíveis: o caso do relato é bem maior, e cabe pela mesma régua. */
+  const MUITOS = [
+    "água", "esperança", "fé", "peregrinação", "advento", "louvor",
+    "comunhão", "paz", "misericórdia", "cura", "natal", "páscoa",
+  ];
+
+  function comTemas(lista: string[]): Song {
+    return { ...song(1, true), temas: lista.join("; ") };
+  }
+
+  function montar(s: Song) {
+    setBackendForTests({
+      getLyrics: vi.fn(async () => LYRICS),
+      writeTags: vi.fn(async () => s),
+      transcricaoPendentesDaMusica: vi.fn(async () => ({
+        musicas: [],
+        segundos_estimados: 0,
+        estimativa_medida_nesta_maquina: false,
+        disponivel: true,
+      })),
+    } as unknown as Backend);
+    useLibraryStore.setState({
+      results: [{ song: s, snippet: null }],
+      selectedSongId: s.id,
+    });
+    render(<LyricsPanel />);
+  }
+
+  beforeEach(() => {
+    useEnrichStore.setState({ status: "idle", scanInFlight: false });
+    useToastStore.setState({ toasts: [] });
+    usePlaylistStore.setState({ items: [], activePlaylistId: null });
+    usePlayerStore.setState({ current: null, isPlaying: false });
+  });
+
+  it("no cabeçalho, 12 temas viram 3 chips e um '+9' que abre", async () => {
+    montar(comTemas(MUITOS));
+    await screen.findByTestId("lyrics-body");
+    expect(screen.getAllByTestId("tema-chip")).toHaveLength(3);
+
+    fireEvent.click(screen.getByRole("button", { name: "Mostrar os outros 9 temas" }));
+    expect(screen.getAllByTestId("tema-chip")).toHaveLength(12);
+  });
+
+  /*
+    NO FORMULÁRIO A MESMA RÉGUA, e o chip continua removível: dobrar é layout,
+    e não um segundo modo de edição. Quem quer tirar o décimo tema abre a lista
+    e clica no × dele, como faria com o primeiro.
+  */
+  it("no formulário, dobra igual e o chip revelado continua removível", async () => {
+    montar(comTemas(MUITOS));
+    await screen.findByTestId("lyrics-body");
+    fireEvent.click(screen.getByRole("button", { name: "Editar" }));
+
+    expect(screen.getAllByTestId("tema-chip-editavel")).toHaveLength(3);
+    expect(
+      screen.queryByRole("button", { name: "Remover tema páscoa" }),
+    ).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByTestId("tema-mais-editavel"));
+    expect(screen.getAllByTestId("tema-chip-editavel")).toHaveLength(12);
+    fireEvent.click(screen.getByRole("button", { name: "Remover tema páscoa" }));
+    expect(screen.getAllByTestId("tema-chip-editavel")).toHaveLength(11);
+  });
+
+  /*
+    O CHIP QUE A PESSOA ACABOU DE CRIAR NÃO NASCE ESCONDIDO.
+
+    Com a lista dobrada, confirmar um tema o mandaria direto para trás do "+N" —
+    e quem digitou e não viu nada acontecer conclui que não funcionou, e digita
+    de novo. Confirmar um tema abre a lista, e é o único gesto que a abre
+    sozinho.
+  */
+  it("confirmar um tema com a lista dobrada abre a lista, para o novo chip aparecer", async () => {
+    montar(comTemas(MUITOS));
+    await screen.findByTestId("lyrics-body");
+    fireEvent.click(screen.getByRole("button", { name: "Editar" }));
+    expect(screen.getAllByTestId("tema-chip-editavel")).toHaveLength(3);
+
+    const input = screen.getByPlaceholderText("Adicionar tema");
+    fireEvent.change(input, { target: { value: "quaresma" } });
+    fireEvent.blur(input);
+
+    expect(screen.getAllByTestId("tema-chip-editavel")).toHaveLength(13);
+    expect(
+      screen.getByRole("button", { name: "Remover tema quaresma" }),
+    ).toBeInTheDocument();
+  });
+
+  // Quatro temas continuam sendo quatro chips: dobrar um só não tira linha
+  // nenhuma da tela e cobraria um clique por nada.
+  it("com quatro temas nada é dobrado, nem na ficha nem no formulário", async () => {
+    montar(comTemas(MUITOS.slice(0, 4)));
+    await screen.findByTestId("lyrics-body");
+    expect(screen.getAllByTestId("tema-chip")).toHaveLength(4);
+    fireEvent.click(screen.getByRole("button", { name: "Editar" }));
+    expect(screen.getAllByTestId("tema-chip-editavel")).toHaveLength(4);
+    expect(screen.queryByTestId("tema-mais")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("tema-mais-editavel")).not.toBeInTheDocument();
+  });
+
+  // Dobrar é de TELA: a gravação leva a lista inteira, aberta ou fechada.
+  it("dobrado ou aberto, o que é gravado é a lista inteira", async () => {
+    const s = comTemas(MUITOS);
+    // tipado com os argumentos que o `writeTags` recebe: sem isso o `mock.calls`
+    // é uma tupla vazia e o índice do campo de temas não compila
+    const writeTags = vi.fn(async (..._args: unknown[]) => s);
+    setBackendForTests({
+      getLyrics: vi.fn(async () => LYRICS),
+      writeTags,
+      transcricaoPendentesDaMusica: vi.fn(async () => ({
+        musicas: [],
+        segundos_estimados: 0,
+        estimativa_medida_nesta_maquina: false,
+        disponivel: true,
+      })),
+    } as unknown as Backend);
+    useLibraryStore.setState({
+      results: [{ song: s, snippet: null }],
+      selectedSongId: s.id,
+    });
+    render(<LyricsPanel />);
+    await screen.findByTestId("lyrics-body");
+    fireEvent.click(screen.getByRole("button", { name: "Editar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Salvar no arquivo" }));
+
+    await waitFor(() => expect(writeTags).toHaveBeenCalledTimes(1));
+    expect(writeTags.mock.calls[0][4]).toBe(MUITOS.join("; "));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V10.11 — ENTER NO CAMPO DE TEMA SALVA O FORMULÁRIO INTEIRO.
+//
+// Relato dos beta testers: a pessoa digita um tema e sai usando o aplicativo,
+// sem clicar em "Salvar no arquivo" — e perde o que digitou.
+//
+// A alternativa "Enter salva só o tema" foi RECUSADA pelo dono: meia tela
+// salvando sozinha é pior que nenhuma. Quem corrige o título, digita um tema,
+// aperta Enter e fecha ficaria com o tema no arquivo e o título perdido, e
+// nada na tela diria que só metade foi.
+// ---------------------------------------------------------------------------
+describe("EditSongForm — Enter no campo de tema (V10.11)", () => {
+  let writeTags: ReturnType<typeof vi.fn>;
+
+  const COM_TEMAS: Song = { ...song(1, true), temas: "água; esperança" };
+
+  function montar() {
+    writeTags = vi.fn(async () => COM_TEMAS);
+    setBackendForTests({
+      getLyrics: vi.fn(async () => LYRICS),
+      writeTags,
+      transcricaoPendentesDaMusica: vi.fn(async () => ({
+        musicas: [],
+        segundos_estimados: 0,
+        estimativa_medida_nesta_maquina: false,
+        disponivel: true,
+      })),
+    } as unknown as Backend);
+    useLibraryStore.setState({
+      results: [{ song: COM_TEMAS, snippet: null }],
+      selectedSongId: 1,
+    });
+    render(<LyricsPanel />);
+  }
+
+  async function editar() {
+    montar();
+    await screen.findByTestId("lyrics-body");
+    fireEvent.click(screen.getByRole("button", { name: "Editar" }));
+  }
+
+  function enter(valor: string) {
+    const input = screen.getByPlaceholderText("Adicionar tema");
+    fireEvent.change(input, { target: { value: valor } });
+    fireEvent.keyDown(input, { key: "Enter" });
+  }
+
+  beforeEach(() => {
+    useEnrichStore.setState({ status: "idle", scanInFlight: false });
+    useToastStore.setState({ toasts: [] });
+    usePlaylistStore.setState({ items: [], activePlaylistId: null });
+    usePlayerStore.setState({ current: null, isPlaying: false });
+  });
+
+  /*
+    O CHIP ENTRA NA GRAVAÇÃO — e é este o assert inteiro do conserto. Salvar o
+    estado de ANTES do Enter gravaria a ficha sem o tema que a pessoa acabou de
+    digitar, que é o mesmo prejuízo com uma cara nova.
+  */
+  it("grava a ficha inteira, com o tema recém-digitado dentro", async () => {
+    await editar();
+    fireEvent.change(screen.getByLabelText("Título"), {
+      target: { value: "Título Corrigido" },
+    });
+    enter("peregrinação");
+
+    await waitFor(() => expect(writeTags).toHaveBeenCalledTimes(1));
+    expect(writeTags).toHaveBeenCalledWith(
+      1,
+      "Título Corrigido",
+      "Artista Teste",
+      LYRICS,
+      "água; esperança; peregrinação",
+      undefined,
+      null,
+    );
+    // uma gravação SÓ: o chip e a ficha não são dois writes
+    expect(writeTags).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect(useToastStore.getState().toasts).toEqual([
+        expect.objectContaining({
+          message: "Alterações salvas em 1.mp3.",
+          kind: "success",
+        }),
+      ]),
+    );
+  });
+
+  /*
+    CAMPO VAZIO TAMBÉM SALVA, e é uma regra sem exceção invisível: Enter aqui
+    grava a ficha. "Enter só funciona se você tiver digitado algo" é a regra que
+    faz alguém apertar, não ver nada acontecer e não ter a quem perguntar — e o
+    que acontece é exatamente o que o botão ao lado faz.
+  */
+  it("com o campo de tema vazio, Enter salva a ficha do mesmo jeito", async () => {
+    await editar();
+    fireEvent.change(screen.getByLabelText("Título"), {
+      target: { value: "Só o título mudou" },
+    });
+    enter("");
+
+    await waitFor(() => expect(writeTags).toHaveBeenCalledTimes(1));
+    expect(writeTags.mock.calls[0][1]).toBe("Só o título mudou");
+    // e os temas continuam os que estavam lá: campo vazio não cria chip nenhum
+    expect(writeTags.mock.calls[0][4]).toBe("água; esperança");
+  });
+
+  /*
+    A MESMA RECUSA DO BOTÃO: título vazio não grava, e a mensagem é a de sempre.
+    Enter é o mesmo caminho, e não um segundo com regras próprias — mas o tema
+    digitado vira chip do mesmo jeito (BUG v0.4 vale inclusive quando o título
+    inválido aborta o save).
+  */
+  it("título vazio: Enter não grava, e o tema digitado não se perde", async () => {
+    await editar();
+    fireEvent.change(screen.getByLabelText("Título"), { target: { value: "  " } });
+    enter("advento");
+
+    expect(writeTags).not.toHaveBeenCalled();
+    expect(screen.getByText("Dê um título à música.")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Remover tema advento" }),
+    ).toBeInTheDocument();
+  });
+
+  /*
+    A MÚSICA TOCANDO É PAUSADA ANTES DE GRAVAR — no Windows o arquivo pode estar
+    em uso. É a regra do "Salvar no arquivo" desde a V4, e Enter a herda porque
+    é o MESMO caminho, e não uma cópia dele.
+  */
+  it("pausa a música em edição antes de gravar, como o botão faz", async () => {
+    await editar();
+    act(() =>
+      usePlayerStore.setState({ current: COM_TEMAS, isPlaying: true }),
+    );
+    enter("cura");
+
+    await waitFor(() => expect(writeTags).toHaveBeenCalledTimes(1));
+    expect(usePlayerStore.getState().isPlaying).toBe(false);
+  });
+
+  /*
+    SE A GRAVAÇÃO FALHAR, A PESSOA VÊ O ERRO COMO VÊ HOJE — mesmo toast, mesmo
+    texto — e o formulário continua aberto com o que ela digitou.
+  */
+  it("gravação recusada: o toast de erro é o mesmo, e nada se perde da tela", async () => {
+    await editar();
+    writeTags.mockRejectedValueOnce(new Error("arquivo em uso"));
+    enter("louvor");
+
+    await waitFor(() =>
+      expect(useToastStore.getState().toasts).toEqual([
+        expect.objectContaining({
+          message: "Não foi possível salvar em 1.mp3.",
+          kind: "error",
+        }),
+      ]),
+    );
+    expect(screen.getByLabelText("Título")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Remover tema louvor" }),
+    ).toBeInTheDocument();
+  });
+
+  /*
+    A DICA APARECE NO SEGUNDO EM QUE A PERGUNTA EXISTE. Enter que GRAVA NO
+    ARQUIVO é surpreendente demais para ficar só num `title` de mouse parado —
+    e uma linha permanente seria a prosa que a DECISIONS #100 proíbe.
+  */
+  it("a dica só aparece enquanto há texto no campo de tema", async () => {
+    await editar();
+    const DICA = "Enter confirma este tema e salva a ficha inteira no arquivo.";
+    expect(screen.queryByText(DICA)).not.toBeInTheDocument();
+
+    const input = screen.getByPlaceholderText("Adicionar tema");
+    fireEvent.change(input, { target: { value: "nat" } });
+    expect(screen.getByText(DICA)).toBeInTheDocument();
+
+    fireEvent.change(input, { target: { value: "" } });
+    expect(screen.queryByText(DICA)).not.toBeInTheDocument();
   });
 });

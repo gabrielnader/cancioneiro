@@ -2243,9 +2243,18 @@ describe("mockBackend", () => {
       expect(propostas[0].error).toBeNull();
     });
 
-    // DECISIONS #79 e #71 — letra existente e marca de instrumental são
-    // trabalho humano, e a etapa 5 não passa por cima de nenhum dos dois.
-    it("não transcreve quem já tem letra nem quem já é instrumental", async () => {
+    /*
+      DECISIONS #71 — a marca de instrumental é trabalho humano dizendo que não
+      há voz no áudio, e a etapa 5 não passa por cima dela.
+
+      **ESTE TESTE PERDEU METADE NA V10.11**, e a metade que saiu é o item: a
+      música que já tem letra passou a ser TRANSCRITA quando a fila pede, porque
+      o botão da ficha passou a valer para ela (DECISIONS #167 revertida) — e a
+      recusa gastaria o clique de quem leu "cerca de 4 minutos" no rótulo. O que
+      protege a letra existente continua sendo o consentimento do `enrichApply`
+      (DECISIONS #79), e ele tem teste próprio no `mockBackend.contrato.test`.
+    */
+    it("não transcreve quem já é instrumental, e transcreve quem já tem letra", async () => {
       await backend.addFolder("/musicas/teste");
       backend._estadoDoAcessorio("whisper-cli", "pronto");
       backend._estadoDoAcessorio("modelo-de-transcricao-grande", "pronto");
@@ -2253,14 +2262,19 @@ describe("mockBackend", () => {
       const comLetra = songs.find((s) => s.title === "Coração Sertanejo")!;
       const semTags = songs.find((s) => s.title === "sem_tags")!;
       backend._markAsInstrumental(semTags.file_path);
+      backend._ensinarTranscricao(comLetra.file_path, {
+        letra: "a letra refeita ouvindo o áudio",
+        refrao: null,
+      });
 
       const { propostas } = await backend.transcreverMusicas(
         [comLetra.id, semTags.id],
         "t1",
       );
-      expect(propostas[0].error).toContain("já tem letra");
+      expect(propostas[0].error).toBeNull();
+      expect(propostas[0].lyrics).toBe("a letra refeita ouvindo o áudio");
       expect(propostas[1].error).toContain("instrumental");
-      expect(propostas.every((p) => p.lyrics === null)).toBe(true);
+      expect(propostas[1].lyrics).toBeNull();
     });
 
     it("sem os acessórios, recusa em vez de fingir que transcreveu", async () => {

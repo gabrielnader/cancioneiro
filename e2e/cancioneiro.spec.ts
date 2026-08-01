@@ -677,7 +677,9 @@ test.describe("V4", () => {
     await panel.getByLabel("Artista").fill("Artista Editado");
     const temaInput = panel.getByPlaceholder("Adicionar tema");
     await temaInput.fill("fé");
-    await temaInput.press("Enter");
+    // V10.11 — o tema vira chip ao sair do campo (BUG v0.4). O Enter deixou de
+    // parar aqui: ele grava a ficha inteira, e tem teste próprio logo abaixo.
+    await temaInput.press("Tab");
     await expect(
       panel.getByRole("button", { name: "Remover tema fé" }),
     ).toBeVisible();
@@ -859,6 +861,111 @@ test.describe("V4", () => {
     await expect(
       page.getByRole("option").filter({ hasText: "sem_tags" }),
     ).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
+  /*
+    V10.11 — ENTER NO CAMPO DE TEMA SALVA O FORMULÁRIO INTEIRO.
+
+    Relato dos beta testers: a pessoa digita um tema e sai usando o aplicativo,
+    sem clicar em "Salvar no arquivo" — e perde o que digitou. A alternativa
+    "Enter salva só o tema" foi recusada pelo dono: meia tela salvando sozinha é
+    pior que nenhuma, e quem corrigiu o título junto ficaria com o tema gravado e
+    o título perdido.
+  */
+  test("V10.11: Enter no campo de tema grava a ficha inteira, numa gravação só", async ({
+    page,
+  }) => {
+    const errors = trackErrors(page);
+    await resetApp(page);
+    await addMockFolder(page);
+
+    await page.getByText("sem_tags", { exact: true }).first().click();
+    const panel = page.getByLabel("Painel de letra");
+    await panel.getByRole("button", { name: "Editar" }).click();
+
+    // a pessoa corrige o título E digita um tema — as duas coisas na mesma tela
+    await panel.getByLabel("Título").fill("Canção do Enter");
+    const temaInput = panel.getByPlaceholder("Adicionar tema");
+    await temaInput.fill("romaria");
+    // a dica aparece no segundo em que a pergunta existe
+    await expect(
+      panel.getByText("Enter confirma este tema e salva a ficha inteira no arquivo."),
+    ).toBeVisible();
+    await temaInput.press("Enter");
+
+    // uma gravação só, e o desfecho é o mesmo do botão
+    await expect(
+      page.getByText("Alterações salvas em sem_tags.mp3."),
+    ).toBeVisible();
+    await expect(panel.getByLabel("Título")).toHaveCount(0);
+
+    // as DUAS coisas foram para o arquivo: o título e o tema
+    await expect(panel.getByText("Canção do Enter")).toBeVisible();
+    await expect(
+      panel.getByRole("button", { name: "Tema: romaria" }),
+    ).toBeVisible();
+
+    const search = page.getByPlaceholder("Buscar por letra, título ou artista…");
+    await search.fill("romaria");
+    await expect(page.getByText("1 resultados")).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
+  /*
+    V10.11 — 20, 40 TEMAS SEM QUEBRAR A TELA.
+
+    Os beta testers pediram um limite de 10 temas por música; o dono recusou o
+    limite (tema é o vocabulário da própria pessoa) e mandou o layout aguentar.
+    Aparecem os 3 primeiros e um "+N" — 3 é quantos chips de largura MEDIANA
+    cabem numa linha do container mais estreito, os 240 px da coluna de texto do
+    painel de 380 px.
+  */
+  test("V10.11: 12 temas viram 3 chips e um '+9' que abre na ficha", async ({
+    page,
+  }) => {
+    const errors = trackErrors(page);
+    await resetApp(page);
+    await addMockFolder(page);
+
+    const MUITOS = [
+      "água", "esperança", "fé", "peregrinação", "advento", "louvor",
+      "comunhão", "paz", "misericórdia", "cura", "natal", "páscoa",
+    ].join("; ");
+    await page.evaluate(async (temas) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const mock = (window as any).__CANCIONEIRO_MOCK__;
+      const songs = await mock.listSongs();
+      const alvo = songs.find(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (s: any) => s.title === "Coração Sertanejo",
+      );
+      await mock.writeTags(alvo.id, alvo.title, alvo.artist, null, temas);
+    }, MUITOS);
+    await page.reload();
+
+    // na LINHA da lista o "+9" é marca, e não botão: a altura da linha é
+    // calculada pela virtualização, e expandir ali cobriria a linha de baixo
+    const linha = page
+      .getByRole("option")
+      .filter({ hasText: "Coração Sertanejo" });
+    await expect(linha.getByTestId("tema-chip")).toHaveCount(3);
+    await expect(linha.getByTestId("tema-mais")).toHaveText("+9");
+
+    // na FICHA ele abre
+    await page.getByText("Coração Sertanejo").first().click();
+    const panel = page.getByLabel("Painel de letra");
+    await expect(panel.getByTestId("tema-chip")).toHaveCount(3);
+    await panel.getByRole("button", { name: "Mostrar os outros 9 temas" }).click();
+    await expect(panel.getByTestId("tema-chip")).toHaveCount(12);
+    await panel.getByRole("button", { name: "mostrar menos" }).click();
+    await expect(panel.getByTestId("tema-chip")).toHaveCount(3);
+
+    // e no FORMULÁRIO a mesma régua, com o chip removível atrás do "+9"
+    await panel.getByRole("button", { name: "Editar" }).click();
+    await expect(panel.getByTestId("tema-chip-editavel")).toHaveCount(3);
+    await panel.getByTestId("tema-mais-editavel").click();
+    await expect(panel.getByTestId("tema-chip-editavel")).toHaveCount(12);
     expect(errors).toEqual([]);
   });
 
@@ -2145,6 +2252,96 @@ test.describe("V10 — a etapa que resolve (F18 fase 3)", () => {
     await expect(
       panel.getByRole("textbox", { name: "Letra", exact: true }),
     ).toHaveValue(/na beira do mar sagrado/);
+    expect(errors).toEqual([]);
+  });
+
+  /*
+    V10.11 — O BOTÃO APARECE TAMBÉM PARA A MÚSICA QUE JÁ TEM LETRA.
+
+    A DECISIONS #167 o escondia. O dono reverteu com um caso concreto: um beta
+    tester abriu uma música cuja letra terminava em `[MÚSICA]` — letra vinda de
+    transcrição, imperfeita — e queria exatamente refazê-la. O caso em que a
+    pessoa mais quer transcrever de novo é justamente aquele em que já existe
+    letra ruim.
+
+    O que este teste guarda é o caminho inteiro, com a garantia no fim: o botão
+    está lá, diz "de novo" e diz que a letra atual vira PROPOSTA de substituição;
+    a linha da revisão chega com a marcação de consentimento DESMARCADA; e sem
+    marcá-la a gravação é recusada — nada é sobrescrito sem clique (#79).
+  */
+  test("a ficha de quem JÁ TEM letra também transcreve, e a substituição pede consentimento", async ({
+    page,
+  }) => {
+    const errors = trackErrors(page);
+    await resetApp(page);
+    await addMockFolder(page);
+    await comTranscricao(page);
+    await page.evaluate(() => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (window as any).__CANCIONEIRO_MOCK__._ensinarTranscricao(
+        "/musicas/mock/com_letra.mp3",
+        { letra: "a letra refeita ouvindo o áudio de novo", refrao: null },
+      );
+    });
+
+    await page.getByText("Coração Sertanejo").first().click();
+    const panel = page.getByLabel("Painel de letra");
+    await panel.getByRole("button", { name: "Editar" }).click();
+
+    // o rótulo diz "de novo", e a dica diz o que acontece com a letra atual
+    const transcrever = panel.getByRole("button", {
+      name: /^Escrever a letra de novo, ouvindo o áudio \(/,
+    });
+    await expect(transcrever).toBeVisible();
+    await expect(transcrever).toHaveAttribute(
+      "title",
+      "Escreve a letra ouvindo o áudio desta música, sem usar a internet." +
+        " A letra que está aqui não é apagada: a nova entra como proposta de" +
+        " substituição, e você decide antes de gravar.",
+    );
+
+    await transcrever.click();
+
+    /*
+      A REVISÃO DE SEMPRE, com o consentimento de substituição no lugar: a linha
+      DIZ que já há letra e o que acontece sem a marcação, e a caixa chega
+      DESMARCADA. É aqui que a promessa se cumpre — nada é sobrescrito sem
+      clique (DECISIONS #79 e CRÍTICO-1).
+    */
+    const dialog = page.getByRole("dialog", { name: "Completar dados" });
+    await expect(
+      dialog.getByText("Já tem letra. Sem marcar abaixo, aplica só título e artista."),
+    ).toBeVisible();
+    const substituir = dialog.getByRole("checkbox", {
+      name: /Substituir a letra atual/,
+    });
+    await expect(substituir).not.toBeChecked();
+
+    // com a marcação, e só com ela, a letra refeita entra no arquivo
+    await substituir.check();
+    await dialog
+      .getByRole("checkbox", {
+        name: "Aplicar a letra escrita ouvindo o áudio: Coração Sertanejo",
+      })
+      .check();
+    await dialog.getByRole("button", { name: /Aplicar selecionadas/ }).click();
+    await expect(
+      page.getByText("1 música teve a letra substituída."),
+    ).toBeVisible();
+
+    const noArquivo = await page.evaluate(async () => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const mock = (window as any).__CANCIONEIRO_MOCK__;
+      const songs = await mock.listSongs();
+      const alvo = songs.find(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (s: any) => s.title === "Coração Sertanejo",
+      );
+      return mock.getLyrics(alvo.id);
+    });
+    expect(noArquivo).toContain("refeita ouvindo o áudio");
+
+    await dialog.getByRole("button", { name: "Fechar" }).click();
     expect(errors).toEqual([]);
   });
 });

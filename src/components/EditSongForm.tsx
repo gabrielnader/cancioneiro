@@ -2,17 +2,26 @@ import { useEffect, useRef, useState } from "react";
 import { audioController } from "../hooks/playerAudioCore";
 import { getBackend, type EnrichProposal } from "../lib/api";
 import {
+  DICA_DO_ENTER_NO_TEMA,
   EXPLICACAO_DA_CONFIANCA_DO_SOM,
   LABEL_SOM_DIZ,
   LABEL_SUA_ETIQUETA_DIZ,
   SEM_RESULTADO_INDIVIDUAL,
   SEM_RESULTADO_INSTRUMENTAL,
   confiancaDoSom,
+  dicaDeTranscreverEstaMusica,
   downloadParaTranscrever,
   rotuloDeTranscreverEstaMusica,
   textoDaOfertaDestaMusica,
   type DownloadPendente,
 } from "../lib/curadoria";
+import {
+  LIMITE_DE_TEMAS_VISIVEIS,
+  ROTULO_DE_DOBRAR_TEMAS,
+  dicaDeMaisTemasNaFicha,
+  dobrarTemas,
+  rotuloDeMaisTemas,
+} from "./TemaChips";
 import { FONTE_LYRICS_OVH, ORIGEM_LYRICS_OVH, type Song } from "../lib/types";
 import { novoScanId, useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
@@ -103,6 +112,14 @@ export function EditSongForm({
       .filter(Boolean),
   );
   const [temaInput, setTemaInput] = useState("");
+  /**
+   * V10.11 — a lista de temas está aberta?
+   *
+   * Nasce dobrada, como no cabeçalho. Estado de TELA e não de dado: nada aqui
+   * muda o que vai para o arquivo — `handleSave` grava a lista inteira, aberta
+   * ou fechada.
+   */
+  const [temasExpandidos, setTemasExpandidos] = useState(false);
   // V8/F17 — a marca de instrumental é escolha humana e viaja no MP3
   // (TXXX:INSTRUMENTAL). O editor é o único lugar do app que a desfaz, mas
   // só quando alguém MEXE no controle: `write_tags` recebe `undefined`
@@ -219,6 +236,16 @@ export function EditSongForm({
     }
     const next = [...temas, tema];
     setTemas(next);
+    /*
+      V10.11 — O CHIP QUE ACABOU DE SER CRIADO NÃO NASCE ESCONDIDO.
+
+      Com a lista dobrada, o tema novo entra no FIM — atrás do "+N". Quem digita
+      e não vê nada acontecer conclui que não funcionou e digita de novo, e num
+      produto sem suporte essa conclusão não tem quem a desminta. Confirmar um
+      tema é o único gesto que abre a lista sozinho; o resto é clique explícito
+      no "+N".
+    */
+    setTemasExpandidos(true);
     return next;
   }
 
@@ -464,12 +491,41 @@ export function EditSongForm({
    *
    * - quem acabou de marcar "esta música é instrumental" declarou que não há voz
    *   no áudio, e oferecer escrever a letra ouvindo o áudio contradiria o que ela
-   *   acabou de dizer (é a mesma razão do `SEM_RESULTADO_INSTRUMENTAL`);
-   * - com letra no campo, a música não está mais sem letra — e a frase da saída
-   *   sem acessórios, que abre com "esta música continua sem letra", seria
-   *   desmentida pelo textarea logo acima dela.
+   *   acabou de dizer (é a mesma razão do `SEM_RESULTADO_INSTRUMENTAL`).
+   *
+   * **V10.11 — e é UMA condição, não duas.** Até aqui havia também "e o campo de
+   * letra está vazio" (DECISIONS #166), e o dono a removeu junto com a #167: o
+   * caso em que a pessoa mais quer transcrever é justamente aquele em que já
+   * existe letra ruim — o beta tester que abriu uma música cuja letra terminava
+   * em `[MÚSICA]`. O campo de letra deixou de decidir se o botão EXISTE e passou
+   * a decidir o que ele DIZ (ver `letraNaTela`).
    */
-  const podeTranscreverEstaMusica = !instrumental && !lyrics.trim();
+  const podeTranscreverEstaMusica = !instrumental;
+
+  /**
+   * Há letra na TELA agora? É o que decide o rótulo e a dica do botão da etapa
+   * 5, e é o campo — e não o banco — porque é a letra que a pessoa está olhando
+   * quando pergunta "vou perder isto?".
+   *
+   * (O que a revisão vai chamar de substituição é a letra do ARQUIVO, e quem
+   * decide isso é o `has_lyrics` que viaja na proposta. As duas coincidem no
+   * caso do relato — a ficha abre com a letra do arquivo no campo — e, quando
+   * não coincidem, a dica continua verdadeira nas duas leituras: nada é
+   * apagado, e o que sai da etapa 5 é proposta.)
+   */
+  const letraNaTela = lyrics.trim() !== "";
+
+  /**
+   * V10.11 — a lista de temas partida em "o que aparece" e "quantos ficaram".
+   *
+   * A régua mora no `TemaChips` e é a mesma das outras duas telas: o número sai
+   * da largura REAL do container mais estreito (240 px, a coluna de texto do
+   * painel), e não de um palpite.
+   */
+  const { visiveis: temasVisiveis, escondidos: temasEscondidos } = dobrarTemas(
+    temas,
+    temasExpandidos,
+  );
 
   const inputClass = (error: boolean) =>
     `w-full rounded-md border bg-white px-3 py-2 text-[15px] text-[#111827] outline-none ${
@@ -519,10 +575,22 @@ export function EditSongForm({
 
       <div>
         <p className="mb-1 text-[13px] font-medium text-[#374151]">Temas</p>
+        {/*
+          V10.11 — A MESMA RÉGUA DE DOBRAMENTO DO CABEÇALHO, aqui com o chip
+          removível. Os beta testers pediram um limite de 10 temas por música; o
+          dono recusou o limite e mandou o layout aguentar — 20, 40 temas
+          continuam podendo, e o que muda é que só os primeiros ficam na tela.
+
+          A régua é a do `LIMITE_DE_TEMAS_VISIVEIS`, e é a MESMA das outras duas
+          telas de propósito: duas réguas seriam duas telas dobrando em pontos
+          diferentes pela mesma lista, e quem contasse os chips de uma na outra
+          acharia que perdeu tema (DECISIONS #80 aplicada a layout).
+        */}
         <div className="flex flex-wrap items-center gap-1.5">
-          {temas.map((tema) => (
+          {temasVisiveis.map((tema) => (
             <span
               key={tema}
+              data-testid="tema-chip-editavel"
               className="inline-flex max-w-40 items-center gap-1 rounded-full bg-[#F0FDFA] px-2 py-0.5 text-[12px] text-[#0F766E]"
             >
               <span className="truncate">{tema}</span>
@@ -536,6 +604,32 @@ export function EditSongForm({
               </button>
             </span>
           ))}
+          {temasEscondidos > 0 && (
+            <button
+              type="button"
+              data-testid="tema-mais-editavel"
+              aria-label={dicaDeMaisTemasNaFicha(temasEscondidos)}
+              title={dicaDeMaisTemasNaFicha(temasEscondidos)}
+              // cinza e não verde-água: o "+N" não é um tema, e pintá-lo como
+              // os chips faria alguém tentar removê-lo
+              className="shrink-0 rounded-full bg-[#F3F4F6] px-2 py-0.5 text-[12px] text-[#5B6472] hover:bg-[#E5E7EB]"
+              onClick={() => setTemasExpandidos(true)}
+            >
+              {rotuloDeMaisTemas(temasEscondidos)}
+            </button>
+          )}
+          {temasExpandidos && temas.length > LIMITE_DE_TEMAS_VISIVEIS + 1 && (
+            // o que abriu fecha no mesmo lugar — e num formulário com 40 chips
+            // abertos é ele que devolve o campo de digitar para perto do olho
+            <button
+              type="button"
+              data-testid="tema-menos-editavel"
+              className="shrink-0 rounded-full px-2 py-0.5 text-[12px] text-[#5B6472] underline hover:bg-[#F3F4F6]"
+              onClick={() => setTemasExpandidos(false)}
+            >
+              {ROTULO_DE_DOBRAR_TEMAS}
+            </button>
+          )}
           <input
             type="text"
             value={temaInput}
@@ -545,7 +639,38 @@ export function EditSongForm({
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
-                commitTemaInput();
+                /*
+                  V10.11 — ENTER CONFIRMA O CHIP **E GRAVA A FICHA INTEIRA**,
+                  numa gravação só.
+
+                  Relato dos beta testers: a pessoa digita um tema, sai usando o
+                  aplicativo sem clicar em "Salvar no arquivo", e perde o que
+                  digitou. A alternativa — "Enter salva só o tema" — foi
+                  RECUSADA pelo dono: meia tela salvando sozinha é pior que
+                  nenhuma. Quem corrige o título, digita um tema, aperta Enter e
+                  fecha ficaria com o tema gravado e o título perdido, sem nada
+                  na tela dizendo que só metade foi.
+
+                  `handleSave` é o MESMO caminho do botão, e é por isso que ele é
+                  chamado inteiro em vez de recopiado: ele confirma o tema
+                  pendente antes de montar a gravação (o chip entra nela), pausa
+                  a música se ela estiver tocando, mostra o mesmo toast de erro
+                  quando o arquivo recusa e recusa o título vazio do mesmo jeito.
+                  Um segundo caminho seria um segundo lugar onde essas quatro
+                  coisas divergem (DECISIONS #80).
+
+                  **Campo VAZIO também salva.** Não há chip a confirmar, mas a
+                  regra é a mesma — e é isso que se pode aprender: Enter aqui
+                  grava a ficha. Uma exceção invisível ("Enter só funciona se
+                  você tiver digitado algo") é a que faz alguém apertar, não ver
+                  nada acontecer e não ter a quem perguntar por quê. O que
+                  acontece é exatamente o que o botão ao lado faz, e o botão
+                  também não pergunta se algo mudou.
+                */
+                // uma gravação em curso já está fazendo o que Enter pediria: é
+                // a mesma trava do botão, que fica desabilitado enquanto `busy`
+                if (busy) return;
+                void handleSave();
               }
             }}
             // sair do campo confirma o tema pendente como chip (BUG v0.4)
@@ -553,6 +678,18 @@ export function EditSongForm({
             className="min-w-28 flex-1 rounded-md border border-[#D1D5DB] bg-white px-2 py-1 text-[13px] text-[#111827] outline-none placeholder:text-[#9CA3AF] focus:border-[#0F766E]"
           />
         </div>
+        {/*
+          A DICA APARECE NO SEGUNDO EM QUE A PERGUNTA EXISTE, e some depois.
+
+          Com texto no campo, a pergunta é "e agora, o que faço com isto?" — a
+          régua da DECISIONS #100 pede exatamente isso do resto da tela. Uma
+          linha permanente abaixo do campo seria prosa que ninguém lê depois da
+          segunda vez, e Enter que GRAVA NO ARQUIVO é surpreendente demais para
+          ficar só num `title` que precisa de mouse parado em cima.
+        */}
+        {temaInput.trim() !== "" && (
+          <p className="mt-1 text-[13px] text-[#5B6472]">{DICA_DO_ENTER_NO_TEMA}</p>
+        )}
       </div>
 
       {/*
@@ -762,8 +899,16 @@ export function EditSongForm({
         instrumental marcada ou com letra no campo, a frase "esta música continua
         sem letra" seria desmentida pela tela em volta dela: é a primeira coisa
         que a pessoa lê, e ela estaria errada.
+
+        V10.11 — E É POR ISSO QUE O `!lyrics.trim()` FICOU AQUI, e saiu do
+        `podeTranscreverEstaMusica`. O BOTÃO passou a valer para quem tem letra
+        (o caso do relato: letra de transcrição terminando em `[MÚSICA]`, que a
+        pessoa quer refazer); esta FRASE não pode, porque ela abre afirmando o
+        contrário do que o textarea logo acima mostra. Quem tem letra e não tem
+        os acessórios continua com o bloco permanente de Configurações — que é
+        onde o download de 1,4 GB mora, e a única tela em que ele é um clique.
       */}
-      {oferta && !oferta.disponivel && buscaSemLetra && podeTranscreverEstaMusica && (
+      {oferta && !oferta.disponivel && buscaSemLetra && podeTranscreverEstaMusica && !letraNaTela && (
         <div
           role="status"
           className="shrink-0 rounded-md bg-[#F0FDFA] px-4 py-3"
@@ -851,6 +996,26 @@ export function EditSongForm({
           Sem `disponivel` não há botão: um botão que não faria nada é pior que a
           frase que diz o que fazer (DECISIONS #157), e a frase está no bloco
           acima.
+
+          V10.11 — E ELE APARECE TAMBÉM PARA A MÚSICA QUE JÁ TEM LETRA.
+
+          A DECISIONS #167 o escondia, e o dono a reverteu com um caso concreto:
+          um beta tester abriu uma música cuja letra terminava em `[MÚSICA]` —
+          letra vinda de transcrição, imperfeita — e queria exatamente refazê-la.
+          O caso em que a pessoa mais quer transcrever de novo é justamente
+          aquele em que já existe letra ruim, e era o único em que o botão não
+          estava lá.
+
+          Quem decide se há o que transcrever continua sendo a PORTA
+          (`transcricaoPendentesDaMusica`), que passou a devolver a fila para
+          essa música — a tela não monta `[song.id]` nenhum (DECISIONS #155). E a
+          varredura em lote e o bloco de Configurações continuam pulando quem tem
+          letra (DECISIONS #136): lá ninguém pediu por aquela música.
+
+          O que muda AQUI é o texto: o rótulo diz "de novo" e a dica diz o que
+          acontece com a letra que já está na tela. **Nada é sobrescrito**: o
+          resultado vai para a mesma revisão, e a substituição continua exigindo
+          a marcação explícita (DECISIONS #79).
         */}
         {oferta && oferta.disponivel && podeTranscreverEstaMusica && (
           <button
@@ -864,13 +1029,21 @@ export function EditSongForm({
             */
             disabled={loteRodando}
             aria-describedby={loteRodando ? "editor-busca-bloqueada" : undefined}
-            title="Escreve a letra ouvindo o áudio desta música, sem usar a internet. Nada é gravado sem você conferir."
+            /*
+              A dica é a resposta ao medo daquele segundo, e ele muda com a
+              tela: sem letra, "nada é gravado sem você conferir"; COM letra, a
+              pergunta é "vou perder o que está aqui?" — e a resposta precisa
+              estar escrita ANTES do clique, porque o consentimento de
+              substituição (DECISIONS #79) só aparece minutos depois, na revisão.
+            */
+            title={dicaDeTranscreverEstaMusica(letraNaTela)}
             onClick={() => void startTranscricao(oferta.musicas)}
             className="rounded-md border border-[#0F766E] px-3 py-1.5 text-[14px] font-medium text-[#0F766E] hover:bg-[#F0FDFA] disabled:opacity-60"
           >
             {rotuloDeTranscreverEstaMusica(
               oferta.segundos,
               oferta.medidaNestaMaquina,
+              letraNaTela,
             )}
           </button>
         )}
