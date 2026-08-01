@@ -15,13 +15,6 @@ import {
   textoDaOfertaDestaMusica,
   type DownloadPendente,
 } from "../lib/curadoria";
-import {
-  LIMITE_DE_TEMAS_VISIVEIS,
-  ROTULO_DE_DOBRAR_TEMAS,
-  dicaDeMaisTemasNaFicha,
-  dobrarTemas,
-  rotuloDeMaisTemas,
-} from "./TemaChips";
 import { FONTE_LYRICS_OVH, ORIGEM_LYRICS_OVH, type Song } from "../lib/types";
 import { novoScanId, useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
@@ -112,14 +105,6 @@ export function EditSongForm({
       .filter(Boolean),
   );
   const [temaInput, setTemaInput] = useState("");
-  /**
-   * V10.11 — a lista de temas está aberta?
-   *
-   * Nasce dobrada, como no cabeçalho. Estado de TELA e não de dado: nada aqui
-   * muda o que vai para o arquivo — `handleSave` grava a lista inteira, aberta
-   * ou fechada.
-   */
-  const [temasExpandidos, setTemasExpandidos] = useState(false);
   // V8/F17 — a marca de instrumental é escolha humana e viaja no MP3
   // (TXXX:INSTRUMENTAL). O editor é o único lugar do app que a desfaz, mas
   // só quando alguém MEXE no controle: `write_tags` recebe `undefined`
@@ -236,16 +221,7 @@ export function EditSongForm({
     }
     const next = [...temas, tema];
     setTemas(next);
-    /*
-      V10.11 — O CHIP QUE ACABOU DE SER CRIADO NÃO NASCE ESCONDIDO.
-
-      Com a lista dobrada, o tema novo entra no FIM — atrás do "+N". Quem digita
-      e não vê nada acontecer conclui que não funcionou e digita de novo, e num
-      produto sem suporte essa conclusão não tem quem a desminta. Confirmar um
-      tema é o único gesto que abre a lista sozinho; o resto é clique explícito
-      no "+N".
-    */
-    setTemasExpandidos(true);
+    // V-campo: sem dobramento aqui, o chip novo já nasce visível — nada a abrir.
     return next;
   }
 
@@ -434,7 +410,15 @@ export function EditSongForm({
     setResultado(null);
   }
 
-  async function handleSave() {
+  /**
+   * `fechar` — o botão "Salvar no arquivo" fecha o editor ao terminar (sempre
+   * fez isso); o Enter do campo de tema, não. Relato de campo: *"não gostei...
+   * pq ele salva e fecha a parte de edição da música"* — Enter grava e deixa a
+   * ficha aberta, com o chip novo na tela, pronta para o próximo tema. O
+   * resto do caminho é IDÊNTICO nos dois: mesmo toast, mesmo erro, mesma
+   * pausa do player.
+   */
+  async function handleSave(fechar: boolean = true) {
     // tema digitado e não confirmado com Enter conta como se tivesse dado
     // Enter (BUG v0.4) — inclusive quando o título inválido aborta o save.
     const finalTemas = commitTemaInput();
@@ -473,7 +457,7 @@ export function EditSongForm({
       usePlaylistStore.getState().updateSongInItems(saved);
       usePlayerStore.getState().updateSongRefs(saved);
       push(`Alterações salvas em ${basename(song.file_path)}.`, "success");
-      onSaved();
+      if (fechar) onSaved();
     } catch {
       push(`Não foi possível salvar em ${basename(song.file_path)}.`, "error");
     } finally {
@@ -514,18 +498,6 @@ export function EditSongForm({
    * apagado, e o que sai da etapa 5 é proposta.)
    */
   const letraNaTela = lyrics.trim() !== "";
-
-  /**
-   * V10.11 — a lista de temas partida em "o que aparece" e "quantos ficaram".
-   *
-   * A régua mora no `TemaChips` e é a mesma das outras duas telas: o número sai
-   * da largura REAL do container mais estreito (240 px, a coluna de texto do
-   * painel), e não de um palpite.
-   */
-  const { visiveis: temasVisiveis, escondidos: temasEscondidos } = dobrarTemas(
-    temas,
-    temasExpandidos,
-  );
 
   const inputClass = (error: boolean) =>
     `w-full rounded-md border bg-surface px-3 py-2 text-[15px] text-ink outline-none ${
@@ -576,18 +548,14 @@ export function EditSongForm({
       <div>
         <p className="mb-1 text-[13px] font-medium text-ink-secondary">Temas</p>
         {/*
-          V10.11 — A MESMA RÉGUA DE DOBRAMENTO DO CABEÇALHO, aqui com o chip
-          removível. Os beta testers pediram um limite de 10 temas por música; o
-          dono recusou o limite e mandou o layout aguentar — 20, 40 temas
-          continuam podendo, e o que muda é que só os primeiros ficam na tela.
-
-          A régua é a do `LIMITE_DE_TEMAS_VISIVEIS`, e é a MESMA das outras duas
-          telas de propósito: duas réguas seriam duas telas dobrando em pontos
-          diferentes pela mesma lista, e quem contasse os chips de uma na outra
-          acharia que perdeu tema (DECISIONS #80 aplicada a layout).
+          Sem dobramento aqui: o "+N" é da linha da biblioteca e do cabeçalho da
+          ficha, onde o espaço é apertado (`TemaChips`/`dobrarTemas`). No editor
+          o espaço sobra — é a única tela em que a pessoa quer ver TODOS os temas
+          de uma vez, inclusive para removê-los. Os chips quebram em quantas
+          linhas precisar (`flex-wrap`).
         */}
         <div className="flex flex-wrap items-center gap-1.5">
-          {temasVisiveis.map((tema) => (
+          {temas.map((tema) => (
             <span
               key={tema}
               data-testid="tema-chip-editavel"
@@ -604,32 +572,6 @@ export function EditSongForm({
               </button>
             </span>
           ))}
-          {temasEscondidos > 0 && (
-            <button
-              type="button"
-              data-testid="tema-mais-editavel"
-              aria-label={dicaDeMaisTemasNaFicha(temasEscondidos)}
-              title={dicaDeMaisTemasNaFicha(temasEscondidos)}
-              // cinza e não verde-água: o "+N" não é um tema, e pintá-lo como
-              // os chips faria alguém tentar removê-lo
-              className="shrink-0 rounded-full bg-surface-hover px-2 py-0.5 text-[12px] text-ink-quaternary hover:bg-border"
-              onClick={() => setTemasExpandidos(true)}
-            >
-              {rotuloDeMaisTemas(temasEscondidos)}
-            </button>
-          )}
-          {temasExpandidos && temas.length > LIMITE_DE_TEMAS_VISIVEIS + 1 && (
-            // o que abriu fecha no mesmo lugar — e num formulário com 40 chips
-            // abertos é ele que devolve o campo de digitar para perto do olho
-            <button
-              type="button"
-              data-testid="tema-menos-editavel"
-              className="shrink-0 rounded-full px-2 py-0.5 text-[12px] text-ink-quaternary underline hover:bg-surface-hover"
-              onClick={() => setTemasExpandidos(false)}
-            >
-              {ROTULO_DE_DOBRAR_TEMAS}
-            </button>
-          )}
           <input
             type="text"
             value={temaInput}
@@ -666,11 +608,18 @@ export function EditSongForm({
                   nada acontecer e não ter a quem perguntar por quê. O que
                   acontece é exatamente o que o botão ao lado faz, e o botão
                   também não pergunta se algo mudou.
+
+                  **E DEIXA O EDITOR ABERTO** (relato de campo, pós-V10.11): quem
+                  aperta Enter aqui não terminou a ficha, só confirmou um tema —
+                  fechar a tela nesse momento é o produto decidindo por ela que
+                  acabou. `handleSave(false)` grava, mostra o mesmo toast e NÃO
+                  chama `onSaved`; quem quer fechar clica em "Salvar no arquivo",
+                  que continua fechando como sempre fez.
                 */
                 // uma gravação em curso já está fazendo o que Enter pediria: é
                 // a mesma trava do botão, que fica desabilitado enquanto `busy`
                 if (busy) return;
-                void handleSave();
+                void handleSave(false);
               }
             }}
             // sair do campo confirma o tema pendente como chip (BUG v0.4)

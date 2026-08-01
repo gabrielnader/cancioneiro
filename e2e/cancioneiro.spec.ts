@@ -872,8 +872,13 @@ test.describe("V4", () => {
     "Enter salva só o tema" foi recusada pelo dono: meia tela salvando sozinha é
     pior que nenhuma, e quem corrigiu o título junto ficaria com o tema gravado e
     o título perdido.
+
+    V11.1 — E ENTER NÃO FECHA MAIS O EDITOR. Segundo relato de campo: *"não
+    gostei... pq ele salva e fecha a parte de edição da música, acho que tem
+    que manter"*. O botão "Salvar no arquivo" continua fechando, como sempre
+    fez — só o Enter mudou.
   */
-  test("V10.11: Enter no campo de tema grava a ficha inteira, numa gravação só", async ({
+  test("V10.11/V11.1: Enter no campo de tema grava a ficha inteira e deixa o editor aberto", async ({
     page,
   }) => {
     const errors = trackErrors(page);
@@ -894,13 +899,22 @@ test.describe("V4", () => {
     ).toBeVisible();
     await temaInput.press("Enter");
 
-    // uma gravação só, e o desfecho é o mesmo do botão
+    // uma gravação só, e o toast é o mesmo do botão
     await expect(
       page.getByText("Alterações salvas em sem_tags.mp3."),
     ).toBeVisible();
-    await expect(panel.getByLabel("Título")).toHaveCount(0);
+    // MAS o editor continua ABERTO: o campo de Título ainda está na tela
+    await expect(panel.getByLabel("Título")).toHaveCount(1);
+    await expect(panel.getByLabel("Título")).toHaveValue("Canção do Enter");
+    // e o chip novo já está lá, com o campo de digitar limpo para o próximo
+    await expect(
+      panel.getByRole("button", { name: "Remover tema romaria" }),
+    ).toBeVisible();
+    await expect(temaInput).toHaveValue("");
 
-    // as DUAS coisas foram para o arquivo: o título e o tema
+    // fecha clicando no botão de sempre, e SÓ ENTÃO os dados aparecem fora da edição
+    await panel.getByRole("button", { name: "Salvar no arquivo" }).click();
+    await expect(panel.getByLabel("Título")).toHaveCount(0);
     await expect(panel.getByText("Canção do Enter")).toBeVisible();
     await expect(
       panel.getByRole("button", { name: "Tema: romaria" }),
@@ -913,15 +927,21 @@ test.describe("V4", () => {
   });
 
   /*
-    V10.11 — 20, 40 TEMAS SEM QUEBRAR A TELA.
+    V10.11 — 20, 40 TEMAS SEM QUEBRAR A TELA (na linha da lista e no cabeçalho
+    da ficha, onde o espaço é apertado).
 
     Os beta testers pediram um limite de 10 temas por música; o dono recusou o
     limite (tema é o vocabulário da própria pessoa) e mandou o layout aguentar.
     Aparecem os 3 primeiros e um "+N" — 3 é quantos chips de largura MEDIANA
     cabem numa linha do container mais estreito, os 240 px da coluna de texto do
     painel de 380 px.
+
+    V11.1 — E NO FORMULÁRIO DE EDIÇÃO, NÃO HÁ "+N": segundo relato de campo,
+    *"nessa tela de editar tem que dar pra ver todas as tags já que na
+    biblioteca só dá pra ver algumas e o +N"*. Os 12 chips aparecem inteiros,
+    quebrando em linhas.
   */
-  test("V10.11: 12 temas viram 3 chips e um '+9' que abre na ficha", async ({
+  test("V10.11/V11.1: 12 temas viram 3 chips e um '+9' no cabeçalho; TODOS no formulário", async ({
     page,
   }) => {
     const errors = trackErrors(page);
@@ -952,7 +972,7 @@ test.describe("V4", () => {
     await expect(linha.getByTestId("tema-chip")).toHaveCount(3);
     await expect(linha.getByTestId("tema-mais")).toHaveText("+9");
 
-    // na FICHA ele abre
+    // no CABEÇALHO DA FICHA ele abre, como sempre
     await page.getByText("Coração Sertanejo").first().click();
     const panel = page.getByLabel("Painel de letra");
     await expect(panel.getByTestId("tema-chip")).toHaveCount(3);
@@ -961,11 +981,10 @@ test.describe("V4", () => {
     await panel.getByRole("button", { name: "mostrar menos" }).click();
     await expect(panel.getByTestId("tema-chip")).toHaveCount(3);
 
-    // e no FORMULÁRIO a mesma régua, com o chip removível atrás do "+9"
+    // e no FORMULÁRIO os 12 aparecem inteiros — sem "+N" nenhum
     await panel.getByRole("button", { name: "Editar" }).click();
-    await expect(panel.getByTestId("tema-chip-editavel")).toHaveCount(3);
-    await panel.getByTestId("tema-mais-editavel").click();
     await expect(panel.getByTestId("tema-chip-editavel")).toHaveCount(12);
+    await expect(panel.getByTestId("tema-mais-editavel")).toHaveCount(0);
     expect(errors).toEqual([]);
   });
 

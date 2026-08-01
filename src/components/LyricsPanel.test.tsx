@@ -1769,10 +1769,15 @@ describe("LyricsPanel — o botão direto da etapa 5 na ficha (V10.10)", () => {
 // Os dois beta testers sugeriram limitar a 10 temas por música. O dono recusou
 // o limite — tema é o vocabulário da própria pessoa, e um teto rígido bate em
 // alguém no pior momento, sem ninguém a quem perguntar — e mandou o layout
-// aguentar. É o que estes testes guardam nas DUAS telas onde os temas de uma
-// música aparecem inteiros: o cabeçalho da ficha e o formulário de edição.
+// aguentar.
+//
+// V11.1 — E O DOBRAMENTO SAIU DO FORMULÁRIO. Relato de campo: *"na tela de
+// editar tem que dar pra ver todas as tags já que na biblioteca só dá pra ver
+// algumas e o +N"*. O "+N" continua no cabeçalho da ficha e na linha da
+// lista — onde o espaço é o mesmo de sempre — mas no editor os chips quebram
+// em quantas linhas precisar, sem "+N" nenhum.
 // ---------------------------------------------------------------------------
-describe("LyricsPanel — os temas dobrados na ficha (V10.11)", () => {
+describe("LyricsPanel — os temas dobrados no cabeçalho; TODOS no formulário (V11.1)", () => {
   /** 12 temas plausíveis: o caso do relato é bem maior, e cabe pela mesma régua. */
   const MUITOS = [
     "água", "esperança", "fé", "peregrinação", "advento", "louvor",
@@ -1818,39 +1823,33 @@ describe("LyricsPanel — os temas dobrados na ficha (V10.11)", () => {
   });
 
   /*
-    NO FORMULÁRIO A MESMA RÉGUA, e o chip continua removível: dobrar é layout,
-    e não um segundo modo de edição. Quem quer tirar o décimo tema abre a lista
-    e clica no × dele, como faria com o primeiro.
+    V11.1 — NO FORMULÁRIO, TODOS OS 12 CHIPS, sem "+N" nenhum: dobrar é da
+    linha apertada da lista e do cabeçalho da ficha, não do editor. O chip
+    continua removível, como sempre foi.
   */
-  it("no formulário, dobra igual e o chip revelado continua removível", async () => {
+  it("no formulário, os 12 temas aparecem inteiros e cada um continua removível", async () => {
     montar(comTemas(MUITOS));
     await screen.findByTestId("lyrics-body");
     fireEvent.click(screen.getByRole("button", { name: "Editar" }));
 
-    expect(screen.getAllByTestId("tema-chip-editavel")).toHaveLength(3);
-    expect(
-      screen.queryByRole("button", { name: "Remover tema páscoa" }),
-    ).not.toBeInTheDocument();
-
-    fireEvent.click(screen.getByTestId("tema-mais-editavel"));
     expect(screen.getAllByTestId("tema-chip-editavel")).toHaveLength(12);
+    expect(screen.queryByTestId("tema-mais-editavel")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("tema-menos-editavel")).not.toBeInTheDocument();
+
     fireEvent.click(screen.getByRole("button", { name: "Remover tema páscoa" }));
     expect(screen.getAllByTestId("tema-chip-editavel")).toHaveLength(11);
   });
 
   /*
-    O CHIP QUE A PESSOA ACABOU DE CRIAR NÃO NASCE ESCONDIDO.
-
-    Com a lista dobrada, confirmar um tema o mandaria direto para trás do "+N" —
-    e quem digitou e não viu nada acontecer conclui que não funcionou, e digita
-    de novo. Confirmar um tema abre a lista, e é o único gesto que a abre
-    sozinho.
+    O CHIP QUE A PESSOA ACABOU DE CRIAR SEMPRE FOI VISÍVEL no formulário —
+    V11.1 só tornou isso verdade também com 12 temas na tela, e não só com
+    poucos.
   */
-  it("confirmar um tema com a lista dobrada abre a lista, para o novo chip aparecer", async () => {
+  it("confirmar um tema no formulário com 12 temas: o chip novo aparece junto dos outros", async () => {
     montar(comTemas(MUITOS));
     await screen.findByTestId("lyrics-body");
     fireEvent.click(screen.getByRole("button", { name: "Editar" }));
-    expect(screen.getAllByTestId("tema-chip-editavel")).toHaveLength(3);
+    expect(screen.getAllByTestId("tema-chip-editavel")).toHaveLength(12);
 
     const input = screen.getByPlaceholderText("Adicionar tema");
     fireEvent.change(input, { target: { value: "quaresma" } });
@@ -1862,9 +1861,8 @@ describe("LyricsPanel — os temas dobrados na ficha (V10.11)", () => {
     ).toBeInTheDocument();
   });
 
-  // Quatro temas continuam sendo quatro chips: dobrar um só não tira linha
-  // nenhuma da tela e cobraria um clique por nada.
-  it("com quatro temas nada é dobrado, nem na ficha nem no formulário", async () => {
+  // Quatro temas continuam sendo quatro chips no cabeçalho (nada a dobrar).
+  it("com quatro temas nada é dobrado no cabeçalho, e o formulário nunca dobra", async () => {
     montar(comTemas(MUITOS.slice(0, 4)));
     await screen.findByTestId("lyrics-body");
     expect(screen.getAllByTestId("tema-chip")).toHaveLength(4);
@@ -1874,8 +1872,8 @@ describe("LyricsPanel — os temas dobrados na ficha (V10.11)", () => {
     expect(screen.queryByTestId("tema-mais-editavel")).not.toBeInTheDocument();
   });
 
-  // Dobrar é de TELA: a gravação leva a lista inteira, aberta ou fechada.
-  it("dobrado ou aberto, o que é gravado é a lista inteira", async () => {
+  // Dobrado no cabeçalho ou não, o que é gravado é a lista inteira.
+  it("dobrado no cabeçalho ou não, o que é gravado é a lista inteira", async () => {
     const s = comTemas(MUITOS);
     // tipado com os argumentos que o `writeTags` recebe: sem isso o `mock.calls`
     // é uma tupla vazia e o índice do campo de temas não compila
@@ -1914,8 +1912,13 @@ describe("LyricsPanel — os temas dobrados na ficha (V10.11)", () => {
 // salvando sozinha é pior que nenhuma. Quem corrige o título, digita um tema,
 // aperta Enter e fecha ficaria com o tema no arquivo e o título perdido, e
 // nada na tela diria que só metade foi.
+//
+// V11.1 — E ENTER PASSOU A NÃO FECHAR MAIS O EDITOR. Segundo relato de campo:
+// *"não gostei... pq ele salva e fecha a parte de edição da música, acho que
+// tem que manter"*. Quem clica em "Salvar no arquivo" continua saindo da
+// edição — é o Enter, e só ele, que grava e deixa a ficha aberta.
 // ---------------------------------------------------------------------------
-describe("EditSongForm — Enter no campo de tema (V10.11)", () => {
+describe("EditSongForm — Enter no campo de tema (V10.11/V11.1)", () => {
   let writeTags: ReturnType<typeof vi.fn>;
 
   const COM_TEMAS: Song = { ...song(1, true), temas: "água; esperança" };
@@ -1990,6 +1993,26 @@ describe("EditSongForm — Enter no campo de tema (V10.11)", () => {
         }),
       ]),
     );
+    // V11.1 — o editor continua ABERTO (o botão não é chamado): o formulário
+    // segue na tela, com o chip novo e o campo de tema limpo para o próximo.
+    expect(screen.getByLabelText("Título")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Remover tema peregrinação" }),
+    ).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Adicionar tema")).toHaveValue("");
+  });
+
+  /*
+    V11.1 — O CONTRASTE COM O BOTÃO: "Salvar no arquivo" continua fechando o
+    editor como sempre fez. A diferença de comportamento é só do Enter.
+  */
+  it("o botão 'Salvar no arquivo' continua fechando o editor (Enter é a exceção)", async () => {
+    await editar();
+    fireEvent.click(screen.getByRole("button", { name: "Salvar no arquivo" }));
+
+    await waitFor(() => expect(writeTags).toHaveBeenCalledTimes(1));
+    expect(await screen.findByTestId("lyrics-body")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Título")).not.toBeInTheDocument();
   });
 
   /*
@@ -2009,6 +2032,8 @@ describe("EditSongForm — Enter no campo de tema (V10.11)", () => {
     expect(writeTags.mock.calls[0][1]).toBe("Só o título mudou");
     // e os temas continuam os que estavam lá: campo vazio não cria chip nenhum
     expect(writeTags.mock.calls[0][4]).toBe("água; esperança");
+    // V11.1 — e o editor continua aberto também neste caso
+    expect(screen.getByLabelText("Título")).toBeInTheDocument();
   });
 
   /*

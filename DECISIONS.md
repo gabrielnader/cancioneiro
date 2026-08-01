@@ -2574,3 +2574,13 @@ opção mais simples que passa nos Acceptance Checks do PRD.
     em `theme: "light" | "dark" | "auto"` no MESMO `uiStore` de sempre;
     aplicada antes do primeiro render (`main.tsx`) para não piscar claro ao
     abrir no escuro.
+
+## V11.1 — dois ajustes de campo no editor (teste em campo pós-V11)
+
+185. **Enter no tema grava e NÃO fecha mais o editor; o "+N" saiu só do
+    formulário.** Relato: *"salva e fecha a parte de edição... acho que tem
+    que manter"* — `handleSave(fechar)` só chama `onSaved` quando `fechar` é
+    `true` (o botão "Salvar no arquivo"); o Enter chama `handleSave(false)`.
+    E no editor os temas deixaram de dobrar atrás do "+N" (`dobrarTemas`
+    continua valendo no cabeçalho da ficha e na linha da lista, onde o
+    espaço é apertado): *"na tela de editar tem que dar pra ver todas"*.
