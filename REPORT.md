@@ -1,6 +1,6 @@
 # REPORT — Cancioneiro
 
-## Estado em 0.10.7 — o que o produto é, e o que ele custou aprender
+## Estado em 0.10.8 — o que o produto é, e o que ele custou aprender
 
 O Cancioneiro é um player de MP3 **offline** (Tauri 2 + Rust + React, SQLite com
 FTS5) que existe para resolver um problema só: **achar uma música pelo pedaço de
@@ -55,16 +55,16 @@ que *esta máquina* faz, não o que o produto sabe fazer.
 
 ### As suítes
 
-| suíte | 0.6.0 (início da janela) | 0.10.7 |
+| suíte | 0.6.0 (início da janela) | 0.10.8 |
 |---|---|---|
 | cargo test | 106 | **467** |
 | pytest | 557 | **754** |
-| vitest | 369 | **1193** |
+| vitest | 369 | **1226** |
 | Playwright E2E | 22 | **54** |
-| total | 1054 | **2468** |
+| total | 1054 | **2501** |
 
 `tsc` limpo, `cargo check` sem avisos, **0 warnings**. As decisões de projeto —
-**181** hoje, contra 30 ao fim da V1 — estão em
+**185** hoje, contra 30 ao fim da V1 — estão em
 [`DECISIONS.md`](./DECISIONS.md), cada uma com o motivo e, quando existe, o
 número que a sustenta.
 
@@ -216,6 +216,33 @@ ao ponto do funil que depende dela.
    que o Rust corrigiu (uma música chamada "Diversos" valeria vazio), e ficou de
    fora por escopo — ele é ferramenta de terminal do dono do produto e não vai
    para as 40 máquinas, mas o dano é o mesmo dentro do arquivo dele.
+
+---
+
+> **Atualização V11 (0.10.8):** tema claro/escuro, pedido pelos beta testers, e
+> dois acertos de campo no editor.
+>
+> Todas as cores fixas do app viraram **tokens CSS**; o claro ficou idêntico ao de
+> hoje e o escuro foi escrito à mão, não invertido — conferido contra AA em cada
+> par texto/fundo que existe na tela. O seletor (Claro / Escuro / Automático,
+> padrão automático) mora em Configurações → Aparência, e o tema é aplicado antes
+> da primeira pintura, para não piscar claro ao abrir no escuro. Um teste varre
+> `src/components/**` procurando cor fixa, para a regressão não voltar em
+> silêncio.
+>
+> Os dois acertos vieram do dono usando a V10.11: **Enter no campo de tema
+> gravava e FECHAVA o editor** ("acho que tem que manter"), e o dobramento em
+> "+N", correto na linha da lista, atrapalhava no **editor**, onde a pessoa está
+> justamente para ver e mexer em tudo. Enter agora grava e mantém a ficha aberta,
+> com o campo limpo para o próximo tema; o botão "Salvar no arquivo" continua
+> fechando, porque quem clica nele terminou. No editor, todos os temas aparecem.
+>
+> **Nota de custo, medida.** Esta rodada foi a primeira feita com a instrução
+> explícita de gastar menos. O tema rodou em Sonnet e consumiu **411k tokens em
+> 243 chamadas** — MAIS que os ~340k/168 da rodada anterior em Opus: modelo mais
+> barato por token, mais idas e vindas. Já os dois acertos, com prompt enxuto e
+> DECISIONS de 5 linhas, saíram por **136k**. O que corta custo é o tamanho do
+> pedido e a cerimônia exigida, não a troca de modelo.
 
 ---
 
