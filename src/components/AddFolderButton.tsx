@@ -46,8 +46,8 @@ export function AddFolderButton({ variant }: AddFolderButtonProps) {
 
   const className =
     variant === "primary"
-      ? "rounded-md bg-[#0F766E] px-4 py-2 text-[15px] font-medium text-[#FFFFFF] hover:bg-[#0d675f]"
-      : "rounded-md border border-[#0F766E] bg-transparent px-4 py-2 text-[15px] font-medium text-[#0F766E] hover:bg-[#F0FDFA]";
+      ? "rounded-md bg-brand-fill px-4 py-2 text-[15px] font-medium text-white hover:bg-brand-fill-hover"
+      : "rounded-md border border-brand bg-transparent px-4 py-2 text-[15px] font-medium text-brand hover:bg-brand-soft";
 
   return (
     <button type="button" className={className} onClick={() => void handleClick()}>

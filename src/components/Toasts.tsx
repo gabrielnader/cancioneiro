@@ -1,9 +1,9 @@
 import { useToastStore, type ToastKind } from "../stores/toastStore";
 
 const STYLES: Record<ToastKind, string> = {
-  success: "bg-[#D1FAE5] text-[#065F46]",
-  warning: "bg-[#FEF3C7] text-[#92400E]",
-  error: "bg-[#FEE2E2] text-[#991B1B]",
+  success: "bg-success-soft-alt text-success-strong",
+  warning: "bg-warning-soft text-warning-strong",
+  error: "bg-danger-soft text-danger-strong",
 };
 
 /** Toasts empilhados no canto inferior direito, acima da barra do player. */

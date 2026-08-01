@@ -53,7 +53,7 @@ export function PlaylistView() {
   }
 
   return (
-    <div className="flex h-full min-w-0 flex-1 flex-col bg-[#F9FAFB]">
+    <div className="flex h-full min-w-0 flex-1 flex-col bg-canvas">
       {/*
         `pr-[var(--faixa-detalhes)]` reserva a faixa do botão flutuante
         "Ocultar/Mostrar detalhes" (App.tsx) — este cabeçalho ficava com
@@ -76,12 +76,12 @@ export function PlaylistView() {
           que é o que ele já fazia) e só quando os botões realmente não cabem
           é que o último desce de linha.
         */}
-        <h1 className="min-w-0 flex-1 truncate text-[22px] font-semibold text-[#111827]">
+        <h1 className="min-w-0 flex-1 truncate text-[22px] font-semibold text-ink">
           {playlist.name}
         </h1>
         <button
           type="button"
-          className="shrink-0 rounded-md bg-[#0F766E] px-4 py-2 text-[15px] font-medium text-[#FFFFFF] hover:bg-[#0d675f] disabled:bg-[#9CA3AF]"
+          className="shrink-0 rounded-md bg-brand-fill px-4 py-2 text-[15px] font-medium text-white hover:bg-brand-fill-hover disabled:bg-disabled"
           disabled={items.length === 0}
           onClick={() => startPlaylist(0)}
         >
@@ -89,7 +89,7 @@ export function PlaylistView() {
         </button>
         <button
           type="button"
-          className="ml-auto shrink-0 rounded-md px-3 py-2 text-[14px] font-medium text-[#B91C1C] hover:bg-[#FEE2E2]"
+          className="ml-auto shrink-0 rounded-md px-3 py-2 text-[14px] font-medium text-danger hover:bg-danger-soft"
           onClick={() => setConfirmingDelete(true)}
         >
           Excluir playlist
@@ -98,7 +98,7 @@ export function PlaylistView() {
 
       {items.length === 0 ? (
         <div className="flex flex-1 items-center justify-center px-6 text-center">
-          <p className="text-[#6B7280]">
+          <p className="text-ink-tertiary">
             Esta playlist está vazia. Adicione músicas pela busca ou biblioteca.
           </p>
         </div>
@@ -128,22 +128,22 @@ export function PlaylistView() {
                 onDoubleClick={() => startPlaylist(index)}
                 className={`group flex min-h-9 cursor-default select-none items-center gap-3 px-4 py-1.5 ${
                   isCurrent
-                    ? "bg-[#F0FDFA]"
+                    ? "bg-brand-soft"
                     : selectedSongId === item.song.id
-                      ? "bg-[#F0FDFA]"
-                      : "hover:bg-[#F3F4F6]"
-                } ${dropIndex === index && dragIndex !== null ? "border-t-2 border-[#0F766E]" : ""}`}
+                      ? "bg-brand-soft"
+                      : "hover:bg-surface-hover"
+                } ${dropIndex === index && dragIndex !== null ? "border-t-2 border-brand" : ""}`}
               >
-                <span className="w-6 shrink-0 text-right text-[13px] text-[#9CA3AF]">
+                <span className="w-6 shrink-0 text-right text-[13px] text-disabled">
                   {index + 1}
                 </span>
                 <span
                   className={`truncate text-[15px] font-medium ${
                     unavailable
-                      ? "text-[#9CA3AF]"
+                      ? "text-disabled"
                       : isCurrent
-                        ? "text-[#0F766E]"
-                        : "text-[#111827]"
+                        ? "text-brand"
+                        : "text-ink"
                   }`}
                 >
                   {isCurrent && playerIsPlaying && (
@@ -154,14 +154,14 @@ export function PlaylistView() {
                   {item.song.title}
                 </span>
                 {item.song.artist && (
-                  <span className="truncate text-[13px] text-[#6B7280]">
+                  <span className="truncate text-[13px] text-ink-tertiary">
                     {item.song.artist}
                   </span>
                 )}
                 <button
                   type="button"
                   aria-label={`Remover ${item.song.title} da playlist`}
-                  className="ml-auto hidden h-6 w-6 shrink-0 rounded text-[#374151] hover:bg-[#E5E7EB] group-hover:block"
+                  className="ml-auto hidden h-6 w-6 shrink-0 rounded text-ink-secondary hover:bg-border group-hover:block"
                   onClick={(e) => {
                     e.stopPropagation();
                     void removeItem(item.id);

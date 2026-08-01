@@ -43,7 +43,9 @@ import { useToastStore } from "../stores/toastStore";
 import {
   AA_TEXTO_NORMAL,
   FUNDOS_DA_LINHA,
+  TEXT_COLOR_RE,
   contrastRatio,
+  corDoFundo,
   corDoTexto,
 } from "../test/contrast";
 import { EnrichReview } from "./EnrichReview";
@@ -1401,13 +1403,12 @@ describe("EnrichReview (V5 — F13)", () => {
     ]);
     const dialog = screen.getByRole("dialog", { name: "Completar dados" });
     const comCor = [...dialog.querySelectorAll<HTMLElement>("*")].filter((el) =>
-      /text-\[#[0-9a-fA-F]{6}\]/.test(el.className),
+      TEXT_COLOR_RE.test(el.className),
     );
     expect(comCor.length).toBeGreaterThan(0);
     for (const el of comCor) {
       // o fundo é o do diálogo (branco), exceto nos selos, que trazem o seu
-      const proprio = /bg-\[(#[0-9a-fA-F]{6})\]/.exec(el.className);
-      const fundo = proprio ? proprio[1] : "#FFFFFF";
+      const fundo = corDoFundo(el.className) ?? "#FFFFFF";
       expect(
         contrastRatio(corDoTexto(el.className), fundo),
         `"${el.textContent?.slice(0, 40)}"`,

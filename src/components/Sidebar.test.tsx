@@ -90,7 +90,7 @@ describe("Sidebar — árvore de pastas (V4 F11)", () => {
     useLibraryStore.setState({ folderFilter: "/acervo/2" });
     render(<Sidebar />);
     const dois = screen.getByRole("button", { name: "Pasta 2" });
-    expect(dois.className).toContain("text-[#0F766E]");
+    expect(dois.className).toContain("text-brand");
   });
 
   it("sem músicas não renderiza subpastas (raiz com contador 0)", () => {

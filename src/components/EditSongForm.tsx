@@ -46,9 +46,9 @@ const BADGE_CONFIANCA: Record<EnrichProposal["confidence"], string> = {
 };
 
 const CLASSE_CONFIANCA: Record<EnrichProposal["confidence"], string> = {
-  alta: "bg-[#DCFCE7] text-[#166534]",
-  media: "bg-[#FEF9C3] text-[#854D0E]",
-  baixa: "bg-[#F3F4F6] text-[#5B6472]",
+  alta: "bg-success-soft text-success",
+  media: "bg-warning-soft-alt text-warning",
+  baixa: "bg-surface-hover text-ink-quaternary",
 };
 
 /**
@@ -528,10 +528,10 @@ export function EditSongForm({
   );
 
   const inputClass = (error: boolean) =>
-    `w-full rounded-md border bg-white px-3 py-2 text-[15px] text-[#111827] outline-none ${
+    `w-full rounded-md border bg-surface px-3 py-2 text-[15px] text-ink outline-none ${
       error
-        ? "border-[#B91C1C]"
-        : "border-[#D1D5DB] focus:border-[#0F766E]"
+        ? "border-danger"
+        : "border-border-strong focus:border-brand"
     }`;
 
   return (
@@ -539,7 +539,7 @@ export function EditSongForm({
       <div>
         <label
           htmlFor="edit-titulo"
-          className="mb-1 block text-[13px] font-medium text-[#374151]"
+          className="mb-1 block text-[13px] font-medium text-ink-secondary"
         >
           Título
         </label>
@@ -551,7 +551,7 @@ export function EditSongForm({
           className={inputClass(titleError)}
         />
         {titleError && (
-          <p className="mt-1 text-[13px] text-[#B91C1C]">
+          <p className="mt-1 text-[13px] text-danger">
             Dê um título à música.
           </p>
         )}
@@ -560,7 +560,7 @@ export function EditSongForm({
       <div>
         <label
           htmlFor="edit-artista"
-          className="mb-1 block text-[13px] font-medium text-[#374151]"
+          className="mb-1 block text-[13px] font-medium text-ink-secondary"
         >
           Artista
         </label>
@@ -574,7 +574,7 @@ export function EditSongForm({
       </div>
 
       <div>
-        <p className="mb-1 text-[13px] font-medium text-[#374151]">Temas</p>
+        <p className="mb-1 text-[13px] font-medium text-ink-secondary">Temas</p>
         {/*
           V10.11 — A MESMA RÉGUA DE DOBRAMENTO DO CABEÇALHO, aqui com o chip
           removível. Os beta testers pediram um limite de 10 temas por música; o
@@ -591,13 +591,13 @@ export function EditSongForm({
             <span
               key={tema}
               data-testid="tema-chip-editavel"
-              className="inline-flex max-w-40 items-center gap-1 rounded-full bg-[#F0FDFA] px-2 py-0.5 text-[12px] text-[#0F766E]"
+              className="inline-flex max-w-40 items-center gap-1 rounded-full bg-brand-soft px-2 py-0.5 text-[12px] text-brand"
             >
               <span className="truncate">{tema}</span>
               <button
                 type="button"
                 aria-label={`Remover tema ${tema}`}
-                className="shrink-0 rounded-full px-0.5 hover:bg-[#ccfbf1]"
+                className="shrink-0 rounded-full px-0.5 hover:bg-brand-soft-hover"
                 onClick={() => setTemas(temas.filter((t) => t !== tema))}
               >
                 ×
@@ -612,7 +612,7 @@ export function EditSongForm({
               title={dicaDeMaisTemasNaFicha(temasEscondidos)}
               // cinza e não verde-água: o "+N" não é um tema, e pintá-lo como
               // os chips faria alguém tentar removê-lo
-              className="shrink-0 rounded-full bg-[#F3F4F6] px-2 py-0.5 text-[12px] text-[#5B6472] hover:bg-[#E5E7EB]"
+              className="shrink-0 rounded-full bg-surface-hover px-2 py-0.5 text-[12px] text-ink-quaternary hover:bg-border"
               onClick={() => setTemasExpandidos(true)}
             >
               {rotuloDeMaisTemas(temasEscondidos)}
@@ -624,7 +624,7 @@ export function EditSongForm({
             <button
               type="button"
               data-testid="tema-menos-editavel"
-              className="shrink-0 rounded-full px-2 py-0.5 text-[12px] text-[#5B6472] underline hover:bg-[#F3F4F6]"
+              className="shrink-0 rounded-full px-2 py-0.5 text-[12px] text-ink-quaternary underline hover:bg-surface-hover"
               onClick={() => setTemasExpandidos(false)}
             >
               {ROTULO_DE_DOBRAR_TEMAS}
@@ -675,7 +675,7 @@ export function EditSongForm({
             }}
             // sair do campo confirma o tema pendente como chip (BUG v0.4)
             onBlur={commitTemaInput}
-            className="min-w-28 flex-1 rounded-md border border-[#D1D5DB] bg-white px-2 py-1 text-[13px] text-[#111827] outline-none placeholder:text-[#9CA3AF] focus:border-[#0F766E]"
+            className="min-w-28 flex-1 rounded-md border border-border-strong bg-surface px-2 py-1 text-[13px] text-ink outline-none placeholder:text-disabled focus:border-brand"
           />
         </div>
         {/*
@@ -688,7 +688,7 @@ export function EditSongForm({
           ficar só num `title` que precisa de mouse parado em cima.
         */}
         {temaInput.trim() !== "" && (
-          <p className="mt-1 text-[13px] text-[#5B6472]">{DICA_DO_ENTER_NO_TEMA}</p>
+          <p className="mt-1 text-[13px] text-ink-quaternary">{DICA_DO_ENTER_NO_TEMA}</p>
         )}
       </div>
 
@@ -700,7 +700,7 @@ export function EditSongForm({
       <div>
         <label
           htmlFor="edit-instrumental"
-          className="flex items-center gap-2 text-[14px] text-[#374151]"
+          className="flex items-center gap-2 text-[14px] text-ink-secondary"
         >
           <input
             id="edit-instrumental"
@@ -710,7 +710,7 @@ export function EditSongForm({
               setInstrumental(e.target.checked);
               setInstrumentalTocado(true);
             }}
-            className="h-4 w-4 accent-[#0F766E]"
+            className="h-4 w-4 accent-brand"
           />
           Esta música é instrumental
         </label>
@@ -719,7 +719,7 @@ export function EditSongForm({
       <div className="flex min-h-32 flex-1 flex-col">
         <label
           htmlFor="edit-letra"
-          className="mb-1 block text-[13px] font-medium text-[#374151]"
+          className="mb-1 block text-[13px] font-medium text-ink-secondary"
         >
           Letra
         </label>
@@ -732,7 +732,7 @@ export function EditSongForm({
             // não vale mais (ALTO-4)
             setLetraOrigemPendente(null);
           }}
-          className="w-full flex-1 resize-none rounded-md border border-[#D1D5DB] bg-white px-3 py-2 text-[15px] leading-relaxed text-[#111827] outline-none focus:border-[#0F766E]"
+          className="w-full flex-1 resize-none rounded-md border border-border-strong bg-surface px-3 py-2 text-[15px] leading-relaxed text-ink outline-none focus:border-brand"
         />
       </div>
 
@@ -744,20 +744,20 @@ export function EditSongForm({
       {resultado && (
         <div
           role="status"
-          className="shrink-0 rounded-md border border-[#E5E7EB] bg-[#F9FAFB] p-3"
+          className="shrink-0 rounded-md border border-border bg-canvas p-3"
         >
           {resultado.tipo === "vazio" ? (
             // ALTO-3b — `null` passou a significar UMA coisa: procuramos e
             // não veio nada novo. Para a música marcada como instrumental,
             // porém, nenhuma etapa de LETRA rodou — dizer "não achamos nos
             // sites de letra" contaria uma busca que não aconteceu.
-            <p className="text-[13px] leading-relaxed text-[#374151]">
+            <p className="text-[13px] leading-relaxed text-ink-secondary">
               {instrumental ? SEM_RESULTADO_INSTRUMENTAL : SEM_RESULTADO_INDIVIDUAL}
             </p>
           ) : resultado.tipo === "falha" ? (
-            <p className="text-[13px] text-[#B91C1C]">{resultado.mensagem}</p>
+            <p className="text-[13px] text-danger">{resultado.mensagem}</p>
           ) : resultado.proposta.error !== null ? (
-            <p className="text-[13px] text-[#B91C1C]">{resultado.proposta.error}</p>
+            <p className="text-[13px] text-danger">{resultado.proposta.error}</p>
           ) : resultado.proposta.conflito ? (
             /*
               V9 — o som contradiz a etiqueta. Aqui NÃO cabe "Título: X" com um
@@ -766,18 +766,18 @@ export function EditSongForm({
               aparecem nomeados por quem os disse, e aceitar é uma escolha.
             */
             <>
-              <p className="flex flex-wrap items-center gap-2 text-[13px] text-[#5B6472]">
-                <span className="rounded bg-[#FEF3C7] px-1.5 py-0.5 text-[11px] font-semibold text-[#854D0E]">
+              <p className="flex flex-wrap items-center gap-2 text-[13px] text-ink-quaternary">
+                <span className="rounded bg-warning-soft px-1.5 py-0.5 text-[11px] font-semibold text-warning">
                   CONFLITO
                 </span>
                 <span>{confiancaDoSom(resultado.proposta.conflito.confianca)}</span>
               </p>
               <dl className="mt-2 space-y-0.5 text-[13px]">
                 <div className="flex gap-2">
-                  <dt className="shrink-0 text-[#5B6472]">
+                  <dt className="shrink-0 text-ink-quaternary">
                     {LABEL_SUA_ETIQUETA_DIZ}:
                   </dt>
-                  <dd className="min-w-0 break-words text-[#111827]">
+                  <dd className="min-w-0 break-words text-ink">
                     {nomeCompleto(
                       resultado.proposta.current_title,
                       resultado.proposta.current_artist,
@@ -785,8 +785,8 @@ export function EditSongForm({
                   </dd>
                 </div>
                 <div className="flex gap-2">
-                  <dt className="shrink-0 text-[#5B6472]">{LABEL_SOM_DIZ}:</dt>
-                  <dd className="min-w-0 break-words font-medium text-[#111827]">
+                  <dt className="shrink-0 text-ink-quaternary">{LABEL_SOM_DIZ}:</dt>
+                  <dd className="min-w-0 break-words font-medium text-ink">
                     {nomeCompleto(
                       resultado.proposta.conflito.titulo,
                       resultado.proposta.conflito.artista,
@@ -800,24 +800,24 @@ export function EditSongForm({
                 etiqueta estar errada. A frase mora num lugar só, e aparece nos
                 dois lugares em que a confiança é mostrada.
               */}
-              <p className="mt-2 text-[13px] leading-relaxed text-[#5B6472]">
+              <p className="mt-2 text-[13px] leading-relaxed text-ink-quaternary">
                 {EXPLICACAO_DA_CONFIANCA_DO_SOM}
               </p>
-              <p className="mt-2 text-[13px] text-[#5B6472]">
+              <p className="mt-2 text-[13px] text-ink-quaternary">
                 Nada foi gravado ainda.
               </p>
               <div className="mt-2 flex flex-wrap gap-2">
                 <button
                   type="button"
                   onClick={() => aceitarOSom(resultado.proposta)}
-                  className="rounded-md bg-[#0F766E] px-3 py-1.5 text-[14px] font-medium text-white hover:bg-[#115E59]"
+                  className="rounded-md bg-brand-fill px-3 py-1.5 text-[14px] font-medium text-white hover:bg-brand-fill-hover"
                 >
                   Usar o que o som diz
                 </button>
                 <button
                   type="button"
                   onClick={() => setResultado(null)}
-                  className="rounded-md border border-[#D1D5DB] px-3 py-1.5 text-[14px] font-medium text-[#374151] hover:bg-[#F3F4F6]"
+                  className="rounded-md border border-border-strong px-3 py-1.5 text-[14px] font-medium text-ink-secondary hover:bg-surface-hover"
                 >
                   Descartar
                 </button>
@@ -825,7 +825,7 @@ export function EditSongForm({
             </>
           ) : (
             <>
-              <p className="flex flex-wrap items-center gap-2 text-[13px] text-[#5B6472]">
+              <p className="flex flex-wrap items-center gap-2 text-[13px] text-ink-quaternary">
                 <span
                   className={`rounded px-1.5 py-0.5 text-[11px] font-semibold ${
                     CLASSE_CONFIANCA[resultado.proposta.confidence]
@@ -835,20 +835,20 @@ export function EditSongForm({
                 </span>
                 <span>via {resultado.proposta.fonte}</span>
                 {resultado.proposta.lyrics !== null && (
-                  <span className="text-[#0F766E]">letra encontrada</span>
+                  <span className="text-brand">letra encontrada</span>
                 )}
               </p>
               <dl className="mt-2 space-y-0.5 text-[13px]">
                 <div className="flex gap-2">
-                  <dt className="shrink-0 text-[#5B6472]">Título:</dt>
-                  <dd className="min-w-0 break-words text-[#111827]">
+                  <dt className="shrink-0 text-ink-quaternary">Título:</dt>
+                  <dd className="min-w-0 break-words text-ink">
                     {resultado.proposta.proposed_title}
                   </dd>
                 </div>
                 {resultado.proposta.proposed_artist && (
                   <div className="flex gap-2">
-                    <dt className="shrink-0 text-[#5B6472]">Artista:</dt>
-                    <dd className="min-w-0 break-words text-[#111827]">
+                    <dt className="shrink-0 text-ink-quaternary">Artista:</dt>
+                    <dd className="min-w-0 break-words text-ink">
                       {resultado.proposta.proposed_artist}
                     </dd>
                   </div>
@@ -857,21 +857,21 @@ export function EditSongForm({
               {/* passe de redução V9: a instrução que vinha depois ("use os
                   dados, confira, e só então salve") está nos botões logo
                   abaixo — repeti-la em prosa era o parágrafo que ninguém lê */}
-              <p className="mt-2 text-[13px] text-[#5B6472]">
+              <p className="mt-2 text-[13px] text-ink-quaternary">
                 Nada foi gravado ainda.
               </p>
               <div className="mt-2 flex flex-wrap gap-2">
                 <button
                   type="button"
                   onClick={() => usarProposta(resultado.proposta)}
-                  className="rounded-md bg-[#0F766E] px-3 py-1.5 text-[14px] font-medium text-white hover:bg-[#115E59]"
+                  className="rounded-md bg-brand-fill px-3 py-1.5 text-[14px] font-medium text-white hover:bg-brand-fill-hover"
                 >
                   Usar estes dados
                 </button>
                 <button
                   type="button"
                   onClick={() => setResultado(null)}
-                  className="rounded-md px-3 py-1.5 text-[14px] font-medium text-[#374151] hover:bg-[#F3F4F6]"
+                  className="rounded-md px-3 py-1.5 text-[14px] font-medium text-ink-secondary hover:bg-surface-hover"
                 >
                   Descartar
                 </button>
@@ -911,9 +911,9 @@ export function EditSongForm({
       {oferta && !oferta.disponivel && buscaSemLetra && podeTranscreverEstaMusica && !letraNaTela && (
         <div
           role="status"
-          className="shrink-0 rounded-md bg-[#F0FDFA] px-4 py-3"
+          className="shrink-0 rounded-md bg-brand-soft px-4 py-3"
         >
-          <p className="text-[14px] leading-relaxed text-[#115E59]">
+          <p className="text-[14px] leading-relaxed text-brand-strong">
             {textoDaOfertaDestaMusica(oferta.download)}
           </p>
         </div>
@@ -932,7 +932,7 @@ export function EditSongForm({
         manda transcrever daqui e volta da revisão está exatamente nesse estado.
       */}
       {loteRodando && (
-        <p id="editor-busca-bloqueada" className="shrink-0 text-[13px] text-[#5B6472]">
+        <p id="editor-busca-bloqueada" className="shrink-0 text-[13px] text-ink-quaternary">
           {transcrevendoLote
             ? "As letras estão sendo escritas — espere elas terminarem para o computador não fazer dois trabalhos pesados ao mesmo tempo."
             : "A busca desta pasta está rodando — espere ela terminar para não consultar os sites de letra duas vezes ao mesmo tempo."}
@@ -941,7 +941,7 @@ export function EditSongForm({
       {fetchBusy && (
         // B1 — a busca pode demorar (cada consulta espera até 10 s antes de
         // desistir). Dizer isso é o que separa "está trabalhando" de "travou".
-        <p className="shrink-0 text-[13px] text-[#5B6472]">
+        <p className="shrink-0 text-[13px] text-ink-quaternary">
           Procurando nos sites de letra… pode demorar se os sites de letra
           estiverem lentos. Dá para cancelar e continuar editando.
         </p>
@@ -966,7 +966,7 @@ export function EditSongForm({
           */
           title="Procura título, artista e letra desta música: primeiro no próprio arquivo, depois pelo som da gravação, no LRCLIB e no lyrics.ovh"
           onClick={() => void handleBuscarDados()}
-          className="rounded-md border border-[#0F766E] px-3 py-1.5 text-[14px] font-medium text-[#0F766E] hover:bg-[#F0FDFA] disabled:opacity-60"
+          className="rounded-md border border-brand px-3 py-1.5 text-[14px] font-medium text-brand hover:bg-brand-soft disabled:opacity-60"
         >
           {fetchBusy ? "Buscando…" : "Buscar dados na internet"}
         </button>
@@ -974,7 +974,7 @@ export function EditSongForm({
           <button
             type="button"
             onClick={cancelarBusca}
-            className="rounded-md px-3 py-1.5 text-[14px] font-medium text-[#374151] hover:bg-[#F3F4F6]"
+            className="rounded-md px-3 py-1.5 text-[14px] font-medium text-ink-secondary hover:bg-surface-hover"
           >
             Cancelar busca
           </button>
@@ -1038,7 +1038,7 @@ export function EditSongForm({
             */
             title={dicaDeTranscreverEstaMusica(letraNaTela)}
             onClick={() => void startTranscricao(oferta.musicas)}
-            className="rounded-md border border-[#0F766E] px-3 py-1.5 text-[14px] font-medium text-[#0F766E] hover:bg-[#F0FDFA] disabled:opacity-60"
+            className="rounded-md border border-brand px-3 py-1.5 text-[14px] font-medium text-brand hover:bg-brand-soft disabled:opacity-60"
           >
             {rotuloDeTranscreverEstaMusica(
               oferta.segundos,
@@ -1052,7 +1052,7 @@ export function EditSongForm({
             type="button"
             disabled={busy}
             onClick={onCancel}
-            className="rounded-md px-3 py-1.5 text-[14px] font-medium text-[#374151] hover:bg-[#F3F4F6] disabled:opacity-60"
+            className="rounded-md px-3 py-1.5 text-[14px] font-medium text-ink-secondary hover:bg-surface-hover disabled:opacity-60"
           >
             Cancelar
           </button>
@@ -1060,7 +1060,7 @@ export function EditSongForm({
             type="button"
             disabled={busy}
             onClick={() => void handleSave()}
-            className="rounded-md bg-[#0F766E] px-3 py-1.5 text-[14px] font-medium text-white hover:bg-[#115E59] disabled:opacity-60"
+            className="rounded-md bg-brand-fill px-3 py-1.5 text-[14px] font-medium text-white hover:bg-brand-fill-hover disabled:opacity-60"
           >
             Salvar no arquivo
           </button>

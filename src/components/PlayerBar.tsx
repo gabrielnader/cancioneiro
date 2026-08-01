@@ -6,7 +6,14 @@ import { playSelectedOrToggle } from "../lib/playbackActions";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlayerStore } from "../stores/playerStore";
 
-/** Barra do player fixa no rodapé, 72px (F4). */
+/**
+ * Barra do player fixa no rodapé, 72px (F4).
+ *
+ * V11 — cores em `--playerbar-*` (index.css), e não nos tokens de tema
+ * (`--color-*`): esta barra já era escura antes de o app ter um tema escuro,
+ * é o desenho PRÓPRIO do componente (como a capa de um rádio), não "o fundo
+ * do app". Ela fica igual nos dois temas de propósito.
+ */
 export function PlayerBar() {
   const audioRef = useRef<HTMLAudioElement>(null);
   usePlayerAudio(audioRef);
@@ -42,7 +49,7 @@ export function PlayerBar() {
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   return (
-    <footer className="flex h-[72px] shrink-0 items-center gap-4 bg-[#111827] px-4 text-[14px] text-[#F9FAFB]">
+    <footer className="flex h-[72px] shrink-0 items-center gap-4 bg-[var(--playerbar-bg)] px-4 text-[14px] text-[var(--playerbar-fg)]">
       <audio
         ref={audioRef}
         onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}
@@ -54,14 +61,14 @@ export function PlayerBar() {
       <div className="flex w-56 min-w-0 items-center gap-3">
         <div
           aria-hidden="true"
-          className="flex h-10 w-10 shrink-0 items-center justify-center rounded bg-[#374151] text-[#9CA3AF]"
+          className="flex h-10 w-10 shrink-0 items-center justify-center rounded bg-[var(--playerbar-surface)] text-[var(--playerbar-fg-muted)]"
         >
           ♪
         </div>
         <div className="min-w-0">
           <p className="truncate font-medium">{current?.title ?? ""}</p>
           {current?.artist && (
-            <p className="truncate text-[12px] text-[#9CA3AF]">{current.artist}</p>
+            <p className="truncate text-[12px] text-[var(--playerbar-fg-muted)]">{current.artist}</p>
           )}
         </div>
       </div>
@@ -73,7 +80,7 @@ export function PlayerBar() {
             type="button"
             aria-label="Anterior"
             disabled={!current}
-            className="text-[#F9FAFB] disabled:opacity-40"
+            className="text-[var(--playerbar-fg)] disabled:opacity-40"
             onClick={handlePrevious}
           >
             ⏮
@@ -82,7 +89,7 @@ export function PlayerBar() {
             type="button"
             aria-label={isPlaying ? "Pausar" : "Tocar"}
             disabled={!current && !hasSelection}
-            className="flex h-9 w-9 items-center justify-center rounded-full bg-[#FFFFFF] text-[#111827] disabled:opacity-40"
+            className="flex h-9 w-9 items-center justify-center rounded-full bg-[var(--playerbar-button-bg)] text-[var(--playerbar-button-fg)] disabled:opacity-40"
             onClick={playSelectedOrToggle}
           >
             {isPlaying ? "⏸" : "▶"}
@@ -91,14 +98,14 @@ export function PlayerBar() {
             type="button"
             aria-label="Próxima"
             disabled={!current}
-            className="text-[#F9FAFB] disabled:opacity-40"
+            className="text-[var(--playerbar-fg)] disabled:opacity-40"
             onClick={() => next()}
           >
             ⏭
           </button>
         </div>
         <div className="flex w-full max-w-xl items-center gap-2">
-          <span className="w-10 shrink-0 text-right text-[12px] text-[#9CA3AF]">
+          <span className="w-10 shrink-0 text-right text-[12px] text-[var(--playerbar-fg-muted)]">
             {formatTime(currentTime)}
           </span>
           <div
@@ -109,15 +116,15 @@ export function PlayerBar() {
             aria-valuemax={Math.floor(duration) || 0}
             aria-valuenow={Math.floor(currentTime)}
             tabIndex={current ? 0 : -1}
-            className="h-1.5 flex-1 cursor-pointer overflow-hidden rounded bg-[#374151]"
+            className="h-1.5 flex-1 cursor-pointer overflow-hidden rounded bg-[var(--playerbar-surface)]"
             onClick={handleSeek}
           >
             <div
-              className="h-full bg-[#14B8A6]"
+              className="h-full bg-[var(--playerbar-accent)]"
               style={{ width: `${progress}%` }}
             />
           </div>
-          <span className="w-10 shrink-0 text-[12px] text-[#9CA3AF]">
+          <span className="w-10 shrink-0 text-[12px] text-[var(--playerbar-fg-muted)]">
             {formatTime(duration)}
           </span>
         </div>
@@ -125,7 +132,7 @@ export function PlayerBar() {
 
       {/* volume */}
       <div className="flex w-40 shrink-0 items-center gap-2">
-        <span aria-hidden="true" className="text-[#9CA3AF]">
+        <span aria-hidden="true" className="text-[var(--playerbar-fg-muted)]">
           🔊
         </span>
         <input
@@ -136,7 +143,7 @@ export function PlayerBar() {
           step={0.01}
           value={volume}
           onChange={(e) => setVolume(Number(e.target.value))}
-          className="w-full accent-[#14B8A6]"
+          className="w-full accent-[var(--playerbar-accent)]"
         />
       </div>
     </footer>

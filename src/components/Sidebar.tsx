@@ -31,14 +31,14 @@ export function Sidebar() {
   function navClass(active: boolean) {
     return `block w-full rounded-md px-3 py-2 text-left text-[15px] ${
       active
-        ? "bg-[#F0FDFA] font-medium text-[#0F766E]"
-        : "text-[#111827] hover:bg-[#F3F4F6]"
+        ? "bg-brand-soft font-medium text-brand"
+        : "text-ink hover:bg-surface-hover"
     }`;
   }
 
   return (
-    <nav className="flex h-full w-60 shrink-0 flex-col border-r border-[#E5E7EB] bg-white p-3">
-      <p className="px-3 pb-2 pt-1 text-[17px] font-semibold text-[#0F766E]">
+    <nav className="flex h-full w-60 shrink-0 flex-col border-r border-border bg-surface p-3">
+      <p className="px-3 pb-2 pt-1 text-[17px] font-semibold text-brand">
         Cancioneiro
       </p>
       <button
@@ -70,7 +70,7 @@ export function Sidebar() {
         Configurações
       </button>
 
-      <p className="mt-5 px-3 text-[12px] font-medium uppercase text-[#6B7280]">
+      <p className="mt-5 px-3 text-[12px] font-medium uppercase text-ink-tertiary">
         PLAYLISTS
       </p>
       <div className="mt-1 flex-1 overflow-y-auto">
@@ -79,7 +79,7 @@ export function Sidebar() {
             key={p.id}
             type="button"
             className={`${navClass(view === "playlist" && activePlaylistId === p.id)} ${
-              dragOverId === p.id ? "ring-2 ring-[#0F766E]" : ""
+              dragOverId === p.id ? "ring-2 ring-brand" : ""
             }`}
             onClick={() => {
               void openPlaylist(p.id);
@@ -105,7 +105,7 @@ export function Sidebar() {
           >
             <span className="flex items-center justify-between gap-2">
               <span className="truncate">{p.name}</span>
-              <span className="shrink-0 text-[12px] text-[#9CA3AF]">
+              <span className="shrink-0 text-[12px] text-disabled">
                 {p.song_count}
               </span>
             </span>
@@ -114,7 +114,7 @@ export function Sidebar() {
       </div>
       <button
         type="button"
-        className="mt-2 rounded-md px-3 py-2 text-left text-[15px] font-medium text-[#0F766E] hover:bg-[#F0FDFA]"
+        className="mt-2 rounded-md px-3 py-2 text-left text-[15px] font-medium text-brand hover:bg-brand-soft"
         onClick={() => setDialogOpen(true)}
       >
         Nova playlist
@@ -177,12 +177,12 @@ function EnrichBackgroundIndicator() {
       onClick={openOverlay}
       title="Abrir a revisão de dados"
       aria-label={etapa ? `${contagem} — ${etapa}` : contagem}
-      className="mt-2 rounded-md bg-[#F0FDFA] px-3 py-2 text-left text-[13px] font-medium text-[#0F766E] hover:bg-[#CCFBF1]"
+      className="mt-2 rounded-md bg-brand-soft px-3 py-2 text-left text-[13px] font-medium text-brand hover:bg-brand-soft-hover"
     >
       <span className="block truncate">{contagem}</span>
       {etapa && (
-        // #115E59 sobre #F0FDFA = 7,27:1 — texto pequeno também passa em AA
-        <span className="block truncate text-[12px] font-normal text-[#115E59]">
+        // brand-strong sobre brand-soft = 7,27:1 no claro (e passa também no escuro)
+        <span className="block truncate text-[12px] font-normal text-brand-strong">
           {etapa}
         </span>
       )}
@@ -217,8 +217,8 @@ function FolderTreeItem({ node, level }: { node: FolderNode; level: number }) {
         title={node.path}
         className={`flex w-full min-w-0 items-center justify-between gap-2 rounded-md py-1 pr-2 text-left text-[14px] ${
           active
-            ? "bg-[#F0FDFA] font-medium text-[#0F766E]"
-            : "text-[#374151] hover:bg-[#F3F4F6]"
+            ? "bg-brand-soft font-medium text-brand"
+            : "text-ink-secondary hover:bg-surface-hover"
         }`}
         style={{ paddingLeft: 20 + level * 14 }}
         onClick={() => {
@@ -228,7 +228,7 @@ function FolderTreeItem({ node, level }: { node: FolderNode; level: number }) {
         }}
       >
         <span className="truncate">{node.name}</span>
-        <span className="shrink-0 text-[12px] text-[#9CA3AF]">{node.count}</span>
+        <span className="shrink-0 text-[12px] text-disabled">{node.count}</span>
       </button>
       {node.children.map((child) => (
         <FolderTreeItem key={child.path} node={child} level={level + 1} />

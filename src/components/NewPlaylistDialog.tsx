@@ -43,8 +43,8 @@ export function NewPlaylistDialog({ open, onClose }: NewPlaylistDialogProps) {
       aria-modal="true"
       aria-label="Nova playlist"
     >
-      <div className="w-[420px] max-w-[calc(100vw-2rem)] rounded-lg bg-white p-5 shadow-xl">
-        <h2 className="text-[18px] font-semibold text-[#111827]">Nova playlist</h2>
+      <div className="w-[420px] max-w-[calc(100vw-2rem)] rounded-lg bg-surface p-5 shadow-xl">
+        <h2 className="text-[18px] font-semibold text-ink">Nova playlist</h2>
         <input
           type="text"
           autoFocus
@@ -58,19 +58,19 @@ export function NewPlaylistDialog({ open, onClose }: NewPlaylistDialogProps) {
             if (e.key === "Escape") handleClose();
           }}
           placeholder="Nome da playlist"
-          className={`mt-4 w-full rounded-md border px-3 py-2 text-[15px] outline-none placeholder:text-[#9CA3AF] ${
+          className={`mt-4 w-full rounded-md border px-3 py-2 text-[15px] outline-none placeholder:text-disabled ${
             showError
-              ? "border-[#B91C1C]"
-              : "border-[#D1D5DB] focus:border-[#0F766E]"
+              ? "border-danger"
+              : "border-border-strong focus:border-brand"
           }`}
         />
         {showError && (
-          <p className="mt-1 text-[13px] text-[#B91C1C]">Dê um nome à playlist.</p>
+          <p className="mt-1 text-[13px] text-danger">Dê um nome à playlist.</p>
         )}
         <div className="mt-5 flex justify-end gap-2">
           <button
             type="button"
-            className="rounded-md px-4 py-2 text-[15px] font-medium text-[#374151] hover:bg-[#F3F4F6]"
+            className="rounded-md px-4 py-2 text-[15px] font-medium text-ink-secondary hover:bg-surface-hover"
             onClick={handleClose}
           >
             Cancelar
@@ -78,8 +78,8 @@ export function NewPlaylistDialog({ open, onClose }: NewPlaylistDialogProps) {
           <button
             type="button"
             disabled={nameEmpty}
-            className={`rounded-md px-4 py-2 text-[15px] font-medium text-[#FFFFFF] ${
-              nameEmpty ? "bg-[#9CA3AF]" : "bg-[#0F766E] hover:bg-[#0d675f]"
+            className={`rounded-md px-4 py-2 text-[15px] font-medium text-white ${
+              nameEmpty ? "bg-disabled" : "bg-brand-fill hover:bg-brand-fill-hover"
             }`}
             onClick={() => void handleCreate()}
           >

@@ -2560,3 +2560,17 @@ opção mais simples que passa nos Acceptance Checks do PRD.
     fazer. O relato foi sobre o campo de tema, que é o único cujo conteúdo
     parecia guardado e não estava — nos outros dois o que está digitado está à
     vista, e ninguém sai da tela achando que salvou.
+
+## V11 — tema claro e escuro, pedido pelos beta testers
+
+184. **Todo hex fixo virou token (`index.css`), e o claro não mudou um pixel.**
+    O escuro NÃO é o claro invertido: os tons de texto (`ink-*`) que a mesma
+    régua de contraste da #69 já auditava seguem sob a mesma régua no escuro,
+    e o par acento/perigo tem uma cor de TEXTO que clareia no escuro (senão
+    ficaria ilegível sobre o fundo escuro) e uma cor de FUNDO de botão sólido
+    que fica igual nos dois temas (o CTA da marca não muda com o tema). O
+    `<mark>` de busca e a barra do player (`--playerbar-*`) ficam constantes
+    nos dois de propósito — grifo e capa de rádio não têm "tema". Preferência
+    em `theme: "light" | "dark" | "auto"` no MESMO `uiStore` de sempre;
+    aplicada antes do primeiro render (`main.tsx`) para não piscar claro ao
+    abrir no escuro.

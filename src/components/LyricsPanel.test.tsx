@@ -19,9 +19,12 @@ import { useEnrichStore } from "../stores/enrichStore";
 import type { Song } from "../lib/types";
 import {
   AA_TEXTO_NORMAL,
+  BG_COLOR_RE,
   contrastRatio,
+  corDoFundo,
   corDoTexto,
   FUNDOS_DA_LINHA,
+  TEXT_COLOR_RE,
 } from "../test/contrast";
 
 const LYRICS = "Quando o sol amanhecer\nMeu coração vai cantar\n\nNão há noite sem estrela";
@@ -294,7 +297,7 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Salvar no arquivo" }));
     expect(writeTags).not.toHaveBeenCalled();
     expect(screen.getByText("Dê um título à música.")).toBeInTheDocument();
-    expect(titulo.className).toContain("border-[#B91C1C]");
+    expect(titulo.className).toContain("border-danger");
   });
 
   it("salvar feliz: writeTags com os dados digitados, toast exato, atualiza stores e sai da edição", async () => {
@@ -693,13 +696,12 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
     );
     const bloco = await screen.findByRole("status");
     const comCor = [...bloco.querySelectorAll<HTMLElement>("*"), bloco].filter(
-      (el) => /text-\[#[0-9a-fA-F]{6}\]/.test(el.className),
+      (el) => TEXT_COLOR_RE.test(el.className),
     );
     expect(comCor.length).toBeGreaterThan(0);
     for (const el of comCor) {
       // o fundo é o do bloco, exceto nos selos, que trazem o próprio
-      const proprio = /bg-\[(#[0-9a-fA-F]{6})\]/.exec(el.className);
-      const fundo = proprio ? proprio[1] : "#F9FAFB";
+      const fundo = corDoFundo(el.className) ?? corDoFundo("bg-canvas")!;
       expect(
         contrastRatio(corDoTexto(el.className), fundo),
         `"${el.textContent?.slice(0, 30)}"`,
@@ -1746,15 +1748,15 @@ describe("LyricsPanel — o botão direto da etapa 5 na ficha (V10.10)", () => {
     await screen.findByText(SEM_LETRA, { exact: false });
     const bloco = screen
       .getAllByRole("status")
-      .find((el) => /bg-\[#F0FDFA\]/.test(el.className))!;
+      .find((el) => BG_COLOR_RE.test(el.className) && corDoFundo(el.className) === corDoFundo("bg-brand-soft"))!;
     const comCor = [...bloco.querySelectorAll<HTMLElement>("*"), bloco].filter(
-      (el) => /text-\[#[0-9a-fA-F]{6}\]/.test(el.className),
+      (el) => TEXT_COLOR_RE.test(el.className),
     );
     expect(comCor.length).toBeGreaterThan(0);
     for (const el of comCor) {
-      const proprio = /bg-\[(#[0-9a-fA-F]{6})\]/.exec(el.className);
+      const fundo = corDoFundo(el.className) ?? corDoFundo("bg-brand-soft")!;
       expect(
-        contrastRatio(corDoTexto(el.className), proprio ? proprio[1] : "#F0FDFA"),
+        contrastRatio(corDoTexto(el.className), fundo),
         `"${el.textContent?.slice(0, 30)}"`,
       ).toBeGreaterThanOrEqual(AA_TEXTO_NORMAL);
     }

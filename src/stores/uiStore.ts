@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import { applyTheme, type ThemePref } from "../lib/theme";
 
 /** Níveis de fonte da letra (F3): 16/20/24px. */
 export const FONT_SIZES_PX = [16, 20, 24] as const;
@@ -19,6 +20,14 @@ interface UiState {
    */
   checkUpdatesOnStart: boolean;
   /**
+   * V11 — tema claro/escuro, pedido pelos beta testers. Guardado no MESMO
+   * lugar das outras preferências (este store, mesma chave de localStorage):
+   * não havia motivo para inventar um segundo depósito só para isto.
+   * Padrão "auto" (segue o sistema) — ninguém pediu para o app decidir por
+   * ela sem perguntar ao SO primeiro.
+   */
+  theme: ThemePref;
+  /**
    * V10 — `vagalumeApiKey` SAIU (DECISIONS #110).
    *
    * A etapa do Vagalume foi removida do produto (API descontinuada, chave que
@@ -35,6 +44,7 @@ interface UiState {
   cycleFontLevel: () => void;
   setView: (view: View) => void;
   setCheckUpdatesOnStart: (value: boolean) => void;
+  setTheme: (theme: ThemePref) => void;
 }
 
 export function createUiStore() {
@@ -45,12 +55,17 @@ export function createUiStore() {
         fontLevel: 0,
         view: "library" as View,
         checkUpdatesOnStart: true,
+        theme: "auto",
         toggleLyricsPanel: () =>
           set((s) => ({ lyricsPanelVisible: !s.lyricsPanelVisible })),
         cycleFontLevel: () =>
           set((s) => ({ fontLevel: ((s.fontLevel + 1) % 3) as FontLevel })),
         setView: (view) => set({ view }),
         setCheckUpdatesOnStart: (value) => set({ checkUpdatesOnStart: value }),
+        setTheme: (theme) => {
+          set({ theme });
+          applyTheme(theme);
+        },
       }),
       {
         name: "cancioneiro-ui",
@@ -58,7 +73,16 @@ export function createUiStore() {
           lyricsPanelVisible: s.lyricsPanelVisible,
           fontLevel: s.fontLevel,
           checkUpdatesOnStart: s.checkUpdatesOnStart,
+          theme: s.theme,
         }),
+        // V11 — reaplica o tema já resolvido assim que o `persist` termina de
+        // ler o localStorage (troca de aba, ou qualquer hidratação tardia).
+        // O `main.tsx` já aplicou uma vez de forma síncrona antes do render
+        // (evita a piscada); isto cobre o caso raro de a hidratação mudar o
+        // valor depois disso.
+        onRehydrateStorage: () => (state) => {
+          if (state) applyTheme(state.theme);
+        },
       },
     ),
   );

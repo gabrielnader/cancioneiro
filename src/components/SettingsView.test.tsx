@@ -1,11 +1,13 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { act } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setBackendForTests, type Backend } from "../lib/api";
 import {
   AA_TEXTO_NORMAL,
   contrastRatio,
+  corDoFundo,
   corDoTexto,
+  TEXT_COLOR_RE,
 } from "../test/contrast";
 import {
   ACESSORIO_CANCELADO,
@@ -951,8 +953,11 @@ describe("SettingsView — o caminho único (V10)", () => {
     acessoriosEstado.mockResolvedValue([acessorio("pronto")]);
     render(<SettingsView />);
     await screen.findAllByText(ACESSORIO_PRONTO);
-    expect(screen.queryAllByRole("radio")).toHaveLength(0);
     const secao = secaoCuradoria();
+    // V11 — o rádio "sem escolha de trabalho" é sobre a CURADORIA, não sobre
+    // a tela inteira: o seletor de tema (novo) também usa `role="radio"`, e
+    // mora numa seção completamente diferente (Aparência).
+    expect(within(secao).queryAllByRole("radio")).toHaveLength(0);
     expect(secao.textContent ?? "").not.toContain("Conferir se a etiqueta");
     expect(secao.textContent ?? "").not.toContain("Completar o que falta");
     expect(
@@ -1305,8 +1310,8 @@ describe("SettingsView — acessibilidade da seção nova", () => {
   function fundoDe(el: HTMLElement, raiz: HTMLElement): string {
     let atual: HTMLElement | null = el;
     while (atual) {
-      const m = /bg-\[(#[0-9a-fA-F]{6})\]/.exec(atual.className ?? "");
-      if (m) return m[1];
+      const cor = corDoFundo(atual.className ?? "");
+      if (cor) return cor;
       if (atual === raiz) break;
       atual = atual.parentElement;
     }
@@ -1315,7 +1320,7 @@ describe("SettingsView — acessibilidade da seção nova", () => {
 
   function varrerContraste(secao: HTMLElement): number {
     const comCor = [...secao.querySelectorAll<HTMLElement>("*")].filter((el) =>
-      /text-\[#[0-9a-fA-F]{6}\]/.test(el.className),
+      TEXT_COLOR_RE.test(el.className),
     );
     for (const el of comCor) {
       const cor = corDoTexto(el.className);
@@ -1605,5 +1610,70 @@ describe("SettingsView — o bloco permanente da transcrição (V10.6)", () => {
         `sobre ${fundo}`,
       ).toBeGreaterThanOrEqual(AA_TEXTO_NORMAL);
     }
+  });
+});
+
+describe("SettingsView — seletor de tema (V11)", () => {
+  beforeEach(() => {
+    estadoBase();
+    // o uiStore é compartilhado entre testes deste arquivo (é o mesmo
+    // singleton `useUiStore`) — sem isto, o tema escolhido num teste
+    // vazaria para o próximo.
+    useUiStore.setState({ theme: "auto" });
+  });
+
+  afterEach(() => {
+    delete document.documentElement.dataset.theme;
+  });
+
+  function radios(): HTMLElement[] {
+    return screen.getAllByRole("radio");
+  }
+
+  it("padrão: 'Automático' marcado, os outros dois não", () => {
+    render(<SettingsView />);
+    const claro = screen.getByRole("radio", { name: "Claro" });
+    const escuro = screen.getByRole("radio", { name: "Escuro" });
+    const automatico = screen.getByRole("radio", { name: "Automático" });
+    expect(automatico).toHaveAttribute("aria-checked", "true");
+    expect(claro).toHaveAttribute("aria-checked", "false");
+    expect(escuro).toHaveAttribute("aria-checked", "false");
+    expect(radios()).toHaveLength(3);
+  });
+
+  it("escolher 'Escuro' marca o botão e aplica data-theme no <html>", () => {
+    render(<SettingsView />);
+    fireEvent.click(screen.getByRole("radio", { name: "Escuro" }));
+    expect(screen.getByRole("radio", { name: "Escuro" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(screen.getByRole("radio", { name: "Automático" })).toHaveAttribute(
+      "aria-checked",
+      "false",
+    );
+    expect(document.documentElement.dataset.theme).toBe("dark");
+  });
+
+  it("escolher 'Claro' depois de 'Escuro' troca de novo", () => {
+    render(<SettingsView />);
+    fireEvent.click(screen.getByRole("radio", { name: "Escuro" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Claro" }));
+    expect(screen.getByRole("radio", { name: "Claro" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    expect(document.documentElement.dataset.theme).toBe("light");
+  });
+
+  it("a escolha sobrevive a remontar a tela (persistida no uiStore)", () => {
+    const { unmount } = render(<SettingsView />);
+    fireEvent.click(screen.getByRole("radio", { name: "Escuro" }));
+    unmount();
+    render(<SettingsView />);
+    expect(screen.getByRole("radio", { name: "Escuro" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
   });
 });

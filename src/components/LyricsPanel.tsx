@@ -55,24 +55,24 @@ export function LyricsPanel() {
 
   return (
     <aside
-      className="flex h-full w-[380px] shrink-0 flex-col border-l border-[#E5E7EB] bg-[#FFFFFF]"
+      className="flex h-full w-[380px] shrink-0 flex-col border-l border-border bg-surface"
       aria-label="Painel de letra"
     >
       {selected === null ? (
         <div className="flex flex-1 items-center justify-center p-6">
-          <p className="text-center text-[#9CA3AF]">
+          <p className="text-center text-disabled">
             Selecione uma música para ver a letra.
           </p>
         </div>
       ) : (
         <>
-          <div className="flex items-start justify-between gap-2 border-b border-[#E5E7EB] p-4">
+          <div className="flex items-start justify-between gap-2 border-b border-border p-4">
             <div className="min-w-0">
-              <h2 className="truncate text-[18px] font-semibold text-[#111827]">
+              <h2 className="truncate text-[18px] font-semibold text-ink">
                 {selected.title}
               </h2>
               {selected.artist && (
-                <p className="truncate text-[14px] text-[#6B7280]">
+                <p className="truncate text-[14px] text-ink-tertiary">
                   {selected.artist}
                 </p>
               )}
@@ -86,7 +86,7 @@ export function LyricsPanel() {
                 <p
                   data-testid="panel-filename"
                   // mesmo cinza da linha da lista (AA 4.5:1 em 12px, ver SongRow)
-                  className="mt-0.5 select-text break-words text-[12px] leading-4 text-[#5B6472]"
+                  className="mt-0.5 select-text break-words text-[12px] leading-4 text-ink-quaternary"
                 >
                   {nomeArquivo}
                 </p>
@@ -124,7 +124,7 @@ export function LyricsPanel() {
                   disabled={
                     !selected.available || (selected.has_lyrics && lyrics === null)
                   }
-                  className="rounded px-2 py-1 text-[15px] font-medium text-[#0F766E] hover:bg-[#F0FDFA] disabled:cursor-not-allowed disabled:text-[#9CA3AF] disabled:hover:bg-transparent"
+                  className="rounded px-2 py-1 text-[15px] font-medium text-brand hover:bg-brand-soft disabled:cursor-not-allowed disabled:text-disabled disabled:hover:bg-transparent"
                   title={
                     selected.available
                       ? "Editar título, artista, temas e letra"
@@ -137,7 +137,7 @@ export function LyricsPanel() {
               <button
                 type="button"
                 onClick={cycleFontLevel}
-                className="rounded px-2 py-1 text-[15px] font-medium text-[#374151] hover:bg-[#F3F4F6]"
+                className="rounded px-2 py-1 text-[15px] font-medium text-ink-secondary hover:bg-surface-hover"
                 aria-label="Tamanho da fonte da letra"
                 title="Tamanho da fonte"
               >
@@ -171,7 +171,7 @@ export function LyricsPanel() {
                   {selected.letra_origem === ORIGEM_TRANSCRICAO && (
                     <p
                       data-testid="lyrics-origem"
-                      className="mb-3 border-l-2 border-[#E5E7EB] pl-2 text-[13px] leading-snug text-[#6B7280]"
+                      className="mb-3 border-l-2 border-border pl-2 text-[13px] leading-snug text-ink-tertiary"
                     >
                       Letra transcrita automaticamente do áudio — pode conter
                       erros.
@@ -179,7 +179,7 @@ export function LyricsPanel() {
                   )}
                   <p
                     data-testid="lyrics-body"
-                    className="whitespace-pre-wrap text-[#111827]"
+                    className="whitespace-pre-wrap text-ink"
                     style={{ fontSize: FONT_SIZES_PX[fontLevel], lineHeight: 1.7 }}
                   >
                     {lyrics}
@@ -193,14 +193,14 @@ export function LyricsPanel() {
                   mostra a letra normalmente.)
                 */
                 <div className="pt-4">
-                  <p className="text-[#6B7280]">Música instrumental — sem letra.</p>
+                  <p className="text-ink-tertiary">Música instrumental — sem letra.</p>
                 </div>
               ) : (
                 <div className="pt-4">
-                  <p className="text-[#6B7280]">
+                  <p className="text-ink-tertiary">
                     Esta música ainda não tem letra registrada.
                   </p>
-                  <p className="mt-2 text-[#9CA3AF]">
+                  <p className="mt-2 text-disabled">
                     Use a ferramenta de curadoria para adicionar a letra ao arquivo.
                   </p>
                 </div>

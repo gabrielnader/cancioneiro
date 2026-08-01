@@ -30,14 +30,14 @@ export function LibraryView() {
   const isRealSearch = hasSearchTokens(query);
 
   return (
-    <div className="flex h-full min-w-0 flex-1 flex-col bg-[#F9FAFB]">
+    <div className="flex h-full min-w-0 flex-1 flex-col bg-canvas">
       {/* Reserva a faixa do botão flutuante "Ocultar/Mostrar detalhes"
           (App.tsx) — a mesma medida das outras duas views, definida uma vez
           só em index.css. O E2E mede a sobreposição das caixas. */}
       <div className="shrink-0 p-4 pb-2 pr-[var(--faixa-detalhes)]">
         <SearchBar />
         {isRealSearch && !isEmptyLibrary && (
-          <p className="mt-2 text-[13px] text-[#6B7280]">
+          <p className="mt-2 text-[13px] text-ink-tertiary">
             {visibleResults.length} resultados
           </p>
         )}
@@ -50,7 +50,7 @@ export function LibraryView() {
             aria-label="Remover filtro de pasta"
             title={`Remover o filtro da pasta ${folderFilter}`}
             onClick={() => setFolderFilter(null)}
-            className="inline-flex items-center gap-1.5 rounded-full bg-[#F0FDFA] px-3 py-1 text-[13px] font-medium text-[#0F766E] hover:bg-[#ccfbf1]"
+            className="inline-flex items-center gap-1.5 rounded-full bg-brand-soft px-3 py-1 text-[13px] font-medium text-brand hover:bg-brand-soft-hover"
           >
             <span>📁 {folderName(folderFilter)}</span>
             <span aria-hidden="true">×</span>
@@ -64,12 +64,12 @@ export function LibraryView() {
 
       {scanning && (
         <div className="mx-4 mb-2 shrink-0">
-          <p className="mb-1 text-[13px] text-[#6B7280]">
+          <p className="mb-1 text-[13px] text-ink-tertiary">
             Indexando… {scanning.done} de {scanning.total} arquivos
           </p>
-          <div className="h-1.5 w-full overflow-hidden rounded bg-[#E5E7EB]">
+          <div className="h-1.5 w-full overflow-hidden rounded bg-border">
             <div
-              className="h-full bg-[#0F766E] transition-[width]"
+              className="h-full bg-brand transition-[width]"
               style={{
                 width:
                   scanning.total > 0
@@ -85,10 +85,10 @@ export function LibraryView() {
         <EmptyLibrary />
       ) : visibleResults.length === 0 && isRealSearch ? (
         <div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
-          <p className="text-[#6B7280]">
+          <p className="text-ink-tertiary">
             Nenhuma música encontrada para "{query.trim()}".
           </p>
-          <p className="mt-1 text-[#9CA3AF]">
+          <p className="mt-1 text-disabled">
             Tente palavras diferentes do trecho que você lembra.
           </p>
         </div>
@@ -103,10 +103,10 @@ export function LibraryView() {
 function EmptyLibrary() {
   return (
     <div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
-      <h1 className="text-[22px] font-semibold text-[#111827]">
+      <h1 className="text-[22px] font-semibold text-ink">
         Sua biblioteca está vazia
       </h1>
-      <p className="mt-2 text-[#6B7280]">
+      <p className="mt-2 text-ink-tertiary">
         Adicione uma pasta com suas músicas para começar.
       </p>
       <div className="mt-6">
@@ -126,14 +126,14 @@ function MissingFolderBanner({ path }: { path: string }) {
   const folder = folders.find((f) => f.path === path);
 
   return (
-    <div className="mx-4 mb-2 flex shrink-0 flex-wrap items-center gap-3 rounded-md bg-[#FEF3C7] px-4 py-3">
-      <p className="min-w-0 flex-1 text-[14px] text-[#92400E]">
+    <div className="mx-4 mb-2 flex shrink-0 flex-wrap items-center gap-3 rounded-md bg-warning-soft px-4 py-3">
+      <p className="min-w-0 flex-1 text-[14px] text-warning-strong">
         A pasta {path} não foi encontrada. Verifique se o disco está conectado.
       </p>
       <div className="flex shrink-0 gap-2">
         <button
           type="button"
-          className="rounded px-2 py-1 text-[14px] font-medium text-[#B91C1C] hover:bg-[#FDE68A]"
+          className="rounded px-2 py-1 text-[14px] font-medium text-danger hover:bg-warning-accent"
           onClick={() => {
             if (folder) void removeFolder(folder.id);
           }}
@@ -142,7 +142,7 @@ function MissingFolderBanner({ path }: { path: string }) {
         </button>
         <button
           type="button"
-          className="rounded px-2 py-1 text-[14px] font-medium text-[#0F766E] hover:bg-[#FDE68A]"
+          className="rounded px-2 py-1 text-[14px] font-medium text-brand hover:bg-warning-accent"
           onClick={() => {
             void rescan().catch((e) => push(String(e), "error"));
           }}

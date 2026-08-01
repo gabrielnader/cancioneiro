@@ -9,6 +9,7 @@ import { Sidebar } from "./components/Sidebar";
 import { Toasts } from "./components/Toasts";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { getBackend } from "./lib/api";
+import { watchSystemTheme } from "./lib/theme";
 import { checkForUpdatesOnStartup, useUpdateStore } from "./lib/updater";
 import { useLibraryStore } from "./stores/libraryStore";
 import { usePlaylistStore } from "./stores/playlistStore";
@@ -31,7 +32,7 @@ function UpdateNotice() {
     <div
       role="status"
       aria-live="polite"
-      className="fixed bottom-20 left-4 z-50 flex w-96 max-w-[calc(100vw-2rem)] items-start gap-3 rounded-md bg-[#F0FDFA] px-4 py-3 text-[14px] text-[#115E59] shadow-md ring-1 ring-[#99F6E4]"
+      className="fixed bottom-20 left-4 z-50 flex w-96 max-w-[calc(100vw-2rem)] items-start gap-3 rounded-md bg-brand-soft px-4 py-3 text-[14px] text-brand-strong shadow-md ring-1 ring-brand-ring"
     >
       <p className="min-w-0 flex-1">
         Atualização pronta. Reinicie o Cancioneiro para usar a versão nova.
@@ -39,7 +40,7 @@ function UpdateNotice() {
       <button
         type="button"
         disabled={restarting}
-        className="shrink-0 rounded bg-[#0F766E] px-3 py-1.5 text-[14px] font-medium text-white hover:bg-[#0D5F58] disabled:opacity-50"
+        className="shrink-0 rounded bg-brand-fill px-3 py-1.5 text-[14px] font-medium text-white hover:bg-brand-fill-hover disabled:opacity-50"
         onClick={() => void runRestart()}
       >
         {restarting ? "Reiniciando…" : "Reiniciar agora"}
@@ -47,7 +48,7 @@ function UpdateNotice() {
       <button
         type="button"
         aria-label="Dispensar aviso de atualização"
-        className="shrink-0 rounded px-1 text-[16px] leading-none text-[#0F766E] hover:bg-[#CCFBF1]"
+        className="shrink-0 rounded px-1 text-[16px] leading-none text-brand hover:bg-brand-soft-hover"
         onClick={dismiss}
       >
         ×
@@ -91,6 +92,13 @@ function App() {
     void checkForUpdatesOnStartup();
   }, []);
 
+  // V11 — só importa para "automático": se o SO mudar de aparência com o
+  // app aberto, o tema segue junto sem precisar reabrir (main.tsx só cobre
+  // o instante inicial).
+  useEffect(() => {
+    return watchSystemTheme(() => useUiStore.getState().theme);
+  }, []);
+
   return (
     <div className="flex h-screen flex-col overflow-hidden">
       <div className="flex min-h-0 flex-1">
@@ -118,7 +126,7 @@ function App() {
           <button
             type="button"
             data-testid="toggle-detalhes"
-            className="absolute right-4 top-4 z-10 whitespace-nowrap rounded-md bg-white/90 px-3 py-2 text-[15px] font-medium text-[#0F766E] shadow-sm ring-1 ring-[#E5E7EB] hover:bg-[#F0FDFA]"
+            className="absolute right-4 top-4 z-10 whitespace-nowrap rounded-md bg-surface/90 px-3 py-2 text-[15px] font-medium text-brand shadow-sm ring-1 ring-border hover:bg-brand-soft"
             onClick={toggleLyricsPanel}
           >
             {/* o painel virou ficha completa (título, artista, temas, letra,

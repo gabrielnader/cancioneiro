@@ -119,11 +119,12 @@ const BADGES: Record<
   EnrichProposal["confidence"],
   { label: string; className: string }
 > = {
-  alta: { label: "ALTA", className: "bg-[#DCFCE7] text-[#166534]" },
-  media: { label: "MÉDIA", className: "bg-[#FEF9C3] text-[#854D0E]" },
-  // #6B7280 sobre #F3F4F6 dava 4,39:1 — abaixo de AA. #5B6472 dá 5,44:1
-  // (DECISIONS #69: contraste mínimo vale para texto secundário também).
-  baixa: { label: "BAIXA", className: "bg-[#F3F4F6] text-[#5B6472]" },
+  alta: { label: "ALTA", className: "bg-success-soft text-success" },
+  media: { label: "MÉDIA", className: "bg-warning-soft-alt text-warning" },
+  // `ink-tertiary` sobre `surface-hover` dava 4,39:1 — abaixo de AA.
+  // `ink-quaternary` dá 5,44:1 (DECISIONS #69: contraste mínimo vale para
+  // texto secundário também).
+  baixa: { label: "BAIXA", className: "bg-surface-hover text-ink-quaternary" },
 };
 
 /**
@@ -133,25 +134,26 @@ const BADGES: Record<
  */
 const BADGE_CONFLITO = {
   label: "CONFLITO",
-  className: "bg-[#FEF3C7] text-[#854D0E]",
+  className: "bg-warning-soft text-warning",
 };
 
 /** V10 — a etapa 5 concluiu que não há voz: também não é palpite fraco. */
 const BADGE_SEM_VOZ = {
   label: "SEM VOZ",
-  className: "bg-[#FEF3C7] text-[#854D0E]",
+  className: "bg-warning-soft text-warning",
 };
 
 /**
  * V10.6 — a linha já foi gravada nesta revisão.
  *
  * Ela existe porque aplicar deixou de fechar a caixa (era o fechamento que
- * jogava fora a lista das músicas sem letra). #115E59 sobre #CCFBF1 dá 6,7:1 —
- * o mesmo verde do resto do produto, acima de AA.
+ * jogava fora a lista das músicas sem letra). `brand-strong` sobre
+ * `brand-soft-hover` dá 6,7:1 no claro (e passa também no escuro) — o mesmo
+ * verde do resto do produto, acima de AA.
  */
 const BADGE_GRAVADA = {
   label: SELO_DA_LINHA_GRAVADA,
-  className: "bg-[#CCFBF1] text-[#115E59]",
+  className: "bg-brand-soft-hover text-brand-strong",
 };
 
 function nomeCompleto(title: string, artist: string | null): string {
@@ -172,7 +174,7 @@ function LadoDoConflito({ texto, contra }: { texto: string; contra: string }) {
     // campo vazio de um dos lados é informação: "(sem artista)" diz que a
     // etiqueta não tem nada ali, e some do texto seria a pessoa concluindo que
     // os dois dizem a mesma coisa
-    return <span className="text-[#5B6472] italic">(vazio)</span>;
+    return <span className="text-ink-quaternary italic">(vazio)</span>;
   }
   return (
     <>
@@ -180,7 +182,7 @@ function LadoDoConflito({ texto, contra }: { texto: string; contra: string }) {
         <span
           key={`${pedaco.texto}-${i}`}
           className={
-            pedaco.difere ? "font-semibold text-[#111827]" : "text-[#5B6472]"
+            pedaco.difere ? "font-semibold text-ink" : "text-ink-quaternary"
           }
         >
           {i > 0 ? " " : ""}
@@ -463,7 +465,7 @@ export function EnrichReview() {
       ref={closeButtonRef}
       disabled={busy}
       onClick={close}
-      className="rounded-md px-4 py-2 text-[15px] font-medium text-[#374151] hover:bg-[#F3F4F6] disabled:opacity-60"
+      className="rounded-md px-4 py-2 text-[15px] font-medium text-ink-secondary hover:bg-surface-hover disabled:opacity-60"
     >
       Fechar
     </button>
@@ -777,7 +779,7 @@ export function EnrichReview() {
           disabled={disabled || busy}
           checked={!disabled && selected.has(linha)}
           onChange={() => toggle(linha)}
-          className="mt-1 h-4 w-4 shrink-0 accent-[#0F766E]"
+          className="mt-1 h-4 w-4 shrink-0 accent-brand"
         />
         <span className="min-w-0 flex-1">
           {comparacao ? (
@@ -789,51 +791,51 @@ export function EnrichReview() {
             */
             <span className="flex flex-col gap-0.5 text-[14px]">
               {comparacao.iguais.map((igual) => (
-                <span key={igual.campo} className="break-words text-[#111827]">
+                <span key={igual.campo} className="break-words text-ink">
                   {igual.valor}
                 </span>
               ))}
               {comparacao.diferem.map((campo) => (
                 <span key={campo.campo} className="flex flex-col gap-0.5">
                   <span className="min-w-0 break-words">
-                    <span className="text-[#5B6472]">{LABEL_SUA_ETIQUETA_DIZ}:</span>{" "}
+                    <span className="text-ink-quaternary">{LABEL_SUA_ETIQUETA_DIZ}:</span>{" "}
                     <LadoDoConflito texto={campo.etiqueta} contra={campo.som} />
                   </span>
                   <span className="min-w-0 break-words">
-                    <span className="text-[#5B6472]">{LABEL_SOM_DIZ}:</span>{" "}
+                    <span className="text-ink-quaternary">{LABEL_SOM_DIZ}:</span>{" "}
                     <LadoDoConflito texto={campo.som} contra={campo.etiqueta} />
                   </span>
                 </span>
               ))}
-              <span className="text-[13px] text-[#5B6472]">
+              <span className="text-[13px] text-ink-quaternary">
                 {confiancaDoSom(p.conflito!.confianca)}
               </span>
             </span>
           ) : (
             <span className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[14px]">
-              <span className="truncate text-[#6B7280]">
+              <span className="truncate text-ink-tertiary">
                 {nomeCompleto(p.current_title, p.current_artist)}
               </span>
               {/* a seta é decorativa (aria-hidden), mas continua sendo tinta
-                  na tela de quem enxerga pouco: #9CA3AF dava 2,5:1 no branco.
-                  #6B7280 dá 4,8:1 (DECISIONS #76). */}
-              <span aria-hidden="true" className="text-[#6B7280]">
+                  na tela de quem enxerga pouco: `disabled` dava 2,5:1 no branco.
+                  `ink-tertiary` dá 4,8:1 (DECISIONS #76). */}
+              <span aria-hidden="true" className="text-ink-tertiary">
                 →
               </span>
-              <span className="truncate font-medium text-[#111827]">
+              <span className="truncate font-medium text-ink">
                 {nomeCompleto(p.proposed_title, p.proposed_artist)}
               </span>
             </span>
           )}
           {error !== null && (
-            <span className="block text-[13px] text-[#B91C1C]">{error}</span>
+            <span className="block text-[13px] text-danger">{error}</span>
           )}
           {/*
             V10.6 — o desfecho da linha, para quem acabou de aplicar e continua
             olhando a mesma caixa. Ela não pede nada: é registro.
           */}
           {gravada && (
-            <span className="block text-[13px] font-medium text-[#0F766E]">
+            <span className="block text-[13px] font-medium text-brand">
               {ROTULO_DA_LINHA_GRAVADA}
             </span>
           )}
@@ -849,7 +851,7 @@ export function EnrichReview() {
             que deu certo ensinaria a ler âmbar como enfeite.
           */}
           {gravada && avisosDaGravacao[p.song_id] !== undefined && (
-            <span className="mt-0.5 block text-[13px] leading-relaxed text-[#5B6472]">
+            <span className="mt-0.5 block text-[13px] leading-relaxed text-ink-quaternary">
               {avisosDaGravacao[p.song_id]}
             </span>
           )}
@@ -859,9 +861,9 @@ export function EnrichReview() {
             // não se decidem igual.
             <span className="flex flex-wrap gap-x-2 text-[13px]">
               {p.lyrics !== null && (
-                <span className="text-[#0F766E]">letra encontrada</span>
+                <span className="text-brand">letra encontrada</span>
               )}
-              {p.fonte && <span className="text-[#5B6472]">via {p.fonte}</span>}
+              {p.fonte && <span className="text-ink-quaternary">via {p.fonte}</span>}
             </span>
           )}
           {/*
@@ -870,14 +872,14 @@ export function EnrichReview() {
             linha, ou vai aplicar no escuro.
           */}
           {error === null && p.refrao && (
-            <span className="mt-0.5 block truncate text-[13px] text-[#5B6472]">
+            <span className="mt-0.5 block truncate text-[13px] text-ink-quaternary">
               {rotuloDoRefrao(p.refrao)}
             </span>
           )}
           {/* V5/F14 — letra de transcrição é letra de MÁQUINA, e a revisão diz
               isso ANTES de aplicar (o painel de letra avisa depois). */}
           {error === null && !gravada && p.lyrics !== null && ehLetraDeMaquina(p.fonte) && (
-            <span className="mt-0.5 block text-[13px] text-[#854D0E]">
+            <span className="mt-0.5 block text-[13px] text-warning">
               {AVISO_LETRA_DE_MAQUINA}
             </span>
           )}
@@ -887,7 +889,7 @@ export function EnrichReview() {
             `aviso` do backend traz a medição que sustenta a conclusão.
           */}
           {error === null && !gravada && p.marcar_instrumental && (
-            <span className="mt-0.5 block text-[13px] text-[#854D0E]">
+            <span className="mt-0.5 block text-[13px] text-warning">
               {AVISO_MARCAR_INSTRUMENTAL}
             </span>
           )}
@@ -913,7 +915,7 @@ export function EnrichReview() {
           {error === null && p.aviso && (
             <span
               className={`mt-0.5 block text-[13px] leading-relaxed ${
-                p.marcar_instrumental ? "text-[#5B6472]" : "text-[#854D0E]"
+                p.marcar_instrumental ? "text-ink-quaternary" : "text-warning"
               }`}
             >
               {p.aviso}
@@ -925,7 +927,7 @@ export function EnrichReview() {
             uma caixa vazia não se explica.
           */}
           {error === null && !gravada && p.substitui_nome_escrito && (
-            <span className="mt-0.5 block text-[13px] text-[#854D0E]">
+            <span className="mt-0.5 block text-[13px] text-warning">
               {AVISO_NOME_ESCRITO}
             </span>
           )}
@@ -937,17 +939,17 @@ export function EnrichReview() {
           */}
           {trocaLetra && (
             <>
-              <span className="mt-0.5 block text-[13px] text-[#854D0E]">
+              <span className="mt-0.5 block text-[13px] text-warning">
                 {avisoLetraExistente(p.letra_origem)}
               </span>
-              <label className="mt-0.5 flex items-start gap-2 text-[13px] text-[#374151]">
+              <label className="mt-0.5 flex items-start gap-2 text-[13px] text-ink-secondary">
                 <input
                   type="checkbox"
                   aria-label={`${LABEL_SUBSTITUIR_LETRA}: ${p.current_title}`}
                   disabled={busy}
                   checked={substituir.has(p.song_id)}
                   onChange={() => toggleSubstituir(p.song_id, linha)}
-                  className="mt-0.5 h-4 w-4 shrink-0 accent-[#0F766E]"
+                  className="mt-0.5 h-4 w-4 shrink-0 accent-brand"
                 />
                 <span>{LABEL_SUBSTITUIR_LETRA}</span>
               </label>
@@ -985,9 +987,9 @@ export function EnrichReview() {
               <div className="flex items-center gap-3 py-4">
                 <span
                   aria-hidden="true"
-                  className="h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-[#0F766E] border-t-transparent"
+                  className="h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-brand border-t-transparent"
                 />
-                <p className="text-[15px] text-[#111827]">
+                <p className="text-[15px] text-ink">
                   Buscando dados… isso pode demorar alguns minutos.
                 </p>
               </div>
@@ -995,7 +997,7 @@ export function EnrichReview() {
               // sem live region aqui: o contador e o nome do arquivo mudam a
               // cada música — quem informa o avanço é o aria-valuenow (M6)
               <div className="py-4">
-                <p className="mb-1 text-[15px] text-[#111827]">
+                <p className="mb-1 text-[15px] text-ink">
                   Buscando dados… {progress.done} de {progress.total}
                 </p>
                 <div
@@ -1004,10 +1006,10 @@ export function EnrichReview() {
                   aria-valuemin={0}
                   aria-valuemax={progress.total}
                   aria-valuenow={progress.done}
-                  className="h-1.5 w-full overflow-hidden rounded bg-[#E5E7EB]"
+                  className="h-1.5 w-full overflow-hidden rounded bg-border"
                 >
                   <div
-                    className="h-full bg-[#0F766E] transition-[width]"
+                    className="h-full bg-brand transition-[width]"
                     style={{
                       width:
                         progress.total > 0
@@ -1019,14 +1021,14 @@ export function EnrichReview() {
                 {/* V8/F18 — a etapa do funil. Sem ela, minutos parados no
                     mesmo número parecem travamento. */}
                 {progress.etapa && (
-                  <p className="mt-1 text-[13px] text-[#5B6472]">
+                  <p className="mt-1 text-[13px] text-ink-quaternary">
                     Etapa: {progress.etapa}
                   </p>
                 )}
                 {/* nome do arquivo pode ser enorme: trunca em uma linha */}
                 <p
                   title={progress.atual}
-                  className="mt-1 truncate text-[13px] text-[#6B7280]"
+                  className="mt-1 truncate text-[13px] text-ink-tertiary"
                 >
                   {progress.atual}
                 </p>
@@ -1038,14 +1040,14 @@ export function EnrichReview() {
                 type="button"
                 ref={closeButtonRef}
                 onClick={hideOverlay}
-                className="rounded-md px-4 py-2 text-[15px] font-medium text-[#0F766E] hover:bg-[#F0FDFA]"
+                className="rounded-md px-4 py-2 text-[15px] font-medium text-brand hover:bg-brand-soft"
               >
                 Deixar rodando em segundo plano
               </button>
               <button
                 type="button"
                 onClick={close}
-                className="rounded-md px-4 py-2 text-[15px] font-medium text-[#374151] hover:bg-[#F3F4F6]"
+                className="rounded-md px-4 py-2 text-[15px] font-medium text-ink-secondary hover:bg-surface-hover"
               >
                 Cancelar
               </button>
@@ -1062,15 +1064,15 @@ export function EnrichReview() {
               <div className="flex items-center gap-3 py-4">
                 <span
                   aria-hidden="true"
-                  className="h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-[#0F766E] border-t-transparent"
+                  className="h-5 w-5 shrink-0 animate-spin rounded-full border-2 border-brand border-t-transparent"
                 />
-                <p className="text-[15px] text-[#111827]">
+                <p className="text-[15px] text-ink">
                   Escrevendo as letras… isso pode demorar horas.
                 </p>
               </div>
             ) : (
               <div className="py-4">
-                <p className="mb-1 text-[15px] text-[#111827]">
+                <p className="mb-1 text-[15px] text-ink">
                   {textoDoProgressoDaTranscricao(
                     transcricaoProgress.done,
                     transcricaoProgress.total,
@@ -1089,10 +1091,10 @@ export function EnrichReview() {
                           100
                       : 0,
                   )}
-                  className="h-1.5 w-full overflow-hidden rounded bg-[#E5E7EB]"
+                  className="h-1.5 w-full overflow-hidden rounded bg-border"
                 >
                   <div
-                    className="h-full bg-[#0F766E] transition-[width]"
+                    className="h-full bg-brand transition-[width]"
                     style={{
                       width:
                         transcricaoProgress.total > 0
@@ -1103,12 +1105,12 @@ export function EnrichReview() {
                 </div>
                 {/* o tempo que falta vem da velocidade MEDIDA — e enquanto não
                     houver medição, a tela diz QUANDO o número vai aparecer */}
-                <p className="mt-1 text-[13px] text-[#5B6472]">
+                <p className="mt-1 text-[13px] text-ink-quaternary">
                   {textoDoTempoDaTranscricao(transcricaoProgress.segundos_restantes)}
                 </p>
                 <p
                   title={transcricaoProgress.atual}
-                  className="mt-1 truncate text-[13px] text-[#6B7280]"
+                  className="mt-1 truncate text-[13px] text-ink-tertiary"
                 >
                   {transcricaoProgress.atual}
                 </p>
@@ -1119,14 +1121,14 @@ export function EnrichReview() {
                 type="button"
                 ref={closeButtonRef}
                 onClick={hideOverlay}
-                className="rounded-md px-4 py-2 text-[15px] font-medium text-[#0F766E] hover:bg-[#F0FDFA]"
+                className="rounded-md px-4 py-2 text-[15px] font-medium text-brand hover:bg-brand-soft"
               >
                 Deixar rodando em segundo plano
               </button>
               <button
                 type="button"
                 onClick={close}
-                className="rounded-md px-4 py-2 text-[15px] font-medium text-[#374151] hover:bg-[#F3F4F6]"
+                className="rounded-md px-4 py-2 text-[15px] font-medium text-ink-secondary hover:bg-surface-hover"
               >
                 Cancelar
               </button>
@@ -1136,7 +1138,7 @@ export function EnrichReview() {
           <>
             {/* A6: "nada a ajustar" com 81 conferidas soava como "pasta
                 completa" — o texto conta o que houve e para onde ir */}
-            <p className="py-4 text-[15px] text-[#111827]">
+            <p className="py-4 text-[15px] text-ink">
               {textoSemPropostas(scannedTotal, semPerguntarAoSom)}
             </p>
             <div className="mt-2 flex justify-end">{closeButton}</div>
@@ -1149,12 +1151,12 @@ export function EnrichReview() {
               a lista rola. Zero não desenha nada.
             */}
             {avisoSemPerguntarAoSom(semPerguntarAoSom) !== null && (
-              <p className="mb-2 rounded-md bg-[#FEF3C7] px-3 py-2 text-[13px] leading-relaxed text-[#854D0E]">
+              <p className="mb-2 rounded-md bg-warning-soft px-3 py-2 text-[13px] leading-relaxed text-warning">
                 {avisoSemPerguntarAoSom(semPerguntarAoSom)}
               </p>
             )}
             <div className="flex flex-wrap items-center gap-2 pb-3">
-              <h2 className="text-[16px] font-semibold text-[#111827]">
+              <h2 className="text-[16px] font-semibold text-ink">
                 {tituloDoCabecalho}
               </h2>
               <span className="ml-auto flex gap-2">
@@ -1182,7 +1184,7 @@ export function EnrichReview() {
                       ),
                     )
                   }
-                  className="rounded-md px-2 py-1 text-[13px] font-medium text-[#0F766E] hover:bg-[#F0FDFA]"
+                  className="rounded-md px-2 py-1 text-[13px] font-medium text-brand hover:bg-brand-soft"
                 >
                   Marcar todas
                 </button>
@@ -1194,7 +1196,7 @@ export function EnrichReview() {
                     setSubstituir(new Set());
                     setConsentidos(new Set());
                   }}
-                  className="rounded-md px-2 py-1 text-[13px] font-medium text-[#0F766E] hover:bg-[#F0FDFA]"
+                  className="rounded-md px-2 py-1 text-[13px] font-medium text-brand hover:bg-brand-soft"
                 >
                   Desmarcar todas
                 </button>
@@ -1222,7 +1224,7 @@ export function EnrichReview() {
                 const todasMarcadas =
                   marcaveis.length > 0 && marcaveis.every((i) => selected.has(i));
                 return (
-                  <section key={grupo} className="border-t border-[#F3F4F6] pt-2">
+                  <section key={grupo} className="border-t border-surface-hover pt-2">
                     <div className="flex flex-wrap items-center gap-2 pb-1">
                       {comMarcacaoEmMassa && (
                         <input
@@ -1240,10 +1242,10 @@ export function EnrichReview() {
                               return next;
                             })
                           }
-                          className="h-4 w-4 shrink-0 accent-[#0F766E]"
+                          className="h-4 w-4 shrink-0 accent-brand"
                         />
                       )}
-                      <h3 className="text-[14px] font-medium text-[#111827]">
+                      <h3 className="text-[14px] font-medium text-ink">
                         {comMarcacaoEmMassa
                           ? textoDoGrupoDobrado(propostas)
                           : tituloDoGrupo(grupo, propostas.length)}
@@ -1260,7 +1262,7 @@ export function EnrichReview() {
                               return next;
                             })
                           }
-                          className="rounded-md px-2 py-1 text-[13px] font-medium text-[#0F766E] hover:bg-[#F0FDFA]"
+                          className="rounded-md px-2 py-1 text-[13px] font-medium text-brand hover:bg-brand-soft"
                         >
                           {aberto ? "fechar" : "abrir para ver"}
                         </button>
@@ -1272,12 +1274,12 @@ export function EnrichReview() {
                       no grupo, e não em cada linha: repetida, vira ruído.
                     */}
                     {grupo === "conflitos" && (
-                      <p className="pb-1 text-[13px] leading-relaxed text-[#5B6472]">
+                      <p className="pb-1 text-[13px] leading-relaxed text-ink-quaternary">
                         {EXPLICACAO_DA_CONFIANCA_DO_SOM}
                       </p>
                     )}
                     {aberto && (
-                      <ul className="divide-y divide-[#F3F4F6]">
+                      <ul className="divide-y divide-surface-hover">
                         {propostas.map((p) => (
                           <Linha
                             key={`${p.song_id}-${proposals.indexOf(p)}`}
@@ -1298,8 +1300,8 @@ export function EnrichReview() {
               letra e quanto tempo isso leva nesta máquina.
             */}
             {perguntaDoFim && (
-              <div className="mt-3 shrink-0 rounded-md bg-[#F0FDFA] px-4 py-3">
-                <p className="text-[14px] leading-relaxed text-[#115E59]">
+              <div className="mt-3 shrink-0 rounded-md bg-brand-soft px-4 py-3">
+                <p className="text-[14px] leading-relaxed text-brand-strong">
                   {transcricao.disponivel
                     ? textoDaOfertaDeTranscricao(
                         semLetraNoFim.length,
@@ -1317,7 +1319,7 @@ export function EnrichReview() {
                       type="button"
                       disabled={busy}
                       onClick={() => void startTranscricao()}
-                      className="rounded-md bg-[#0F766E] px-3 py-1.5 text-[14px] font-medium text-white hover:bg-[#115E59] disabled:bg-[#9CA3AF]"
+                      className="rounded-md bg-brand-fill px-3 py-1.5 text-[14px] font-medium text-white hover:bg-brand-fill-hover disabled:bg-disabled"
                     >
                       {ROTULO_COMECAR_TRANSCRICAO}
                     </button>
@@ -1325,7 +1327,7 @@ export function EnrichReview() {
                   <button
                     type="button"
                     onClick={dispensarTranscricao}
-                    className="rounded-md px-3 py-1.5 text-[14px] font-medium text-[#115E59] hover:bg-[#CCFBF1]"
+                    className="rounded-md px-3 py-1.5 text-[14px] font-medium text-brand-strong hover:bg-brand-soft-hover"
                   >
                     Agora não
                   </button>
@@ -1340,7 +1342,7 @@ export function EnrichReview() {
                 "Marcar todas" e nada acontecera.
               */}
               {selected.size === 0 && (
-                <p className="mr-auto text-[13px] text-[#5B6472]">
+                <p className="mr-auto text-[13px] text-ink-quaternary">
                   {ofertas.length === 0
                     ? "Não há nada a aplicar nesta lista."
                     : "Marque ao menos uma linha para aplicar."}
@@ -1353,8 +1355,8 @@ export function EnrichReview() {
                 onClick={() => void handleApply()}
                 className={`rounded-md px-4 py-2 text-[15px] font-medium text-white ${
                   busy || selected.size === 0
-                    ? "bg-[#9CA3AF]"
-                    : "bg-[#0F766E] hover:bg-[#115E59]"
+                    ? "bg-disabled"
+                    : "bg-brand-fill hover:bg-brand-fill-hover"
                 }`}
               >
                 Aplicar selecionadas ({selected.size})

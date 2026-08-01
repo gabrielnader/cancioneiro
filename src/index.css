@@ -2,6 +2,222 @@
 
 @theme {
   --font-sans: "Inter", system-ui, sans-serif;
+
+  /*
+    TEMA CLARO/ESCURO (V11) — tokens de cor.
+
+    Cada `--color-*` daqui vira, de graça, um jogo inteiro de utilitários
+    Tailwind (`bg-brand`, `text-brand`, `border-brand`, `accent-brand`,
+    `divide-brand`, ring-brand`, ...). Os valores abaixo são os do tema
+    CLARO — os mesmos hex que já estavam espalhados pelos componentes antes
+    desta versão (nenhum deles mudou). O tema escuro é definido só com
+    overrides de `:root[data-theme]` mais abaixo: a maior parte do app nunca
+    precisou saber que o tema existe, porque a cor final sempre veio de uma
+    variável CSS.
+
+    Por que tantos tokens quase iguais (ink/ink-secondary/ink-tertiary/
+    ink-quaternary, warning/warning-soft/warning-soft-alt...): o app JÁ tinha
+    vários cinzas e âmbares levemente diferentes para o mesmo papel (herança
+    de quem escreveu cada tela em momentos diferentes). Unificá-los agora
+    mudaria pixel do tema claro — proibido pelo pedido — então cada tom
+    ganhou o seu próprio token, fiel ao hex de origem.
+  */
+
+  /* Neutros: fundo, fundo secundário, texto, texto secundário, borda. */
+  --color-canvas: #f9fafb; /* fundo do app (body, colunas) */
+  --color-surface: #ffffff; /* fundo secundário: cards, listas, diálogos */
+  --color-surface-hover: #f3f4f6; /* hover neutro (linhas, menus, botões) */
+  --color-border: #e5e7eb; /* borda/divisor sutil */
+  --color-border-strong: #d1d5db; /* borda de campo de formulário */
+  --color-ink: #111827; /* texto primário */
+  --color-ink-secondary: #374151; /* texto de corpo/rótulo */
+  --color-ink-tertiary: #6b7280; /* texto de apoio (contadores, metadados) */
+  --color-ink-quaternary: #5b6472; /* texto de apoio MAIS discreto (12px auditado em AA — SongRow) */
+  --color-disabled: #9ca3af; /* texto/placeholder apagado e fundo de botão desabilitado */
+
+  /*
+    Acento (marca): "ink" muda com o tema (precisa ler bem em cima do fundo
+    que for), "fill" NÃO muda — é a cor do botão sólido, e ela já passa em
+    AA com texto branco nos dois fundos, então o CTA fica igual sempre
+    (identidade da marca > variação de tema).
+
+    `brand-fill-hover` também absorve duas variações que já existiam no
+    código (`#0d675f` e `#0D5F58`) para o mesmo hover de botão sólido —
+    diferença de 1 dígito de hex, invisível a olho nu, sobra de cópia entre
+    telas escritas em momentos diferentes. Convergir para o valor mais usado
+    (`#115E59`, 21 ocorrências) não é "inventar cor nova", é parar de ter
+    três hovers que ninguém escolheu ter.
+  */
+  --color-brand: #0f766e;
+  --color-brand-strong: #115e59; /* texto/selo sobre fundo brand-soft */
+  --color-brand-soft: #f0fdfa;
+  --color-brand-soft-hover: #ccfbf1;
+  --color-brand-ring: #99f6e4; /* anel do aviso de atualização */
+  --color-brand-fill: #0f766e; /* fundo de botão sólido — constante nos dois temas */
+  --color-brand-fill-hover: #115e59; /* idem, hover */
+
+  /* Perigo: mesma lógica do acento (ink varia, fill não). */
+  --color-danger: #b91c1c;
+  --color-danger-strong: #991b1b;
+  --color-danger-soft: #fee2e2;
+  --color-danger-fill: #b91c1c;
+  --color-danger-fill-hover: #991b1b;
+
+  /* Aviso (âmbar). */
+  --color-warning: #854d0e;
+  --color-warning-strong: #92400e; /* banner de pasta sumida / toast */
+  --color-warning-soft: #fef3c7;
+  --color-warning-soft-alt: #fef9c3; /* selo de confiança MÉDIA */
+  --color-warning-accent: #fde68a; /* hover dos botões do banner de pasta sumida */
+
+  /* Sucesso (verde). */
+  --color-success: #166534;
+  --color-success-soft: #dcfce7;
+  --color-success-strong: #065f46; /* toast de sucesso (verde ligeiramente diferente, idem) */
+  --color-success-soft-alt: #d1fae5;
+
+  /*
+    Destaque de busca (`<mark>`): propositalmente CONSTANTE nos dois temas.
+    É um grifo — como um marca-texto físico, ele não muda de cor com a luz
+    do ambiente — e o par já passa em AA nele mesmo, isolado do resto da
+    tela, então não há "fundo do tema escuro" para conferir aqui.
+  */
+  --color-mark: #fde68a;
+  --color-mark-ink: #78350f;
+}
+
+/*
+  Fallback só-CSS para o tema Automático: enquanto o JavaScript ainda não
+  rodou (primeiro paint), o navegador já aplica o escuro certo se o SO pedir
+  — é a segunda camada contra a piscada, além do script síncrono do
+  `main.tsx`. As regras `[data-theme]` abaixo, mais específicas, vencem esta
+  assim que o JS decide (claro forçado, escuro forçado ou automático já
+  resolvido).
+*/
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-canvas: #0f172a;
+    --color-surface: #1e293b;
+    --color-surface-hover: #29374b;
+    --color-border: #334155;
+    --color-border-strong: #475569;
+    --color-ink: #f1f5f9;
+    --color-ink-secondary: #cbd5e1;
+    --color-ink-tertiary: #a3b0c2;
+    --color-ink-quaternary: #c7d0dc;
+    --color-disabled: #64748b;
+
+    --color-brand: #2dd4bf;
+    --color-brand-strong: #5eead4;
+    --color-brand-soft: #0b3b36;
+    --color-brand-soft-hover: #114a43;
+    --color-brand-ring: #0f766e;
+
+    --color-danger: #f87171;
+    --color-danger-strong: #fca5a5;
+    --color-danger-soft: #3b0d0d;
+
+    --color-warning: #fbbf24;
+    --color-warning-strong: #f59e0b;
+    --color-warning-soft: #3a2a0e;
+    --color-warning-soft-alt: #332b0a;
+    --color-warning-accent: #3a260d;
+
+    --color-success: #4ade80;
+    --color-success-soft: #0f2a1b;
+    --color-success-strong: #34d399;
+    --color-success-soft-alt: #122b1d;
+  }
+}
+
+/* Tema Claro forçado (sobrepõe até o SO escuro — DECISIONS). */
+:root[data-theme="light"] {
+  --color-canvas: #f9fafb;
+  --color-surface: #ffffff;
+  --color-surface-hover: #f3f4f6;
+  --color-border: #e5e7eb;
+  --color-border-strong: #d1d5db;
+  --color-ink: #111827;
+  --color-ink-secondary: #374151;
+  --color-ink-tertiary: #6b7280;
+  --color-ink-quaternary: #5b6472;
+  --color-disabled: #9ca3af;
+
+  --color-brand: #0f766e;
+  --color-brand-strong: #115e59;
+  --color-brand-soft: #f0fdfa;
+  --color-brand-soft-hover: #ccfbf1;
+  --color-brand-ring: #99f6e4;
+
+  --color-danger: #b91c1c;
+  --color-danger-strong: #991b1b;
+  --color-danger-soft: #fee2e2;
+
+  --color-warning: #854d0e;
+  --color-warning-strong: #92400e;
+  --color-warning-soft: #fef3c7;
+  --color-warning-soft-alt: #fef9c3;
+  --color-warning-accent: #fde68a;
+
+  --color-success: #166534;
+  --color-success-soft: #dcfce7;
+  --color-success-strong: #065f46;
+  --color-success-soft-alt: #d1fae5;
+}
+
+/*
+  Tema Escuro forçado.
+
+  NÃO é o claro invertido — nem matematicamente, nem por papel. Dois
+  cuidados que valem a pena registrar:
+
+  1. Cinza de texto: no claro, `ink-quaternary` (#5B6472) é mais ESCURO que
+     `ink-tertiary` (#6B7280) — é o par mais contrastado, escolhido a dedo
+     para o texto de 12px do nome de arquivo (ver SongRow). No escuro, mais
+     contraste contra um fundo ESCURO significa mais CLARO, não mais escuro
+     — então a ordem se inverte (`ink-quaternary` fica mais claro que
+     `ink-tertiary`), do jeito que preserva qual dos dois "puxa mais" o
+     olho, e não o valor literal.
+
+  2. Acento/perigo "ink" vs "fill": os tons de TEXTO (brand/brand-strong,
+     danger/danger-strong) precisam clarear para continuar legíveis num
+     fundo escuro — mas os fundos de BOTÃO SÓLIDO (brand-fill, danger-fill)
+     ficam com o MESMO hex do claro, porque já passam em AA com texto branco
+     nos dois fundos: mudá-los por mudar seria a "inversão ingênua" que o
+     pedido pediu para evitar.
+*/
+:root[data-theme="dark"] {
+  --color-canvas: #0f172a;
+  --color-surface: #1e293b;
+  --color-surface-hover: #29374b;
+  --color-border: #334155;
+  --color-border-strong: #475569;
+  --color-ink: #f1f5f9;
+  --color-ink-secondary: #cbd5e1;
+  --color-ink-tertiary: #a3b0c2;
+  --color-ink-quaternary: #c7d0dc;
+  --color-disabled: #64748b;
+
+  --color-brand: #2dd4bf;
+  --color-brand-strong: #5eead4;
+  --color-brand-soft: #0b3b36;
+  --color-brand-soft-hover: #114a43;
+  --color-brand-ring: #0f766e;
+
+  --color-danger: #f87171;
+  --color-danger-strong: #fca5a5;
+  --color-danger-soft: #3b0d0d;
+
+  --color-warning: #fbbf24;
+  --color-warning-strong: #f59e0b;
+  --color-warning-soft: #3a2a0e;
+  --color-warning-soft-alt: #332b0a;
+  --color-warning-accent: #3a260d;
+
+  --color-success: #4ade80;
+  --color-success-soft: #0f2a1b;
+  --color-success-strong: #34d399;
+  --color-success-soft-alt: #122b1d;
 }
 
 :root {
@@ -23,6 +239,21 @@
     painel aberto e fechado, a 1280 e a 1024 (o minWidth do tauri.conf).
   */
   --faixa-detalhes: 12rem;
+
+  /*
+    Barra do player (PlayerBar): PROPOSITALMENTE constante nos dois temas.
+    Ela já era uma barra escura sobre um app claro antes desta versão — não
+    é "o fundo do app", é a cor própria do componente, como a capa de um
+    rádio. Trocar de tema não deveria apagar esse desenho nem (pior) fazer a
+    barra ficar clara no tema escuro.
+  */
+  --playerbar-bg: #111827;
+  --playerbar-fg: #f9fafb;
+  --playerbar-fg-muted: #9ca3af;
+  --playerbar-surface: #374151;
+  --playerbar-accent: #14b8a6;
+  --playerbar-button-bg: #ffffff;
+  --playerbar-button-fg: #111827;
 }
 
 html,
@@ -34,7 +265,7 @@ body,
 body {
   font-family: var(--font-sans);
   font-size: 15px;
-  color: #111827;
-  background-color: #f9fafb;
+  color: var(--color-ink);
+  background-color: var(--color-canvas);
   overflow: hidden;
 }

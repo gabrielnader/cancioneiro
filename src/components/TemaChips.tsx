@@ -128,7 +128,7 @@ export function TemaChips({ temas, expansivel = false }: TemaChipsProps) {
           data-testid="tema-chip"
           aria-label={`Tema: ${tema}`}
           title={`Buscar pelo tema "${tema}"`}
-          className="max-w-32 shrink-0 truncate rounded-full bg-[#F0FDFA] px-2 py-0.5 text-[12px] text-[#0F766E] hover:bg-[#ccfbf1]"
+          className="max-w-32 shrink-0 truncate rounded-full bg-brand-soft px-2 py-0.5 text-[12px] text-brand hover:bg-brand-soft-hover"
           onClick={(e) => {
             e.stopPropagation();
             setQuery(tema);
@@ -148,7 +148,7 @@ export function TemaChips({ temas, expansivel = false }: TemaChipsProps) {
             title={dicaDeMaisTemasNaFicha(escondidos)}
             // cinza e não verde-água: o "+N" não é um tema, e pintá-lo como os
             // chips faria a pessoa procurar uma música com o tema "+9"
-            className="shrink-0 rounded-full bg-[#F3F4F6] px-2 py-0.5 text-[12px] text-[#5B6472] hover:bg-[#E5E7EB]"
+            className="shrink-0 rounded-full bg-surface-hover px-2 py-0.5 text-[12px] text-ink-quaternary hover:bg-border"
             onClick={(e) => {
               e.stopPropagation();
               setExpandido(true);
@@ -161,7 +161,7 @@ export function TemaChips({ temas, expansivel = false }: TemaChipsProps) {
           <span
             data-testid="tema-mais"
             title={dicaDeMaisTemasNaLista(escondidos)}
-            className="shrink-0 rounded-full bg-[#F3F4F6] px-2 py-0.5 text-[12px] text-[#5B6472]"
+            className="shrink-0 rounded-full bg-surface-hover px-2 py-0.5 text-[12px] text-ink-quaternary"
           >
             {rotuloDeMaisTemas(escondidos)}
           </span>
@@ -175,7 +175,7 @@ export function TemaChips({ temas, expansivel = false }: TemaChipsProps) {
         <button
           type="button"
           data-testid="tema-menos"
-          className="shrink-0 rounded-full px-2 py-0.5 text-[12px] text-[#5B6472] underline hover:bg-[#F3F4F6]"
+          className="shrink-0 rounded-full px-2 py-0.5 text-[12px] text-ink-quaternary underline hover:bg-surface-hover"
           onClick={(e) => {
             e.stopPropagation();
             setExpandido(false);

@@ -28,6 +28,7 @@ import {
   type EstadoDaContagem,
 } from "../lib/curadoria";
 import { buildFolderTree, isUnderFolder } from "../lib/folderTree";
+import type { ThemePref } from "../lib/theme";
 import { getAppVersion } from "../lib/updater";
 import { useDownloadStore } from "../stores/downloadStore";
 import { useEnrichStore } from "../stores/enrichStore";
@@ -51,6 +52,8 @@ export function SettingsView() {
   const [confirmingFolderId, setConfirmingFolderId] = useState<number | null>(null);
   const checkUpdatesOnStart = useUiStore((s) => s.checkUpdatesOnStart);
   const setCheckUpdatesOnStart = useUiStore((s) => s.setCheckUpdatesOnStart);
+  const theme = useUiStore((s) => s.theme);
+  const setTheme = useUiStore((s) => s.setTheme);
   const [appVersion, setAppVersion] = useState<string | null>(null);
 
   // Versão vinda do próprio app (nunca uma string no código) — null no modo
@@ -81,32 +84,32 @@ export function SettingsView() {
   }
 
   return (
-    <div className="flex h-full min-w-0 flex-1 flex-col overflow-y-auto bg-[#F9FAFB] p-6">
+    <div className="flex h-full min-w-0 flex-1 flex-col overflow-y-auto bg-canvas p-6">
       {/*
         A faixa do botão flutuante (App.tsx) é reservada SÓ na linha do
         título, não na página inteira (DECISIONS #76).
       */}
-      <h1 className="pr-[var(--faixa-detalhes)] text-[22px] font-semibold text-[#111827]">
+      <h1 className="pr-[var(--faixa-detalhes)] text-[22px] font-semibold text-ink">
         Configurações
       </h1>
 
       <section className="mt-6">
-        <h2 className="text-[15px] font-medium text-[#111827]">
+        <h2 className="text-[15px] font-medium text-ink">
           Pastas de música
         </h2>
         {folders.length === 0 ? (
-          <p className="mt-2 text-[#6B7280]">Nenhuma pasta adicionada.</p>
+          <p className="mt-2 text-ink-tertiary">Nenhuma pasta adicionada.</p>
         ) : (
-          <ul className="mt-2 divide-y divide-[#E5E7EB] rounded-md border border-[#E5E7EB] bg-white">
+          <ul className="mt-2 divide-y divide-border rounded-md border border-border bg-surface">
             {folders.map((f) => (
               <li
                 key={f.id}
                 className="flex items-center justify-between gap-4 px-4 py-2.5"
               >
-                <span className="min-w-0 truncate text-[#111827]">{f.path}</span>
+                <span className="min-w-0 truncate text-ink">{f.path}</span>
                 <button
                   type="button"
-                  className="shrink-0 rounded px-2 py-1 text-[14px] font-medium text-[#B91C1C] hover:bg-[#FEE2E2]"
+                  className="shrink-0 rounded px-2 py-1 text-[14px] font-medium text-danger hover:bg-danger-soft"
                   onClick={() => setConfirmingFolderId(f.id)}
                 >
                   Remover
@@ -120,7 +123,7 @@ export function SettingsView() {
           <button
             type="button"
             disabled={scanning !== null}
-            className="rounded-md border border-[#0F766E] bg-transparent px-4 py-2 text-[15px] font-medium text-[#0F766E] hover:bg-[#F0FDFA] disabled:opacity-50"
+            className="rounded-md border border-brand bg-transparent px-4 py-2 text-[15px] font-medium text-brand hover:bg-brand-soft disabled:opacity-50"
             onClick={() => void handleRescan()}
           >
             Reindexar tudo
@@ -128,12 +131,12 @@ export function SettingsView() {
         </div>
         {scanning && (
           <div className="mt-4 max-w-md">
-            <p className="mb-1 text-[13px] text-[#6B7280]">
+            <p className="mb-1 text-[13px] text-ink-tertiary">
               Indexando… {scanning.done} de {scanning.total} arquivos
             </p>
-            <div className="h-1.5 w-full overflow-hidden rounded bg-[#E5E7EB]">
+            <div className="h-1.5 w-full overflow-hidden rounded bg-border">
               <div
-                className="h-full bg-[#0F766E] transition-[width]"
+                className="h-full bg-brand transition-[width]"
                 style={{
                   width:
                     scanning.total > 0
@@ -149,19 +152,19 @@ export function SettingsView() {
       <CuradoriaSection />
 
       <section className="mt-8">
-        <h2 className="text-[15px] font-medium text-[#111827]">Atualizações</h2>
+        <h2 className="text-[15px] font-medium text-ink">Atualizações</h2>
         <label className="mt-2 flex max-w-md items-start gap-3">
           <input
             type="checkbox"
-            className="mt-1 h-4 w-4 accent-[#0F766E]"
+            className="mt-1 h-4 w-4 accent-brand"
             checked={checkUpdatesOnStart}
             onChange={(e) => setCheckUpdatesOnStart(e.target.checked)}
           />
           <span>
-            <span className="text-[#111827]">
+            <span className="text-ink">
               Verificar atualizações ao abrir
             </span>
-            <span className="mt-0.5 block text-[13px] text-[#6B7280]">
+            <span className="mt-0.5 block text-[13px] text-ink-tertiary">
               Consulta apenas se existe uma versão nova. Nada do seu acervo sai
               do computador. Desligado, o Cancioneiro não acessa a internet ao
               abrir.
@@ -169,10 +172,45 @@ export function SettingsView() {
           </span>
         </label>
         {appVersion && (
-          <p className="mt-4 text-[13px] text-[#6B7280]">
+          <p className="mt-4 text-[13px] text-ink-tertiary">
             Versão instalada: {appVersion}
           </p>
         )}
+      </section>
+
+      <section className="mt-8">
+        <h2 className="text-[15px] font-medium text-ink">Aparência</h2>
+        <p className="mt-2 max-w-md text-[13px] text-ink-tertiary">
+          Automático segue o tema claro/escuro do sistema operacional.
+        </p>
+        <div
+          role="radiogroup"
+          aria-label="Tema"
+          className="mt-3 inline-flex rounded-md border border-border-strong p-0.5"
+        >
+          {(
+            [
+              ["light", "Claro"],
+              ["dark", "Escuro"],
+              ["auto", "Automático"],
+            ] as [ThemePref, string][]
+          ).map(([valor, rotulo]) => (
+            <button
+              key={valor}
+              type="button"
+              role="radio"
+              aria-checked={theme === valor}
+              onClick={() => setTheme(valor)}
+              className={`rounded px-3 py-1.5 text-[14px] font-medium ${
+                theme === valor
+                  ? "bg-brand-fill text-white"
+                  : "text-ink-secondary hover:bg-surface-hover"
+              }`}
+            >
+              {rotulo}
+            </button>
+          ))}
+        </div>
       </section>
 
       <ConfirmDialog
@@ -414,12 +452,12 @@ function CuradoriaSection() {
     <section className="mt-8 max-w-2xl" aria-labelledby="curadoria-titulo">
       <h2
         id="curadoria-titulo"
-        className="text-[15px] font-medium text-[#111827]"
+        className="text-[15px] font-medium text-ink"
       >
         Curadoria do acervo
       </h2>
 
-      <p className="mt-2 text-[14px] leading-relaxed text-[#374151]">
+      <p className="mt-2 text-[14px] leading-relaxed text-ink-secondary">
         Procura o que falta nas músicas de uma pasta — título, artista e letra.{" "}
         <strong className="font-medium">
           Nada é gravado sem você conferir
@@ -427,7 +465,7 @@ function CuradoriaSection() {
         e marcar o que quer aplicar.
       </p>
 
-      <ol className="mt-2 list-decimal space-y-0.5 pl-6 text-[14px] text-[#374151]">
+      <ol className="mt-2 list-decimal space-y-0.5 pl-6 text-[14px] text-ink-secondary">
         {etapas.map((etapa) => (
           <li key={etapa.nome}>
             <span className="font-medium">{etapa.nome}</span>
@@ -441,7 +479,7 @@ function CuradoriaSection() {
         varredura. Custa minutos por música, e a pergunta é feita no fim,
         quando o app já sabe quantas sobraram sem letra.
       */}
-      <p className="mt-2 text-[13px] leading-relaxed text-[#5B6472]">
+      <p className="mt-2 text-[13px] leading-relaxed text-ink-quaternary">
         {TRANSCRICAO_NO_FIM} Roda em segundo plano: dá para continuar ouvindo
         música, e interromper quando quiser.
       </p>
@@ -451,7 +489,7 @@ function CuradoriaSection() {
       <div className="mt-4 max-w-md">
         <label
           htmlFor="curadoria-pasta"
-          className="mb-1 block text-[13px] font-medium text-[#374151]"
+          className="mb-1 block text-[13px] font-medium text-ink-secondary"
         >
           Pasta a curar
         </label>
@@ -459,7 +497,7 @@ function CuradoriaSection() {
           id="curadoria-pasta"
           value={pasta}
           onChange={(e) => setEscolhida(e.target.value)}
-          className="w-full rounded-md border border-[#D1D5DB] bg-white px-3 py-2 text-[15px] text-[#111827] outline-none focus:border-[#0F766E]"
+          className="w-full rounded-md border border-border-strong bg-surface px-3 py-2 text-[15px] text-ink outline-none focus:border-brand"
         >
           {opcoes.map((o) => (
             <option key={o.path || "__tudo__"} value={o.path}>
@@ -471,7 +509,7 @@ function CuradoriaSection() {
         </select>
       </div>
 
-      <p className="mt-2 text-[13px] text-[#5B6472]">
+      <p className="mt-2 text-[13px] text-ink-quaternary">
         {estimativaTexto({ contagem, musicasNaPasta })}
       </p>
 
@@ -492,12 +530,12 @@ function CuradoriaSection() {
               download: downloadParaTranscrever(acessorios),
             })
           }
-          className="rounded-md bg-[#0F766E] px-4 py-2 text-[15px] font-medium text-white hover:bg-[#115E59] disabled:cursor-not-allowed disabled:bg-[#9CA3AF]"
+          className="rounded-md bg-brand-fill px-4 py-2 text-[15px] font-medium text-white hover:bg-brand-fill-hover disabled:cursor-not-allowed disabled:bg-disabled"
         >
           {ROTULO_DO_DISPARO}
         </button>
         {motivo && (
-          <p id="curadoria-motivo" className="mt-1 text-[13px] text-[#5B6472]">
+          <p id="curadoria-motivo" className="mt-1 text-[13px] text-ink-quaternary">
             {motivo}
           </p>
         )}
@@ -509,19 +547,19 @@ function CuradoriaSection() {
         pessoa achar o indicador da lateral.
       */}
       {varrendo && (
-        <div className="mt-4 rounded-md bg-[#F0FDFA] px-4 py-3">
-          <p className="text-[14px] font-medium text-[#115E59]">
+        <div className="mt-4 rounded-md bg-brand-soft px-4 py-3">
+          <p className="text-[14px] font-medium text-brand-strong">
             {progress
               ? `Buscando dados… ${progress.done} de ${progress.total}`
               : "Buscando dados…"}
           </p>
           {progress?.etapa && (
-            <p className="mt-0.5 text-[13px] text-[#115E59]">{progress.etapa}</p>
+            <p className="mt-0.5 text-[13px] text-brand-strong">{progress.etapa}</p>
           )}
           <button
             type="button"
             onClick={openOverlay}
-            className="mt-2 rounded-md border border-[#0F766E] px-3 py-1.5 text-[14px] font-medium text-[#0F766E] hover:bg-[#CCFBF1]"
+            className="mt-2 rounded-md border border-brand px-3 py-1.5 text-[14px] font-medium text-brand hover:bg-brand-soft-hover"
           >
             Acompanhar a busca
           </button>
@@ -529,8 +567,8 @@ function CuradoriaSection() {
       )}
       {/* V10 — a etapa 5 leva HORAS: ela precisa do mesmo caminho de volta */}
       {transcrevendo && (
-        <div className="mt-4 rounded-md bg-[#F0FDFA] px-4 py-3">
-          <p className="text-[14px] font-medium text-[#115E59]">
+        <div className="mt-4 rounded-md bg-brand-soft px-4 py-3">
+          <p className="text-[14px] font-medium text-brand-strong">
             {transcricaoProgress
               ? textoDoProgressoDaTranscricao(
                   transcricaoProgress.done,
@@ -541,15 +579,15 @@ function CuradoriaSection() {
           <button
             type="button"
             onClick={openOverlay}
-            className="mt-2 rounded-md border border-[#0F766E] px-3 py-1.5 text-[14px] font-medium text-[#0F766E] hover:bg-[#CCFBF1]"
+            className="mt-2 rounded-md border border-brand px-3 py-1.5 text-[14px] font-medium text-brand hover:bg-brand-soft-hover"
           >
             Acompanhar a escrita
           </button>
         </div>
       )}
       {status === "review" && (
-        <div className="mt-4 rounded-md bg-[#F0FDFA] px-4 py-3">
-          <p className="text-[14px] font-medium text-[#115E59]">
+        <div className="mt-4 rounded-md bg-brand-soft px-4 py-3">
+          <p className="text-[14px] font-medium text-brand-strong">
             {propostas === 1
               ? "1 proposta esperando a sua conferência."
               : `${propostas} propostas esperando a sua conferência.`}
@@ -557,7 +595,7 @@ function CuradoriaSection() {
           <button
             type="button"
             onClick={openOverlay}
-            className="mt-2 rounded-md border border-[#0F766E] px-3 py-1.5 text-[14px] font-medium text-[#0F766E] hover:bg-[#CCFBF1]"
+            className="mt-2 rounded-md border border-brand px-3 py-1.5 text-[14px] font-medium text-brand hover:bg-brand-soft-hover"
           >
             Abrir a revisão
           </button>
@@ -578,11 +616,11 @@ function CuradoriaSection() {
         de qual escopo o número fala.
       */}
       {pendentes != null && (
-        <div className="mt-6 border-t border-[#E5E7EB] pt-4">
-          <h3 className="text-[14px] font-medium text-[#111827]">
+        <div className="mt-6 border-t border-border pt-4">
+          <h3 className="text-[14px] font-medium text-ink">
             Escrever a letra ouvindo o áudio
           </h3>
-          <p className="mt-1 text-[14px] leading-relaxed text-[#374151]">
+          <p className="mt-1 text-[14px] leading-relaxed text-ink-secondary">
             {textoDoBlocoDeTranscricao({
               quantas: pendentes.musicas.length,
               segundos: pendentes.segundos_estimados,
@@ -603,7 +641,7 @@ function CuradoriaSection() {
               disabled={bloqueado}
               aria-describedby={motivo ? "curadoria-motivo" : undefined}
               onClick={() => void startTranscricao(pendentes.musicas)}
-              className="mt-2 rounded-md bg-[#0F766E] px-4 py-2 text-[15px] font-medium text-white hover:bg-[#115E59] disabled:cursor-not-allowed disabled:bg-[#9CA3AF]"
+              className="mt-2 rounded-md bg-brand-fill px-4 py-2 text-[15px] font-medium text-white hover:bg-brand-fill-hover disabled:cursor-not-allowed disabled:bg-disabled"
             >
               {ROTULO_COMECAR_TRANSCRICAO}
             </button>
@@ -642,10 +680,10 @@ function Acessorios({
       {/* enquanto a pergunta não volta nada é afirmado: nem que existe, nem
           que não existe, nem que está pronto (DECISIONS #86) */}
       {lista === null && (
-        <p className="text-[13px] text-[#5B6472]">{ACESSORIO_INDETERMINADO}</p>
+        <p className="text-[13px] text-ink-quaternary">{ACESSORIO_INDETERMINADO}</p>
       )}
       {lista?.length === 0 && (
-        <p className="text-[13px] text-[#5B6472]">{ACESSORIO_SEM_BINARIO}</p>
+        <p className="text-[13px] text-ink-quaternary">{ACESSORIO_SEM_BINARIO}</p>
       )}
       {(lista ?? []).map((info) => (
         <CartaoDoAcessorio key={info.nome} info={info} lista={lista} />
@@ -703,35 +741,35 @@ function CartaoDoAcessorio({
   return (
     <section
       aria-labelledby={tituloId}
-      className="rounded-md border border-[#E5E7EB] bg-[#FFFFFF] p-4"
+      className="rounded-md border border-border bg-surface p-4"
     >
       {/* o "para que serve" vem PRONTO do backend, em pt-BR: quem cura não
           sabe (e não precisa saber) o que é "impressão digital acústica" */}
-      <h3 id={tituloId} className="text-[14px] font-medium text-[#111827]">
+      <h3 id={tituloId} className="text-[14px] font-medium text-ink">
         {tituloDoAcessorio(info)}
       </h3>
 
       {estado === "indisponivel" && (
-        <p className="mt-1 text-[13px] text-[#5B6472]">{ACESSORIO_INDISPONIVEL}</p>
+        <p className="mt-1 text-[13px] text-ink-quaternary">{ACESSORIO_INDISPONIVEL}</p>
       )}
 
       {estado === "pronto" && (
-        <p className="mt-1 text-[13px] text-[#115E59]">{ACESSORIO_PRONTO}</p>
+        <p className="mt-1 text-[13px] text-brand-strong">{ACESSORIO_PRONTO}</p>
       )}
 
       {estado === "corrompido" && (
-        <p className="mt-1 text-[13px] text-[#854D0E]">{ACESSORIO_CORROMPIDO}</p>
+        <p className="mt-1 text-[13px] text-warning">{ACESSORIO_CORROMPIDO}</p>
       )}
 
       {podeBaixar && (
         <>
-          <p className="mt-1 text-[13px] leading-relaxed text-[#374151]">
+          <p className="mt-1 text-[13px] leading-relaxed text-ink-secondary">
             {textoDoAcessorioAusente(info)}
           </p>
           {/* a origem à vista: é o que permite a alguém conferir de onde veio */}
-          <p className="mt-1 text-[13px] leading-relaxed text-[#5B6472]">
+          <p className="mt-1 text-[13px] leading-relaxed text-ink-quaternary">
             Vem de{" "}
-            <span className="select-text break-all text-[#0F766E]">
+            <span className="select-text break-all text-brand">
               {info.origem}
             </span>
           </p>
@@ -739,7 +777,7 @@ function CartaoDoAcessorio({
             <button
               type="button"
               onClick={() => void baixar(info.nome)}
-              className="mt-2 rounded-md border border-[#0F766E] px-3 py-1.5 text-[14px] font-medium text-[#0F766E] hover:bg-[#F0FDFA]"
+              className="mt-2 rounded-md border border-brand px-3 py-1.5 text-[14px] font-medium text-brand hover:bg-brand-soft"
             >
               {rotuloBaixarAcessorio(info, estado === "corrompido")}
             </button>
@@ -749,7 +787,7 @@ function CartaoDoAcessorio({
 
       {baixando !== null && (
         <div className="mt-2">
-          <p className="text-[13px] text-[#374151]">
+          <p className="text-[13px] text-ink-secondary">
             {textoDoDownload(
               baixando.baixados,
               totalConfiavel(baixando),
@@ -770,10 +808,10 @@ function CartaoDoAcessorio({
               aria-valuemax={baixando.total!}
               aria-valuenow={baixando.baixados}
               aria-valuetext={`${formatarTamanho(baixando.baixados)} de ${formatarTamanho(baixando.total!)}`}
-              className="mt-1 h-1.5 w-full overflow-hidden rounded bg-[#E5E7EB]"
+              className="mt-1 h-1.5 w-full overflow-hidden rounded bg-border"
             >
               <div
-                className="h-full bg-[#0F766E] transition-[width]"
+                className="h-full bg-brand transition-[width]"
                 style={{ width: `${(baixando.baixados / baixando.total!) * 100}%` }}
               />
             </div>
@@ -781,7 +819,7 @@ function CartaoDoAcessorio({
           <button
             type="button"
             onClick={() => parar(info.nome)}
-            className="mt-2 rounded-md px-3 py-1.5 text-[14px] font-medium text-[#374151] hover:bg-[#F3F4F6]"
+            className="mt-2 rounded-md px-3 py-1.5 text-[14px] font-medium text-ink-secondary hover:bg-surface-hover"
           >
             Parar
           </button>
@@ -789,7 +827,7 @@ function CartaoDoAcessorio({
       )}
 
       {mensagem !== null && baixando === null && (
-        <p className="mt-2 text-[13px] leading-relaxed text-[#854D0E]">
+        <p className="mt-2 text-[13px] leading-relaxed text-warning">
           {mensagem}
         </p>
       )}

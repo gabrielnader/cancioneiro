@@ -502,8 +502,8 @@ describe("SongList (F1 UI / F2 / F3)", () => {
       render(<SongList />);
       const info = selo("Doce Prelúdio", "Instrumental")!;
       const pendencia = selo("Brisa", "Sem letra")!;
-      expect(pendencia.className).toContain("bg-[#F3F4F6]");
-      expect(info.className).not.toContain("bg-[#F3F4F6]");
+      expect(pendencia.className).toContain("bg-surface-hover");
+      expect(info.className).not.toContain("bg-surface-hover");
     });
 
     it("o selo passa em AA (4.5:1) no fundo branco, no selecionado e no hover", () => {

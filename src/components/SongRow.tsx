@@ -31,10 +31,10 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
   const nomeArquivo = songFileName(song);
 
   const titleColor = !song.available
-    ? "text-[#9CA3AF]"
+    ? "text-disabled"
     : isCurrent
-      ? "text-[#0F766E]"
-      : "text-[#111827]";
+      ? "text-brand"
+      : "text-ink";
 
   return (
     <div
@@ -53,14 +53,14 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
         if (song.available) onPlay();
       }}
       className={`group relative flex min-h-9 cursor-default select-none flex-col justify-center px-4 py-1.5 ${
-        selected || isCurrent ? "bg-[#F0FDFA]" : "hover:bg-[#F3F4F6]"
+        selected || isCurrent ? "bg-brand-soft" : "hover:bg-surface-hover"
       }`}
     >
       <div className="flex items-center gap-2">
         {isPlaying && (
           <span
             aria-hidden="true"
-            className="text-[#0F766E] motion-safe:animate-pulse"
+            className="text-brand motion-safe:animate-pulse"
           >
             ♪
           </span>
@@ -70,7 +70,7 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
           {song.title}
         </span>
         {song.artist && (
-          <span className="max-w-40 truncate text-[13px] text-[#6B7280]">
+          <span className="max-w-40 truncate text-[13px] text-ink-tertiary">
             {song.artist}
           </span>
         )}
@@ -80,16 +80,17 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
           sempre) vem "Instrumental": contorno leve, sem preenchimento, porque
           é INFORMAÇÃO e não tarefa. Instrumental COM letra registrada é caso
           previsto pelo PRD e continua mostrando o selo — a letra aparece
-          normalmente no painel. #5B6472 é o cinza já auditado da linha: passa
-          em AA (4.5:1) nos três fundos — branco, selecionado e hover.
+          normalmente no painel. `ink-quaternary` é o cinza já auditado da
+          linha: passa em AA (4.5:1) nos três fundos — branco, selecionado e
+          hover (e no escuro também, ver index.css).
         */}
         {song.instrumental ? (
-          <span className="shrink-0 rounded border border-[#D1D5DB] px-1.5 py-0.5 text-[12px] text-[#5B6472]">
+          <span className="shrink-0 rounded border border-border-strong px-1.5 py-0.5 text-[12px] text-ink-quaternary">
             Instrumental
           </span>
         ) : (
           !song.has_lyrics && (
-            <span className="shrink-0 rounded bg-[#F3F4F6] px-1.5 py-0.5 text-[12px] text-[#6B7280]">
+            <span className="shrink-0 rounded bg-surface-hover px-1.5 py-0.5 text-[12px] text-ink-tertiary">
               Sem letra
             </span>
           )
@@ -116,7 +117,7 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
               type="button"
               aria-label="Adicionar à playlist"
               title="Adicionar à playlist"
-              className={`h-6 w-6 rounded text-[#374151] hover:bg-[#E5E7EB] group-hover:block ${
+              className={`h-6 w-6 rounded text-ink-secondary hover:bg-border group-hover:block ${
                 // além do hover (PRD), fica visível na linha selecionada —
                 // sem isso não há como adicionar via toque ou teclado
                 selected || menuPos ? "block" : "hidden"
@@ -141,20 +142,21 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
         <p
           data-testid="song-filename"
           title={nomeArquivo}
-          // #5B6472 e não o cinza-claro de antes: em 12px o texto precisa
+          // `ink-quaternary` e não `ink-tertiary`: em 12px o texto precisa
           // passar em AA (4.5:1) nos TRÊS fundos da linha — branco (5.98:1),
-          // selecionado #F0FDFA (5.74:1) e hover #F3F4F6 (5.44:1). Ainda muito
-          // mais claro que o título (#111827, 17.74:1): o olho cai nele primeiro.
-          className="truncate text-[12px] leading-4 text-[#5B6472]"
+          // selecionado (5.74:1) e hover (5.44:1) — e nos três equivalentes do
+          // tema escuro (ver index.css). Ainda muito mais claro que o título
+          // (`ink`, 17.74:1 no claro): o olho cai nele primeiro.
+          className="truncate text-[12px] leading-4 text-ink-quaternary"
         >
           {nomeArquivo}
         </p>
       )}
       {snippet && (
-        <p className="mt-0.5 truncate text-[13px] text-[#6B7280]">
+        <p className="mt-0.5 truncate text-[13px] text-ink-tertiary">
           {parseSnippet(snippet).map((seg, i) =>
             seg.highlighted ? (
-              <mark key={i} className="rounded-sm bg-[#FDE68A] px-0.5 text-[#78350F]">
+              <mark key={i} className="rounded-sm bg-mark px-0.5 text-mark-ink">
                 {seg.text}
               </mark>
             ) : (
@@ -175,18 +177,18 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
               }}
             />
             <div
-              className="fixed z-50 w-56 rounded border border-[#E5E7EB] bg-white py-1 shadow-lg"
+              className="fixed z-50 w-56 rounded border border-border bg-surface py-1 shadow-lg"
               style={{ top: menuPos.top, left: Math.max(8, menuPos.left) }}
               onClick={(e) => e.stopPropagation()}
             >
-              <p className="px-3 py-1 text-[12px] uppercase text-[#6B7280]">
+              <p className="px-3 py-1 text-[12px] uppercase text-ink-tertiary">
                 Adicionar à playlist
               </p>
               {playlists.map((p) => (
                 <button
                   key={p.id}
                   type="button"
-                  className="block w-full px-3 py-1.5 text-left text-[#374151] hover:bg-[#F3F4F6]"
+                  className="block w-full px-3 py-1.5 text-left text-ink-secondary hover:bg-surface-hover"
                   onClick={() => {
                     setMenuPos(null);
                     void addToPlaylist(p.id, song.id);

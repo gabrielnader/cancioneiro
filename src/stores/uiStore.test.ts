@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { createUiStore, FONT_SIZES_PX } from "./uiStore";
 
 describe("uiStore (F3 — persistência de painel e fonte)", () => {
@@ -33,6 +33,46 @@ describe("uiStore (F3 — persistência de painel e fonte)", () => {
     await Promise.resolve();
     expect(reopened.getState().lyricsPanelVisible).toBe(false);
     expect(reopened.getState().fontLevel).toBe(2);
+  });
+});
+
+// V11 — tema claro/escuro/automático, pedido pelos beta testers. Guardado no
+// MESMO store das outras preferências (é o pedido explícito: "no mesmo lugar
+// onde as outras preferências já são guardadas").
+describe("uiStore — tema (V11)", () => {
+  afterEach(() => {
+    delete document.documentElement.dataset.theme;
+  });
+
+  it("padrão é automático (segue o sistema)", () => {
+    expect(createUiStore().getState().theme).toBe("auto");
+  });
+
+  it("setTheme troca o estado e aplica no <html> via data-theme", () => {
+    const store = createUiStore();
+    store.getState().setTheme("dark");
+    expect(store.getState().theme).toBe("dark");
+    expect(document.documentElement.dataset.theme).toBe("dark");
+
+    store.getState().setTheme("light");
+    expect(store.getState().theme).toBe("light");
+    expect(document.documentElement.dataset.theme).toBe("light");
+  });
+
+  it("a escolha persiste entre 'sessões' (novo store lê o localStorage)", async () => {
+    const store = createUiStore();
+    store.getState().setTheme("dark");
+
+    const reaberto = createUiStore();
+    await Promise.resolve();
+    expect(reaberto.getState().theme).toBe("dark");
+  });
+
+  it("está na mesma chave de localStorage das outras preferências", () => {
+    const store = createUiStore();
+    store.getState().setTheme("dark");
+    const salvo = JSON.parse(localStorage.getItem("cancioneiro-ui") ?? "{}");
+    expect(salvo.state.theme).toBe("dark");
   });
 });
 
