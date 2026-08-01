@@ -1,6 +1,6 @@
 # REPORT — Cancioneiro
 
-## Estado em 0.10.6 — o que o produto é, e o que ele custou aprender
+## Estado em 0.10.7 — o que o produto é, e o que ele custou aprender
 
 O Cancioneiro é um player de MP3 **offline** (Tauri 2 + Rust + React, SQLite com
 FTS5) que existe para resolver um problema só: **achar uma música pelo pedaço de
@@ -55,16 +55,16 @@ que *esta máquina* faz, não o que o produto sabe fazer.
 
 ### As suítes
 
-| suíte | 0.6.0 (início da janela) | 0.10.6 |
+| suíte | 0.6.0 (início da janela) | 0.10.7 |
 |---|---|---|
-| cargo test | 106 | **463** |
+| cargo test | 106 | **467** |
 | pytest | 557 | **754** |
-| vitest | 369 | **1166** |
-| Playwright E2E | 22 | **51** |
-| total | 1054 | **2434** |
+| vitest | 369 | **1193** |
+| Playwright E2E | 22 | **54** |
+| total | 1054 | **2468** |
 
 `tsc` limpo, `cargo check` sem avisos, **0 warnings**. As decisões de projeto —
-**171** hoje, contra 30 ao fim da V1 — estão em
+**181** hoje, contra 30 ao fim da V1 — estão em
 [`DECISIONS.md`](./DECISIONS.md), cada uma com o motivo e, quando existe, o
 número que a sustenta.
 
@@ -216,6 +216,34 @@ ao ponto do funil que depende dela.
    que o Rust corrigiu (uma música chamada "Diversos" valeria vazio), e ficou de
    fora por escopo — ele é ferramenta de terminal do dono do produto e não vai
    para as 40 máquinas, mas o dano é o mesmo dentro do arquivo dele.
+
+---
+
+> **Atualização V10.11 (0.10.7):** a primeira versão feita a partir de relato de
+> **beta testers de verdade** — dois, no Windows, os primeiros humanos a usar o
+> produto fora do dono. O Windows funcionou: era o maior risco em aberto da
+> janela inteira, e nenhuma suíte podia respondê-lo.
+>
+> **Limite de 10 temas: recusado.** Os testadores pediram; o dono disse não. Tema
+> é o vocabulário da própria pessoa, e limite rígido bate em alguém no pior
+> momento sem ninguém para explicar. O problema era de layout e ficou no layout:
+> **3 chips antes do "+N"**, número que saiu de medição e não de gosto — 240 px de
+> coluna útil no painel mais estreito, dividido pela mediana de 74 px dos temas do
+> acervo real. Com folga de um: até 4 temas nada dobra, porque o "+1" tem quase a
+> largura de um chip e cobraria um clique por nada.
+>
+> **Enter no campo de tema salva a ficha inteira.** O relato: a pessoa digita um
+> tema e sai usando o app, e perde o que digitou. A alternativa óbvia — "Enter
+> salva só o tema" — foi recusada: meia tela salvando sozinha é pior que nenhuma
+> (corrige o título, digita um tema, aperta Enter, fecha: tema salvo, título
+> perdido). Enter chama o mesmo `handleSave` do botão, inteiro.
+>
+> **O botão de transcrever voltou a aparecer em música que já tem letra**,
+> revertendo a #167 com um caso concreto de campo: um testador abriu uma música
+> cuja letra terminava em `[MÚSICA]` — letra de transcrição, imperfeita — e queria
+> refazê-la. **O caso em que mais se quer transcrever de novo é justamente aquele
+> em que já existe letra ruim.** A proteção nunca esteve em esconder o botão: está
+> no `apply`, que recusa substituir letra sem consentimento (#79).
 
 ---
 
