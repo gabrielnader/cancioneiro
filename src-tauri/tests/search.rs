@@ -462,6 +462,206 @@ fn last_token_is_prefix_matched_for_typeahead() {
     assert_eq!(results.len(), 1);
 }
 
+// ===========================================================================
+// V13 — a busca que perdoa a letra escrita por máquina (a UNIÃO)
+// ===========================================================================
+//
+// Boa parte das letras do acervo foi escrita por máquina, ouvindo o áudio, e
+// tem erro. A busca até aqui exigia TODAS as palavras EXATAS (só a última
+// aceitava prefixo), então `dormir` não achava `dormi` — uma letra.
+//
+// O que entrou é a UNIÃO: tudo que a busca de hoje acha, MAIS o que o
+// casamento por SEQUÊNCIA achar na letra. Ver DECISIONS #188–#192.
+// ---------------------------------------------------------------------------
+
+/// O caso que abriu a rodada, e o primeiro teste escrito: uma letra
+/// transcrita diz `dormi` onde a pessoa lembra `dormir`. Uma letra de
+/// diferença — e o FTS5, que casa token inteiro (com prefixo só no último),
+/// não tem como achar: `"dormir"*` casa `dormirei`, nunca `dormi`.
+#[test]
+fn dormir_encontra_a_letra_que_diz_dormi() {
+    let conn = conn_with_songs(&[
+        ("Noite Longa", None, Some("eu nao consigo dormi de tanto pensar em voce")),
+        ("Outra", None, Some("nada aqui tem a ver com o assunto")),
+    ]);
+
+    let results = search::search(&conn, "dormir", 50).unwrap();
+    assert_eq!(results.len(), 1, "a letra com o erro de máquina tem de aparecer");
+    assert_eq!(results[0].song.title, "Noite Longa");
+
+    // o trecho continua vindo destacado — a palavra apontada é a que a
+    // máquina escreveu, e não a que a pessoa digitou
+    let snippet = results[0].snippet.as_deref().expect("trecho destacado");
+    assert!(
+        snippet.contains(&format!("{HIGHLIGHT_START}dormi{HIGHLIGHT_END}")),
+        "o trecho tem de destacar a palavra que ESTÁ na letra: {snippet:?}"
+    );
+}
+
+/// **A união não é troca: o que a busca de hoje acha continua achado.**
+///
+/// Medido em 721 trechos de cinco palavras: 5 deles são achados pela busca de
+/// hoje e NÃO seriam pelo casamento por sequência — a transcrição destruiu o
+/// verso, as palavras sobreviveram espalhadas, e a busca de hoje se safa por
+/// não exigir ORDEM. Perder caso que já funciona não se negocia (DECISIONS
+/// #189).
+///
+/// O primeiro par é o da medição (`na minha casa se eu`); os outros quatro
+/// são da MESMA família — verso desmontado, palavras espalhadas — e existem
+/// para a regra ficar guardada por mais de um exemplo.
+#[test]
+fn a_uniao_preserva_os_trechos_que_so_a_busca_de_hoje_acha() {
+    // (trecho lembrado, letra transcrita com o verso desmontado)
+    let casos: &[(&str, &str)] = &[
+        (
+            "na minha casa se eu",
+            "se eu quiser dancar\nposso ficar aqui\nminha vida na casa dos outros\neu nao sei",
+        ),
+        (
+            "eu vou embora hoje cedo",
+            "hoje eu acordei bem cedo\ne resolvi que vou seguir\nembora tudo esteja estranho",
+        ),
+        (
+            "quando o sol nascer amanha",
+            "amanha talvez o dia venha\ne quando nascer de novo\no sol vai me encontrar",
+        ),
+        (
+            "meu amor nao vai morrer",
+            "morrer de amor nao e pra mim\nvai que meu coracao aguenta",
+        ),
+        (
+            "a gente se ve depois",
+            "depois de tudo que passou\nse a gente ainda quiser\nve se me liga",
+        ),
+    ];
+
+    for (trecho, letra) in casos {
+        // a metade tolerante REPROVA este par — é isto que a união salva
+        assert!(
+            search::casamento_por_sequencia(trecho, letra).is_none(),
+            "o par {trecho:?} deixou de ser um caso de união: a sequência agora o acha"
+        );
+
+        // e a busca inteira acha, porque a metade exata continua lá
+        let conn = conn_with_songs(&[("Alvo", None, Some(letra))]);
+        let results = search::search(&conn, trecho, 50).unwrap();
+        assert_eq!(results.len(), 1, "trecho {trecho:?} se perdeu");
+        assert_eq!(results[0].song.title, "Alvo");
+    }
+}
+
+/// A nota é a fração casada da MELHOR janela de `n` palavras, e o limiar é
+/// 0,60 — medido. Abaixo dele o resultado não entra: 79% de acerto com 68
+/// resultados por busca é pior que não achar (DECISIONS #188).
+#[test]
+fn a_nota_e_a_fracao_da_melhor_janela_e_o_limiar_e_60_por_cento() {
+    // 5 de 5 — a janela inteira
+    let c = search::casamento_por_sequencia("na beira do mar sagrado", "na beira do mar sagrado")
+        .expect("igual casa");
+    assert!((c.nota - 1.0).abs() < 1e-9);
+
+    // 4 de 5 (0,80): uma palavra trocada no meio
+    let c = search::casamento_por_sequencia(
+        "na beira do mar sagrado",
+        "eu vi na beira do rio sagrado hoje",
+    )
+    .expect("4 de 5 entra");
+    assert!((c.nota - 0.8).abs() < 1e-9, "nota {}", c.nota);
+
+    // 3 de 5 (0,60) — o limiar é INCLUSIVO
+    assert!(
+        search::casamento_por_sequencia("na beira do mar sagrado", "na beira do rio bonito")
+            .is_some(),
+        "3 de 5 é exatamente 0,60 e entra"
+    );
+
+    // 2 de 5 (0,40) — fica de fora
+    assert!(
+        search::casamento_por_sequencia("na beira do mar sagrado", "na beira de um rio bonito")
+            .is_none()
+    );
+
+    // texto MENOR que a consulta não vira nota alta por acidente: o
+    // denominador continua sendo o tamanho da consulta
+    assert!(search::casamento_por_sequencia("na beira do mar sagrado", "na beira").is_none());
+}
+
+/// **O perdão de uma edição só vale a partir de 4 letras.** Em palavra curta
+/// uma letra já é outra palavra: `sol` e `sal` não são a mesma coisa lembrada
+/// errado, são duas coisas.
+#[test]
+fn uma_edicao_so_perdoa_palavra_de_quatro_letras_ou_mais() {
+    // 6 letras: `dormir` acha `dormi` (remoção)
+    assert!(search::casamento_por_sequencia("dormir", "dormi").is_some());
+    // 6 letras: troca no meio
+    assert!(search::casamento_por_sequencia("cantar", "contar").is_some());
+    // 4 letras: inserção
+    assert!(search::casamento_por_sequencia("casa", "causa").is_some());
+    // 3 letras: NÃO
+    assert!(search::casamento_por_sequencia("sol", "sal").is_none());
+    assert!(search::casamento_por_sequencia("meu", "seu").is_none());
+    // duas edições nunca passam, por mais longa que seja a palavra
+    assert!(search::casamento_por_sequencia("saudade", "saudede").is_some());
+    assert!(search::casamento_por_sequencia("saudade", "soudede").is_none());
+}
+
+/// O prefixo continua valendo em TODAS as posições da janela (a busca roda
+/// enquanto se digita), e acento/caixa saem antes da comparação — a mesma
+/// normalização do FTS.
+#[test]
+fn a_sequencia_aceita_prefixo_em_qualquer_posicao_e_ignora_acento() {
+    let c = search::casamento_por_sequencia("cora bat forte", "meu CORAÇÃO BATE forte demais")
+        .expect("prefixo em qualquer posição");
+    assert!((c.nota - 1.0).abs() < 1e-9);
+}
+
+/// **O que a busca de hoje acha vem PRIMEIRO.** Casamento exato é mais
+/// confiável que casamento perdoado, e as duas notas não viram um número só.
+#[test]
+fn o_exato_vem_antes_do_tolerante() {
+    let conn = conn_with_songs(&[
+        // a máquina escreveu "dormi": só o tolerante acha
+        ("Perdoada", None, Some("eu nao consigo dormi de tanto pensar")),
+        // esta diz "dormir" com todas as letras: a busca de hoje acha
+        ("Exata", None, Some("nao vou dormir enquanto o galo nao cantar")),
+    ]);
+
+    let results = search::search(&conn, "dormir", 50).unwrap();
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].song.title, "Exata", "o exato vem primeiro");
+    assert_eq!(results[1].song.title, "Perdoada");
+}
+
+/// A biblioteca inteira continua vindo com o campo vazio, e a metade
+/// tolerante não inventa resultado onde não há nada parecido.
+#[test]
+fn a_tolerancia_nao_alarga_o_campo_vazio_nem_inventa_resultado() {
+    let conn = conn_with_songs(&[
+        ("Zebra", None, Some("qualquer letra")),
+        ("Amanhecer", None, Some("outra letra")),
+    ]);
+    assert_eq!(search::search(&conn, "", 50).unwrap().len(), 2);
+    assert_eq!(search::search(&conn, "   ", 50).unwrap().len(), 2);
+
+    // nada parecido: nem exato nem tolerante
+    assert!(search::search(&conn, "helicoptero submarino", 50).unwrap().is_empty());
+}
+
+/// Match só em título/artista/tema/pasta/arquivo continua SEM trecho — a
+/// metade tolerante olha só a LETRA, e por isso não muda essa regra.
+#[test]
+fn a_tolerancia_olha_so_a_letra_e_nao_inventa_trecho_para_titulo() {
+    let conn = conn_with_songs(&[("Aurora Boreal", Some("Trio Norte"), Some("letra sem o termo"))]);
+    // A música É candidata (o "aurora" bate no título), e mesmo assim
+    // "aurora borel" não a traz: a metade tolerante pontua a LETRA, e o
+    // título é etiqueta escrita por gente — não é onde a máquina erra.
+    assert!(search::search(&conn, "aurora borel", 50).unwrap().is_empty());
+    // e o match de título continua sem trecho destacado
+    let results = search::search(&conn, "aurora", 50).unwrap();
+    assert_eq!(results.len(), 1);
+    assert!(results[0].snippet.is_none());
+}
+
 // ---------------------------------------------------------------------------
 // Acceptance: 2.000 músicas sintéticas, busca < 100ms.
 // ---------------------------------------------------------------------------
@@ -530,6 +730,107 @@ fn search_over_2000_songs_under_100ms() {
         "busca comum levou {}ms (limite 100ms)",
         elapsed.as_millis()
     );
+}
+
+// ---------------------------------------------------------------------------
+// V13 — O ACERVO DO DONO: 8.000 músicas COM LETRA, e a busca roda enquanto se
+// digita. Percorrer a letra inteira das 8.000 a cada tecla é inviável; o que
+// segura o tempo é o FTS5 escolher os candidatos (índice) e o Rust pontuar a
+// sequência só neles, com TETO (`search::CANDIDATOS`).
+//
+// Este teste é a régua que impede o teto de crescer sem que alguém meça: os
+// números medidos estão na DECISIONS #192. Ele mede consultas de 3, 5 e 8
+// palavras — inclusive a PIOR delas, a de palavras comuns, que é a que enche
+// a lista de candidatos.
+// ---------------------------------------------------------------------------
+#[test]
+fn busca_em_8000_musicas_com_letra_responde_enquanto_se_digita() {
+    let conn = db::open_in_memory().unwrap();
+    conn.execute("INSERT INTO folders (path) VALUES ('/f')", [])
+        .unwrap();
+
+    // vocabulário de canção brasileira — o que enche uma letra de verdade
+    let words = [
+        "amor", "esperança", "coração", "alegria", "caminho", "estrada", "luz", "sombra",
+        "noite", "dia", "sol", "lua", "estrela", "vento", "chuva", "flor", "campo", "mar",
+        "rio", "montanha", "canto", "voz", "silêncio", "paz", "vida", "sonho", "tempo",
+        "memória", "saudade", "partida",
+    ];
+    let tx = conn.unchecked_transaction().unwrap();
+    for i in 0..8000 {
+        // ~240 palavras por letra: o porte de uma canção inteira
+        let mut lyrics = String::with_capacity(1600);
+        for line in 0..40 {
+            for w in 0..6 {
+                lyrics.push_str(words[(i * 7 + line * 3 + w * 11) % words.len()]);
+                lyrics.push(' ');
+            }
+            lyrics.push('\n');
+        }
+        // UMA música guarda o trecho procurado — com o erro de máquina no
+        // meio ("beira" virou "beirra", "sagrado" virou "sagrada")
+        if i == 4321 {
+            lyrics.push_str("\nna beirra do mar sagrada eu vi o barco velho passar devagar\n");
+        }
+        tx.execute(
+            "INSERT INTO songs (file_path, folder_id, title, artist, lyrics, has_lyrics, file_mtime, file_size)
+             VALUES (?1, 1, ?2, ?3, ?4, 1, 0, 0)",
+            params![
+                format!("/f/{i}.mp3"),
+                format!("Música {i}"),
+                format!("Artista {}", i % 40),
+                lyrics
+            ],
+        )
+        .unwrap();
+    }
+    tx.commit().unwrap();
+
+    // warm-up (a primeira query paga a compilação dos statements)
+    search::search(&conn, "amor", 200).unwrap();
+
+    // O produto roda em RELEASE, e lá o teto é o debounce da caixa de busca:
+    // 150 ms. `cargo test` roda em DEBUG, e nele o SQLite embutido é compilado
+    // sem otimização (o `cc` usa o opt-level do perfil) — as mesmas buscas
+    // custam de 3 a 4 vezes mais. Os dois números medidos estão na DECISIONS
+    // #192; a régua aqui é a de cada perfil, e não uma média que não descreve
+    // nenhum dos dois.
+    let limite = if cfg!(debug_assertions) { 500 } else { 150 };
+    let cronometrar = |consulta: &str| {
+        let start = std::time::Instant::now();
+        let results = search::search(&conn, consulta, 200).unwrap();
+        let ms = start.elapsed().as_millis();
+        println!("  {ms:>4}ms  {:>3} resultados  {consulta:?}", results.len());
+        assert!(
+            ms < limite,
+            "busca {consulta:?} levou {ms}ms (limite {limite}ms — o botão a girar é o \
+             teto de candidatos, nunca o limiar nem a tolerância)"
+        );
+        results
+    };
+
+    println!("\n=== busca em 8.000 músicas com letra ===");
+    // 3, 5 e 8 palavras como a pessoa LEMBRA — a letra guardada tem os erros
+    // ("beirra", "sagrada"), e só o casamento por sequência as acha
+    for consulta in [
+        "na beira do",
+        "na beira do mar sagrado",
+        "na beira do mar sagrado eu vi o",
+    ] {
+        let r = cronometrar(consulta);
+        assert!(
+            r.iter().any(|r| r.song.title == "Música 4321"),
+            "o trecho {consulta:?} tem de achar a letra com o erro de máquina"
+        );
+    }
+
+    // as PIORES: palavras comuns, que casam em quase todo o acervo
+    cronometrar("amor e saudade");
+    cronometrar("amor e saudade na estrada");
+    cronometrar("amor e saudade na estrada de casa com sol");
+    // e a de uma letra só, que é o primeiro instante de quem está digitando
+    cronometrar("a");
+    println!();
 }
 
 // ---------------------------------------------------------------------------

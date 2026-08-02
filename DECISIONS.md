@@ -2609,3 +2609,161 @@ opção mais simples que passa nos Acceptance Checks do PRD.
     contagem de nós na tela não cresce com o tamanho do acervo — medido
     `buildFolderTree` em 8.000 músicas/200 pastas (~21ms, memoizado), sem
     necessidade de virtualizar a lateral.
+
+## V13 — a busca que perdoa a letra escrita por máquina
+
+188. **A medição que decidiu o desenho, e as duas coisas que ela recusou.**
+    O produto existe para uma coisa: achar uma música pelo pedaço de letra que
+    alguém lembra. Boa parte das letras do acervo foi **escrita por máquina,
+    ouvindo o áudio** (#122, #129), e tem erro — e a busca exigia TODAS as
+    palavras EXATAS, com prefixo só na última (#16). `dormir` não achava
+    `dormi`. Uma letra.
+    **721 trechos de cinco palavras** tirados de letras conferidas OUVINDO,
+    procurados dentro das transcrições de máquina das mesmas músicas:
+
+    | busca | acha | é o 1º | traz errada | resultados |
+    |---|---|---|---|---|
+    | a de hoje | 30% | 30% | — | — |
+    | tolerante por palavras soltas, 60% | 79% | 12% | 88% | **68** |
+    | tolerante por **sequência**, 60% | 54% | 52% | 20% | 1,1 |
+    | **as duas somadas** | **55%** | — | — | — |
+
+    **(a) Pontuar palavras soltas é armadilha.** Os 79% parecem o melhor
+    número da tabela até a coluna seguinte ser lida: **68 resultados por
+    busca**, com a música certa em primeiro em 12% das vezes. Uma lista de 68
+    linhas não é um resultado, é a biblioteca de volta — e 88% delas trazem
+    música errada junto. **O que alguém lembra é uma SEQUÊNCIA, e não um saco
+    de palavras**, e é por isso que a régua desliza uma janela em vez de contar
+    palavras espalhadas.
+    **(b) Somar, nunca trocar.** A sequência acha 54% contra os 30% de hoje —
+    mas **5 dos 721 trechos são achados hoje e NÃO seriam por ela** (a
+    transcrição destruiu o verso, as palavras sobreviveram espalhadas, e a
+    busca de hoje se safa justamente por não exigir ordem). Trocar uma pela
+    outra seria comprar 24 pontos e pagar com cinco casos que já funcionavam.
+    Perder caso que já funciona não se negocia — a mesma régua da #148a, agora
+    sobre a busca.
+
+189. **A busca devolve a UNIÃO, e o risco de regressão é zero POR
+    CONSTRUÇÃO.**
+    Primeiro tudo que a busca de hoje acha — a mesma função, o mesmo SQL, o
+    mesmo `snippet()` do FTS5 —, depois o que o casamento por sequência achar.
+    Não é a busca antiga "com um afrouxamento": ela não foi tocada. Um limiar
+    afrouxado teria de ser reconferido contra os 721 trechos toda vez que
+    alguém mexesse nele; uma união não tem o que reconferir, porque a metade
+    velha continua respondendo o que respondia.
+    Os cinco trechos da #188(b) estão guardados como TESTE
+    (`a_uniao_preserva_os_trechos_que_so_a_busca_de_hoje_acha`), e o teste diz
+    as duas coisas: que `casamento_por_sequencia` REPROVA aquele par, e que a
+    busca inteira acha assim mesmo. Se algum dia a tolerância passar a achá-lo,
+    o teste avisa — não para proibir, mas para a mudança ser vista.
+
+190. **A régua da metade tolerante, exatamente como foi medida.**
+    Normaliza como o índice já faz (minúsculas, sem acento, só alfanumérico);
+    `n` = número de palavras da consulta; desliza uma janela de `n` palavras
+    pela letra; cada posição casa se for **igual**, **prefixo** (a busca roda
+    enquanto se digita) ou **uma edição** de distância; a nota é a fração
+    casada da MELHOR janela, e entra a partir de **0,60**.
+    **A edição só perdoa palavra de 4 letras para cima**: em palavra curta uma
+    letra já é outra palavra — `sol`/`sal`, `meu`/`seu` não são a mesma coisa
+    lembrada errado, são duas coisas, e perdoá-las devolveria música errada com
+    cara de acerto.
+    **O denominador é sempre `n`**, mesmo quando a letra é menor que a
+    consulta: senão uma letra de duas palavras casaria "inteira" com uma busca
+    de cinco.
+    **O 0,60 é conta INTEIRA** (`n * 60 / 100`, arredondado para cima), e não
+    `0.6 * n` em ponto flutuante: `0,6 × 5` dá 3,0000000000000004 em binário, e
+    o trecho de cinco palavras com três casadas — que é exatamente o limiar —
+    seria recusado por um dígito que não existe em lugar nenhum da medição.
+
+191. **A metade tolerante pontua a LETRA, e só ela.**
+    A busca inteira continua cruzando título, artista, letra, temas, pastas e
+    nome de arquivo (#34, F12, V8). A tolerância olha só a letra por três
+    razões que puxam para o mesmo lado: os outros campos são **etiqueta escrita
+    por gente**, e não é lá que a máquina erra; a medição foi feita sobre
+    letra, e estender a régua a campo não medido é afirmar sem ter conferido
+    (#72); e o trecho destacado só existe para a letra (#18) — um resultado
+    tolerante de título seria uma linha na tela **sem nada que explicasse por
+    que ela veio**.
+    **Ordenação: o exato primeiro, o tolerante depois, por nota decrescente.**
+    As duas notas não viram um número só. Casamento exato é mais confiável que
+    casamento perdoado, e somá-los num "score" faria a nota de um empurrar o
+    outro sem que ninguém pudesse dizer por quê — a mesma razão da #63.
+    **O trecho destacado funciona nos dois casamentos**, e no tolerante ele
+    grifa **a palavra que ESTÁ na letra** (`dormi`), não a que foi digitada
+    (`dormir`): ver a diferença entre o que se lembrava e o que a máquina
+    gravou é metade do que a pessoa foi buscar ali. Ele é montado a partir das
+    posições da janela no texto ORIGINAL — mesma grafia, mesma pontuação,
+    mesmas 12 palavras do `snippet()` do FTS5, para ninguém adivinhar pela
+    largura da linha qual metade da busca achou.
+
+192. **O desempenho: quem escolhe os candidatos é o índice; o teto são 300, e
+    ele é medido.**
+    O acervo do dono tem **8.000 músicas** e a busca roda **enquanto se
+    digita**. Percorrer a letra inteira das 8.000 a cada tecla custa **358 ms**
+    (medido) — mais que o dobro do debounce de 150 ms da caixa, quer dizer: a
+    lista passa a responder à tecla anterior. Então o FTS5 escolhe os
+    candidatos (uma consulta com **OR** dos termos, que é índice e é barata) e
+    o Rust pontua a sequência **só neles**, com teto.
+    **Medido em release, 8.000 músicas COM letra (~240 palavras cada), a pior
+    busca do banco (oito palavras comuns):**
+
+    | teto de candidatos | pior busca |
+    |---|---|
+    | 100 | 61 ms |
+    | **300** | **62 ms** |
+    | 1000 | 89 ms |
+    | 3000 | 159 ms |
+    | sem teto (8.000) | 358 ms |
+
+    De 100 para 300 o custo **não se mede** — o gasto está na consulta ao
+    índice, não na pontuação —, então 300 é recall de graça; 3.000 já encosta
+    no debounce e 8.000 o estoura. O corte é por `rank` (bm25): o que sai da
+    lista é sempre o que tem MENOS palavras da consulta, e para o teto custar
+    um resultado a música certa precisaria ter menos termos em comum com o que
+    foi digitado do que 300 outras — e aí a nota dela dificilmente chegaria a
+    0,60. **Se a busca ficar lenta, o botão a girar é ESTE**, nunca o limiar
+    nem a tolerância.
+    **A busca inteira, antes e depois, no mesmo banco de 8.000:**
+
+    | consulta | antes | depois |
+    |---|---|---|
+    | 3 palavras ("na beira do") | 0 ms, **nada** | 0 ms, **acha** |
+    | 5 palavras | 0 ms, **nada** | 22 ms, **acha** |
+    | 8 palavras | 0 ms, **nada** | 27 ms, **acha** |
+    | 3 palavras comuns | 0 ms | 41 ms |
+    | 5 palavras comuns | 0 ms | 51 ms |
+    | 8 palavras comuns | 0 ms | 62 ms |
+    | uma letra só ("a", 200 resultados) | 18 ms | 19 ms |
+
+    Os zeros do "antes" não são velocidade: são a busca **não achando** — ela
+    devolve nada depressa. E o custo novo só aparece quando há o que pontuar:
+    consulta que já enche a tela de resultados exatos (o "a" acima) **não paga
+    nada**, porque a metade tolerante nem roda quando não há vaga.
+    Em DEBUG (que é como `cargo test` roda) as mesmas buscas custam de 3 a 4
+    vezes mais — o SQLite embutido é compilado sem otimização —, e é por isso
+    que o teste de escala tem uma régua por perfil (500 ms em debug, 150 ms em
+    release) em vez de uma média que não descreve nenhum dos dois.
+
+193. **O que NÃO se fez, e fica escrito.**
+    **(a) O índice não sabe procurar "uma letra diferente".** O FTS5 só
+    procura prefixo, então a consulta de candidatos pede cada palavra **também
+    sem a última letra** (`"dormi"*` junto de `"dormir"*`) — é o pedaço de
+    tolerância que cabe num índice de prefixo, e é onde a máquina mais erra: o
+    FIM da palavra (`dormir`/`dormi`, `falam`/`fala`, `casas`/`casa`). Sem
+    isso, o caso que abriu esta rodada não seria nem candidato. **O que fica de
+    fora é o erro no COMEÇO da palavra** (`cantar`/`contar`): numa busca de
+    várias palavras ele entra pelas outras; numa busca de uma palavra só, ele
+    se perde. Alargar mais o prefixo (três letras) traria "cor", "corpo" e
+    "correr" atrás de "coração" — candidato demais para achar de menos.
+    **(b) A tela não mudou um pixel.** Mesma caixa, mesma lista, mesmo
+    contador, mesmo `<mark>`. A pessoa não tem de aprender nada para ganhar
+    isto — o produto simplesmente passa a achar o que antes não achava.
+    **(c) Nenhum campo novo foi indexado e nenhuma migração aconteceu.** A
+    tolerância trabalha sobre a coluna de letra que já existia; um índice
+    próprio (trigramas, digamos) obrigaria a reindexar 8.000 músicas para
+    resolver o caso da alínea (a), que é o mais raro dos três.
+    **(d) O mock ganhou a MESMA régua** (`casamentoPorSequencia`), com a tabela
+    de contrato ao lado da do Rust — mock que discorda do backend certifica o
+    contrato errado (#88). A ÚNICA coisa que ele não reproduz é o teto de 300:
+    ele existe porque lá são 8.000 músicas em disco, e no mock são as poucas de
+    um teste, em memória.

@@ -359,6 +359,171 @@ function buildSnippet(lyrics: string, tokens: string[]): string | null {
   return snippet;
 }
 
+// ---------------------------------------------------------------------------
+// V13 — a metade TOLERANTE da busca (o par TypeScript de src-tauri/src/search.rs)
+//
+// Boa parte das letras do acervo foi escrita por máquina, ouvindo o áudio, e
+// tem erro: `dormir` não achava a letra que diz `dormi`. A busca passou a
+// devolver a UNIÃO — tudo que a busca exata acha, mais o que o casamento por
+// SEQUÊNCIA achar NA LETRA. As razões e os números estão na DECISIONS
+// #188–#192 e no cabeçalho do search.rs; aqui mora a mesma régua, porque mock
+// que discorda do backend certifica o contrato errado (DECISIONS #88).
+// ---------------------------------------------------------------------------
+
+/** Fração mínima da janela casada para um resultado tolerante entrar (medido). */
+export const NOTA_MINIMA_DA_SEQUENCIA = 0.6;
+/** De 4 letras para cima uma edição é perdão; abaixo disso é outra palavra. */
+const MENOR_PALAVRA_COM_PERDAO = 4;
+/** Palavras que o trecho destacado mostra — o mesmo 12 do snippet() do FTS5. */
+const PALAVRAS_DO_TRECHO = 12;
+
+interface PalavraDoTexto {
+  /** Chave normalizada (minúscula, sem acento, só alfanumérico). */
+  chave: string;
+  /** Onde a palavra começa e termina no texto ORIGINAL. */
+  inicio: number;
+  fim: number;
+}
+
+/**
+ * Quebra o texto em palavras normalizadas guardando a posição de cada uma —
+ * é isso que deixa o trecho destacado sair com a grafia e a pontuação de
+ * verdade. A marca combinante (`\p{M}`, o acento SOLTO da forma NFD) conta
+ * como parte da palavra: sem isso "coração" em NFD viraria "cora" e "cao".
+ */
+function palavrasComPosicao(texto: string): PalavraDoTexto[] {
+  const out: PalavraDoTexto[] = [];
+  for (const m of texto.matchAll(/[\p{L}\p{N}\p{M}]+/gu)) {
+    const chave = tokenize(m[0]).join("");
+    if (chave) out.push({ chave, inicio: m.index, fim: m.index + m[0].length });
+  }
+  return out;
+}
+
+/**
+ * Uma troca, uma inserção ou uma remoção separam as duas palavras? Não é uma
+ * distância de Levenshtein — é a pergunta "cabe em uma edição?", numa passada
+ * só, sem matriz.
+ */
+function ateUmaEdicao(a: string, b: string): boolean {
+  const [curta, longa] = a.length <= b.length ? [a, b] : [b, a];
+  if (longa.length - curta.length > 1) return false;
+  const mesmoTamanho = curta.length === longa.length;
+  let i = 0;
+  let j = 0;
+  let edicoes = 0;
+  while (i < curta.length && j < longa.length) {
+    if (curta[i] === longa[j]) {
+      i++;
+      j++;
+      continue;
+    }
+    edicoes++;
+    if (edicoes > 1) return false;
+    // tamanhos iguais: é troca, e as duas andam. Diferentes: só a longa anda.
+    if (mesmoTamanho) i++;
+    j++;
+  }
+  return edicoes + (longa.length - j) + (curta.length - i) <= 1;
+}
+
+/** Igual, prefixo (busca enquanto se digita) ou uma edição de distância. */
+function casaPalavra(digitada: string, naLetra: string): boolean {
+  if (!digitada) return false;
+  if (naLetra.startsWith(digitada)) return true;
+  return (
+    digitada.length >= MENOR_PALAVRA_COM_PERDAO && ateUmaEdicao(digitada, naLetra)
+  );
+}
+
+/**
+ * A melhor janela de `n` palavras (n = tamanho da consulta) dentro do texto, e
+ * a fração dela que casou. `null` quando nem a melhor chega ao limiar.
+ *
+ * O denominador é sempre `n`: texto menor que a consulta não vira nota cheia
+ * por ser menor.
+ */
+export function casamentoPorSequencia(
+  consulta: string,
+  texto: string,
+): { nota: number; primeiraPalavra: number } | null {
+  const alvo = tokenize(consulta);
+  const palavras = palavrasComPosicao(texto);
+  const n = alvo.length;
+  if (n === 0 || palavras.length === 0) return null;
+  // conta inteira: 0,6 × 5 em ponto flutuante daria 4, e três de cinco é
+  // exatamente o limiar e tem de entrar
+  const minimo = Math.ceil((n * 60) / 100);
+
+  let melhorCasaram = 0;
+  let melhorInicio = 0;
+  for (let inicio = 0; inicio <= Math.max(0, palavras.length - n); inicio++) {
+    let casaram = 0;
+    for (let k = 0; k < n; k++) {
+      if (casaram + (n - k) <= melhorCasaram) break;
+      const p = palavras[inicio + k];
+      if (p && casaPalavra(alvo[k], p.chave)) casaram++;
+    }
+    if (casaram > melhorCasaram) {
+      melhorCasaram = casaram;
+      melhorInicio = inicio;
+    }
+    if (melhorCasaram === n) break;
+  }
+  if (melhorCasaram < minimo) return null;
+  return { nota: melhorCasaram / n, primeiraPalavra: melhorInicio };
+}
+
+/**
+ * O trecho em volta da janela que casou. O destaque cai na palavra que ESTÁ
+ * NA LETRA — que é justamente a que a máquina escreveu errado, e ver a
+ * diferença é metade do que a pessoa foi buscar.
+ */
+function trechoDaJanela(letra: string, consulta: string, janela: number): string {
+  const alvo = tokenize(consulta);
+  const palavras = palavrasComPosicao(letra);
+  const fimDaJanela = Math.min(janela + alvo.length, palavras.length);
+  const sobra = Math.max(0, PALAVRAS_DO_TRECHO - (fimDaJanela - janela));
+  const comeco = Math.max(0, janela - Math.floor(sobra / 2));
+  const fim = Math.min(
+    palavras.length,
+    comeco + Math.max(PALAVRAS_DO_TRECHO, fimDaJanela - janela),
+  );
+
+  let trecho = comeco > 0 ? "…" : "";
+  for (let i = comeco; i < fim; i++) {
+    // o que havia ENTRE as duas palavras no texto original: o trecho é a
+    // letra, e não uma reescrita dela
+    if (i > comeco) trecho += letra.slice(palavras[i - 1].fim, palavras[i].inicio);
+    const palavra = letra.slice(palavras[i].inicio, palavras[i].fim);
+    const destacada =
+      i >= janela &&
+      i < fimDaJanela &&
+      casaPalavra(alvo[i - janela], palavras[i].chave);
+    trecho += destacada
+      ? `${HIGHLIGHT_START}${palavra}${HIGHLIGHT_END}`
+      : palavra;
+  }
+  if (fim < palavras.length) trecho += "…";
+  return trecho;
+}
+
+/**
+ * A música chega a ser CANDIDATA da metade tolerante?
+ *
+ * Espelha a consulta de candidatos do backend (`"tok"* OR "tok-sem-a-última"*`
+ * no FTS5): pontuar a sequência é caro, e no Rust quem escolhe quem vale a
+ * pena pontuar é o índice. A ÚNICA parte que este mock não reproduz é o TETO
+ * (`search::CANDIDATOS` = 300, cortado por `rank`): ele existe porque lá são
+ * 8.000 músicas em disco, e aqui são as poucas de um teste, em memória.
+ */
+function ehCandidataDaTolerancia(words: string[], tokens: string[]): boolean {
+  return tokens.some((t) => {
+    const raiz = t.length >= MENOR_PALAVRA_COM_PERDAO ? t.slice(0, -1) : t;
+    return words.some((w) => w.startsWith(t) || w.startsWith(raiz));
+  });
+}
+
 function toSong(record: SongRecord): Song {
   return {
     id: record.id,
@@ -2021,9 +2186,28 @@ export function createMockBackend(): MockBackend {
           .map((song) => ({ song: toSong(song), snippet: null }));
       }
 
+      // V13 — A UNIÃO, numa passada só. O que a busca EXATA acha vem primeiro
+      // (é casamento exato, mais confiável); o que o casamento por SEQUÊNCIA
+      // achar na LETRA vem depois, por nota decrescente. As duas ordens não
+      // viram um número só. A letra é o único campo pontuado pela tolerância:
+      // título, artista, tema e nome de arquivo são etiqueta escrita por
+      // gente, e não é lá que a máquina erra.
       const matched: Array<{ song: SongRecord; snippet: string | null; rank: number }> = [];
+      const tolerantes: Array<{ song: SongRecord; snippet: string; nota: number }> = [];
       for (const song of state.songs) {
-        if (!matchesAll(songWords(song), tokens)) continue;
+        const words = songWords(song);
+        if (!matchesAll(words, tokens)) {
+          // não é da busca exata: pode ainda ser da tolerante
+          if (!song.lyrics || !ehCandidataDaTolerancia(words, tokens)) continue;
+          const casamento = casamentoPorSequencia(query, song.lyrics);
+          if (!casamento) continue;
+          tolerantes.push({
+            song,
+            nota: casamento.nota,
+            snippet: trechoDaJanela(song.lyrics, query, casamento.primeiraPalavra),
+          });
+          continue;
+        }
 
         const titleArtistWords = tokenize(`${song.title} ${song.artist ?? ""}`);
         const titleArtistOnly = matchesAll(titleArtistWords, tokens);
@@ -2039,7 +2223,14 @@ export function createMockBackend(): MockBackend {
       matched.sort(
         (a, b) => a.rank - b.rank || a.song.title.localeCompare(b.song.title),
       );
-      return matched.map((m) => ({ song: toSong(m.song), snippet: m.snippet }));
+      tolerantes.sort(
+        (a, b) => b.nota - a.nota || a.song.title.localeCompare(b.song.title),
+      );
+
+      return [
+        ...matched.map((m) => ({ song: toSong(m.song), snippet: m.snippet })),
+        ...tolerantes.map((t) => ({ song: toSong(t.song), snippet: t.snippet })),
+      ];
     },
 
     async getLyrics(songId: number): Promise<string | null> {

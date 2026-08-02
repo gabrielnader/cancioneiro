@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { EnrichApply, EnrichProgress, EnrichProposal } from "./api";
 import {
   AVISO_SEM_CONFERENCIA,
+  casamentoPorSequencia,
   createMockBackend,
   installMockBackend,
   type MockBackend,
@@ -269,6 +270,68 @@ describe("mockBackend", () => {
       const results = await backend.search("estrela");
       expect(results).toHaveLength(1);
       expect(results[0].song.title).toBe("Coração Sertanejo");
+    });
+
+    // -----------------------------------------------------------------------
+    // V13 — a busca que perdoa a letra escrita por máquina (a UNIÃO).
+    // O par Rust destes testes é `dormir_encontra_a_letra_que_diz_dormi`,
+    // `o_exato_vem_antes_do_tolerante` e
+    // `a_uniao_preserva_os_trechos_que_so_a_busca_de_hoje_acha`
+    // (src-tauri/tests/search.rs). Ver DECISIONS #188–#192.
+    // -----------------------------------------------------------------------
+
+    /** Põe uma letra transcrita (com o erro de máquina) numa das fixtures. */
+    async function comLetra(titulo: string, letra: string) {
+      const songs = await backend.listSongs();
+      const alvo = songs.find((s) => s.title === "sem_tags")!;
+      await backend.writeTags(alvo.id, titulo, null, letra, null);
+    }
+
+    it("'dormir' encontra a letra que a máquina escreveu 'dormi'", async () => {
+      await comLetra("Noite Longa", "eu nao consigo dormi de tanto pensar em voce");
+
+      const results = await backend.search("dormir");
+      expect(results).toHaveLength(1);
+      expect(results[0].song.title).toBe("Noite Longa");
+      // o destaque cai na palavra que ESTÁ na letra, não na que foi digitada
+      expect(results[0].snippet).toContain(
+        `${HIGHLIGHT_START}dormi${HIGHLIGHT_END}`,
+      );
+    });
+
+    it("o que a busca exata acha vem antes do que a tolerante acha", async () => {
+      await comLetra("Perdoada", "eu nao consigo dormi de tanto pensar");
+      const songs = await backend.listSongs();
+      const outra = songs.find((s) => s.title === "Instrumental Sem Letra")!;
+      await backend.writeTags(
+        outra.id,
+        "Exata",
+        null,
+        "nao vou dormir enquanto o galo nao cantar",
+        null,
+      );
+
+      const results = await backend.search("dormir");
+      expect(results.map((r) => r.song.title)).toEqual(["Exata", "Perdoada"]);
+    });
+
+    it("a união preserva o trecho que só a busca exata acha", async () => {
+      // a transcrição destruiu o verso e espalhou as palavras: a sequência
+      // reprova, e é a metade exata que salva o caso (5 dos 721 medidos)
+      const letra =
+        "se eu quiser dancar\nposso ficar aqui\nminha vida na casa dos outros\neu nao sei";
+      await comLetra("Verso Desmontado", letra);
+      expect(casamentoPorSequencia("na minha casa se eu", letra)).toBeNull();
+
+      const results = await backend.search("na minha casa se eu");
+      expect(results.map((r) => r.song.title)).toEqual(["Verso Desmontado"]);
+    });
+
+    it("a tolerância pontua a LETRA, e não o título", async () => {
+      // "aurora" é candidata pelo título, e mesmo assim "aurora borel" não a
+      // traz: etiqueta é escrita por gente, não é lá que a máquina erra
+      await comLetra("Aurora Boreal", "letra sem o termo procurado");
+      expect(await backend.search("aurora borel")).toHaveLength(0);
     });
   });
 

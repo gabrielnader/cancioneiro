@@ -192,7 +192,12 @@ END;
 "#;
 
 /// Remove diacríticos latinos comuns (suficiente para ordenação pt-BR).
-fn strip_diacritic(c: char) -> char {
+/// `pub(crate)` por causa da busca tolerante (V13): ela normaliza a letra
+/// PALAVRA POR PALAVRA, dentro de um laço que roda centenas de milhares de
+/// vezes por tecla digitada, e chamar `fold_pt` (que devolve `String`) por
+/// caractere alocaria uma vez por letra da canção. A regra continua morando
+/// aqui, num lugar só — o que a `search` reusa é a MESMA tabela.
+pub(crate) fn strip_diacritic(c: char) -> char {
     match c {
         'á' | 'à' | 'â' | 'ã' | 'ä' | 'å' => 'a',
         'é' | 'è' | 'ê' | 'ë' => 'e',
@@ -214,7 +219,7 @@ fn strip_diacritic(c: char) -> char {
 /// precomposta (NFC). `strip_diacritic` só conhece os caracteres
 /// precompostos; sem descartar as marcas soltas, `fold_pt("Coração")` daria
 /// duas chaves diferentes para a mesma palavra dependendo de onde ela veio.
-fn is_combining_mark(c: char) -> bool {
+pub(crate) fn is_combining_mark(c: char) -> bool {
     matches!(c, '\u{0300}'..='\u{036F}')
 }
 

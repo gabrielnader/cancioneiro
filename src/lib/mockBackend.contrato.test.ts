@@ -4,6 +4,7 @@ import { grupoDaProposta } from "./curadoria";
 
 import {
   AVISO_ETIQUETA_NORMALIZADA,
+  casamentoPorSequencia,
   ERRO_FPCALC,
   ERRO_FPCALC_NAO_EXECUTA,
   createMockBackend,
@@ -1328,5 +1329,81 @@ describe("V10.8 — a etiqueta normalizada, e o desfecho que a conta", () => {
       resultados[1].aviso,
       "aviso sem gravação não existe: ele descreve o que foi FEITO",
     ).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regra — o casamento por SEQUÊNCIA da busca tolerante (V13)
+// ---------------------------------------------------------------------------
+
+/**
+ * A metade tolerante da busca (`search.rs`, V13) tem uma régua só, e ela mora
+ * em dois arquivos: `casamento_por_sequencia` no Rust e
+ * `casamentoPorSequencia` aqui. É a mesma tabela dos testes do Rust
+ * (`a_nota_e_a_fracao_da_melhor_janela_e_o_limiar_e_60_por_cento`,
+ * `uma_edicao_so_perdoa_palavra_de_quatro_letras_ou_mais`,
+ * `a_sequencia_aceita_prefixo_em_qualquer_posicao_e_ignora_acento` e
+ * `a_uniao_preserva_os_trechos_que_so_a_busca_de_hoje_acha`), com o MESMO
+ * esperado — fixado como DADO, porque não dá para chamar o Rust daqui.
+ *
+ * Divergir passa a exigir apagar uma linha desta tabela, que é uma coisa que
+ * alguém precisa justificar, em vez de acontecer por esquecimento.
+ *
+ * [consulta, texto, nota esperada (null = não entra no resultado)]
+ */
+const SEQUENCIA: Array<[string, string, number | null]> = [
+  // -- a fração da melhor janela, e o limiar de 0,60 -------------------------
+  ["na beira do mar sagrado", "na beira do mar sagrado", 1],
+  ["na beira do mar sagrado", "eu vi na beira do rio sagrado hoje", 0.8],
+  // 3 de 5 é exatamente o limiar, e ENTRA
+  ["na beira do mar sagrado", "na beira do rio bonito", 0.6],
+  ["na beira do mar sagrado", "na beira de um rio bonito", null],
+  // texto menor que a consulta: o denominador continua sendo a consulta
+  ["na beira do mar sagrado", "na beira", null],
+
+  // -- uma edição só perdoa palavra de 4 letras para cima --------------------
+  ["dormir", "dormi", 1], // remoção — o caso que abriu a rodada
+  ["cantar", "contar", 1], // troca
+  ["casa", "causa", 1], // inserção
+  ["sol", "sal", null], // 3 letras: outra palavra, não erro
+  ["meu", "seu", null],
+  ["saudade", "saudede", 1],
+  ["saudade", "soudede", null], // duas edições nunca passam
+
+  // -- prefixo em qualquer posição, e acento/caixa fora ----------------------
+  ["cora bat forte", "meu CORAÇÃO BATE forte demais", 1],
+
+  // -- os cinco trechos que SÓ a busca exata acha (a união salva) ------------
+  [
+    "na minha casa se eu",
+    "se eu quiser dancar posso ficar aqui minha vida na casa dos outros eu nao sei",
+    null,
+  ],
+  [
+    "eu vou embora hoje cedo",
+    "hoje eu acordei bem cedo e resolvi que vou seguir embora tudo esteja estranho",
+    null,
+  ],
+  [
+    "quando o sol nascer amanha",
+    "amanha talvez o dia venha e quando nascer de novo o sol vai me encontrar",
+    null,
+  ],
+  ["meu amor nao vai morrer", "morrer de amor nao e pra mim vai que meu coracao aguenta", null],
+  [
+    "a gente se ve depois",
+    "depois de tudo que passou se a gente ainda quiser ve se me liga",
+    null,
+  ],
+];
+
+describe("contrato mock × Rust — o casamento por sequência da busca (V13)", () => {
+  it.each(SEQUENCIA)("%o em %o → %o", (consulta, texto, esperado) => {
+    const casamento = casamentoPorSequencia(consulta, texto);
+    if (esperado === null) {
+      expect(casamento).toBeNull();
+    } else {
+      expect(casamento?.nota).toBeCloseTo(esperado, 9);
+    }
   });
 });
