@@ -1,6 +1,6 @@
 # REPORT — Cancioneiro
 
-## Estado em 0.10.9 — o que o produto é, e o que ele custou aprender
+## Estado em 0.11.0 — o que o produto é, e o que ele custou aprender
 
 O Cancioneiro é um player de MP3 **offline** (Tauri 2 + Rust + React, SQLite com
 FTS5) que existe para resolver um problema só: **achar uma música pelo pedaço de
@@ -55,13 +55,13 @@ que *esta máquina* faz, não o que o produto sabe fazer.
 
 ### As suítes
 
-| suíte | 0.6.0 (início da janela) | 0.10.9 |
+| suíte | 0.6.0 (início da janela) | 0.11.0 |
 |---|---|---|
-| cargo test | 106 | **467** |
+| cargo test | 106 | **476** |
 | pytest | 557 | **754** |
-| vitest | 369 | **1263** |
+| vitest | 369 | **1285** |
 | Playwright E2E | 22 | **54** |
-| total | 1054 | **2538** |
+| total | 1054 | **2569** |
 
 `tsc` limpo, `cargo check` sem avisos, **0 warnings**. As decisões de projeto —
 **185** hoje, contra 30 ao fim da V1 — estão em
@@ -216,6 +216,46 @@ ao ponto do funil que depende dela.
    que o Rust corrigiu (uma música chamada "Diversos" valeria vazio), e ficou de
    fora por escopo — ele é ferramenta de terminal do dono do produto e não vai
    para as 40 máquinas, mas o dano é o mesmo dentro do arquivo dele.
+
+---
+
+> **Atualização V13 (0.11.0):** a busca — a única coisa que este produto existe
+> para fazer — passou a **somar** uma segunda leitura em vez de exigir a grafia
+> exata. É a última mudança medida da janela, e a que mais mexe no propósito.
+>
+> **O problema, medido:** boa parte das letras do acervo foi escrita por máquina
+> ouvindo o áudio, com erros. A busca exigia todas as palavras exatas — `dormir`
+> não achava `dormi`, uma letra. Em 721 trechos de cinco palavras tirados de
+> letras conferidas ouvindo, procurados nas transcrições das mesmas músicas, ela
+> achava **30%**.
+>
+> **A armadilha que quase entrou.** A primeira versão tolerante pontuava palavras
+> soltas e achava **79%** — número que parecia ótimo até o outro lado ser medido:
+> **68 resultados por busca**, com a música certa em primeiro em 12% das vezes.
+> Parede de resultado errado é tão inútil quanto tela vazia, e pior, porque
+> parece que funcionou. O erro era de modelagem: o que alguém lembra é uma
+> **sequência**, não um saco de palavras. Pontuando a sequência: **54%**, com 1,1
+> resultado por busca.
+>
+> **E o que o dono achou antes de existir código.** Numa página de teste montada
+> para ele experimentar, ele digitou `na minha casa se eu` — trecho real — e viu a
+> busca de hoje achar e a nova não. Eu havia medido só o que a nova **ganha**,
+> nunca o que ela **perde**: são **5 trechos em 721**. Pouco, e perder caso que já
+> funciona não se negocia. A proposta virou **união**: tudo que a busca de hoje
+> acha continua achando, e a tolerante acrescenta. **55%**, com risco de regressão
+> zero por construção — não por medição.
+>
+> **Desempenho, o risco real.** A busca roda a cada tecla e o acervo tem 8.000
+> músicas; percorrer 8.000 letras inteiras é inviável. O FTS5 escolhe candidatos
+> (indexado, barato) e o Rust pontua só neles. Teto medido em release, 8.000
+> músicas, pior busca do banco: 100→61 ms, **300→62 ms**, 1000→89 ms, 3000→159 ms,
+> sem teto→358 ms. De 100 para 300 o custo não se mede, então 300 é alcance de
+> graça; 3.000 encostaria no debounce de 150 ms.
+>
+> **Uma limitação que ficou escrita** em vez de escondida: erro na PRIMEIRA letra
+> (`cantar`/`contar`) só é alcançado pelas outras palavras da consulta — o índice
+> só procura prefixo, e palavra com o começo errado não vira candidata. Numa busca
+> de uma palavra só, se perde.
 
 ---
 
