@@ -117,6 +117,25 @@ O frame gravado é `USLT` (UTF-8, lang `por`, ID3v2.4); rodar duas vezes substit
 (não duplica). As fixtures de teste em `fixtures/` são geradas por
 `python3 tools/make_fixtures.py` (tons senoidais curtos + um arquivo corrompido).
 
+### Busca que perdoa a letra escrita por máquina (V13)
+
+Boa parte da letra de um acervo grande foi escrita pela transcrição automática,
+ouvindo o áudio, e tem erro. Digitar `dormir` deixaria de fora a música cuja letra
+gravada diz `dormi` — uma letra de diferença.
+
+A busca devolve a **união** de duas: a de sempre (todas as palavras, exatas, com
+prefixo na última) e uma **tolerante por sequência**, que desliza pelo texto uma
+janela do tamanho do que você digitou e aceita cada posição quando a palavra é
+igual, é começo dela ou está a **uma letra** de distância (só em palavras de 4
+letras para cima — `sol` e `sal` são duas coisas, não um erro). Entra no resultado
+quem casar **60%** da janela.
+
+Os resultados exatos vêm primeiro, e os tolerantes depois, do mais parecido para o
+menos. O trecho destacado mostra a palavra **como ela está gravada** — é assim que
+se vê o que a máquina ouviu errado. Nada muda na tela: é a mesma caixa de busca.
+Os números que decidiram cada régua estão na [`DECISIONS.md`](./DECISIONS.md)
+(#188–#193).
+
 ### Temas (V2 — tags temáticas para busca)
 
 Marque cada música com temas livres ("água", "cura", "ceia"…), gravados no próprio
