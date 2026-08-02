@@ -28,6 +28,15 @@ interface UiState {
    */
   theme: ThemePref;
   /**
+   * V12 — pastas ABERTAS da árvore lateral (relato de campo: acervo de ~8.000
+   * músicas, subpastas todas abertas ao mesmo tempo). Guarda só o que foi
+   * ABERTO NA MÃO, por caminho de pasta; o padrão é fechado, e quem contém a
+   * seleção atual abre sozinha (calculado no `Sidebar`, sem entrar aqui — não
+   * é preciso persistir o que já é derivável do filtro ativo). Mesmo store e
+   * mesma chave das outras preferências.
+   */
+  openFolders: string[];
+  /**
    * V10 — `vagalumeApiKey` SAIU (DECISIONS #110).
    *
    * A etapa do Vagalume foi removida do produto (API descontinuada, chave que
@@ -45,6 +54,7 @@ interface UiState {
   setView: (view: View) => void;
   setCheckUpdatesOnStart: (value: boolean) => void;
   setTheme: (theme: ThemePref) => void;
+  toggleFolder: (path: string) => void;
 }
 
 export function createUiStore() {
@@ -56,6 +66,7 @@ export function createUiStore() {
         view: "library" as View,
         checkUpdatesOnStart: true,
         theme: "auto",
+        openFolders: [],
         toggleLyricsPanel: () =>
           set((s) => ({ lyricsPanelVisible: !s.lyricsPanelVisible })),
         cycleFontLevel: () =>
@@ -66,6 +77,12 @@ export function createUiStore() {
           set({ theme });
           applyTheme(theme);
         },
+        toggleFolder: (path) =>
+          set((s) => ({
+            openFolders: s.openFolders.includes(path)
+              ? s.openFolders.filter((p) => p !== path)
+              : [...s.openFolders, path],
+          })),
       }),
       {
         name: "cancioneiro-ui",
@@ -74,6 +91,7 @@ export function createUiStore() {
           fontLevel: s.fontLevel,
           checkUpdatesOnStart: s.checkUpdatesOnStart,
           theme: s.theme,
+          openFolders: s.openFolders,
         }),
         // V11 — reaplica o tema já resolvido assim que o `persist` termina de
         // ler o localStorage (troca de aba, ou qualquer hidratação tardia).

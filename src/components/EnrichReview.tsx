@@ -974,7 +974,11 @@ export function EnrichReview() {
       aria-modal="true"
       aria-label="Completar dados"
     >
-      <div className="flex max-h-[calc(100vh-4rem)] w-[640px] max-w-[calc(100vw-2rem)] flex-col rounded-lg bg-white p-5 shadow-xl">
+      {/* V11 (achado de campo) — era `bg-white` fixo: no escuro o fundo
+          continuava branco com texto claro por cima, ilegível. `bg-surface`
+          é o mesmo branco no claro e o card escuro no escuro, igual ao
+          ConfirmDialog e ao NewPlaylistDialog. */}
+      <div className="flex max-h-[calc(100vh-4rem)] w-[640px] max-w-[calc(100vw-2rem)] flex-col rounded-lg bg-surface p-5 shadow-xl">
         {/* única região viva do overlay (M6): montada o tempo todo e com o
             texto trocando só nas transições — começo e fim do trabalho */}
         <p className="sr-only" role="status">

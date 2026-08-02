@@ -2584,3 +2584,28 @@ opção mais simples que passa nos Acceptance Checks do PRD.
     E no editor os temas deixaram de dobrar atrás do "+N" (`dobrarTemas`
     continua valendo no cabeçalho da ficha e na linha da lista, onde o
     espaço é apertado): *"na tela de editar tem que dar pra ver todas"*.
+
+## V12 — dois achados de campo pós-V11
+
+186. **`bg-white` fixo no modal de revisão, e o guarda que não pegou.**
+    `EnrichReview.tsx` era o único componente com fundo fixo — virou
+    `bg-surface`. O guarda (`noFixedColors.test.ts`) só varria HEX; ganhou
+    uma segunda varredura para `bg-white`/`text-white`/`bg-black`/família
+    numerada (`gray-500`...), com duas exceções nomeadas e justificadas no
+    próprio teste: `bg-black/NN` (cortina de modal, igual nos dois temas) e
+    `text-white` perto de `-fill`/`bg-disabled` (fundo de botão sólido, também
+    constante). `contrast.ts` ganhou um ajuste: token sem entrada no bloco
+    `dark` (brand-fill, danger-fill) cai para o valor do claro — é a mesma
+    regra de cascata do CSS de verdade, não um token "quebrado".
+
+187. **Árvore de pastas: acordeão, como um explorador de arquivos.**
+    Relato com ~8.000 músicas: subpastas todas abertas ocupavam a lateral
+    inteira. A setinha abre/fecha (nasce FECHADA); o NOME continua só
+    filtrando — não rouba a ação de hoje. Estado por caminho de pasta em
+    `uiStore.openFolders`, persistido no mesmo `localStorage` de sempre. A
+    pasta que contém a seleção atual abre sozinha (calculado no render, não
+    persistido) para ninguém se perder depois de filtrar fundo na árvore.
+    Nós fechados não renderizam filhos: com a árvore nascendo fechada, a
+    contagem de nós na tela não cresce com o tamanho do acervo — medido
+    `buildFolderTree` em 8.000 músicas/200 pastas (~21ms, memoizado), sem
+    necessidade de virtualizar a lateral.

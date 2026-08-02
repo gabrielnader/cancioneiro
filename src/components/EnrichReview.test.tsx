@@ -1416,6 +1416,101 @@ describe("EnrichReview (V5 — F13)", () => {
     }
   });
 
+  /*
+    Achado de campo (V11) — o teste acima só conferia o tema CLARO (o
+    "#FFFFFF" fixo de fallback era, coincidentemente, o `bg-white` que o
+    modal tinha antes do conserto). Nada neste arquivo conferia o ESCURO:
+    foi assim que o fundo fixo sobreviveu à bateria inteira de contraste.
+    Estes três testes repetem a mesma varredura — review, varredura e
+    transcrição — resolvendo cada token contra `CORES_ESCURO` (a mesma fonte
+    do index.css que os utilitários de `contrast.ts` já leem).
+  */
+  describe("achado de campo — contraste no tema ESCURO (V11)", () => {
+    /** Fundo do CARD do modal no escuro — mesma fonte que resolve os tokens. */
+    const fundoDoDialogEscuro = corDoFundo("bg-surface", "escuro")!;
+
+    function conferirContrasteEscuro(dialog: HTMLElement) {
+      const comCor = [...dialog.querySelectorAll<HTMLElement>("*")].filter((el) =>
+        TEXT_COLOR_RE.test(el.className),
+      );
+      expect(comCor.length).toBeGreaterThan(0);
+      for (const el of comCor) {
+        const fundo = corDoFundo(el.className, "escuro") ?? fundoDoDialogEscuro;
+        expect(
+          contrastRatio(corDoTexto(el.className, "escuro"), fundo),
+          `"${el.textContent?.slice(0, 40)}" sobre ${fundo}`,
+        ).toBeGreaterThanOrEqual(AA_TEXTO_NORMAL);
+      }
+    }
+
+    it("a lista de revisão passa em AA no escuro (badges, avisos, comparação de conflito)", () => {
+      renderReview([
+        SOBRE_TRANSCRICAO,
+        MEDIA,
+        BAIXA,
+        COM_ERRO,
+        proposal({
+          song_id: 7,
+          current_title: "Te ver feliz",
+          current_artist: "Caetano Veloso",
+          proposed_title: "Te ver feliz",
+          proposed_artist: "Caetano Veloso",
+          lyrics: null,
+          confidence: "baixa",
+          fonte: "reconhecimento pelo som",
+          conflito: {
+            titulo: "Viver Feliz",
+            artista: "Nilson Chaves",
+            confianca: "media",
+          },
+        }),
+        proposal({
+          song_id: 8,
+          current_title: "Ponto de Oxum",
+          proposed_title: "Ponto de Oxum (Ao Vivo)",
+          lyrics: null,
+          confidence: "alta",
+          substitui_nome_escrito: true,
+        }),
+      ]);
+      conferirContrasteEscuro(screen.getByRole("dialog", { name: "Completar dados" }));
+    });
+
+    it("a barra de progresso da VARREDURA passa em AA no escuro", () => {
+      renderScanning({
+        done: 25,
+        total: 95,
+        atual: "barco - Marinheiro só.mp3",
+        etapa: "procurando no LRCLIB",
+      });
+      conferirContrasteEscuro(screen.getByRole("dialog", { name: "Completar dados" }));
+    });
+
+    it("a barra de progresso da TRANSCRIÇÃO passa em AA no escuro", () => {
+      useEnrichStore.setState({
+        status: "transcribing",
+        overlayOpen: true,
+        proposals: [],
+        progress: null,
+        scanId: "t1",
+        semLetraNoFim: [1, 2],
+        segundosDeTranscricao: 600,
+        transcricao: { disponivel: true, download: null },
+        transcricaoProgress: {
+          done: 3,
+          total: 47,
+          atual: "barco - Marinheiro só.mp3",
+          porcento_da_musica: 40,
+          segundos_restantes: 120,
+          scan_id: "t1",
+        },
+        applyErrors: {},
+      });
+      render(<EnrichReview />);
+      conferirContrasteEscuro(screen.getByRole("dialog", { name: "Completar dados" }));
+    });
+  });
+
   describe("modal: Esc e foco (QA achado 3)", () => {
     it("Esc fecha o overlay na revisão", () => {
       renderReview([ALTA]);

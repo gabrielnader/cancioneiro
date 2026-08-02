@@ -22,13 +22,18 @@ function song(id: number, filePath: string): Song {
   };
 }
 
+/** Clica na setinha (não no nome) para abrir/fechar uma pasta. */
+function abrirPasta(nome: string) {
+  fireEvent.click(screen.getByRole("button", { name: `Abrir pasta ${nome}` }));
+}
+
 describe("Sidebar — árvore de pastas (V4 F11)", () => {
   beforeEach(() => {
     setBackendForTests({
       listPlaylists: vi.fn(async () => []),
       getPlaylistItems: vi.fn(async () => []),
     } as unknown as Backend);
-    useUiStore.setState({ view: "library" });
+    useUiStore.setState({ view: "library", openFolders: [] });
     usePlaylistStore.setState({ playlists: [], activePlaylistId: null, items: [] });
     useLibraryStore.setState({
       folders: [{ id: 1, path: "/acervo", last_scanned_at: null }],
@@ -41,11 +46,20 @@ describe("Sidebar — árvore de pastas (V4 F11)", () => {
     });
   });
 
-  it("renderiza a árvore sob Biblioteca: raiz e subpastas com contadores", () => {
+  it("renderiza a raiz sob Biblioteca, com o contador da subárvore inteira", () => {
     render(<Sidebar />);
     const root = screen.getByRole("button", { name: "Pasta acervo" });
     expect(root).toHaveTextContent("acervo");
     expect(root).toHaveTextContent("3");
+  });
+
+  // V12 — a árvore nasce FECHADA (relato de campo, 8.000 músicas): abrir é a
+  // setinha, e só ela.
+  it("as subpastas nascem FECHADAS: só aparecem depois de abrir a raiz", () => {
+    render(<Sidebar />);
+    expect(screen.queryByRole("button", { name: "Pasta 1" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Pasta 2" })).not.toBeInTheDocument();
+    abrirPasta("acervo");
     const um = screen.getByRole("button", { name: "Pasta 1" });
     expect(um).toHaveTextContent("2");
     const dois = screen.getByRole("button", { name: "Pasta 2" });
@@ -56,6 +70,7 @@ describe("Sidebar — árvore de pastas (V4 F11)", () => {
     useUiStore.setState({ view: "playlist" });
     usePlaylistStore.setState({ activePlaylistId: 7 });
     render(<Sidebar />);
+    abrirPasta("acervo");
     fireEvent.click(screen.getByRole("button", { name: "Pasta 1" }));
     expect(useLibraryStore.getState().folderFilter).toBe("/acervo/1");
     expect(useUiStore.getState().view).toBe("library");
@@ -86,18 +101,143 @@ describe("Sidebar — árvore de pastas (V4 F11)", () => {
     expect(useLibraryStore.getState().folderFilter).toBeNull();
   });
 
-  it("pasta ativa aparece destacada", () => {
+  // V12 — sem clique nenhum: a pasta que CONTÉM a seleção abre sozinha.
+  it("pasta ativa aparece destacada, e a raiz que a contém já vem aberta", () => {
     useLibraryStore.setState({ folderFilter: "/acervo/2" });
     render(<Sidebar />);
     const dois = screen.getByRole("button", { name: "Pasta 2" });
     expect(dois.className).toContain("text-brand");
   });
 
-  it("sem músicas não renderiza subpastas (raiz com contador 0)", () => {
+  it("sem músicas não renderiza subpastas (raiz sem seta, contador 0)", () => {
     useLibraryStore.setState({ allSongs: [] });
     render(<Sidebar />);
     expect(screen.getByRole("button", { name: "Pasta acervo" })).toHaveTextContent("0");
+    expect(
+      screen.queryByRole("button", { name: "Abrir pasta acervo" }),
+    ).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Pasta 1" })).not.toBeInTheDocument();
+  });
+});
+
+/*
+  V12 (relato de campo) — "as subpastas ficam todas abertas... talvez seja bom
+  poder minimizar as pastas, mais parecido com a visão de pastas no
+  computador". A árvore passa a abrir/fechar pela setinha, nasce fechada,
+  persiste entre sessões e abre sozinha em cima da seleção atual.
+*/
+describe("Sidebar — árvore de pastas recolhível, como um explorador (V12)", () => {
+  beforeEach(() => {
+    setBackendForTests({
+      listPlaylists: vi.fn(async () => []),
+      getPlaylistItems: vi.fn(async () => []),
+    } as unknown as Backend);
+    useUiStore.setState({ view: "library", openFolders: [] });
+    usePlaylistStore.setState({ playlists: [], activePlaylistId: null, items: [] });
+    useLibraryStore.setState({
+      folders: [{ id: 1, path: "/acervo", last_scanned_at: null }],
+      allSongs: [
+        song(1, "/acervo/1/x/a.mp3"),
+        song(2, "/acervo/1/x/b.mp3"),
+        song(3, "/acervo/1/y/c.mp3"),
+        song(4, "/acervo/2/d.mp3"),
+      ],
+      folderFilter: null,
+    });
+  });
+
+  it("pasta-folha (sem subpasta) não tem seta nenhuma", () => {
+    render(<Sidebar />);
+    abrirPasta("acervo");
+    abrirPasta("1");
+    expect(
+      screen.queryByRole("button", { name: /Abrir pasta y|Fechar pasta y/ }),
+    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Pasta y" })).toBeInTheDocument();
+  });
+
+  it("clicar na seta abre; clicar de novo fecha — e some com os filhos", () => {
+    render(<Sidebar />);
+    expect(screen.queryByRole("button", { name: "Pasta 1" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Abrir pasta acervo" }));
+    expect(screen.getByRole("button", { name: "Pasta 1" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Fechar pasta acervo" }));
+    expect(screen.queryByRole("button", { name: "Pasta 1" })).not.toBeInTheDocument();
+  });
+
+  it("a setinha não filtra: abrir a pasta não muda o filtro ativo", () => {
+    render(<Sidebar />);
+    abrirPasta("acervo");
+    expect(useLibraryStore.getState().folderFilter).toBeNull();
+  });
+
+  it("clicar no NOME não abre/fecha: subpastas continuam escondidas depois do clique", () => {
+    render(<Sidebar />);
+    fireEvent.click(screen.getByRole("button", { name: "Pasta acervo" }));
+    expect(screen.queryByRole("button", { name: "Pasta 1" })).not.toBeInTheDocument();
+  });
+
+  it("indentação cresce por nível", () => {
+    render(<Sidebar />);
+    abrirPasta("acervo");
+    abrirPasta("1");
+    const raiz = screen.getByRole("button", { name: "Fechar pasta acervo" });
+    const nivel1 = screen.getByRole("button", { name: "Fechar pasta 1" });
+    const nivel2 = screen.getByRole("button", { name: "Pasta y" });
+    const margemDe = (el: HTMLElement) => parseFloat(el.style.marginLeft || "0");
+    expect(margemDe(nivel1)).toBeGreaterThan(margemDe(raiz));
+    // "Pasta y" é o botão de nome (sem seta): o wrapper dele é quem carrega a
+    // indentação da seta-fantasma do mesmo nível
+    expect(margemDe(nivel1)).toBeLessThan(
+      parseFloat(
+        (nivel2.parentElement!.querySelector("span")?.style.marginLeft as string) || "0",
+      ),
+    );
+  });
+
+  it("o estado aberto/fechado PERSISTE entre sessões (mesmo storage das outras preferências)", () => {
+    const { unmount } = render(<Sidebar />);
+    abrirPasta("acervo");
+    expect(screen.getByRole("button", { name: "Pasta 1" })).toBeInTheDocument();
+    unmount();
+
+    // simula reabrir o app: novo render lendo o MESMO uiStore (persistido)
+    render(<Sidebar />);
+    expect(screen.getByRole("button", { name: "Pasta 1" })).toBeInTheDocument();
+
+    const salvo = JSON.parse(localStorage.getItem("cancioneiro-ui") ?? "{}");
+    expect(salvo.state.openFolders).toContain("/acervo");
+  });
+
+  it("a pasta que contém a seleção atual abre sozinha, mesmo sem nunca ter sido aberta na mão", () => {
+    useLibraryStore.setState({ folderFilter: "/acervo/1/x" });
+    render(<Sidebar />);
+    // acervo -> 1 -> x: as duas pastas ancestrais da seleção vêm abertas, e
+    // "x" (a própria selecionada) aparece — sem isso a pessoa clica um filtro
+    // fundo e perde de vista onde ele está na árvore
+    expect(screen.getByRole("button", { name: "Pasta 1" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Pasta x" })).toBeInTheDocument();
+  });
+
+  it("uma pasta IRMÃ da seleção não abre sozinha (só quem está no caminho até ela)", () => {
+    useLibraryStore.setState({ folderFilter: "/acervo/2" });
+    render(<Sidebar />);
+    // "2" é irmã de "1": a seleção está em "2", então "1" não teria por que se
+    // abrir — mas como "2" não tem subpastas, o teste conclusivo é sobre "1"
+    expect(screen.queryByRole("button", { name: "Pasta x" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Pasta y" })).not.toBeInTheDocument();
+  });
+
+  it("abrir sozinha por causa da seleção não é persistido (não fica aberta depois de trocar de filtro)", () => {
+    useLibraryStore.setState({ folderFilter: "/acervo/1/x" });
+    const { rerender } = render(<Sidebar />);
+    expect(screen.getByRole("button", { name: "Pasta x" })).toBeInTheDocument();
+
+    useLibraryStore.setState({ folderFilter: "/acervo/2" });
+    rerender(<Sidebar />);
+    expect(screen.queryByRole("button", { name: "Pasta x" })).not.toBeInTheDocument();
   });
 });
 
@@ -113,7 +253,7 @@ describe("Sidebar — a árvore de pastas voltou a ser só navegação (V8 F18)"
       listPlaylists: vi.fn(async () => []),
       getPlaylistItems: vi.fn(async () => []),
     } as unknown as Backend);
-    useUiStore.setState({ view: "library" });
+    useUiStore.setState({ view: "library", openFolders: [] });
     usePlaylistStore.setState({ playlists: [], activePlaylistId: null, items: [] });
     useLibraryStore.setState({
       folders: [{ id: 1, path: "/acervo", last_scanned_at: null }],
@@ -142,6 +282,7 @@ describe("Sidebar — a árvore de pastas voltou a ser só navegação (V8 F18)"
 
   it("a árvore continua navegando normalmente: um botão por pasta, e só", () => {
     render(<Sidebar />);
+    abrirPasta("acervo");
     const pastas = screen
       .getAllByRole("button")
       .filter((b) => b.getAttribute("aria-label")?.startsWith("Pasta "));

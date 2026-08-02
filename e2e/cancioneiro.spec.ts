@@ -791,9 +791,11 @@ test.describe("V4", () => {
     await page.reload();
 
     // árvore: raiz "acervo" e subpastas "1" e "2" com contadores
-    const root = page.getByRole("button", { name: "Pasta acervo" });
+    const root = page.getByRole("button", { name: "Pasta acervo", exact: true });
     await expect(root).toBeVisible();
     await expect(root).toContainText("2");
+    // V12 — a árvore nasce FECHADA: as subpastas só aparecem depois da seta
+    await page.getByRole("button", { name: "Abrir pasta acervo" }).click();
     const pasta1 = page.getByRole("button", { name: "Pasta 1", exact: true });
     const pasta2 = page.getByRole("button", { name: "Pasta 2", exact: true });
     await expect(pasta1).toContainText("1");
@@ -1000,6 +1002,7 @@ test.describe("V4", () => {
 
     // seleciona a música da pasta 2/ e SÓ DEPOIS filtra pela pasta 1/
     await page.getByText("Faixa Dois").first().click();
+    await page.getByRole("button", { name: "Abrir pasta acervo" }).click();
     await page.getByRole("button", { name: "Pasta 1", exact: true }).click();
     const panel = page.getByLabel("Painel de letra");
     // a seleção sobrevive ao filtro: o painel continua na Faixa Dois
@@ -1357,7 +1360,9 @@ test.describe("V8 — O funil dentro do app (F18)", () => {
       (window as any).__CANCIONEIRO_MOCK__._seedFolderTree();
     });
     await page.reload();
-    await expect(page.getByRole("button", { name: "Pasta acervo" })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "Pasta acervo", exact: true }),
+    ).toBeVisible();
 
     // a lateral voltou a ser só navegação
     await expect(
@@ -1365,6 +1370,7 @@ test.describe("V8 — O funil dentro do app (F18)", () => {
     ).toHaveCount(0);
 
     // quem estava olhando a subpasta "1" não precisa procurá-la de novo
+    await page.getByRole("button", { name: "Abrir pasta acervo" }).click();
     await page.getByRole("button", { name: "Pasta 1" }).click();
     await page.getByRole("button", { name: "Configurações" }).click();
     await expect(page.getByLabel("Pasta a curar")).toHaveValue("/acervo/1");

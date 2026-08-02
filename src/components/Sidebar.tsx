@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { textoDoProgressoDaTranscricao } from "../lib/curadoria";
-import { buildFolderTree, type FolderNode } from "../lib/folderTree";
+import { buildFolderTree, isUnderFolder, type FolderNode } from "../lib/folderTree";
 import { useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlaylistStore } from "../stores/playlistStore";
@@ -200,39 +200,81 @@ function EnrichBackgroundIndicator() {
  * diária é convite a clique acidental. A varredura mudou de endereço: agora
  * mora em Configurações → "Curadoria do acervo", já apontando para a pasta que
  * estiver selecionada aqui — o contexto que o ✎ dava de graça.
+ *
+ * V12 (relato de campo, acervo de ~8.000 músicas) — pasta com subpasta abre e
+ * fecha como no explorador de arquivos do sistema, e nasce FECHADA: com o
+ * acervo inteiro a árvore virava uma parede de linhas. A setinha abre/fecha; o
+ * NOME continua só filtrando (não rouba a ação que já existia). A pasta que
+ * contém a seleção atual abre sozinha (`contemSelecao` abaixo) — sem isso, filtrar
+ * uma subpasta bem funda e depois reabrir a lateral faria a pessoa se perder
+ * numa árvore toda fechada. Nós FECHADOS não renderizam os filhos: com a
+ * árvore nascendo fechada, o número de nós na tela não cresce com o tamanho
+ * do acervo (só com a profundidade do caminho aberto) — dispensa virtualização
+ * aqui (ver DECISIONS).
  */
 function FolderTreeItem({ node, level }: { node: FolderNode; level: number }) {
   const folderFilter = useLibraryStore((s) => s.folderFilter);
   const setFolderFilter = useLibraryStore((s) => s.setFolderFilter);
   const setView = useUiStore((s) => s.setView);
   const closePlaylist = usePlaylistStore((s) => s.closePlaylist);
+  const openFolders = useUiStore((s) => s.openFolders);
+  const toggleFolder = useUiStore((s) => s.toggleFolder);
   const isRoot = level === 0;
   const active = !isRoot && folderFilter === node.path;
+  const hasChildren = node.children.length > 0;
+  // a seleção atual está DENTRO desta pasta (ela mesma ou uma subpasta dela)
+  const contemSelecao =
+    folderFilter !== null &&
+    (folderFilter === node.path || isUnderFolder(folderFilter, node.path));
+  const aberta = hasChildren && (openFolders.includes(node.path) || contemSelecao);
 
   return (
     <>
-      <button
-        type="button"
-        aria-label={`Pasta ${node.name}`}
-        title={node.path}
-        className={`flex w-full min-w-0 items-center justify-between gap-2 rounded-md py-1 pr-2 text-left text-[14px] ${
-          active
-            ? "bg-brand-soft font-medium text-brand"
-            : "text-ink-secondary hover:bg-surface-hover"
-        }`}
-        style={{ paddingLeft: 20 + level * 14 }}
-        onClick={() => {
-          closePlaylist();
-          setFolderFilter(isRoot ? null : node.path);
-          setView("library");
-        }}
-      >
-        <span className="truncate">{node.name}</span>
-        <span className="shrink-0 text-[12px] text-disabled">{node.count}</span>
-      </button>
-      {node.children.map((child) => (
-        <FolderTreeItem key={child.path} node={child} level={level + 1} />
-      ))}
+      <div className="flex w-full min-w-0 items-center gap-0.5 pr-2">
+        {hasChildren ? (
+          <button
+            type="button"
+            aria-label={`${aberta ? "Fechar" : "Abrir"} pasta ${node.name}`}
+            aria-expanded={aberta}
+            onClick={() => toggleFolder(node.path)}
+            className="shrink-0 rounded p-0.5 text-ink-tertiary hover:bg-surface-hover"
+            style={{ marginLeft: 8 + level * 14 }}
+          >
+            <span
+              aria-hidden="true"
+              className={`inline-block text-[10px] transition-transform ${aberta ? "rotate-90" : ""}`}
+            >
+              ▶
+            </span>
+          </button>
+        ) : (
+          // espaço reservado do tamanho da setinha: sem isso o nome de uma
+          // pasta-folha desalinharia com o das pastas que têm seta
+          <span className="w-[22px] shrink-0" style={{ marginLeft: 8 + level * 14 }} />
+        )}
+        <button
+          type="button"
+          aria-label={`Pasta ${node.name}`}
+          title={node.path}
+          className={`flex w-full min-w-0 items-center justify-between gap-2 rounded-md py-1 pl-1 text-left text-[14px] ${
+            active
+              ? "bg-brand-soft font-medium text-brand"
+              : "text-ink-secondary hover:bg-surface-hover"
+          }`}
+          onClick={() => {
+            closePlaylist();
+            setFolderFilter(isRoot ? null : node.path);
+            setView("library");
+          }}
+        >
+          <span className="truncate">{node.name}</span>
+          <span className="shrink-0 text-[12px] text-disabled">{node.count}</span>
+        </button>
+      </div>
+      {aberta &&
+        node.children.map((child) => (
+          <FolderTreeItem key={child.path} node={child} level={level + 1} />
+        ))}
     </>
   );
 }

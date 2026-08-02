@@ -66,8 +66,13 @@ function extrairToken(className: string, prefixo: "text" | "bg" | "border"): str
 function corDoToken(nome: string, tema: "claro" | "escuro"): string {
   if (nome === "white") return "#FFFFFF";
   if (nome === "black") return "#000000";
-  const mapa = tema === "escuro" ? CORES_ESCURO : CORES_CLARO;
-  const hex = mapa[nome];
+  // Tokens propositalmente CONSTANTES (brand-fill, danger-fill, mark, ...) não
+  // são redeclarados no bloco `:root[data-theme="dark"]` do index.css — e é
+  // assim que devem continuar valendo: sem override, a variável CSS de verdade
+  // mantém o valor do claro também no escuro. Cair para CORES_CLARO aqui
+  // repete essa mesma regra de cascata, em vez de tratar "token sem entrada no
+  // escuro" como erro.
+  const hex = tema === "escuro" ? (CORES_ESCURO[nome] ?? CORES_CLARO[nome]) : CORES_CLARO[nome];
   if (!hex) throw new Error(`token de cor sem valor em index.css: ${nome} (${tema})`);
   return hex;
 }

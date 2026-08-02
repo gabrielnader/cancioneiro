@@ -1,6 +1,6 @@
 # REPORT — Cancioneiro
 
-## Estado em 0.10.8 — o que o produto é, e o que ele custou aprender
+## Estado em 0.10.9 — o que o produto é, e o que ele custou aprender
 
 O Cancioneiro é um player de MP3 **offline** (Tauri 2 + Rust + React, SQLite com
 FTS5) que existe para resolver um problema só: **achar uma música pelo pedaço de
@@ -55,13 +55,13 @@ que *esta máquina* faz, não o que o produto sabe fazer.
 
 ### As suítes
 
-| suíte | 0.6.0 (início da janela) | 0.10.8 |
+| suíte | 0.6.0 (início da janela) | 0.10.9 |
 |---|---|---|
 | cargo test | 106 | **467** |
 | pytest | 557 | **754** |
-| vitest | 369 | **1226** |
+| vitest | 369 | **1263** |
 | Playwright E2E | 22 | **54** |
-| total | 1054 | **2501** |
+| total | 1054 | **2538** |
 
 `tsc` limpo, `cargo check` sem avisos, **0 warnings**. As decisões de projeto —
 **185** hoje, contra 30 ao fim da V1 — estão em
@@ -216,6 +216,35 @@ ao ponto do funil que depende dela.
    que o Rust corrigiu (uma música chamada "Diversos" valeria vazio), e ficou de
    fora por escopo — ele é ferramenta de terminal do dono do produto e não vai
    para as 40 máquinas, mas o dano é o mesmo dentro do arquivo dele.
+
+---
+
+> **Atualização V12 (0.10.9):** dois achados do dono usando a V11 num acervo de
+> **~8.000 músicas** — a primeira vez que o produto foi visto em escala real.
+>
+> **A caixa de revisão ficava ilegível no escuro.** Uma linha: `bg-white` fixo no
+> container do modal, enquanto o texto virava claro. O que importa aqui não é a
+> linha, é **por que o guarda não pegou**: o teste que varre cor fixa procurava
+> **hex**, e `bg-white` não é hex. Um guarda que cobre a forma errada do defeito
+> dá a sensação de proteção sem a proteção. Ele passou a barrar também as classes
+> do Tailwind, com duas exceções nomeadas e justificadas (a cortina `bg-black/40`,
+> que funciona nos dois temas, e `text-white` sobre botão sólido).
+>
+> **A árvore de pastas com 8.000 músicas era impraticável** — tudo aberto ao mesmo
+> tempo, num painel estreito. Virou acordeão: nasce fechada, a setinha abre, o
+> clique no nome continua filtrando (não roubar a ação que já existia), e o estado
+> persiste. Persiste **só o que foi aberto na mão**: a pasta que contém a seleção
+> abre por derivação, e derivável não se guarda.
+>
+> **Duas lições de arnês nesta rodada, as duas minhas.** A primeira: o agente
+> entregou o trabalho e **parou antes de as próprias suítes terminarem**, sem
+> comitar — terminei a verificação por fora, mais barato que reacordá-lo. A
+> segunda: ao caçar a falha, deixei **quatro execuções do Playwright rodando ao
+> mesmo tempo**, disputando o mesmo `localStorage`; o placar foi de 2 falhas para
+> 16 e eu quase diagnostiquei uma regressão que não existia. A execução limpa deu
+> 2, e as duas eram do teste: a setinha nova (`aria-label="Abrir pasta acervo"`)
+> fez o localizador por substring casar com dois botões. O rótulo do produto está
+> certo — é o que um leitor de tela precisa ouvir —, então quem mudou foi o teste.
 
 ---
 
