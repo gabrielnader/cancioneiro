@@ -23,7 +23,13 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
   const addToPlaylist = usePlaylistStore((s) => s.addToPlaylist);
   // Menu em portal: as linhas virtualizadas usam transform (stacking context
   // próprio), então um dropdown inline ficaria por baixo da linha seguinte.
-  const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
+  const [menuPos, setMenuPos] = useState<{
+    top: number;
+    left: number;
+    /** V13.2 — altura máxima: sem ela o menu passava da tela e as últimas
+        playlists ficavam inalcançáveis (relato de campo, 13 playlists). */
+    altura: number;
+  } | null>(null);
   const plusRef = useRef<HTMLButtonElement>(null);
 
   // V6 — o nome do arquivo é como as coordenadoras já se organizam; entra como
@@ -128,7 +134,17 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
                   setMenuPos(null);
                 } else {
                   const rect = plusRef.current!.getBoundingClientRect();
-                  setMenuPos({ top: rect.bottom + 4, left: rect.right - 224 });
+                  // Cabe embaixo? Senão abre para cima, e em último caso rola.
+                  const margem = 12;
+                  const abaixo = window.innerHeight - rect.bottom - margem;
+                  const acima = rect.top - margem;
+                  const paraCima = abaixo < 200 && acima > abaixo;
+                  const altura = Math.max(120, Math.min(320, paraCima ? acima : abaixo));
+                  setMenuPos({
+                    top: paraCima ? Math.max(margem, rect.top - altura - 4) : rect.bottom + 4,
+                    left: rect.right - 224,
+                    altura,
+                  });
                 }
               }}
             >
@@ -177,11 +193,15 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
               }}
             />
             <div
-              className="fixed z-50 w-56 rounded border border-border bg-surface py-1 shadow-lg"
-              style={{ top: menuPos.top, left: Math.max(8, menuPos.left) }}
+              className="fixed z-50 w-56 overflow-y-auto rounded border border-border bg-surface py-1 shadow-lg"
+              style={{
+                top: menuPos.top,
+                left: Math.max(8, menuPos.left),
+                maxHeight: menuPos.altura,
+              }}
               onClick={(e) => e.stopPropagation()}
             >
-              <p className="px-3 py-1 text-[12px] uppercase text-ink-tertiary">
+              <p className="sticky top-0 bg-surface px-3 py-1 text-[12px] uppercase text-ink-tertiary">
                 Adicionar à playlist
               </p>
               {playlists.map((p) => (

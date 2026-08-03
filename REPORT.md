@@ -1,6 +1,6 @@
 # REPORT — Cancioneiro
 
-## Estado em 0.11.2 — o que o produto é, e o que ele custou aprender
+## Estado em 0.11.3 — o que o produto é, e o que ele custou aprender
 
 O Cancioneiro é um player de MP3 **offline** (Tauri 2 + Rust + React, SQLite com
 FTS5) que existe para resolver um problema só: **achar uma música pelo pedaço de
@@ -55,7 +55,7 @@ que *esta máquina* faz, não o que o produto sabe fazer.
 
 ### As suítes
 
-| suíte | 0.6.0 (início da janela) | 0.11.2 |
+| suíte | 0.6.0 (início da janela) | 0.11.3 |
 |---|---|---|
 | cargo test | 106 | **477** |
 | pytest | 557 | **754** |
