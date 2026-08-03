@@ -204,6 +204,53 @@ fn rescan_updates_only_changed_file() {
 // F1 — Acceptance: remover pasta apaga Songs e PlaylistItems em cascata.
 // ---------------------------------------------------------------------------
 #[test]
+/// V14 — o tema casa EXATO, e não por pedaço.
+///
+/// "Natal" não pode arrastar "Natalino" nem "Pré-Natal": montar playlist por
+/// tema acrescenta em lote, e um lote errado é trabalho manual de desfazer.
+fn songs_by_tema_casa_exato_e_nao_por_pedaco() {
+    let dir = setup_music_dir(false);
+    let conn = test_conn();
+    let folder_id = db::add_folder(&conn, dir.path().to_str().unwrap()).unwrap();
+    indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
+    let songs = db::list_songs(&conn).unwrap();
+
+    let temas = ["Natal; Louvor", "Natalino", "natal"];
+    for (s, t) in songs.iter().zip(temas) {
+        conn.execute(
+            "UPDATE songs SET temas = ?2 WHERE id = ?1",
+            rusqlite::params![s.id, t],
+        )
+        .unwrap();
+    }
+
+    let achadas = db::songs_by_tema(&conn, "Natal").unwrap();
+    assert_eq!(
+        achadas.len(),
+        2,
+        "só as duas com o tema Natal (uma delas em minúsculas): {:?}",
+        achadas.iter().map(|s| &s.temas).collect::<Vec<_>>()
+    );
+    assert!(
+        !achadas.iter().any(|s| s.temas.as_deref() == Some("Natalino")),
+        "Natalino não é Natal"
+    );
+
+    // e a lista de temas conta cada um uma vez, com o número de músicas
+    let lista = db::list_temas(&conn).unwrap();
+    let natais: Vec<_> = lista
+        .iter()
+        .filter(|(t, _)| t.eq_ignore_ascii_case("natal"))
+        .collect();
+    assert_eq!(
+        natais.len(),
+        1,
+        "\"Natal\" e \"natal\" são UM tema na lista: {lista:?}"
+    );
+    assert_eq!(natais[0].1, 2, "e a contagem soma as duas: {lista:?}");
+}
+
+#[test]
 /// V13 — renomear a playlist, e a recusa do nome vazio.
 ///
 /// A recusa mora no banco, e não só na tela: playlist sem nome vira uma linha

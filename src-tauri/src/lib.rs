@@ -51,6 +51,8 @@ pub fn run() {
             commands::create_playlist,
             commands::delete_playlist,
             commands::rename_playlist,
+            commands::list_temas,
+            commands::songs_by_tema,
             commands::list_playlists,
             commands::get_playlist_items,
             commands::add_to_playlist,

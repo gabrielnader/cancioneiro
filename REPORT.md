@@ -1,6 +1,6 @@
 # REPORT — Cancioneiro
 
-## Estado em 0.11.3 — o que o produto é, e o que ele custou aprender
+## Estado em 0.12.0 — o que o produto é, e o que ele custou aprender
 
 O Cancioneiro é um player de MP3 **offline** (Tauri 2 + Rust + React, SQLite com
 FTS5) que existe para resolver um problema só: **achar uma música pelo pedaço de
@@ -55,13 +55,13 @@ que *esta máquina* faz, não o que o produto sabe fazer.
 
 ### As suítes
 
-| suíte | 0.6.0 (início da janela) | 0.11.3 |
+| suíte | 0.6.0 (início da janela) | 0.12.0 |
 |---|---|---|
-| cargo test | 106 | **477** |
+| cargo test | 106 | **478** |
 | pytest | 557 | **754** |
 | vitest | 369 | **1286** |
 | Playwright E2E | 22 | **54** |
-| total | 1054 | **2571** |
+| total | 1054 | **2572** |
 
 `tsc` limpo, `cargo check` sem avisos, **0 warnings**. As decisões de projeto —
 **185** hoje, contra 30 ao fim da V1 — estão em
@@ -216,6 +216,29 @@ ao ponto do funil que depende dela.
    que o Rust corrigiu (uma música chamada "Diversos" valeria vazio), e ficou de
    fora por escopo — ele é ferramenta de terminal do dono do produto e não vai
    para as 40 máquinas, mas o dano é o mesmo dentro do arquivo dele.
+
+---
+
+> **Atualização V14 (0.12.0):** montar playlist deixou de exigir sair da
+> playlist. Veio de um beta tester ("abre uma tela vazia") e o dono acrescentou
+> como ELE usa: playlists são sequências para tocar numa ocasião — logo a ordem
+> importa, e acrescentar é atividade contínua, não só do primeiro dia.
+>
+> Por isso o painel fica no topo **sempre**, e não só na tela vazia, e cada
+> música clicada vai para o FIM, na ordem dos cliques. A busca é própria do
+> painel: se fosse a da biblioteca, montar playlist bagunçaria o que a pessoa
+> estava procurando na outra tela.
+>
+> Três formas de acrescentar, porque são três situações: **buscar** (lembrei
+> desta música), **por tema** (quero tudo de São João) e **arrastar** — que já
+> existia desde a V5 e ninguém descobria; a tela vazia passou a ensinar.
+>
+> O "por tema" é o que só este produto pode fazer, porque só ele guarda tema
+> dentro do MP3. Duas consultas novas, com duas decisões que o teste forçou: o
+> tema casa **exato** ("Natal" não arrasta "Natalino" — lote errado é trabalho
+> manual de desfazer), e a lista agrupa **ignorando maiúsculas**, porque num
+> acervo curado à mão "Natal" e "natal" convivem e apareceriam como dois temas.
+> A segunda só apareceu porque o teste da primeira mostrou a contagem quebrada.
 
 ---
 

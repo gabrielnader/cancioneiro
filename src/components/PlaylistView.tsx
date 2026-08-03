@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { getBackend } from "../lib/api";
+import type { Song } from "../lib/types";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlayerStore } from "../stores/playerStore";
 import { usePlaylistStore } from "../stores/playlistStore";
@@ -13,6 +15,7 @@ export function PlaylistView() {
   const removeItem = usePlaylistStore((s) => s.removeItem);
   const reorder = usePlaylistStore((s) => s.reorder);
   const deletePlaylist = usePlaylistStore((s) => s.deletePlaylist);
+  const addToPlaylist = usePlaylistStore((s) => s.addToPlaylist);
 
   const select = useLibraryStore((s) => s.select);
   const selectedSongId = useLibraryStore((s) => s.selectedSongId);
@@ -25,6 +28,35 @@ export function PlaylistView() {
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
   const [confirmingDelete, setConfirmingDelete] = useState(false);
+  /** V14 — o painel de acrescentar músicas, aberto por padrão na playlist vazia. */
+  const [busca, setBusca] = useState("");
+  const [achados, setAchados] = useState<Song[]>([]);
+  const [temas, setTemas] = useState<[string, number][]>([]);
+  const [tema, setTema] = useState("");
+
+  useEffect(() => {
+    void getBackend()
+      .listTemas()
+      .then(setTemas)
+      .catch(() => setTemas([]));
+  }, []);
+
+  useEffect(() => {
+    const termo = busca.trim();
+    if (!termo) {
+      setAchados([]);
+      return;
+    }
+    // espera de 150 ms, a mesma da busca da biblioteca: digitar não dispara
+    // uma consulta por tecla
+    const t = setTimeout(() => {
+      void getBackend()
+        .search(termo)
+        .then((r) => setAchados(r.slice(0, 30).map((x) => x.song)))
+        .catch(() => setAchados([]));
+    }, 150);
+    return () => clearTimeout(t);
+  }, [busca]);
 
   const playlist = playlists.find((p) => p.id === activePlaylistId);
   if (!playlist || activePlaylistId === null) return null;
@@ -96,10 +128,86 @@ export function PlaylistView() {
         </button>
       </div>
 
+      {/* V14 — acrescentar músicas SEM sair da playlist. A ordem importa aqui
+          (a playlist é uma sequência para tocar), então cada adição vai para o
+          FIM, na ordem em que a pessoa clica. */}
+      <div className="shrink-0 border-b border-border px-4 py-3">
+        <input
+          type="text"
+          value={busca}
+          onChange={(e) => setBusca(e.target.value)}
+          placeholder="Buscar música para acrescentar…"
+          aria-label="Buscar música para acrescentar"
+          className="w-full rounded-md border border-border bg-canvas px-3 py-2 text-[14px] text-ink"
+        />
+        {achados.length > 0 && (
+          <div className="mt-2 max-h-56 overflow-y-auto rounded-md border border-border">
+            {achados.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                className="flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-[14px] text-ink-secondary hover:bg-surface-hover"
+                onClick={() => void addToPlaylist(activePlaylistId, s.id)}
+              >
+                <span className="truncate">
+                  {s.title}
+                  {s.artist ? ` — ${s.artist}` : ""}
+                </span>
+                <span className="shrink-0 text-brand">+</span>
+              </button>
+            ))}
+          </div>
+        )}
+        {temas.length > 0 && (
+          <div className="mt-2 flex flex-wrap items-center gap-2 text-[14px]">
+            <label htmlFor="tema-lote" className="text-ink-tertiary">
+              Ou acrescentar tudo de um tema:
+            </label>
+            <select
+              id="tema-lote"
+              value={tema}
+              onChange={(e) => setTema(e.target.value)}
+              className="rounded-md border border-border bg-canvas px-2 py-1 text-ink"
+            >
+              <option value="">escolha um tema</option>
+              {temas.map(([nome, n]) => (
+                <option key={nome} value={nome}>
+                  {nome} ({n})
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              disabled={!tema}
+              className="rounded-md px-3 py-1 font-medium text-brand hover:bg-brand-soft disabled:text-disabled"
+              onClick={() => {
+                const escolhido = tema;
+                void getBackend()
+                  .songsByTema(escolhido)
+                  .then(async (musicas) => {
+                    // em série: a ordem da playlist é a ordem daqui
+                    for (const m of musicas) {
+                      await addToPlaylist(activePlaylistId, m.id);
+                    }
+                    setTema("");
+                  });
+              }}
+            >
+              Acrescentar
+            </button>
+          </div>
+        )}
+      </div>
+
       {items.length === 0 ? (
         <div className="flex flex-1 items-center justify-center px-6 text-center">
-          <p className="text-ink-tertiary">
-            Esta playlist está vazia. Adicione músicas pela busca ou biblioteca.
+          <p className="max-w-sm text-ink-tertiary">
+            Esta playlist está vazia. Use a busca acima para acrescentar
+            músicas — ou{" "}
+            <strong className="font-medium text-ink-secondary">
+              arraste uma música da biblioteca
+            </strong>{" "}
+            e solte no nome da playlist, na coluna da esquerda.
           </p>
         </div>
       ) : (

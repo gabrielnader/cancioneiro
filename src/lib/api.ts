@@ -481,6 +481,9 @@ export interface Backend {
   scan(): Promise<ScanResult>;
   listSongs(): Promise<Song[]>;
   search(query: string): Promise<SearchResult[]>;
+  /** V14 — temas do acervo com a contagem, para montar playlist por tema. */
+  listTemas(): Promise<[string, number][]>;
+  songsByTema(tema: string): Promise<Song[]>;
   getLyrics(songId: number): Promise<string | null>;
   fileExists(path: string): Promise<boolean>;
   createPlaylist(name: string): Promise<number>;
@@ -678,6 +681,14 @@ function tauriBackend(): Backend {
     async listSongs() {
       const { invoke } = await import("@tauri-apps/api/core");
       return invoke<Song[]>("list_songs");
+    },
+    async listTemas() {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<[string, number][]>("list_temas");
+    },
+    async songsByTema(tema) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<Song[]>("songs_by_tema", { tema });
     },
     async search(query) {
       const { invoke } = await import("@tauri-apps/api/core");

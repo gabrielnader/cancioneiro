@@ -477,6 +477,63 @@ pub fn list_songs(conn: &Connection) -> Result<Vec<Song>> {
     Ok(rows.collect::<std::result::Result<_, _>>()?)
 }
 
+/// V14 — os temas do acervo, com quantas músicas cada um tem.
+///
+/// A coluna `temas` guarda vários unidos por "; ", então a separação é feita
+/// aqui e não em SQL: SQLite não tem split, e um LIKE por tema pegaria
+/// "Natal" dentro de "Natalino".
+pub fn list_temas(conn: &Connection) -> Result<Vec<(String, i64)>> {
+    let mut stmt = conn.prepare("SELECT temas FROM songs WHERE temas IS NOT NULL")?;
+    let linhas = stmt.query_map([], |r| r.get::<_, String>(0))?;
+    // Agrupa ignorando maiúsculas: num acervo curado à mão "Natal" e "natal"
+    // convivem, e mostrá-los como dois temas na lista é confusão pura. Vale a
+    // primeira grafia vista — a busca por tema também ignora maiúsculas.
+    let mut contagem: std::collections::HashMap<String, (String, i64)> =
+        std::collections::HashMap::new();
+    for linha in linhas {
+        for t in linha?.split(';') {
+            let t = t.trim();
+            if t.is_empty() {
+                continue;
+            }
+            let e = contagem
+                .entry(t.to_lowercase())
+                .or_insert_with(|| (t.to_string(), 0));
+            e.1 += 1;
+        }
+    }
+    let mut saida: Vec<(String, i64)> = contagem.into_values().collect();
+    // minúsculas bastam para uma lista que a pessoa varre com o olho
+    saida.sort_by_key(|(t, _)| t.to_lowercase());
+    Ok(saida)
+}
+
+/// As músicas que têm EXATAMENTE este tema (e não que o contenham).
+pub fn songs_by_tema(conn: &Connection, tema: &str) -> Result<Vec<Song>> {
+    let alvo = tema.trim();
+    if alvo.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn.prepare(&format!(
+        "SELECT {SONG_COLS} FROM songs WHERE temas IS NOT NULL ORDER BY title COLLATE ptbr, id"
+    ))?;
+    let rows = stmt.query_map([], song_from_row)?;
+    let mut saida = Vec::new();
+    for s in rows {
+        let s = s?;
+        let tem = s
+            .temas
+            .as_deref()
+            .unwrap_or("")
+            .split(';')
+            .any(|t| t.trim().eq_ignore_ascii_case(alvo));
+        if tem {
+            saida.push(s);
+        }
+    }
+    Ok(saida)
+}
+
 pub fn get_song(conn: &Connection, song_id: i64) -> Result<Option<Song>> {
     let mut stmt = conn.prepare(&format!("SELECT {SONG_COLS} FROM songs WHERE id = ?1"))?;
     Ok(stmt

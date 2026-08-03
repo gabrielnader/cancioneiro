@@ -2255,6 +2255,27 @@ export function createMockBackend(): MockBackend {
       return playlist.id;
     },
 
+    async listTemas(): Promise<[string, number][]> {
+      const contagem = new Map<string, number>();
+      for (const s of state.songs) {
+        for (const t of (s.temas ?? "").split(";")) {
+          const nome = t.trim();
+          if (nome) contagem.set(nome, (contagem.get(nome) ?? 0) + 1);
+        }
+      }
+      return [...contagem.entries()].sort((a, b) =>
+        a[0].toLowerCase().localeCompare(b[0].toLowerCase()),
+      );
+    },
+    async songsByTema(tema: string): Promise<Song[]> {
+      const alvo = tema.trim().toLowerCase();
+      if (!alvo) return [];
+      return state.songs.filter((s) =>
+        (s.temas ?? "")
+          .split(";")
+          .some((t) => t.trim().toLowerCase() === alvo),
+      );
+    },
     async renamePlaylist(playlistId: number, name: string): Promise<void> {
       const nome = name.trim();
       // mesma recusa do Rust: playlist sem nome vira linha em branco na lateral

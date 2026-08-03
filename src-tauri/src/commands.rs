@@ -327,6 +327,20 @@ pub fn rename_playlist(state: State<'_, Db>, playlist_id: i64, name: String) -> 
     db::rename_playlist(&conn, playlist_id, &name)
 }
 
+/// V14 — os temas do acervo, para montar playlist a partir de um deles.
+#[tauri::command]
+pub fn list_temas(state: State<'_, Db>) -> Result<Vec<(String, i64)>> {
+    let conn = state.lock()?;
+    db::list_temas(&conn)
+}
+
+/// As músicas com EXATAMENTE este tema.
+#[tauri::command]
+pub fn songs_by_tema(state: State<'_, Db>, tema: String) -> Result<Vec<db::Song>> {
+    let conn = state.lock()?;
+    db::songs_by_tema(&conn, &tema)
+}
+
 #[tauri::command]
 pub fn list_playlists(state: State<'_, Db>) -> Result<Vec<Playlist>> {
     let conn = state.lock()?;
