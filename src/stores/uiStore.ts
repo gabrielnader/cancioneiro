@@ -36,6 +36,10 @@ interface UiState {
    * mesma chave das outras preferências.
    */
   openFolders: string[];
+  /** V14.1 — largura da barra lateral, em pixels. Ajustável porque nome de
+      playlist é longo e a coluna fixa cortava quase todos. */
+  larguraLateral: number;
+  setLarguraLateral: (px: number) => void;
   /**
    * V10 — `vagalumeApiKey` SAIU (DECISIONS #110).
    *
@@ -67,6 +71,10 @@ export function createUiStore() {
         checkUpdatesOnStart: true,
         theme: "auto",
         openFolders: [],
+        larguraLateral: 240,
+        // limites: estreita demais some com o texto, larga demais come a lista
+        setLarguraLateral: (px) =>
+          set({ larguraLateral: Math.max(180, Math.min(480, Math.round(px))) }),
         toggleLyricsPanel: () =>
           set((s) => ({ lyricsPanelVisible: !s.lyricsPanelVisible })),
         cycleFontLevel: () =>

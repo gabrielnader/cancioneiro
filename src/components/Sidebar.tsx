@@ -1,5 +1,6 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { textoDoProgressoDaTranscricao } from "../lib/curadoria";
+import { versaoDoApp } from "../lib/versao";
 import { buildFolderTree, isUnderFolder, type FolderNode } from "../lib/folderTree";
 import { useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
@@ -25,6 +26,14 @@ export function Sidebar() {
   /** V13 — a playlist sendo renomeada, e o texto em edição. */
   const [renomeando, setRenomeando] = useState<number | null>(null);
   const [nomeNovo, setNomeNovo] = useState("");
+  const larguraLateral = useUiStore((s) => s.larguraLateral);
+  const setLarguraLateral = useUiStore((s) => s.setLarguraLateral);
+  /** V14.1 — a versão ao lado do nome: é o que a pessoa lê para dizer qual
+      tem, quando relata algo e não há a quem perguntar. */
+  const [versao, setVersao] = useState("");
+  useEffect(() => {
+    void versaoDoApp().then(setVersao).catch(() => setVersao(""));
+  }, []);
 
   // Árvore de pastas do acervo (V4 — F11), derivada dos file_path.
   const folderTree = useMemo(
@@ -41,9 +50,39 @@ export function Sidebar() {
   }
 
   return (
-    <nav className="flex h-full w-60 shrink-0 flex-col border-r border-border bg-surface p-3">
-      <p className="px-3 pb-2 pt-1 text-[17px] font-semibold text-brand">
+    <nav
+      className="relative flex h-full shrink-0 flex-col border-r border-border bg-surface p-3"
+      style={{ width: larguraLateral }}
+    >
+      {/* V14.1 — a alça de largura. Nomes de playlist são longos ("Chamada -
+          Mistérios da...") e a coluna fixa de 240px cortava quase todos. */}
+      <div
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Ajustar largura do menu"
+        title="Arraste para ajustar a largura"
+        className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-brand-soft"
+        onMouseDown={(e) => {
+          e.preventDefault();
+          const inicioX = e.clientX;
+          const inicial = larguraLateral;
+          const mover = (ev: MouseEvent) =>
+            setLarguraLateral(inicial + (ev.clientX - inicioX));
+          const soltar = () => {
+            window.removeEventListener("mousemove", mover);
+            window.removeEventListener("mouseup", soltar);
+          };
+          window.addEventListener("mousemove", mover);
+          window.addEventListener("mouseup", soltar);
+        }}
+      />
+      <p className="flex items-baseline gap-1.5 px-3 pb-2 pt-1 text-[17px] font-semibold text-brand">
         Cancioneiro
+        {versao && (
+          <span className="text-[11px] font-normal text-ink-tertiary">
+            v{versao}
+          </span>
+        )}
       </p>
       <button
         type="button"

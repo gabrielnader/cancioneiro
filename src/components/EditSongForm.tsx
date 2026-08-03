@@ -429,12 +429,19 @@ export function EditSongForm({
     }
     setTitleError(false);
 
-    // Se a música em edição está tocando, pausa ANTES de gravar (o arquivo
-    // pode estar em uso no Windows) e mantém pausado depois (PRD V4).
-    // audioController.pause age direto no elemento — sem esperar re-render,
-    // fechando a janela de corrida entre o pause e o write no disco.
+    // Se a música em edição está tocando, pausa ANTES de gravar: no Windows
+    // não se regrava um arquivo que está sendo lido. `audioController.pause`
+    // age direto no elemento, sem esperar re-render, fechando a corrida entre
+    // o pause e a escrita no disco.
+    //
+    // V14.1 — mas VOLTA a tocar depois, do mesmo ponto (relato de campo:
+    // "quando editar algo da música não pausar a música que está tocando").
+    // A pausa é exigência técnica de alguns segundos; deixar parado era
+    // decisão, e a decisão mudou. Pausar não zera o tempo, e a gravação não
+    // recarrega o áudio — a música continua de onde estava.
     const player = usePlayerStore.getState();
-    if (player.current?.id === song.id && player.isPlaying) {
+    const estavaTocando = player.current?.id === song.id && player.isPlaying;
+    if (estavaTocando) {
       player.setPlaying(false);
       audioController.pause();
     }
@@ -461,6 +468,9 @@ export function EditSongForm({
     } catch {
       push(`Não foi possível salvar em ${basename(song.file_path)}.`, "error");
     } finally {
+      // Volta a tocar mesmo se a gravação FALHOU: a pausa foi nossa, não da
+      // pessoa, e deixar parado somaria um segundo prejuízo ao erro.
+      if (estavaTocando) usePlayerStore.getState().setPlaying(true);
       setBusy(false);
     }
   }

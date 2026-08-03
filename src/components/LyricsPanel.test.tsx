@@ -418,12 +418,26 @@ describe("LyricsPanel — modo de edição (V4 F10)", () => {
     expect(screen.getByLabelText("Título")).toHaveValue("Título Que Falha");
   });
 
-  it("música em edição tocando: pausa antes de gravar", async () => {
+  // V14.1 — a pausa foi NOSSA, não da pessoa: deixá-la parada somaria um
+  // segundo prejuízo ao erro que ela acabou de ver.
+  it("gravação que FALHA também devolve a música ao ar", async () => {
+    writeTags.mockRejectedValueOnce(new Error("falhou"));
     usePlayerStore.setState({ current: song(1, true), isPlaying: true });
     await enterEditMode();
     fireEvent.click(screen.getByRole("button", { name: "Salvar no arquivo" }));
     await waitFor(() => expect(writeTags).toHaveBeenCalled());
-    expect(usePlayerStore.getState().isPlaying).toBe(false);
+    await waitFor(() => expect(usePlayerStore.getState().isPlaying).toBe(true));
+  });
+
+  // V14.1 — a pausa é exigência TÉCNICA (no Windows não se regrava arquivo em
+  // uso), e dura o tempo da gravação. Ficar parado depois era decisão, e o
+  // relato de campo a derrubou: "quando editar algo da música não pausar".
+  it("música em edição tocando: pausa para gravar e VOLTA a tocar", async () => {
+    usePlayerStore.setState({ current: song(1, true), isPlaying: true });
+    await enterEditMode();
+    fireEvent.click(screen.getByRole("button", { name: "Salvar no arquivo" }));
+    await waitFor(() => expect(writeTags).toHaveBeenCalled());
+    await waitFor(() => expect(usePlayerStore.getState().isPlaying).toBe(true));
   });
 
   it("outra música tocando: NÃO pausa ao salvar", async () => {
@@ -2059,7 +2073,7 @@ describe("EditSongForm — Enter no campo de tema (V10.11/V11.1)", () => {
     em uso. É a regra do "Salvar no arquivo" desde a V4, e Enter a herda porque
     é o MESMO caminho, e não uma cópia dele.
   */
-  it("pausa a música em edição antes de gravar, como o botão faz", async () => {
+  it("pausa para gravar e volta a tocar, como o botão faz (V14.1)", async () => {
     await editar();
     act(() =>
       usePlayerStore.setState({ current: COM_TEMAS, isPlaying: true }),
@@ -2067,7 +2081,7 @@ describe("EditSongForm — Enter no campo de tema (V10.11/V11.1)", () => {
     enter("cura");
 
     await waitFor(() => expect(writeTags).toHaveBeenCalledTimes(1));
-    expect(usePlayerStore.getState().isPlaying).toBe(false);
+    await waitFor(() => expect(usePlayerStore.getState().isPlaying).toBe(true));
   });
 
   /*

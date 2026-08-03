@@ -1,6 +1,6 @@
 # REPORT — Cancioneiro
 
-## Estado em 0.12.0 — o que o produto é, e o que ele custou aprender
+## Estado em 0.12.1 — o que o produto é, e o que ele custou aprender
 
 O Cancioneiro é um player de MP3 **offline** (Tauri 2 + Rust + React, SQLite com
 FTS5) que existe para resolver um problema só: **achar uma música pelo pedaço de
@@ -55,13 +55,13 @@ que *esta máquina* faz, não o que o produto sabe fazer.
 
 ### As suítes
 
-| suíte | 0.6.0 (início da janela) | 0.12.0 |
+| suíte | 0.6.0 (início da janela) | 0.12.1 |
 |---|---|---|
 | cargo test | 106 | **478** |
 | pytest | 557 | **754** |
-| vitest | 369 | **1286** |
+| vitest | 369 | **1287** |
 | Playwright E2E | 22 | **54** |
-| total | 1054 | **2572** |
+| total | 1054 | **2573** |
 
 `tsc` limpo, `cargo check` sem avisos, **0 warnings**. As decisões de projeto —
 **185** hoje, contra 30 ao fim da V1 — estão em
@@ -239,6 +239,16 @@ ao ponto do funil que depende dela.
 > manual de desfazer), e a lista agrupa **ignorando maiúsculas**, porque num
 > acervo curado à mão "Natal" e "natal" convivem e apareceriam como dois temas.
 > A segunda só apareceu porque o teste da primeira mostrou a contagem quebrada.
+>
+> **V14.1 (0.12.1):** a versão passou a aparecer ao lado do nome — sem suporte
+> a quem perguntar, "qual versão você tem?" é a primeira pergunta de todo
+> relato, e a pessoa precisa lê-la sem abrir menu. A largura da lateral virou
+> ajustável e guardada (nome de playlist é longo; "Chamada - Mistérios da..."
+> não cabia em 240px). E **salvar deixou de parar a música**: a pausa é
+> exigência técnica — no Windows não se regrava arquivo em uso —, mas ficar
+> parado depois era decisão, e ela caiu. Volta do mesmo ponto, **inclusive
+> quando a gravação falha**: a pausa foi nossa, não da pessoa, e deixar parado
+> somaria um segundo prejuízo ao erro.
 
 ---
 
