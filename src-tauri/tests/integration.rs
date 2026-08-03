@@ -204,6 +204,41 @@ fn rescan_updates_only_changed_file() {
 // F1 — Acceptance: remover pasta apaga Songs e PlaylistItems em cascata.
 // ---------------------------------------------------------------------------
 #[test]
+/// V13 — renomear a playlist, e a recusa do nome vazio.
+///
+/// A recusa mora no banco, e não só na tela: playlist sem nome vira uma linha
+/// em branco na lateral, impossível de achar ou de apagar depois.
+fn rename_playlist_troca_o_nome_e_recusa_vazio() {
+    let conn = test_conn();
+    let id = db::create_playlist(&conn, "Antigo").unwrap();
+
+    db::rename_playlist(&conn, id, "  Reunião de sábado  ").unwrap();
+    let nomes: Vec<String> = db::list_playlists(&conn)
+        .unwrap()
+        .into_iter()
+        .map(|p| p.name)
+        .collect();
+    assert!(
+        nomes.contains(&"Reunião de sábado".to_string()),
+        "o nome novo entra sem os espaços das pontas: {nomes:?}"
+    );
+
+    for vazio in ["", "   "] {
+        assert!(
+            db::rename_playlist(&conn, id, vazio).is_err(),
+            "nome vazio ({vazio:?}) tem de ser recusado"
+        );
+    }
+    // e o nome anterior continua lá: a recusa não estraga o que existia
+    let nomes: Vec<String> = db::list_playlists(&conn)
+        .unwrap()
+        .into_iter()
+        .map(|p| p.name)
+        .collect();
+    assert!(nomes.contains(&"Reunião de sábado".to_string()));
+}
+
+#[test]
 fn remove_folder_cascades_to_songs_and_playlist_items() {
     let dir = setup_music_dir(false);
     let conn = test_conn();

@@ -322,6 +322,12 @@ pub fn delete_playlist(state: State<'_, Db>, playlist_id: i64) -> Result<()> {
 }
 
 #[tauri::command]
+pub fn rename_playlist(state: State<'_, Db>, playlist_id: i64, name: String) -> Result<()> {
+    let conn = state.lock()?;
+    db::rename_playlist(&conn, playlist_id, &name)
+}
+
+#[tauri::command]
 pub fn list_playlists(state: State<'_, Db>) -> Result<Vec<Playlist>> {
     let conn = state.lock()?;
     db::list_playlists(&conn)

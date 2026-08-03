@@ -449,7 +449,7 @@ test.describe("Cabeçalho: o botão flutuante de detalhes x o conteúdo das view
       [
         "Playlist",
         async () => {
-          await page.getByRole("button", { name: /Encontro de sábado/ }).first().click();
+          await page.getByRole("button", { name: /^Encontro de sábado/ }).first().click();
         },
       ],
       [
@@ -613,7 +613,7 @@ test.describe("Playlists (F5)", () => {
 
     // persiste após "reiniciar o app"
     await page.reload();
-    await page.getByRole("button", { name: /Domingo/ }).click();
+    await page.getByRole("button", { name: /^Domingo/ }).click();
     const list = page.getByRole("listbox", { name: "Playlist Domingo" });
     await expect(list.getByText("Coração Sertanejo")).toBeVisible();
     await expect(list.getByText("Instrumental Sem Letra")).toBeVisible();

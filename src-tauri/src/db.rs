@@ -644,6 +644,20 @@ pub fn delete_playlist(conn: &Connection, playlist_id: i64) -> Result<()> {
     Ok(())
 }
 
+/// V13 — renomear a playlist. Nome vazio é recusado aqui, e não só na tela:
+/// playlist sem nome vira uma linha em branco na lateral, impossível de achar.
+pub fn rename_playlist(conn: &Connection, playlist_id: i64, name: &str) -> Result<()> {
+    let nome = name.trim();
+    if nome.is_empty() {
+        return Err(AppError("dê um nome para a playlist".into()));
+    }
+    conn.execute(
+        "UPDATE playlists SET name = ?2 WHERE id = ?1",
+        params![playlist_id, nome],
+    )?;
+    Ok(())
+}
+
 pub fn list_playlists(conn: &Connection) -> Result<Vec<Playlist>> {
     let mut stmt = conn.prepare(
         "SELECT p.id, p.name, count(pi.id)

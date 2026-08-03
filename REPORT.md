@@ -1,6 +1,6 @@
 # REPORT — Cancioneiro
 
-## Estado em 0.11.0 — o que o produto é, e o que ele custou aprender
+## Estado em 0.11.1 — o que o produto é, e o que ele custou aprender
 
 O Cancioneiro é um player de MP3 **offline** (Tauri 2 + Rust + React, SQLite com
 FTS5) que existe para resolver um problema só: **achar uma música pelo pedaço de
@@ -55,13 +55,13 @@ que *esta máquina* faz, não o que o produto sabe fazer.
 
 ### As suítes
 
-| suíte | 0.6.0 (início da janela) | 0.11.0 |
+| suíte | 0.6.0 (início da janela) | 0.11.1 |
 |---|---|---|
-| cargo test | 106 | **476** |
+| cargo test | 106 | **477** |
 | pytest | 557 | **754** |
 | vitest | 369 | **1285** |
 | Playwright E2E | 22 | **54** |
-| total | 1054 | **2569** |
+| total | 1054 | **2570** |
 
 `tsc` limpo, `cargo check` sem avisos, **0 warnings**. As decisões de projeto —
 **185** hoje, contra 30 ao fim da V1 — estão em
@@ -216,6 +216,26 @@ ao ponto do funil que depende dela.
    que o Rust corrigiu (uma música chamada "Diversos" valeria vazio), e ficou de
    fora por escopo — ele é ferramenta de terminal do dono do produto e não vai
    para as 40 máquinas, mas o dano é o mesmo dentro do arquivo dele.
+
+---
+
+> **Atualização V13 (0.11.1):** três pedidos pequenos, feitos direto e sem
+> agente — a pedido do dono, que paga esta conta do próprio bolso e viu o custo
+> subir demais para o tamanho das mudanças.
+>
+> Tocar da biblioteca passou a montar **fila** com a lista que está na tela (já
+> filtrada por pasta e busca), para o botão de próxima funcionar fora de
+> playlist. Renomear playlist ganhou comando no Rust, com a recusa de nome vazio
+> **no banco** e não só na tela — playlist sem nome vira linha em branco na
+> lateral, impossível de achar depois. E a lateral trocou "Nova playlist" por um
+> **+** ao lado do título da seção, com Configurações descendo para o pé.
+>
+> **Duas coisas que a suíte pegou e que não eram teste velho.** A fila nova fez
+> um clique numa música com arquivo ausente passar a tocar **outra**: o código
+> decidia pular por "tem fila?", e pular sozinho é comportamento de PLAYLIST, não
+> de lista. E eu havia posto o ✎ **dentro** do botão da playlist — clicável
+> dentro de clicável, HTML inválido, que além de confundir leitor de tela fez o
+> localizador do teste casar com dois elementos. Virou irmão.
 
 ---
 

@@ -31,7 +31,7 @@ export function SongList() {
   const folderFilter = useLibraryStore((s) => s.folderFilter);
   const selectedSongId = useLibraryStore((s) => s.selectedSongId);
   const select = useLibraryStore((s) => s.select);
-  const playSong = usePlayerStore((s) => s.playSong);
+  const playQueue = usePlayerStore((s) => s.playQueue);
 
   // Filtro de pasta ativo (V4 F11) refina a lista exibida.
   const results = useMemo(
@@ -86,7 +86,17 @@ export function SongList() {
                 snippet={result.snippet}
                 selected={selectedSongId === result.song.id}
                 onSelect={() => select(result.song.id)}
-                onPlay={() => playSong(result.song)}
+                onPlay={() =>
+                  // V13 — tocar da biblioteca monta a fila com a lista que está
+                  // NA TELA (já filtrada por pasta e por busca), para o botão de
+                  // próxima funcionar fora de playlist. `null` de playlist é o
+                  // que distingue "fila da biblioteca" de "fila de playlist".
+                  playQueue(
+                    results.map((r) => r.song),
+                    vi.index,
+                    null,
+                  )
+                }
               />
             </div>
           );

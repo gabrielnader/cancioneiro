@@ -128,11 +128,8 @@ export function useKeyboardShortcuts() {
           const selectedId = useLibraryStore.getState().selectedSongId;
           const index = songs.findIndex((s) => s.id === selectedId);
           if (index === -1) break;
-          if (playlistId !== null) {
-            usePlayerStore.getState().playQueue(songs, index, playlistId);
-          } else {
-            usePlayerStore.getState().playSong(songs[index]);
-          }
+          // V13 — os dois casos montam fila; o que muda é de onde ela veio.
+          usePlayerStore.getState().playQueue(songs, index, playlistId);
           break;
         }
       }

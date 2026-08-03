@@ -27,8 +27,12 @@ export async function loadCurrentIntoAudio(
 
   if (!exists) {
     useLibraryStore.getState().markUnavailable(song.id);
-    const inQueue = player.queueIndex !== null;
-    if (inQueue) {
+    // V13 — pular sozinho é comportamento de PLAYLIST, não de "tem fila".
+    // A biblioteca passou a montar fila (para o botão de próxima funcionar),
+    // e sem esta distinção dois cliques numa música cujo arquivo sumiu
+    // passariam a tocar OUTRA música: quem clicou pediu aquela.
+    const tocandoPlaylist = player.playlistId !== null;
+    if (tocandoPlaylist) {
       useToastStore
         .getState()
         .push(`Pulando "${song.title}": arquivo não encontrado.`, "warning");

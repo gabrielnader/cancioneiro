@@ -16,11 +16,15 @@ export function Sidebar() {
   const openPlaylist = usePlaylistStore((s) => s.openPlaylist);
   const closePlaylist = usePlaylistStore((s) => s.closePlaylist);
   const addToPlaylist = usePlaylistStore((s) => s.addToPlaylist);
+  const renamePlaylist = usePlaylistStore((s) => s.renamePlaylist);
   const folders = useLibraryStore((s) => s.folders);
   const allSongs = useLibraryStore((s) => s.allSongs);
   const setFolderFilter = useLibraryStore((s) => s.setFolderFilter);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dragOverId, setDragOverId] = useState<number | null>(null);
+  /** V13 — a playlist sendo renomeada, e o texto em edição. */
+  const [renomeando, setRenomeando] = useState<number | null>(null);
+  const [nomeNovo, setNomeNovo] = useState("");
 
   // Árvore de pastas do acervo (V4 — F11), derivada dos file_path.
   const folderTree = useMemo(
@@ -59,24 +63,46 @@ export function Sidebar() {
           ))}
         </div>
       )}
-      <button
-        type="button"
-        className={navClass(view === "settings")}
-        onClick={() => {
-          closePlaylist();
-          setView("settings");
-        }}
-      >
-        Configurações
-      </button>
-
-      <p className="mt-5 px-3 text-[12px] font-medium uppercase text-ink-tertiary">
-        PLAYLISTS
-      </p>
+      {/* V13 — o "+" fica ao lado do título da seção que ele preenche, e
+          Configurações desceu para o pé: é ajuste, não navegação do dia a dia. */}
+      <div className="mt-5 flex items-center justify-between gap-2 px-3">
+        <p className="text-[12px] font-medium uppercase text-ink-tertiary">
+          PLAYLISTS
+        </p>
+        <button
+          type="button"
+          aria-label="Nova playlist"
+          title="Nova playlist"
+          className="rounded p-0.5 text-[16px] leading-none text-brand hover:bg-brand-soft"
+          onClick={() => setDialogOpen(true)}
+        >
+          +
+        </button>
+      </div>
       <div className="mt-1 flex-1 overflow-y-auto">
         {playlists.map((p) => (
+          <div key={p.id} className="group flex items-center gap-1">
+          {renomeando === p.id ? (
+            /* V13 — renomear no lugar, sem caixa de diálogo: é uma palavra. */
+            <input
+              autoFocus
+              aria-label={`Novo nome para ${p.name}`}
+              className="w-full rounded-md border border-border bg-canvas px-3 py-2 text-[15px] text-ink"
+              value={nomeNovo}
+              onChange={(e) => setNomeNovo(e.target.value)}
+              onBlur={() => setRenomeando(null)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setRenomeando(null);
+                if (e.key !== "Enter") return;
+                const nome = nomeNovo.trim();
+                // nome vazio não grava: playlist sem nome some na lateral
+                if (nome) void renamePlaylist(p.id, nome);
+                setRenomeando(null);
+              }}
+            />
+          ) : (
+            <>
           <button
-            key={p.id}
             type="button"
             className={`${navClass(view === "playlist" && activePlaylistId === p.id)} ${
               dragOverId === p.id ? "ring-2 ring-brand" : ""
@@ -110,14 +136,34 @@ export function Sidebar() {
               </span>
             </span>
           </button>
+          {/* V13 — o ✎ é IRMÃO do botão, e não filho: clicável dentro de
+              clicável é HTML inválido e confunde leitor de tela. */}
+          <button
+            type="button"
+            aria-label={`Renomear playlist ${p.name}`}
+            title="Renomear"
+            className="shrink-0 rounded px-1 text-[12px] text-ink-tertiary hover:bg-surface-hover"
+            onClick={() => {
+              setNomeNovo(p.name);
+              setRenomeando(p.id);
+            }}
+          >
+            ✎
+          </button>
+            </>
+          )}
+          </div>
         ))}
       </div>
       <button
         type="button"
-        className="mt-2 rounded-md px-3 py-2 text-left text-[15px] font-medium text-brand hover:bg-brand-soft"
-        onClick={() => setDialogOpen(true)}
+        className={`mt-2 ${navClass(view === "settings")}`}
+        onClick={() => {
+          closePlaylist();
+          setView("settings");
+        }}
       >
-        Nova playlist
+        Configurações
       </button>
 
       <EnrichBackgroundIndicator />

@@ -51,6 +51,7 @@ function fakeBackend(overrides: Partial<Backend> = {}): Backend {
     fileExists: vi.fn(async () => true),
     createPlaylist: vi.fn(async () => 1),
     deletePlaylist: vi.fn(async () => {}),
+    renamePlaylist: vi.fn(async () => {}),
     listPlaylists: vi.fn(async () => []),
     getPlaylistItems: vi.fn(async () => []),
     addToPlaylist: vi.fn(async () => 1),

@@ -16,6 +16,7 @@ interface PlaylistState {
   closePlaylist: () => void;
   createPlaylist: (name: string) => Promise<number>;
   deletePlaylist: (playlistId: number) => Promise<void>;
+  renamePlaylist: (playlistId: number, name: string) => Promise<void>;
   addToPlaylist: (playlistId: number, songId: number) => Promise<void>;
   removeItem: (itemId: number) => Promise<void>;
   reorder: (itemIds: number[]) => Promise<void>;
@@ -61,6 +62,11 @@ export const usePlaylistStore = create<PlaylistState>()((set, get) => ({
     if (get().activePlaylistId === playlistId) {
       set({ activePlaylistId: null, items: [] });
     }
+    await get().loadPlaylists();
+  },
+
+  renamePlaylist: async (playlistId, name) => {
+    await getBackend().renamePlaylist(playlistId, name);
     await get().loadPlaylists();
   },
 

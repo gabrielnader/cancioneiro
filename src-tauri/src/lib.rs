@@ -50,6 +50,7 @@ pub fn run() {
             commands::file_exists,
             commands::create_playlist,
             commands::delete_playlist,
+            commands::rename_playlist,
             commands::list_playlists,
             commands::get_playlist_items,
             commands::add_to_playlist,

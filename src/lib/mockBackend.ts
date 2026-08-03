@@ -2255,6 +2255,14 @@ export function createMockBackend(): MockBackend {
       return playlist.id;
     },
 
+    async renamePlaylist(playlistId: number, name: string): Promise<void> {
+      const nome = name.trim();
+      // mesma recusa do Rust: playlist sem nome vira linha em branco na lateral
+      if (!nome) throw new Error("dê um nome para a playlist");
+      const p = state.playlists.find((x) => x.id === playlistId);
+      if (p) p.name = nome;
+      save();
+    },
     async deletePlaylist(playlistId: number): Promise<void> {
       state.playlists = state.playlists.filter((p) => p.id !== playlistId);
       state.playlistItems = state.playlistItems.filter(

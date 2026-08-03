@@ -485,6 +485,7 @@ export interface Backend {
   fileExists(path: string): Promise<boolean>;
   createPlaylist(name: string): Promise<number>;
   deletePlaylist(playlistId: number): Promise<void>;
+  renamePlaylist(playlistId: number, name: string): Promise<void>;
   listPlaylists(): Promise<Playlist[]>;
   getPlaylistItems(playlistId: number): Promise<PlaylistItem[]>;
   addToPlaylist(playlistId: number, songId: number): Promise<number>;
@@ -697,6 +698,10 @@ function tauriBackend(): Backend {
     async deletePlaylist(playlistId) {
       const { invoke } = await import("@tauri-apps/api/core");
       await invoke("delete_playlist", { playlistId });
+    },
+    async renamePlaylist(playlistId, name) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("rename_playlist", { playlistId, name });
     },
     async listPlaylists() {
       const { invoke } = await import("@tauri-apps/api/core");
