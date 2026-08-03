@@ -122,6 +122,15 @@ export function createPlayerStore() {
         },
 
         onEnded: () => {
+          // V13.1 — emendar sozinho é comportamento de PLAYLIST: ali a pessoa
+          // montou uma sequência e quer ouvi-la. Na biblioteca ela pediu UMA
+          // música; seguir para a próxima da pasta sozinho seria decidir por
+          // ela. O botão de próxima continua avançando nos dois casos — o que
+          // muda é quem pede: a pessoa, ou o fim da faixa.
+          if (get().playlistId === null) {
+            set({ isPlaying: false });
+            return;
+          }
           if (!get().next()) {
             set({ isPlaying: false });
           }

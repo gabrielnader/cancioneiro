@@ -50,6 +50,23 @@ describe("playerStore (F4/F5)", () => {
     expect(s.current?.id).toBe(1);
   });
 
+  it("fila da BIBLIOTECA: ao terminar para, mas o botão de próxima avança", () => {
+    // V13.1 — relato de campo. Tocar da biblioteca monta fila (para o botão de
+    // próxima funcionar), mas emendar sozinho é comportamento de PLAYLIST: aqui
+    // a pessoa pediu UMA música. `playlistId` null é o que separa os dois.
+    usePlayerStore.getState().playQueue([S1, S2, S3], 0, null);
+
+    usePlayerStore.getState().onEnded();
+    let s = usePlayerStore.getState();
+    expect(s.isPlaying).toBe(false);
+    expect(s.current?.id).toBe(1);
+
+    // mas pedir a próxima na mão continua avançando
+    expect(usePlayerStore.getState().next()).toBe(true);
+    s = usePlayerStore.getState();
+    expect(s.current?.id).toBe(2);
+  });
+
   it("playQueue inicia no índice pedido e avança automaticamente até o fim", () => {
     usePlayerStore.getState().playQueue([S1, S2, S3], 0, 42);
     let s = usePlayerStore.getState();

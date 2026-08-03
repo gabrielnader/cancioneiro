@@ -1,6 +1,6 @@
 # REPORT — Cancioneiro
 
-## Estado em 0.11.1 — o que o produto é, e o que ele custou aprender
+## Estado em 0.11.2 — o que o produto é, e o que ele custou aprender
 
 O Cancioneiro é um player de MP3 **offline** (Tauri 2 + Rust + React, SQLite com
 FTS5) que existe para resolver um problema só: **achar uma música pelo pedaço de
@@ -55,13 +55,13 @@ que *esta máquina* faz, não o que o produto sabe fazer.
 
 ### As suítes
 
-| suíte | 0.6.0 (início da janela) | 0.11.1 |
+| suíte | 0.6.0 (início da janela) | 0.11.2 |
 |---|---|---|
 | cargo test | 106 | **477** |
 | pytest | 557 | **754** |
-| vitest | 369 | **1285** |
+| vitest | 369 | **1286** |
 | Playwright E2E | 22 | **54** |
-| total | 1054 | **2570** |
+| total | 1054 | **2571** |
 
 `tsc` limpo, `cargo check` sem avisos, **0 warnings**. As decisões de projeto —
 **185** hoje, contra 30 ao fim da V1 — estão em
@@ -236,6 +236,12 @@ ao ponto do funil que depende dela.
 > de lista. E eu havia posto o ✎ **dentro** do botão da playlist — clicável
 > dentro de clicável, HTML inválido, que além de confundir leitor de tela fez o
 > localizador do teste casar com dois elementos. Virou irmão.
+>
+> **V13.1 (0.11.2), no mesmo dia:** a fila da biblioteca fez a música seguinte
+> emendar sozinha ao fim da faixa — e não era isso que se pediu. Emendar é
+> comportamento de PLAYLIST, onde a pessoa montou uma sequência; na biblioteca
+> ela pediu UMA música. O botão de próxima continua avançando nos dois casos. O
+> que separa não é ter fila, é **quem pede**: a pessoa, ou o fim da faixa.
 
 ---
 
