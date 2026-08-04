@@ -28,6 +28,8 @@ export function Sidebar() {
   const [nomeNovo, setNomeNovo] = useState("");
   const larguraLateral = useUiStore((s) => s.larguraLateral);
   const setLarguraLateral = useUiStore((s) => s.setLarguraLateral);
+  const alturaArvore = useUiStore((s) => s.alturaArvore);
+  const setAlturaArvore = useUiStore((s) => s.setAlturaArvore);
   /** V14.1 — a versão ao lado do nome: é o que a pessoa lê para dizer qual
       tem, quando relata algo e não há a quem perguntar. */
   const [versao, setVersao] = useState("");
@@ -40,6 +42,34 @@ export function Sidebar() {
     () => buildFolderTree(allSongs, folders),
     [allSongs, folders],
   );
+
+  /*
+    V14.2 — a abertura automática virou EMPURRÃO, e não trava.
+
+    Quando o filtro de pasta muda, as ancestrais entram na lista de abertas
+    uma vez. Daí em diante a setinha manda: fechar fecha e continua fechado.
+    Antes isso era calculado a cada render, e a pasta com a seleção não podia
+    ser fechada de jeito nenhum.
+  */
+  const folderFilterAtual = useLibraryStore((s) => s.folderFilter);
+  useEffect(() => {
+    if (!folderFilterAtual) return;
+    const ancestrais: string[] = [];
+    const visita = (nos: FolderNode[]) => {
+      for (const n of nos) {
+        if (
+          n.children.length > 0 &&
+          (folderFilterAtual === n.path || isUnderFolder(folderFilterAtual, n.path))
+        ) {
+          ancestrais.push(n.path);
+          visita(n.children);
+        }
+      }
+    };
+    visita(folderTree);
+    const faltando = ancestrais.filter((p) => !useUiStore.getState().openFolders.includes(p));
+    for (const p of faltando) useUiStore.getState().toggleFolder(p);
+  }, [folderFilterAtual, folderTree]);
 
   function navClass(active: boolean) {
     return `block w-full rounded-md px-3 py-2 text-left text-[15px] ${
@@ -96,11 +126,39 @@ export function Sidebar() {
         Biblioteca
       </button>
       {folderTree.length > 0 && (
-        <div className="max-h-64 shrink-0 overflow-y-auto">
-          {folderTree.map((node) => (
-            <FolderTreeItem key={node.path} node={node} level={0} />
-          ))}
-        </div>
+        <>
+          <div
+            className="shrink-0 overflow-y-auto"
+            style={{ height: alturaArvore }}
+          >
+            {folderTree.map((node) => (
+              <FolderTreeItem key={node.path} node={node} level={0} />
+            ))}
+          </div>
+          {/* V14.2 — alça horizontal: com 7.894 músicas a árvore precisa de
+              muito mais espaço que a lista de playlists, e com poucas pastas é
+              o contrário. Quem sabe a proporção certa é quem está olhando. */}
+          <div
+            role="separator"
+            aria-orientation="horizontal"
+            aria-label="Ajustar altura da árvore de pastas"
+            title="Arraste para ajustar a altura"
+            className="my-1 h-1.5 shrink-0 cursor-row-resize rounded hover:bg-brand-soft"
+            onMouseDown={(e) => {
+              e.preventDefault();
+              const inicioY = e.clientY;
+              const inicial = alturaArvore;
+              const mover = (ev: MouseEvent) =>
+                setAlturaArvore(inicial + (ev.clientY - inicioY));
+              const soltar = () => {
+                window.removeEventListener("mousemove", mover);
+                window.removeEventListener("mouseup", soltar);
+              };
+              window.addEventListener("mousemove", mover);
+              window.addEventListener("mouseup", soltar);
+            }}
+          />
+        </>
       )}
       {/* V13 — o "+" fica ao lado do título da seção que ele preenche, e
           Configurações desceu para o pé: é ajuste, não navegação do dia a dia. */}
@@ -307,11 +365,19 @@ function FolderTreeItem({ node, level }: { node: FolderNode; level: number }) {
   const isRoot = level === 0;
   const active = !isRoot && folderFilter === node.path;
   const hasChildren = node.children.length > 0;
-  // a seleção atual está DENTRO desta pasta (ela mesma ou uma subpasta dela)
-  const contemSelecao =
-    folderFilter !== null &&
-    (folderFilter === node.path || isUnderFolder(folderFilter, node.path));
-  const aberta = hasChildren && (openFolders.includes(node.path) || contemSelecao);
+  /*
+    V14.2 — quem manda no aberto/fechado é SÓ a lista de abertas.
+
+    Antes havia um `|| contemSelecao`: a pasta que continha o filtro era
+    forçada aberta, e clicar na setinha para fechar não tinha efeito nenhum.
+    Relato de campo: "consigo abrir as pastas na setinha, mas pra fechar fica
+    travando" — não era lentidão, era briga.
+
+    A abertura automática continua existindo, mas virou um EMPURRÃO (o efeito
+    no `Sidebar`, quando o filtro muda) em vez de uma trava permanente: ela
+    põe as ancestrais na lista, e daí em diante a pessoa manda.
+  */
+  const aberta = hasChildren && openFolders.includes(node.path);
 
   return (
     <>

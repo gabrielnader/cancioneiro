@@ -40,6 +40,9 @@ interface UiState {
       playlist é longo e a coluna fixa cortava quase todos. */
   larguraLateral: number;
   setLarguraLateral: (px: number) => void;
+  /** V14.2 — altura da árvore de pastas; o resto da coluna é das playlists. */
+  alturaArvore: number;
+  setAlturaArvore: (px: number) => void;
   /**
    * V10 — `vagalumeApiKey` SAIU (DECISIONS #110).
    *
@@ -75,6 +78,10 @@ export function createUiStore() {
         // limites: estreita demais some com o texto, larga demais come a lista
         setLarguraLateral: (px) =>
           set({ larguraLateral: Math.max(180, Math.min(480, Math.round(px))) }),
+        alturaArvore: 256,
+        // piso de 80px: abaixo disso não cabe uma pasta e a alça vira armadilha
+        setAlturaArvore: (px) =>
+          set({ alturaArvore: Math.max(80, Math.min(700, Math.round(px))) }),
         toggleLyricsPanel: () =>
           set((s) => ({ lyricsPanelVisible: !s.lyricsPanelVisible })),
         cycleFontLevel: () =>

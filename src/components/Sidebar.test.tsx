@@ -230,13 +230,26 @@ describe("Sidebar — árvore de pastas recolhível, como um explorador (V12)", 
     expect(screen.queryByRole("button", { name: "Pasta y" })).not.toBeInTheDocument();
   });
 
-  it("abrir sozinha por causa da seleção não é persistido (não fica aberta depois de trocar de filtro)", () => {
+  /*
+    V14.2 — a abertura automática virou EMPURRÃO, e a decisão da V12 mudou.
+
+    Antes ela era derivada a cada render e NÃO persistia — o que tinha um preço
+    escondido: a pasta que continha o filtro era forçada aberta, e a setinha de
+    fechar não fazia nada. Relato de campo: "consigo abrir na setinha, mas pra
+    fechar fica travando".
+
+    Agora as ancestrais entram na lista de abertas uma vez, e daí em diante
+    quem manda é a pessoa. O preço trocado: a pasta continua aberta depois de
+    limpar o filtro — o que é aceitável, porque ela É relevante para quem
+    acabou de filtrá-la, e agora dá para fechar.
+  */
+  it("a pasta do filtro abre sozinha, e depois PODE ser fechada na setinha", () => {
     useLibraryStore.setState({ folderFilter: "/acervo/1/x" });
-    const { rerender } = render(<Sidebar />);
+    render(<Sidebar />);
     expect(screen.getByRole("button", { name: "Pasta x" })).toBeInTheDocument();
 
-    useLibraryStore.setState({ folderFilter: "/acervo/2" });
-    rerender(<Sidebar />);
+    // fechar a ancestral esconde a subpasta — antes isto não tinha efeito
+    fireEvent.click(screen.getByRole("button", { name: "Fechar pasta 1" }));
     expect(screen.queryByRole("button", { name: "Pasta x" })).not.toBeInTheDocument();
   });
 });

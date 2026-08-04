@@ -1,6 +1,6 @@
 # REPORT — Cancioneiro
 
-## Estado em 0.12.1 — o que o produto é, e o que ele custou aprender
+## Estado em 0.12.2 — o que o produto é, e o que ele custou aprender
 
 O Cancioneiro é um player de MP3 **offline** (Tauri 2 + Rust + React, SQLite com
 FTS5) que existe para resolver um problema só: **achar uma música pelo pedaço de
@@ -55,7 +55,7 @@ que *esta máquina* faz, não o que o produto sabe fazer.
 
 ### As suítes
 
-| suíte | 0.6.0 (início da janela) | 0.12.1 |
+| suíte | 0.6.0 (início da janela) | 0.12.2 |
 |---|---|---|
 | cargo test | 106 | **478** |
 | pytest | 557 | **754** |
@@ -249,6 +249,18 @@ ao ponto do funil que depende dela.
 > parado depois era decisão, e ela caiu. Volta do mesmo ponto, **inclusive
 > quando a gravação falha**: a pausa foi nossa, não da pessoa, e deixar parado
 > somaria um segundo prejuízo ao erro.
+>
+> **V14.2 (0.12.2), com o acervo de 7.894 músicas na tela:** *"consigo abrir as
+> pastas na setinha, mas pra fechar fica travando"*. Não era lentidão — era
+> `aberta = openFolders.includes(path) || contemSelecao`: a pasta que continha o
+> filtro era **forçada** aberta, e a setinha de fechar não tinha efeito nenhum.
+> A abertura automática virou **empurrão de uma vez** (um efeito, quando o
+> filtro muda) em vez de trava permanente, e daí em diante quem manda é a
+> pessoa. O preço trocado está escrito no teste que mudou de lado: a pasta
+> continua aberta depois de limpar o filtro — aceitável, porque ela é relevante
+> para quem acabou de filtrá-la, e agora dá para fechar. Junto, a altura da
+> árvore virou ajustável: com 7.894 músicas ela precisa de muito mais espaço que
+> a lista de playlists, e com poucas pastas é o contrário.
 
 ---
 
