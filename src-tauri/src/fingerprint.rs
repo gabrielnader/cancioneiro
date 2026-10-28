@@ -190,7 +190,7 @@ pub fn impressao_digital(
     mp3: &Path,
     cancelado: &dyn Fn() -> bool,
 ) -> Result<Impressao> {
-    let mut filho = std::process::Command::new(fpcalc)
+    let mut filho = crate::processo::comando_sem_janela(fpcalc)
         .arg("-json")
         .arg(mp3)
         .stdin(std::process::Stdio::null())

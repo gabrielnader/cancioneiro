@@ -464,6 +464,39 @@ fn destino_de(url: &str) -> Option<Destino> {
 /// acusando a internet de quem está olhando.
 ///
 /// As demais falhas viram mensagens DISTINTAS (ver `mensagem_de_status`).
+/// Quanto esperar antes de PERGUNTAR DE NOVO, se é que vale perguntar.
+///
+/// Existe por um defeito de campo: numa varredura de mil músicas apareciam
+/// linhas vermelhas dizendo que o site de letras estava fora do ar — não
+/// todas, algumas. Serviço comunitário e gratuito como o LRCLIB engasga: um
+/// 502 isolado não significa "fora do ar", significa "agora não". Só que uma
+/// tentativa única transforma o engasgo de um segundo em música sem letra, e
+/// a pessoa não tem como saber que bastava perguntar de novo — ela teria de
+/// rodar a varredura inteira outra vez.
+///
+/// Função à parte, e não um `if` dentro do laço, para a suíte poder exercitar
+/// a REGRA sem abrir conexão nenhuma.
+///
+/// O que se repete é só o que pode ser engasgo:
+/// - **5xx**: defeito do lado de lá, que costuma passar sozinho;
+/// - **429**: ele pediu para esperar — então espera-se mais, e pergunta-se de
+///   novo uma vez.
+///
+/// O que NÃO se repete:
+/// - **4xx em geral** (404, 400): a resposta não vai mudar, e repetir só
+///   dobraria o tempo da varredura;
+/// - **falha de transporte** (DNS, tempo esgotado, conexão recusada): quando a
+///   internet está fora, repetir custa mais 10 s POR MÚSICA, e numa pasta de
+///   mil músicas isso são horas de espera para chegar à mesma conclusão.
+fn espera_antes_de_insistir(status: u16) -> Option<std::time::Duration> {
+    match status {
+        // ele mesmo pediu tempo: dar menos que isso é insistir à toa
+        429 => Some(std::time::Duration::from_millis(1200)),
+        500..=599 => Some(std::time::Duration::from_millis(600)),
+        _ => None,
+    }
+}
+
 pub(crate) fn funil_fetcher(url: &str) -> Result<String> {
     let Some(destino) = destino_de(url) else {
         return Err(AppError("endereço de rede não permitido".into()));
@@ -472,18 +505,33 @@ pub(crate) fn funil_fetcher(url: &str) -> Result<String> {
         .timeout(std::time::Duration::from_secs(10))
         .user_agent("Cancioneiro/0.9")
         .build();
-    match agent.get(url).call() {
-        // O corpo que não chegou inteiro é a conexão caindo no meio: para quem
-        // está olhando, este servidor não respondeu.
-        Ok(resp) => resp
-            .into_string()
-            .map_err(|_| AppError(mensagem_de_transporte(destino).into())),
-        Err(ureq::Error::Status(404, _)) if destino == Destino::LyricsOvh => Ok(String::new()),
-        Err(ureq::Error::Status(status, _)) => {
-            Err(AppError(mensagem_de_status(status, destino).into()))
+    // uma segunda chance, e só uma: ver `espera_antes_de_insistir`
+    let mut ja_insistiu = false;
+    loop {
+        match agent.get(url).call() {
+            // O corpo que não chegou inteiro é a conexão caindo no meio: para
+            // quem está olhando, este servidor não respondeu.
+            Ok(resp) => {
+                return resp
+                    .into_string()
+                    .map_err(|_| AppError(mensagem_de_transporte(destino).into()))
+            }
+            Err(ureq::Error::Status(404, _)) if destino == Destino::LyricsOvh => {
+                return Ok(String::new())
+            }
+            Err(ureq::Error::Status(status, _)) => {
+                if let Some(espera) = espera_antes_de_insistir(status) {
+                    if !ja_insistiu {
+                        ja_insistiu = true;
+                        std::thread::sleep(espera);
+                        continue;
+                    }
+                }
+                return Err(AppError(mensagem_de_status(status, destino).into()));
+            }
+            // transporte: DNS que não resolve, tempo esgotado, conexão recusada.
+            Err(_) => return Err(AppError(mensagem_de_transporte(destino).into())),
         }
-        // transporte: DNS que não resolve, tempo esgotado, conexão recusada.
-        Err(_) => Err(AppError(mensagem_de_transporte(destino).into())),
     }
 }
 
@@ -1813,6 +1861,35 @@ mod tests {
         ] {
             let err = funil_fetcher(url).expect_err("destino {url} deveria ser recusado");
             assert_eq!(err.to_string(), "endereço de rede não permitido");
+        }
+    }
+
+    /// Quem merece uma segunda pergunta e quem não merece.
+    ///
+    /// A varredura real é de mil músicas: cada repetição à toa custa tempo
+    /// multiplicado por mil, e cada repetição que falta custa uma música sem
+    /// letra que teria letra. Esta é a linha entre as duas.
+    #[test]
+    fn only_a_hiccup_earns_a_second_question() {
+        // engasgo do lado de lá: pergunta de novo
+        for status in [500, 502, 503, 504, 599] {
+            assert!(
+                espera_antes_de_insistir(status).is_some(),
+                "{status} é engasgo e merece segunda pergunta"
+            );
+        }
+        // ele pediu para esperar — e a espera tem de ser MAIOR que a do 5xx,
+        // senão insistir é desobedecer
+        let pediu_tempo = espera_antes_de_insistir(429).expect("429 merece segunda pergunta");
+        let engasgou = espera_antes_de_insistir(503).expect("503 merece segunda pergunta");
+        assert!(pediu_tempo > engasgou, "quem pede tempo tem de ganhar mais");
+
+        // resposta que não vai mudar: repetir só dobraria a varredura
+        for status in [200, 400, 401, 403, 404, 410, 422] {
+            assert!(
+                espera_antes_de_insistir(status).is_none(),
+                "{status} não muda se perguntarem de novo"
+            );
         }
     }
 

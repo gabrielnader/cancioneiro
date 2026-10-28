@@ -1611,7 +1611,7 @@ pub fn transcrever(
         return Ok(None); // cancelado durante a decodificação
     };
 
-    let mut filho = std::process::Command::new(whisper)
+    let mut filho = crate::processo::comando_sem_janela(whisper)
         .args(argumentos(modelo, &temporario.0, idioma))
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())

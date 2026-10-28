@@ -8,6 +8,7 @@ pub mod fingerprint;
 pub mod indexer;
 pub mod lyrics_fetch;
 pub mod lyrics_ovh;
+pub mod processo;
 pub mod search;
 pub mod transcricao;
 pub mod writer;

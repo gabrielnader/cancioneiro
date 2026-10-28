@@ -2767,3 +2767,20 @@ opção mais simples que passa nos Acceptance Checks do PRD.
     contrato errado (#88). A ÚNICA coisa que ele não reproduz é o teto de 300:
     ele existe porque lá são 8.000 músicas em disco, e no mock são as poucas de
     um teste, em memória.
+
+## V14 — dois defeitos de campo no Windows (curadoria de acervo grande)
+
+- **Piscava uma janela de terminal a cada música.** No Windows todo processo
+  filho ganha um console próprio a menos que se peça o contrário, e a
+  impressão digital (`fpcalc`) roda uma vez POR MÚSICA: numa pasta de mil
+  músicas são mil janelas abrindo e fechando por cima do que a pessoa está
+  fazendo. `processo::comando_sem_janela` concentra `CREATE_NO_WINDOW` num
+  lugar só — os dois acessórios externos (`fpcalc` e `whisper-cli`) passam
+  por ele, e qualquer terceiro que venha também.
+- **"o site de letras está fora do ar agora" em algumas músicas.** O LRCLIB é
+  serviço comunitário e gratuito: engasga. Uma tentativa única transformava
+  um 502 de um segundo em música sem letra, e a pessoa só teria como corrigir
+  rodando a varredura inteira de novo. Agora 5xx e 429 ganham **uma** segunda
+  pergunta (600 ms / 1200 ms). O que NÃO se repete: 4xx (a resposta não vai
+  mudar) e falha de transporte — com a internet fora, repetir custa mais 10 s
+  por música, e são horas para chegar à mesma conclusão.
