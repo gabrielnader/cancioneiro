@@ -2784,3 +2784,17 @@ opção mais simples que passa nos Acceptance Checks do PRD.
   pergunta (600 ms / 1200 ms). O que NÃO se repete: 4xx (a resposta não vai
   mudar) e falha de transporte — com a internet fora, repetir custa mais 10 s
   por música, e são horas para chegar à mesma conclusão.
+
+## V14.1 — o acervo que vinha do Mac aparecia em dobro no Windows
+
+Ao lado de cada `musica.mp3` a biblioteca mostrava um `._musica.mp3` que não
+tocava. É o rastro do macOS (AppleDouble: ícone e atributos, nunca áudio),
+deixado ao copiar para pendrive ou zip — e no acervo de quem cura num Mac e
+ouve num PC, isso é a biblioteca inteira duplicada. A varredura passa a
+ignorar **tudo que começa com ponto**, arquivo ou pasta: esconder é o jeito
+que todo sistema tem de dizer "isto é maquinaria, não conteúdo". A raiz
+escolhida pela pessoa nunca é podada pelo próprio nome. Nada é apagado nem
+renomeado — o que já estava no índice sai pela mesma linha que remove música
+que saiu da pasta. As duas varreduras (a que conta e a que indexa) viraram
+uma função só: elas TÊM de concordar, senão a barra promete um número e o
+trabalho entrega outro.

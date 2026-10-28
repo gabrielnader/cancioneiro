@@ -317,6 +317,48 @@ fn is_mp3(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// O nome começa com ponto — isto é, o sistema o esconde de quem abre a pasta.
+///
+/// Existe por um defeito de campo: no Windows a biblioteca apareceu cheia de
+/// `._musica.mp3` ao lado de cada `musica.mp3`. São arquivos que o **macOS**
+/// deixa para trás ao copiar música para um pendrive ou para um zip
+/// (AppleDouble: guardam ícone e atributos estendidos, nunca áudio). Têm
+/// quatro quilobytes, não tocam, e dobram a lista exatamente no acervo de
+/// quem trouxe as músicas de um Mac.
+///
+/// Esconder um arquivo é o jeito que TODO sistema tem de dizer "isto não é
+/// conteúdo, é maquinaria" — o `.Trashes` e o `.Spotlight-V100` do pendrive
+/// dizem a mesma coisa. Então a regra não é sobre AppleDouble: é sobre ponto.
+///
+/// Nada é apagado nem renomeado: o arquivo continua exatamente onde está, só
+/// deixa de entrar no índice. Quem já tem esses registros no banco os perde na
+/// próxima varredura, pela mesma linha que remove música que saiu da pasta.
+fn e_oculto(path: &Path) -> bool {
+    path.file_name()
+        .map(|n| n.to_string_lossy().starts_with('.'))
+        .unwrap_or(false)
+}
+
+/// Os MP3s de uma pasta, do jeito que a varredura os vê.
+///
+/// Um lugar só, e não a mesma expressão copiada em dois: quem conta para a
+/// barra de progresso e quem indexa TÊM de concordar, senão a barra promete um
+/// número e o trabalho entrega outro. Pastas ocultas são podadas inteiras
+/// (`.Trashes`, `.fseventsd`) — descer nelas é gastar tempo de disco para
+/// jogar tudo fora no filtro seguinte.
+///
+/// A raiz nunca é podada: a pessoa pode ter escolhido uma pasta que mora
+/// dentro de um caminho com ponto, e aí recusar a própria raiz seria dizer
+/// que a pasta está vazia.
+fn mp3s_da_pasta(folder_path: &str) -> impl Iterator<Item = walkdir::DirEntry> + '_ {
+    WalkDir::new(folder_path)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| e.depth() == 0 || !e_oculto(e.path()))
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file() && is_mp3(e.path()))
+}
+
 /// Varre uma pasta registrada: indexa MP3s novos/alterados (skip incremental
 /// por mtime+size), remove do índice arquivos que sumiram, atualiza
 /// last_scanned_at. `progress` recebe (concluídos, total).
@@ -344,12 +386,7 @@ pub fn scan_folder<F: FnMut(usize, usize)>(
         params![folder_id],
     )?;
 
-    let files: Vec<walkdir::DirEntry> = WalkDir::new(&folder_path)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file() && is_mp3(e.path()))
-        .collect();
+    let files: Vec<walkdir::DirEntry> = mp3s_da_pasta(&folder_path).collect();
 
     let mut stats = ScanStats {
         total: files.len(),
@@ -470,18 +507,62 @@ pub fn scan_all<F: FnMut(usize, usize)>(
 }
 
 fn count_mp3s(folder_path: &str) -> usize {
-    WalkDir::new(folder_path)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file() && is_mp3(e.path()))
-        .count()
+    mp3s_da_pasta(folder_path).count()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{arquivo_para_busca, pastas_for};
+    use super::{arquivo_para_busca, mp3s_da_pasta, pastas_for};
     use std::path::Path;
+
+    /// O acervo que veio de um Mac não entra dobrado.
+    ///
+    /// Defeito relatado no Windows: ao lado de cada `musica.mp3` aparecia um
+    /// `._musica.mp3` que não tocava e sujava a lista. É o rastro que o macOS
+    /// deixa ao copiar para pendrive ou zip — e no acervo de quem cura a
+    /// coleção num Mac e ouve num PC, isso é a biblioteca inteira em dobro.
+    #[test]
+    fn the_scan_ignores_what_the_system_hides() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let raiz = dir.path();
+        std::fs::write(raiz.join("musica.mp3"), b"").unwrap();
+        // o sósia do macOS, que é o caso que abriu este teste
+        std::fs::write(raiz.join("._musica.mp3"), b"").unwrap();
+        // e qualquer outro oculto: a regra é sobre o ponto, não sobre o macOS
+        std::fs::write(raiz.join(".rascunho.mp3"), b"").unwrap();
+
+        // pasta oculta inteira (o `.Trashes` do pendrive): podada, não visitada
+        let lixeira = raiz.join(".Trashes");
+        std::fs::create_dir(&lixeira).unwrap();
+        std::fs::write(lixeira.join("apagada.mp3"), b"").unwrap();
+
+        // subpasta NORMAL continua entrando — a poda é dos ocultos, não da
+        // recursão
+        let sub = raiz.join("Capoeira");
+        std::fs::create_dir(&sub).unwrap();
+        std::fs::write(sub.join("roda.mp3"), b"").unwrap();
+
+        let mut achados: Vec<String> = mp3s_da_pasta(&raiz.to_string_lossy())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        achados.sort();
+        assert_eq!(achados, vec!["musica.mp3", "roda.mp3"]);
+    }
+
+    /// A raiz escolhida pela pessoa vale mesmo que ELA comece com ponto.
+    ///
+    /// Recusar a própria raiz seria responder "a pasta está vazia" a quem
+    /// acabou de apontar para uma pasta cheia de música — e ela não tem a quem
+    /// perguntar por quê.
+    #[test]
+    fn a_chosen_root_is_never_pruned_for_its_own_name() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let raiz = dir.path().join(".acervo");
+        std::fs::create_dir(&raiz).unwrap();
+        std::fs::write(raiz.join("musica.mp3"), b"").unwrap();
+
+        assert_eq!(mp3s_da_pasta(&raiz.to_string_lossy()).count(), 1);
+    }
 
     #[test]
     fn arquivo_para_busca_uses_stem_without_extension() {
