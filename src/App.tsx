@@ -33,7 +33,7 @@ function UpdateNotice() {
     <div
       role="status"
       aria-live="polite"
-      className="fixed bottom-20 left-4 z-50 flex w-96 max-w-[calc(100vw-2rem)] items-start gap-3 rounded-md bg-brand-soft px-4 py-3 text-[14px] text-brand-strong shadow-md ring-1 ring-brand-ring"
+      className="fixed bottom-28 left-4 z-50 flex w-96 max-w-[calc(100vw-2rem)] items-start gap-3 rounded-md bg-brand-soft px-4 py-3 text-[14px] text-brand-strong shadow-md ring-1 ring-brand-ring"
     >
       <p className="min-w-0 flex-1">
         Atualização pronta. Reinicie o Cancioneiro para usar a versão nova.

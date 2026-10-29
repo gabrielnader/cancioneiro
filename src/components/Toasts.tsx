@@ -14,7 +14,10 @@ export function Toasts() {
   return (
     <div
       aria-live="polite"
-      className="pointer-events-none fixed bottom-20 right-4 z-50 flex w-96 max-w-[calc(100vw-2rem)] flex-col gap-2"
+      // V15 — no centro, acima do player: no canto direito o aviso caía em
+      // cima do "Salvar no arquivo" dos detalhes, e quem salvava duas músicas
+      // seguidas não conseguia clicar na segunda (achado do E2E)
+      className="pointer-events-none fixed bottom-28 left-1/2 z-50 flex w-[28rem] max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-col gap-2 baixa:bottom-24"
     >
       {toasts.map((t) => (
         <button

@@ -1218,14 +1218,14 @@ describe("a pergunta do fim (PRD V10)", () => {
     expect(t).toContain("Sobraram 47 músicas sem letra");
     expect(t).toContain("174,5 MB");
     expect(t).toContain("cerca de 3 minutos");
-    expect(t).toContain("Configurações");
+    expect(t).toContain('"Organizar minhas músicas"');
   });
 
   // Estado do acessório desconhecido: não inventa tamanho nem tempo.
   it("sem saber o tamanho, não inventa número", () => {
     const t = textoDaTranscricaoIndisponivel(47, null);
     expect(t).toContain("Sobraram 47 músicas sem letra");
-    expect(t).toContain("Configurações");
+    expect(t).toContain('"Organizar minhas músicas"');
     expect(t).not.toMatch(/\d+ MB/);
   });
 });
@@ -1282,11 +1282,13 @@ describe("os três campos novos da proposta", () => {
 // ---------------------------------------------------------------------------
 
 describe("avisoLetraExistente — o que seria substituído", () => {
-  it("letra qualquer: avisa que existe e que, sem marcar, só nomes são aplicados", () => {
+  // V15 — o aviso nomeia os DOIS botões da conferência: o que troca e o que
+  // não muda nada. Era uma caixa de marcar "abaixo", que deixou de existir.
+  it("letra qualquer: avisa que existe, e diz o que cada botão faz com ela", () => {
     const texto = avisoLetraExistente(null);
     expect(texto).toContain("Já tem letra");
-    expect(texto).toContain("só título e artista");
-    expect(texto).toContain("abaixo");
+    expect(texto).toContain('"Trocar a letra pela nova" substitui a de hoje');
+    expect(texto).toContain('"Manter como está" não muda nada');
   });
 
   it("letra transcrita: usa o vocabulário do projeto e lembra da correção à mão", () => {
@@ -1302,7 +1304,7 @@ describe("avisoLetraExistente — o que seria substituído", () => {
 
 describe("aviso de troca de nome escrito por gente", () => {
   it("diz o que a linha faria, em uma frase", () => {
-    expect(AVISO_NOME_ESCRITO.toLowerCase()).toContain("já existe");
+    expect(AVISO_NOME_ESCRITO.toLowerCase()).toContain("alguém escreveu");
     expect(AVISO_NOME_ESCRITO.length).toBeLessThanOrEqual(90);
     expect(frases(AVISO_NOME_ESCRITO)).toBe(1);
   });
@@ -1873,7 +1875,7 @@ describe("fechar a revisão com transcrição pendente (V10.6)", () => {
   it("diz quantas faltam e onde a oferta continua", () => {
     expect(avisoDeTranscricaoPendente(27)).toBe(
       "Ainda há 27 músicas sem letra. Escrever a letra ouvindo o áudio continua" +
-        " em Configurações, quando você quiser.",
+        ' em "Organizar minhas músicas", quando você quiser.',
     );
   });
 
@@ -2040,11 +2042,11 @@ describe("a saída da ficha para quem não tem os acessórios (V10.10)", () => {
     está: o bloco permanente diz "acima" porque já estamos em Configurações, e
     o editor não está lá.
   */
-  it("manda para Configurações com tamanho e tempo", () => {
+  it("manda para \"Organizar minhas músicas\" com tamanho e tempo", () => {
     const t = textoDaOfertaDestaMusica(DOWNLOAD);
     expect(t).toContain("1,4 GB");
     expect(t).toContain("cerca de 9 minutos");
-    expect(t).toContain("em Configurações");
+    expect(t).toContain('em "Organizar minhas músicas"');
     // e não fala do tempo da transcrição: quem não pode transcrever ainda não
     // tem o que decidir sobre minutos de CPU
     expect(t).not.toContain("ouvindo o áudio leva");
@@ -2052,7 +2054,7 @@ describe("a saída da ficha para quem não tem os acessórios (V10.10)", () => {
 
   it("a frase do download é a MESMA da pergunta do fim, letra por letra", () => {
     const segunda =
-      "Para escrever a letra ouvindo o áudio, baixe 1,4 GB em Configurações —" +
+      'Para escrever a letra ouvindo o áudio, baixe 1,4 GB em "Organizar minhas músicas" —' +
       " cerca de 9 minutos.";
     expect(textoDaOfertaDestaMusica(DOWNLOAD)).toContain(segunda);
     expect(textoDaTranscricaoIndisponivel(47, DOWNLOAD)).toContain(segunda);
@@ -2061,7 +2063,7 @@ describe("a saída da ficha para quem não tem os acessórios (V10.10)", () => {
   it("sem saber o tamanho, não inventa número (DECISIONS #86)", () => {
     const t = textoDaOfertaDestaMusica(null);
     expect(t).toContain("Esta música continua sem letra.");
-    expect(t).toContain("Configurações");
+    expect(t).toContain('"Organizar minhas músicas"');
     expect(t).not.toMatch(/\d+(,\d)? (kB|MB|GB)/);
   });
 });

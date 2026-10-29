@@ -966,11 +966,12 @@ export function textoDaTranscricaoIndisponivel(
  */
 function fraseDoDownloadDaTranscricao(download: DownloadPendente | null): string {
   if (download === null) {
-    return "Para escrever a letra ouvindo o áudio, ligue o recurso em Configurações.";
+    // V15 — o lugar se chama pelo nome que está escrito no botão do topo
+    return 'Para escrever a letra ouvindo o áudio, ligue o recurso em "Organizar minhas músicas".';
   }
   return (
     "Para escrever a letra ouvindo o áudio, baixe" +
-    ` ${formatarTamanho(download.bytes)} em Configurações —` +
+    ` ${formatarTamanho(download.bytes)} em "Organizar minhas músicas" —` +
     ` ${cercaDe(download.segundos)}.`
   );
 }
@@ -1221,7 +1222,7 @@ export function avisoDeTranscricaoPendente(quantas: number): string | null {
       ? "Ainda há 1 música sem letra"
       : `Ainda há ${quantas} músicas sem letra`;
   return (
-    `${ainda}. Escrever a letra ouvindo o áudio continua em Configurações,` +
+    `${ainda}. Escrever a letra ouvindo o áudio continua em "Organizar minhas músicas",` +
     " quando você quiser."
   );
 }
@@ -1386,17 +1387,17 @@ export const LABEL_SUBSTITUIR_LETRA = "Substituir a letra atual";
  * O aviso da linha cuja proposta passaria por cima de uma letra que JÁ EXISTE
  * no arquivo (CRÍTICO-1).
  *
- * Duas coisas precisam estar escritas: que existe letra ali, e o que acontece
- * se ninguém marcar nada (aplica só os nomes — que é o valor real dessas
- * linhas). O "abaixo" aponta a marcação que fica na linha logo embaixo deste
- * texto, numa lista que pode ter dezenas de caixas parecidas.
+ * Duas coisas precisam estar escritas: que existe letra ali, e o que cada
+ * botão faz com ela. V15 — a conferência é uma sugestão por vez, com botões
+ * que dizem o que fazem; o texto nomeia os botões, e não uma caixa de marcar
+ * que deixou de existir.
  */
 export function avisoLetraExistente(letraOrigem: string | null): string {
   const oQueTem =
     letraOrigem === ORIGEM_TRANSCRICAO
       ? "Já tem letra, escrita ouvindo o áudio e talvez corrigida à mão."
       : "Já tem letra.";
-  return `${oQueTem} Sem marcar abaixo, aplica só título e artista.`;
+  return `${oQueTem} Compare as duas: "Trocar a letra pela nova" substitui a de hoje, e "Manter como está" não muda nada.`;
 }
 
 /**
@@ -1408,7 +1409,7 @@ export function avisoLetraExistente(letraOrigem: string | null): string {
  * alguém digitou à mão.
  */
 export const AVISO_NOME_ESCRITO =
-  "Isto troca um título ou artista que já existe — confira antes de marcar.";
+  "Isto troca um título ou artista que alguém escreveu — confira antes de usar o novo.";
 
 // ---------------------------------------------------------------------------
 // Acessórios — nada baixa sozinho

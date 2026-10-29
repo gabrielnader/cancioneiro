@@ -1646,7 +1646,7 @@ describe("LyricsPanel — o botão direto da etapa 5 na ficha (V10.10)", () => {
     expect(
       await screen.findByText(
         "Esta música continua sem letra. Para escrever a letra ouvindo o áudio," +
-          " baixe 1,4 GB em Configurações — cerca de 9 minutos.",
+          ' baixe 1,4 GB em "Organizar minhas músicas" — cerca de 9 minutos.',
       ),
     ).toBeInTheDocument();
     expect(
@@ -1665,7 +1665,7 @@ describe("LyricsPanel — o botão direto da etapa 5 na ficha (V10.10)", () => {
     });
     buscar();
     const texto = await screen.findByText(SEM_LETRA, { exact: false });
-    expect(texto.textContent).toContain("Configurações");
+    expect(texto.textContent).toContain('"Organizar minhas músicas"');
     expect(texto.textContent).not.toMatch(/\d+(,\d)? (kB|MB|GB)/);
   });
 

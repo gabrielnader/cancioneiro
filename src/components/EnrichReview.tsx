@@ -11,6 +11,7 @@ import {
   AVISO_LETRA_DE_MAQUINA,
   AVISO_MARCAR_INSTRUMENTAL,
   AVISO_NOME_ESCRITO,
+  EXPLICACAO_DA_CONFIANCA_DO_SOM,
   ROTULO_COMECAR_TRANSCRICAO,
   agruparPorRisco,
   avisoLetraExistente,
@@ -544,7 +545,11 @@ function Conferir() {
 
   const avisos: string[] = p
     ? [
-        ...(p.conflito ? [confiancaDoSom(p.conflito.confianca)] : []),
+        // a confiança é do RECONHECIMENTO da gravação, não de a etiqueta estar
+        // errada: sem a frase que desfaz o engano, "alta" lê como "troque já"
+        ...(p.conflito
+          ? [confiancaDoSom(p.conflito.confianca), EXPLICACAO_DA_CONFIANCA_DO_SOM]
+          : []),
         ...(p.lyrics !== null && ehLetraDeMaquina(p.fonte) ? [AVISO_LETRA_DE_MAQUINA] : []),
         ...(p.marcar_instrumental ? [AVISO_MARCAR_INSTRUMENTAL] : []),
         ...(p.substitui_nome_escrito ? [AVISO_NOME_ESCRITO] : []),

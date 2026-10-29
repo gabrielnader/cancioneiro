@@ -30,9 +30,25 @@ async function resetApp(page: Page) {
  * suíte passa por aqui, que é o caminho real da pessoa.
  */
 async function dispararCuradoria(page: Page, pasta = "") {
-  await page.getByRole("button", { name: "Configurações" }).click();
+  await page.getByRole("button", { name: "Organizar minhas músicas" }).click();
   await page.getByLabel("Pasta a curar").selectOption(pasta);
-  await page.getByRole("button", { name: "Buscar dados desta pasta" }).click();
+  await page.getByRole("button", { name: "Completar agora" }).click();
+}
+
+/**
+ * V15 — a conferência mostra UMA sugestão por vez. Avança com "Decidir depois"
+ * até a sugestão que contém `texto` aparecer (ou a fila acabar).
+ */
+async function irAteASugestao(page: Page, texto: string | RegExp) {
+  const conferir = page.getByRole("dialog", { name: "Conferir sugestões" });
+  await expect(conferir).toBeVisible({ timeout: 20000 });
+  for (let i = 0; i < 10; i++) {
+    if ((await conferir.getByText(texto).count()) > 0) return conferir;
+    const depois = conferir.getByRole("button", { name: "Decidir depois" });
+    if ((await depois.count()) === 0) break;
+    await depois.click();
+  }
+  throw new Error(`a sugestão com "${texto}" não apareceu na conferência`);
 }
 
 async function addMockFolder(page: Page) {
@@ -132,18 +148,18 @@ test.describe("Fluxo crítico: indexar → buscar → ver letra → tocar", () =
       }
     }
 
-    const search = page.getByPlaceholder("Buscar por letra, título ou artista…");
+    const search = page.getByPlaceholder("Um pedaço da letra, o nome ou quem canta");
 
     // 1 resultado sem snippet (casa pelo título) → fatia mais baixa
     await search.fill("sertanejo");
-    await expect(page.getByText("1 resultados")).toBeVisible();
+    await expect(page.getByText(/^1 música\s+encontrada$/)).toBeVisible();
     await expect(page.locator("mark")).toHaveCount(0);
     await fatiasComportam();
 
     // 1 resultado COM snippet (casa só pela letra) → a linha cresce, e a
     // contagem continua 1: é aqui que as medidas antigas eram reaproveitadas
     await search.fill(LETRA_TRECHO);
-    await expect(page.getByText("1 resultados")).toBeVisible();
+    await expect(page.getByText(/^1 música\s+encontrada$/)).toBeVisible();
     await expect(page.locator("mark").first()).toBeVisible();
     await fatiasComportam();
 
@@ -159,9 +175,9 @@ test.describe("Fluxo crítico: indexar → buscar → ver letra → tocar", () =
     await resetApp(page);
     await addMockFolder(page);
 
-    const search = page.getByPlaceholder("Buscar por letra, título ou artista…");
+    const search = page.getByPlaceholder("Um pedaço da letra, o nome ou quem canta");
     await search.fill(LETRA_TRECHO);
-    await expect(page.getByText("1 resultados")).toBeVisible();
+    await expect(page.getByText(/^1 música\s+encontrada$/)).toBeVisible();
     await expect(page.getByText("Coração Sertanejo")).toBeVisible();
     // snippet com highlight
     await expect(page.locator("mark").first()).toBeVisible();
@@ -180,7 +196,7 @@ test.describe("Fluxo crítico: indexar → buscar → ver letra → tocar", () =
       page.getByText('Nenhuma música encontrada para "xyzinexistente".'),
     ).toBeVisible();
     await expect(
-      page.getByText("Tente palavras diferentes do trecho que você lembra."),
+      page.getByText("Tente outras palavras do trecho que você lembra, ou só uma palavra."),
     ).toBeVisible();
 
     // limpar restaura a biblioteca completa
@@ -209,9 +225,9 @@ test.describe("Fluxo crítico: indexar → buscar → ver letra → tocar", () =
     await resetApp(page);
     await addMockFolder(page);
 
-    const search = page.getByPlaceholder("Buscar por letra, título ou artista…");
+    const search = page.getByPlaceholder("Um pedaço da letra, o nome ou quem canta");
     await search.fill("com_letra");
-    await expect(page.getByText("1 resultados")).toBeVisible();
+    await expect(page.getByText(/^1 música\s+encontrada$/)).toBeVisible();
     await expect(page.getByText("Coração Sertanejo")).toBeVisible();
     await expect(page.locator("mark")).toHaveCount(0);
 
@@ -229,9 +245,9 @@ test.describe("Fluxo crítico: indexar → buscar → ver letra → tocar", () =
     await addMockFolder(page);
 
     // busca por tema sem acento ("agua" → tema "água")
-    const search = page.getByPlaceholder("Buscar por letra, título ou artista…");
+    const search = page.getByPlaceholder("Um pedaço da letra, o nome ou quem canta");
     await search.fill("agua");
-    await expect(page.getByText("1 resultados")).toBeVisible();
+    await expect(page.getByText(/^1 música\s+encontrada$/)).toBeVisible();
     await expect(page.getByText("Coração Sertanejo")).toBeVisible();
 
     // chips visíveis na linha
@@ -242,7 +258,7 @@ test.describe("Fluxo crítico: indexar → buscar → ver letra → tocar", () =
     // clique no chip preenche a busca e filtra
     await chip.click();
     await expect(search).toHaveValue("esperança");
-    await expect(page.getByText("1 resultados")).toBeVisible();
+    await expect(page.getByText(/^1 música\s+encontrada$/)).toBeVisible();
     await expect(page.getByText("Coração Sertanejo")).toBeVisible();
 
     // chips também no painel de letra
@@ -288,7 +304,7 @@ test.describe("Fluxo crítico: indexar → buscar → ver letra → tocar", () =
     await expect
       .poll(async () => audio.evaluate((a: HTMLAudioElement) => a.duration))
       .toBeGreaterThan(2);
-    await page.getByRole("button", { name: "Pausar" }).click();
+    await page.getByRole("button", { name: "Pausar", exact: true }).click();
     await expect(audio).toHaveJSProperty("paused", true);
     const bar = page.getByRole("slider", { name: "Progresso da música" });
     const box = (await bar.boundingBox())!;
@@ -316,7 +332,7 @@ test.describe("Fluxo crítico: indexar → buscar → ver letra → tocar", () =
 
     await page.getByRole("button", { name: "Tocar", exact: true }).click();
     await expect(audio).toHaveJSProperty("paused", false);
-    await expect(page.getByRole("button", { name: "Pausar" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Pausar", exact: true })).toBeVisible();
   });
 
   test("espaço alterna play/pause fora da busca; dentro da busca digita espaço", async ({
@@ -334,7 +350,7 @@ test.describe("Fluxo crítico: indexar → buscar → ver letra → tocar", () =
     await expect(audio).toHaveJSProperty("paused", true);
 
     // espaço dentro do campo de busca insere espaço e não retoma o play
-    const search = page.getByPlaceholder("Buscar por letra, título ou artista…");
+    const search = page.getByPlaceholder("Um pedaço da letra, o nome ou quem canta");
     await search.click();
     await search.pressSequentially("sol amanhecer");
     await expect(search).toHaveValue("sol amanhecer");
@@ -347,167 +363,6 @@ test.describe("Fluxo crítico: indexar → buscar → ver letra → tocar", () =
   });
 });
 
-test.describe("Cabeçalho: o botão flutuante de detalhes x o conteúdo das views", () => {
-  // Relato de uso real: o botão "Ocultar/Mostrar detalhes" montava em cima do
-  // campo de busca. Ele é FLUTUANTE (precisa existir em todas as views —
-  // decisão 25), então cada view tem de reservar a faixa dele, e a única
-  // garantia real é medir as caixas.
-  //
-  // A primeira versão deste teste media SÓ a LibraryView, SÓ a 1280 — e
-  // passava enquanto a Playlist tinha o "Excluir playlist" 72 px por baixo do
-  // botão a 1024. Um teste que cobre uma view de uma família de três dá
-  // exatamente a confiança errada. Agora: as TRÊS views, nas duas pontas da
-  // largura suportada, com o painel aberto e fechado, contra QUALQUER
-  // elemento interativo da faixa do botão.
-  //
-  // As duas larguras: 1280 é a janela típica (o padrão do app é 1200) e 1024
-  // é o `minWidth` do tauri.conf.json — o mais estreito que a janela do
-  // produto chega a ser. Abaixo disso não é caso do produto (ver o teste
-  // seguinte).
-  const LARGURAS = [1280, 1024];
-
-  // A faixa reservada (--faixa-detalhes, index.css) foi dimensionada para a
-  // janela do produto, cujo piso é o `minWidth` do tauri.conf.json. Abaixo
-  // dele, com o painel aberto, o botão flutuante chega a cobrir o campo de
-  // busca inteiro — mas a janela não pode ficar tão estreita, e o modo web
-  // (onde ela pode) é ferramenta de desenvolvimento, não o produto.
-  //
-  // Só que essa justificativa depende de um número que mora em OUTRO
-  // arquivo. Se alguém baixar o minWidth, este teste passa a mentir em
-  // silêncio — então ele confere o número.
-  test("a largura mínima testada é mesmo o piso da janela do produto", () => {
-    const conf = JSON.parse(
-      readFileSync(new URL("../src-tauri/tauri.conf.json", import.meta.url), "utf-8"),
-    );
-    const minWidth = conf.app.windows[0].minWidth;
-    expect(
-      minWidth,
-      "o minWidth da janela mudou: refaça a conta de --faixa-detalhes e " +
-        "ajuste LARGURAS — abaixo de 1024 o botão flutuante cobre a busca",
-    ).toBe(Math.min(...LARGURAS));
-  });
-
-  /** Sobreposição em px entre duas caixas (0 quando não se tocam). */
-  function sobreposicao(a: Box, b: Box) {
-    return {
-      x: Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x),
-      y: Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y),
-    };
-  }
-
-  type Box = { x: number; y: number; width: number; height: number };
-
-  /**
-   * Falha se qualquer elemento interativo do <main> encostar no botão.
-   * Não é uma lista de elementos conhecidos de propósito: um controle novo
-   * no cabeçalho de qualquer view tem de acordar este teste sozinho.
-   */
-  async function semSobreposicaoCom(page: Page, contexto: string) {
-    const botao = page.getByTestId("toggle-detalhes");
-    await expect(botao).toBeVisible();
-    const t = (await botao.boundingBox())!;
-
-    const alvos = await page.locator("main button, main input, main a").all();
-    const colisoes: string[] = [];
-    for (const alvo of alvos) {
-      if ((await alvo.getAttribute("data-testid")) === "toggle-detalhes") continue;
-      const b = await alvo.boundingBox();
-      if (!b) continue;
-      const o = sobreposicao(t, b);
-      if (o.x > 0 && o.y > 0) {
-        const nome =
-          (await alvo.getAttribute("aria-label")) ??
-          (await alvo.getAttribute("placeholder")) ??
-          ((await alvo.textContent()) || "?").trim();
-        colisoes.push(
-          `"${nome}" coberto em ${Math.round(o.x)}x${Math.round(o.y)} px` +
-            ` (elemento x=${Math.round(b.x)}..${Math.round(b.x + b.width)},` +
-            ` botão x=${Math.round(t.x)}..${Math.round(t.x + t.width)})`,
-        );
-      }
-    }
-    expect(colisoes, `${contexto}: o botão flutuante cobre controles`).toEqual([]);
-  }
-
-  test("nenhuma das três views deixa o botão cobrir um controle, em 1280 e 1024", async ({
-    page,
-  }) => {
-    await resetApp(page);
-    await addMockFolder(page);
-    // uma playlist de verdade: é o cabeçalho mais cheio das três views
-    await page.getByRole("button", { name: "Nova playlist" }).click();
-    await page.getByPlaceholder("Nome da playlist").fill("Encontro de sábado");
-    await page.getByRole("button", { name: "Criar" }).click();
-
-    const views: [string, () => Promise<void>][] = [
-      [
-        "Biblioteca",
-        async () => {
-          await page.getByRole("button", { name: "Biblioteca", exact: true }).click();
-        },
-      ],
-      [
-        "Playlist",
-        async () => {
-          await page.getByRole("button", { name: /^Encontro de sábado/ }).first().click();
-        },
-      ],
-      [
-        "Configurações",
-        async () => {
-          await page.getByRole("button", { name: "Configurações" }).click();
-        },
-      ],
-    ];
-
-    for (const largura of LARGURAS) {
-      await page.setViewportSize({ width: largura, height: 760 });
-      for (const painel of ["aberto", "fechado"]) {
-        for (const [nome, abrir] of views) {
-          await abrir();
-          await semSobreposicaoCom(page, `${nome} @ ${largura}px, painel ${painel}`);
-        }
-        if (painel === "aberto") {
-          await page.getByTestId("toggle-detalhes").click();
-        }
-      }
-      await page.getByTestId("toggle-detalhes").click(); // reabre para a próxima largura
-    }
-  });
-
-  test("na Biblioteca o botão fica alinhado com o campo de busca, aberto ou fechado", async ({
-    page,
-  }) => {
-    await resetApp(page);
-    await addMockFolder(page);
-
-    const busca = page.getByPlaceholder("Buscar por letra, título ou artista…");
-    const botao = page.getByTestId("toggle-detalhes");
-
-    for (const largura of LARGURAS) {
-      await page.setViewportSize({ width: largura, height: 760 });
-      for (const estado of ["aberto", "fechado"]) {
-        const contexto = `[${largura}px, ${estado}]`;
-        const b = (await busca.boundingBox())!;
-        const t = (await botao.boundingBox())!;
-        expect(t.x, `${contexto} botão invade o campo de busca`).toBeGreaterThanOrEqual(
-          b.x + b.width,
-        );
-        // alinhados na mesma linha: topos coincidem e alturas batem
-        expect(Math.abs(t.y - b.y), `${contexto} topos desalinhados`).toBeLessThanOrEqual(2);
-        expect(
-          Math.abs(t.height - b.height),
-          `${contexto} alturas diferentes`,
-        ).toBeLessThanOrEqual(2);
-        // o campo continua utilizável: reservar a faixa não pode espremer a
-        // busca a ponto de não caber nem uma palavra
-        expect(b.width, `${contexto} campo de busca espremido`).toBeGreaterThanOrEqual(160);
-        if (estado === "aberto") await botao.click();
-      }
-      await botao.click(); // reabre para a próxima largura
-    }
-  });
-});
 
 test.describe("Persistência entre sessões (reload)", () => {
   test("volume, painel de letra e nível de fonte persistem", async ({ page }) => {
@@ -543,15 +398,15 @@ test.describe("Persistência entre sessões (reload)", () => {
 
 test.describe("Playlists (F5)", () => {
   async function createPlaylistWithSongs(page: Page, name: string) {
-    await page.getByRole("button", { name: "Nova playlist" }).click();
+    await page.getByRole("button", { name: "Nova lista" }).click();
     await page.getByPlaceholder("Nome da playlist").fill(name);
     await page.getByRole("button", { name: "Criar" }).click();
     // volta para a biblioteca para adicionar músicas
-    await page.getByRole("button", { name: "Biblioteca", exact: true }).click();
+    await page.getByRole("button", { name: /^Todas as músicas/ }).click();
     for (const title of ["Coração Sertanejo", "Instrumental Sem Letra"]) {
       const row = page.getByRole("option").filter({ hasText: title }).first();
-      await row.hover();
-      await row.getByLabel("Adicionar à playlist").click();
+      // V15 — o botão é sempre visível, com palavra ("Pôr numa lista")
+      await row.getByTestId("por-na-lista").click();
       // o menu é renderizado em portal (document.body)
       await page.getByRole("button", { name, exact: true }).click();
     }
@@ -576,7 +431,7 @@ test.describe("Playlists (F5)", () => {
     await expect(audio).toHaveJSProperty("paused", false);
     // primeira faixa (3s de duração real)
     await expect(
-      page.getByRole("button", { name: "Pausar" }),
+      page.getByRole("button", { name: "Pausar", exact: true }),
     ).toBeVisible();
 
     // avanço automático para a segunda (aguarda fim da primeira)
@@ -696,9 +551,9 @@ test.describe("V4", () => {
     await expect(panel.getByText("Artista Editado")).toBeVisible();
 
     // reindexado: buscar pelo novo título encontra
-    const search = page.getByPlaceholder("Buscar por letra, título ou artista…");
+    const search = page.getByPlaceholder("Um pedaço da letra, o nome ou quem canta");
     await search.fill("Canção Editada");
-    await expect(page.getByText("1 resultados")).toBeVisible();
+    await expect(page.getByText(/^1 música\s+encontrada$/)).toBeVisible();
     await expect(
       page.getByRole("option").filter({ hasText: "Canção Editada" }),
     ).toBeVisible();
@@ -813,9 +668,9 @@ test.describe("V4", () => {
     await expect(chip).toContainText("📁 1");
 
     // busca digitada refina DENTRO do filtro
-    const search = page.getByPlaceholder("Buscar por letra, título ou artista…");
+    const search = page.getByPlaceholder("Um pedaço da letra, o nome ou quem canta");
     await search.fill("faixa");
-    await expect(page.getByText("1 resultados")).toBeVisible();
+    await expect(page.getByText(/^1 música\s+encontrada$/)).toBeVisible();
     await search.fill("");
 
     // × limpa o filtro e restaura a biblioteca completa
@@ -857,9 +712,9 @@ test.describe("V4", () => {
     ).toBeVisible();
 
     // buscar pelo tema encontra a música
-    const search = page.getByPlaceholder("Buscar por letra, título ou artista…");
+    const search = page.getByPlaceholder("Um pedaço da letra, o nome ou quem canta");
     await search.fill("peregrinação");
-    await expect(page.getByText("1 resultados")).toBeVisible();
+    await expect(page.getByText(/^1 música\s+encontrada$/)).toBeVisible();
     await expect(
       page.getByRole("option").filter({ hasText: "sem_tags" }),
     ).toBeVisible();
@@ -922,9 +777,9 @@ test.describe("V4", () => {
       panel.getByRole("button", { name: "Tema: romaria" }),
     ).toBeVisible();
 
-    const search = page.getByPlaceholder("Buscar por letra, título ou artista…");
+    const search = page.getByPlaceholder("Um pedaço da letra, o nome ou quem canta");
     await search.fill("romaria");
-    await expect(page.getByText("1 resultados")).toBeVisible();
+    await expect(page.getByText(/^1 música\s+encontrada$/)).toBeVisible();
     expect(errors).toEqual([]);
   });
 
@@ -1016,7 +871,7 @@ test.describe("V4", () => {
 
     // com o filtro da pasta 1/ ativo, a busca pelo tema NÃO mostra a música;
     // a UI deixa claro o porquê: o chip 📁 1 segue visível sobre o empty state
-    const search = page.getByPlaceholder("Buscar por letra, título ou artista…");
+    const search = page.getByPlaceholder("Um pedaço da letra, o nome ou quem canta");
     await search.fill("advento");
     await expect(
       page.getByText('Nenhuma música encontrada para "advento".'),
@@ -1026,7 +881,7 @@ test.describe("V4", () => {
 
     // limpar o filtro no × do chip revela a música na busca pelo tema
     await chip.click();
-    await expect(page.getByText("1 resultados")).toBeVisible();
+    await expect(page.getByText(/^1 música\s+encontrada$/)).toBeVisible();
     await expect(
       page.getByRole("option").filter({ hasText: "Faixa Dois" }),
     ).toBeVisible();
@@ -1034,7 +889,7 @@ test.describe("V4", () => {
 });
 
 test.describe("V5 — Completar dados em lote (F13)", () => {
-  test("varrer a biblioteca propõe dados; aplicar a selecionada atualiza a música", async ({
+  test("varrer a biblioteca: o que só preenche grava sozinho, o resto se confere um por um", async ({
     page,
   }) => {
     const errors = trackErrors(page);
@@ -1046,66 +901,34 @@ test.describe("V5 — Completar dados em lote (F13)", () => {
     // "Toda a biblioteca" = prefixo vazio
     await dispararCuradoria(page);
 
-    const dialog = page.getByRole("dialog", { name: "Completar dados" });
-    await expect(dialog.getByText("2 propostas para conferir")).toBeVisible();
-    // V10 — a lista é ordenada por RISCO: a letra encontrada em cima, e o
-    // preenchimento de campo vazio DOBRADO, com a frase que diz o que fará
-    await expect(dialog.getByText("1 letra encontrada")).toBeVisible();
+    /*
+      V15 — o nome do arquivo para a música SEM etiqueta só preenche o que
+      estava vazio: é gravado sozinho, e o aviso diz o que mudou. A letra em
+      MÉDIA trocaria nada e preencheria algo, mas não é certeza: ela espera.
+    */
     await expect(
-      dialog.getByText(
-        "1 música sem título ou artista vai receber o nome que está no arquivo",
-      ),
+      page.getByText("1 música teve título ou artista corrigido. A biblioteca já está atualizada."),
     ).toBeVisible();
-    await expect(dialog.getByText("MÉDIA", { exact: true })).toBeVisible();
-    await expect(
-      dialog.getByText("letra encontrada", { exact: true }),
-    ).toBeVisible();
+    const conferir = page.getByRole("dialog", { name: "Conferir sugestões" });
+    await expect(conferir.getByText(/^Falta\s+1\s+para conferir$/)).toBeVisible();
+    await expect(conferir.getByRole("heading", { level: 2 })).toContainText("Instrumental Sem Letra");
+    await expect(conferir.getByText("LRCLIB.")).toBeVisible();
+    await expect(conferir.getByRole("region", { name: "Como ficaria" })).toContainText(LETRA_TRECHO);
 
-    // o grupo dobrado chega MARCADO (preencher campo vazio não tem nada a
-    // perder) e a letra em MÉDIA, não: são riscos diferentes
-    await expect(
-      dialog.getByRole("button", { name: "Aplicar selecionadas (1)" }),
-    ).toBeEnabled();
-    await expect(
-      dialog.getByRole("checkbox", {
-        name: "Aplicar proposta: Instrumental Sem Letra",
-      }),
-    ).not.toBeChecked();
-
-    // o humano decide a letra; e desmarca o grupo dobrado, para este teste
-    // aplicar só a linha da letra
-    await dialog
-      .getByRole("checkbox", { name: /1 música sem título ou artista/ })
-      .uncheck();
-    await dialog
-      .getByRole("checkbox", { name: "Aplicar proposta: Instrumental Sem Letra" })
-      .check();
-    await dialog
-      .getByRole("button", { name: "Aplicar selecionadas (1)" })
-      .click();
+    await conferir.getByRole("button", { name: "Usar o novo", exact: true }).click();
 
     // PRD V8: o aviso final diz o que MUDOU, nunca uma tarefa a fazer
     await expect(
       page.getByText("1 música ganhou letra. A biblioteca já está atualizada."),
     ).toBeVisible();
-    /*
-      V10.6 — aplicar NÃO fecha mais a caixa: era o fechamento que jogava fora a
-      lista das músicas sem letra, e recuperá-la custava a varredura inteira. A
-      linha gravada fica na tela, marcada, e quem fecha é o "Fechar".
-    */
-    await expect(dialog).toBeVisible();
-    await expect(dialog.getByText(/1 música gravada no arquivo/)).toBeVisible();
-    await dialog.getByRole("button", { name: "Fechar" }).click();
-    // e NÃO existe popup nenhum pedindo reindexação ou reinício: a curadoria
-    // feita dentro do app já reindexou
-    await expect(dialog).toHaveCount(0);
+    await expect(conferir.getByRole("heading", { name: "Pronto! Você conferiu todas." })).toBeVisible();
+    await expect(conferir.getByText(/foi completada sozinha/)).toBeVisible();
+    await conferir.getByRole("button", { name: "Ir ouvir música" }).click();
+    // e NÃO existe popup nenhum pedindo reindexação ou reinício
     await expect(page.getByRole("dialog")).toHaveCount(0);
 
-    // de volta à biblioteca, a música ganhou letra: só a sem_tags tem o badge
-    await page.getByRole("button", { name: "Biblioteca", exact: true }).click();
+    // a música ganhou letra: só a sem_tags continua com o badge
     expect(await page.getByText("Sem letra", { exact: true }).count()).toBe(1);
-
-    // a letra aplicada abre no painel de detalhes
     await page.getByText("Instrumental Sem Letra").first().click();
     await expect(
       page.getByLabel("Painel de letra").getByText(LETRA_TRECHO),
@@ -1126,65 +949,42 @@ test.describe("V5 — Completar dados em lote (F13)", () => {
     mexendo no arquivo): a consulta funcionou, a gravação é que foi recusada. A
     tela fica com as duas metades do mesmo clique, no mesmo vocabulário.
   */
-  test("gravação recusada: o cabeçalho fala de gravação, e nunca de consulta", async ({
+  test("gravação recusada: o motivo fica na sugestão, e ela continua esperando em Organizar", async ({
     page,
   }) => {
     await resetApp(page);
     await addMockFolder(page);
     await dispararCuradoria(page);
 
-    const dialog = page.getByRole("dialog", { name: "Completar dados" });
-    await expect(dialog.getByText("2 propostas para conferir")).toBeVisible();
+    const conferir = page.getByRole("dialog", { name: "Conferir sugestões" });
+    await expect(conferir.getByText(/^Falta\s+1\s+para conferir$/)).toBeVisible();
 
-    // o arquivo sai do lugar DEPOIS da varredura: a proposta continua na tela
+    // o arquivo sai do lugar DEPOIS da varredura (pen drive arrancado, pasta
+    // sincronizada com a nuvem): a consulta funcionou, a gravação é recusada
     await page.evaluate(() => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (window as any).__CANCIONEIRO_MOCK__._removeFileFromDisk(
         "/musicas/mock/sem_letra.mp3",
       );
     });
+    await conferir.getByRole("button", { name: "Usar o novo", exact: true }).click();
 
-    // a linha da letra (MÉDIA, nunca pré-marcada) mais o grupo dobrado, que
-    // chega marcado: uma grava e a outra é recusada
-    await dialog
-      .getByRole("checkbox", { name: "Aplicar proposta: Instrumental Sem Letra" })
-      .check();
-    await dialog
-      .getByRole("button", { name: "Aplicar selecionadas (2)" })
-      .click();
-
-    await expect(
-      dialog.getByRole("heading", {
-        level: 3,
-        name: "1 música não pôde ser gravada no arquivo — o motivo está na linha dela",
-      }),
-    ).toBeVisible();
-    await expect(dialog.getByText(/não pôde ser consultada/)).toHaveCount(0);
-    // o motivo é por ARQUIVO, e mora na linha
-    await expect(
-      dialog.getByText("arquivo não encontrado: /musicas/mock/sem_letra.mp3"),
-    ).toBeVisible();
-    // e a outra metade do clique, com o mesmo vocabulário
-    await expect(
-      dialog.getByRole("heading", { level: 3, name: "1 música gravada no arquivo" }),
-    ).toBeVisible();
+    // o motivo é por ARQUIVO, e mora na própria sugestão — que continua na tela
+    await expect(conferir.getByRole("alert")).toHaveText(
+      "Não deu para gravar: arquivo não encontrado: /musicas/mock/sem_letra.mp3",
+    );
+    await expect(conferir.getByText(/^Falta\s+1\s+para conferir$/)).toBeVisible();
 
     /*
-      V10.9 — e FECHAR avisa que a lista das que não gravaram sai da tela.
-
-      Relato de campo, verbatim: *"não sei quais são as duas outras músicas… pq
-      fechei a tela em seguida"*. É a mesma família do defeito que a V10.6
-      consertou, e é pior: a oferta de transcrição continua em Configurações, e
-      esta lista não continua em lugar nenhum.
+      V10.9 → V15 — o relato de campo era "não sei quais são as duas outras
+      músicas… pq fechei a tela em seguida". Agora sair NÃO joga a lista fora:
+      ela continua esperando em Organizar, com o motivo junto.
     */
-    await dialog.getByRole("button", { name: "Fechar" }).click();
-    await expect(dialog).toHaveCount(0);
-    await expect(
-      page.getByText(
-        "1 música não pôde ser gravada no arquivo. Esta lista não fica" +
-          " guardada: para vê-la de novo, repita a busca desta pasta.",
-      ),
-    ).toBeVisible();
+    await conferir.getByRole("button", { name: "Voltar", exact: true }).click();
+    await expect(conferir).toHaveCount(0);
+    await expect(page.getByRole("region", { name: "Esperando sua decisão" })).toBeVisible();
+    await page.getByRole("button", { name: "Conferir agora" }).click();
+    await expect(conferir.getByRole("alert")).toContainText("arquivo não encontrado");
   });
 
   test("progresso determinado, segundo plano e reabrir pelo indicador", async ({
@@ -1212,7 +1012,7 @@ test.describe("V5 — Completar dados em lote (F13)", () => {
     );
     // com uma varredura rodando, disparar outra fica bloqueado
     await expect(
-      page.getByRole("button", { name: "Buscar dados desta pasta" }),
+      page.getByRole("button", { name: "Completar agora" }),
     ).toBeDisabled();
 
     // some da frente sem cancelar: o app continua usável
@@ -1220,6 +1020,9 @@ test.describe("V5 — Completar dados em lote (F13)", () => {
       .getByRole("button", { name: "Deixar rodando em segundo plano" })
       .click();
     await expect(dialog).toHaveCount(0);
+    // V15 — o cartão de Organizar mostra em que pé está, e a volta é pelo topo
+    await expect(page.getByRole("button", { name: "Acompanhar a busca" })).toBeVisible();
+    await page.getByRole("button", { name: /^Voltar/ }).click();
     const indicador = page.getByRole("button", { name: /Buscando dados/ });
     await expect(indicador).toBeVisible();
     // o indicador da lateral traz contagem E etapa do funil (V8/F18)
@@ -1227,22 +1030,25 @@ test.describe("V5 — Completar dados em lote (F13)", () => {
     await expect(indicador).toContainText(/procurando no LRCLIB|preparando/);
 
     // a pessoa volta ao dia a dia enquanto a busca roda
-    await page.getByRole("button", { name: "Biblioteca", exact: true }).click();
+    await page.getByRole("button", { name: /^Todas as músicas/ }).click();
 
     // busca (atalho global) responde durante a varredura em segundo plano
     await page.keyboard.press("/");
-    const search = page.getByPlaceholder("Buscar por letra, título ou artista…");
+    const search = page.getByPlaceholder("Um pedaço da letra, o nome ou quem canta");
     await expect(search).toBeFocused();
     await search.fill(LETRA_TRECHO);
-    await expect(page.getByText("1 resultados")).toBeVisible();
+    await expect(page.getByText(/^1 música\s+encontrada$/)).toBeVisible();
     await search.fill("");
 
-    // ao terminar, o toast avisa e o indicador vira o convite à revisão
+    // ao terminar, o que só preenche já foi gravado; o toast avisa o que
+    // sobrou para decidir e o indicador vira o convite à conferência
     await expect(
-      page.getByText("Dados encontrados para 2 músicas — abra a revisão para conferir."),
+      page.getByText("1 sugestão espera a sua decisão — veja em Organizar."),
     ).toBeVisible({ timeout: 15000 });
-    await page.getByRole("button", { name: "Revisar 2 propostas" }).click();
-    await expect(dialog.getByText("2 propostas para conferir")).toBeVisible();
+    await page.getByRole("button", { name: "Conferir 1 sugestão" }).click();
+    await expect(
+      page.getByRole("dialog", { name: "Conferir sugestões" }).getByText(/^Falta\s+1\s+para conferir$/),
+    ).toBeVisible();
     expect(errors).toEqual([]);
   });
 
@@ -1259,8 +1065,8 @@ test.describe("V5 — Completar dados em lote (F13)", () => {
       (window as any).__CANCIONEIRO_MOCK__._enrichDelayMs = 1500;
     });
 
-    await page.getByRole("button", { name: "Configurações" }).click();
-    const abrir = page.getByRole("button", { name: "Buscar dados desta pasta" });
+    await page.getByRole("button", { name: "Organizar minhas músicas" }).click();
+    const abrir = page.getByRole("button", { name: "Completar agora" });
     await abrir.click();
     const dialog = page.getByRole("dialog", { name: "Completar dados" });
     // V10 — o caminho único olha TODAS as músicas disponíveis da pasta (3),
@@ -1372,12 +1178,15 @@ test.describe("V8 — O funil dentro do app (F18)", () => {
     // quem estava olhando a subpasta "1" não precisa procurá-la de novo
     await page.getByRole("button", { name: "Abrir pasta acervo" }).click();
     await page.getByRole("button", { name: "Pasta 1" }).click();
-    await page.getByRole("button", { name: "Configurações" }).click();
+    await page.getByRole("button", { name: "Organizar minhas músicas" }).click();
     await expect(page.getByLabel("Pasta a curar")).toHaveValue("/acervo/1");
 
-    // e o que vai acontecer está explicado ANTES de qualquer clique
-    const secao = page.getByRole("region", { name: "Curadoria do acervo" });
-    await expect(secao.getByText(/Nada é gravado sem você conferir/)).toBeVisible();
+    // e o que vai acontecer está explicado ANTES de qualquer clique: a
+    // promessa à vista, e o passo a passo em "Como funciona"
+    const secao = page.getByTestId("curadoria");
+    await expect(secao.getByText(/é preenchido sozinho/)).toBeVisible();
+    await expect(secao.getByText(/a gente pergunta antes/)).toBeVisible();
+    await secao.getByText("Como funciona").click();
     await expect(secao.getByText(/LRCLIB/).first()).toBeVisible();
     // V10 — o texto que negava a etapa 5 deixou de ser verdade: ela existe, e
     // é oferecida no FIM, quando o app já sabe quantas músicas sobraram
@@ -1409,8 +1218,9 @@ test.describe("V8 — O funil dentro do app (F18)", () => {
     await panel.getByRole("button", { name: "Salvar no arquivo" }).click();
     await expect(page.getByText("Alterações salvas em sem_tags.mp3.")).toBeVisible();
 
-    await page.getByRole("button", { name: "Configurações" }).click();
-    const secao = page.getByRole("region", { name: "Curadoria do acervo" });
+    await page.getByRole("button", { name: "Organizar minhas músicas" }).click();
+    const secao = page.getByTestId("curadoria");
+    await secao.getByText("Como funciona").click();
     // nenhum campo de credencial, e nenhuma palavra sobre chave
     await expect(page.getByLabel(/Chave do Vagalume/i)).toHaveCount(0);
     await expect(secao).not.toContainText("chave");
@@ -1422,26 +1232,20 @@ test.describe("V8 — O funil dentro do app (F18)", () => {
       secao.getByText(/ele não diz de que música é a letra/),
     ).toBeVisible();
 
-    await page.getByRole("button", { name: "Buscar dados desta pasta" }).click();
-    const dialog = page.getByRole("dialog", { name: "Completar dados" });
-    await expect(dialog.getByText("via lyrics.ovh")).toBeVisible();
-    await expect(dialog.getByText("via LRCLIB")).toBeVisible();
+    await page.getByRole("button", { name: "Completar agora" }).click();
+    const dialog = await irAteASugestao(page, "lyrics.ovh.");
     // este caminho NUNCA propõe nome novo (DECISIONS #63): a letra é a
     // mudança inteira
-    await expect(dialog.getByText("Ponto de Oxum — Grupo Fixture")).toHaveCount(2);
-    await expect(dialog.getByText("2 letras encontradas")).toBeVisible();
+    await expect(dialog.getByRole("heading", { level: 2 })).toHaveText("Ponto de Oxum — Grupo Fixture");
+    await expect(dialog.getByRole("region", { name: "Como ficaria" })).toContainText(/Nome da música\s*igual/);
 
-    // A RESSALVA, na linha e sem abrir nada: esta fonte não diz a que música a
-    // letra pertence, e é a única cujo casamento o programa não confere. Sem
-    // ela, o teto MÉDIA é só um clique a mais sem explicação — e a medição de
-    // campo foi "eu nem li as sugestões em baixa".
+    // A RESSALVA, à vista e antes do clique: esta fonte não diz a que música a
+    // letra pertence, e é a única cujo casamento o programa não confere
     await expect(
       dialog.getByText(/este site não diz a que música a letra pertence/),
     ).toBeVisible();
-    // e ela não desabilita a linha: quem leu a letra pode aplicá-la
-    await expect(
-      dialog.getByRole("checkbox", { name: "Aplicar proposta: Ponto de Oxum" }),
-    ).toBeEnabled();
+    // e ela não impede nada: quem leu a letra pode usá-la
+    await expect(dialog.getByRole("button", { name: "Usar o novo", exact: true })).toBeEnabled();
     expect(errors).toEqual([]);
   });
 
@@ -1453,21 +1257,19 @@ test.describe("V8 — O funil dentro do app (F18)", () => {
     await resetApp(page);
     await addMockFolder(page);
 
-    await page.getByRole("button", { name: "Configurações" }).click();
-    await page.getByRole("button", { name: "Buscar dados desta pasta" }).click();
+    await page.getByRole("button", { name: "Organizar minhas músicas" }).click();
+    await page.getByRole("button", { name: "Completar agora" }).click();
 
-    const dialog = page.getByRole("dialog", { name: "Completar dados" });
-    await expect(dialog.getByText("2 propostas para conferir")).toBeVisible();
-    await expect(dialog.getByText("via lyrics.ovh")).toHaveCount(0);
-    // e ninguém recebe ressalva que não se aplica: aviso em toda linha ensina
-    // a ignorar todos
+    const dialog = page.getByRole("dialog", { name: "Conferir sugestões" });
+    // o palpite de nome de arquivo só preenchia: foi gravado sozinho
+    await expect(page.getByText(/1 música teve título ou artista corrigido/)).toBeVisible();
+    await expect(dialog.getByText(/^Falta\s+1\s+para conferir$/)).toBeVisible();
+    await expect(dialog.getByText("lyrics.ovh.")).toHaveCount(0);
+    // e ninguém recebe ressalva que não se aplica: aviso em toda sugestão
+    // ensina a ignorar todos
     await expect(
       dialog.getByText(/este site não diz a que música a letra pertence/),
     ).toHaveCount(0);
-    // o palpite de nome de arquivo mora no grupo dobrado: a procedência
-    // aparece ao abrir, que é o que a pessoa faz quando quer conferir
-    await dialog.getByRole("button", { name: /abrir para ver/i }).click();
-    await expect(dialog.getByText("via nome do arquivo")).toBeVisible();
     expect(errors).toEqual([]);
   });
 
@@ -1497,7 +1299,7 @@ test.describe("V8 — O funil dentro do app (F18)", () => {
     await expect(page.getByText("Alterações salvas em sem_tags.mp3.")).toBeVisible();
 
     await dispararCuradoria(page);
-    const dialog = page.getByRole("dialog", { name: "Completar dados" });
+    const dialog = page.getByRole("dialog", { name: "Conferir sugestões" });
     // .last(): a mesma frase também vai para a região viva (sr-only) que
     // anuncia o fim da busca — o parágrafo visível é o segundo
     const aviso = dialog
@@ -1519,8 +1321,8 @@ test.describe("V8 — O funil dentro do app (F18)", () => {
     page,
   }) => {
     await resetApp(page);
-    await page.getByRole("button", { name: "Configurações" }).click();
-    const secao = page.getByRole("region", { name: "Curadoria do acervo" });
+    await page.getByRole("button", { name: "Organizar minhas músicas" }).click();
+    const secao = page.getByTestId("curadoria");
     await expect(secao.getByText(/Não há nenhuma música nesta pasta/)).toBeVisible();
     await expect(secao.getByText(/Adicione uma pasta/)).toBeVisible();
     // MÉDIO-14: o motivo do bloqueio é texto na tela, não `title=`
@@ -1528,7 +1330,7 @@ test.describe("V8 — O funil dentro do app (F18)", () => {
       secao.getByText("Não há música nesta pasta para procurar."),
     ).toBeVisible();
     await expect(
-      page.getByRole("button", { name: "Buscar dados desta pasta" }),
+      page.getByRole("button", { name: "Completar agora" }),
     ).toBeDisabled();
   });
 
@@ -1576,29 +1378,21 @@ test.describe("V8 — O funil dentro do app (F18)", () => {
     await page.reload();
 
     await dispararCuradoria(page);
-    const dialog = page.getByRole("dialog", { name: "Completar dados" });
+    const dialog = page.getByRole("dialog", { name: "Conferir sugestões" });
 
-    // nenhuma linha oferece letra para ela, e portanto não há consentimento a
-    // pedir: a letra escrita à mão nunca esteve em risco
-    await expect(
-      dialog.getByText(/Já tem letra, escrita ouvindo o áudio/),
-    ).toHaveCount(0);
-    await expect(
-      dialog.getByRole("checkbox", { name: /Substituir a letra atual/ }),
-    ).toHaveCount(0);
-
-    // e o resto da revisão segue normal: marcar todas e aplicar não encosta
-    // na letra
-    await dialog
-      .getByRole("button", { name: "Marcar todas", exact: true })
-      .click();
-    await dialog.getByRole("button", { name: /Aplicar selecionadas/ }).click();
-    await expect(page.getByText(/A biblioteca já está atualizada/)).toBeVisible();
-    // V10.6 — aplicar não fecha mais a caixa; quem fecha é o "Fechar"
-    await dialog.getByRole("button", { name: "Fechar" }).click();
+    // nenhuma sugestão oferece letra para ela, e portanto não há consentimento
+    // a pedir: a letra escrita à mão nunca esteve em risco. Passa por TODAS,
+    // usando o novo em cada uma — e nenhuma encosta na letra.
+    for (let i = 0; i < 10; i++) {
+      await expect(dialog.getByText(/Já tem letra, escrita ouvindo o áudio/)).toHaveCount(0);
+      await expect(dialog.getByRole("button", { name: "Trocar a letra pela nova" })).toHaveCount(0);
+      const usar = dialog.getByRole("button", { name: "Usar o novo", exact: true });
+      if ((await usar.count()) === 0) break;
+      await usar.click();
+    }
+    await dialog.getByRole("button", { name: "Ir ouvir música" }).click();
 
     // a letra escrita à mão continua no arquivo, letra por letra
-    await page.getByRole("button", { name: "Biblioteca", exact: true }).click();
     await page.getByText("Coração Sertanejo").first().click();
     await expect(
       page.getByLabel("Painel de letra").getByTestId("lyrics-body"),
@@ -1640,8 +1434,8 @@ test.describe("V9/V10 — o acessório do som e o conflito (F18 fases 2 e 3)", (
       });
     });
 
-    await page.getByRole("button", { name: "Configurações" }).click();
-    const secao = page.getByRole("region", { name: "Curadoria do acervo" });
+    await page.getByRole("button", { name: "Organizar minhas músicas" }).click();
+    const secao = page.getByTestId("curadoria");
     const bloco = page.getByRole("region", { name: "Reconhecer a música pelo som" });
 
     // a tela diz o que vai baixar, quanto ocupa, quanto TEMPO leva e de onde
@@ -1665,51 +1459,30 @@ test.describe("V9/V10 — o acessório do som e o conflito (F18 fases 2 e 3)", (
     await expect(bloco.getByRole("button", { name: /Baixar/ })).toHaveCount(0);
 
     // com o acessório, a etapa 2 entra no funil — e no caminho ÚNICO
+    await secao.getByText("Como funciona").click();
     await expect(secao.getByText(/Reconhecendo pelo som/)).toBeVisible();
-    await page.getByRole("button", { name: "Buscar dados desta pasta" }).click();
+    await page.getByRole("button", { name: "Completar agora" }).click();
 
-    const dialog = page.getByRole("dialog", { name: "Completar dados" });
-    await expect(dialog.getByText("CONFLITO")).toBeVisible();
-    // a divergência é o PRIMEIRO grupo: é a linha mais arriscada da tela
-    await expect(
-      dialog.getByText("1 música em que o som discorda da etiqueta"),
-    ).toBeVisible();
-    // os dois lados aparecem CAMPO A CAMPO: aqui título e artista diferem, e
-    // cada campo tem o seu par de rótulos — daí o `.first()`
-    await expect(dialog.getByText(/Sua etiqueta diz/).first()).toBeVisible();
-    await expect(dialog.getByText(/O som diz/).first()).toBeVisible();
-    // V10 — o que difere em destaque, palavra por palavra
-    await expect(dialog.getByText("Coração", { exact: true })).toBeVisible();
-    await expect(dialog.getByText("Nilson", { exact: true })).toBeVisible();
+    // o conflito nunca é gravado sozinho: duas fontes discordando é decisão
+    const dialog = await irAteASugestao(page, /reconheceu a gravação pelo som/);
+    // os dois lados, campo a campo: como está hoje e o que o som disse
+    await expect(dialog.getByRole("region", { name: "Como está hoje" })).toContainText("Coração Sertanejo");
+    await expect(dialog.getByRole("region", { name: "Como ficaria" })).toContainText("Viver Feliz");
+    await expect(dialog.getByRole("region", { name: "Como ficaria" })).toContainText("Nilson Chaves");
     // e a confiança diz SOBRE O QUE ela fala: a gravação, não a etiqueta
-    await expect(
-      dialog.getByText("gravação reconhecida com confiança alta"),
-    ).toBeVisible();
-    await expect(
-      dialog.getByText(/A confiança é sobre qual gravação é esta/),
-    ).toBeVisible();
+    await expect(dialog.getByText("gravação reconhecida com confiança alta")).toBeVisible();
+    await expect(dialog.getByText(/A confiança é sobre qual gravação é esta/)).toBeVisible();
 
-    // aceitar o som é escolha POR LINHA: nem pré-marcada, nem em massa
-    const aceitar = dialog.getByRole("checkbox", {
-      name: /Aceitar o que o som diz/,
-    });
-    await expect(aceitar).not.toBeChecked();
-    await dialog.getByRole("button", { name: "Marcar todas", exact: true }).click();
-    await expect(aceitar).not.toBeChecked();
-    await dialog.getByRole("button", { name: "Desmarcar todas" }).click();
-
-    await aceitar.check();
-    await dialog.getByRole("button", { name: "Aplicar selecionadas (1)" }).click();
+    await dialog.getByRole("button", { name: "Usar o novo", exact: true }).click();
     await expect(
       page.getByText(
         "1 música teve título ou artista corrigido. A biblioteca já está atualizada.",
-      ),
+      ).last(),
     ).toBeVisible();
-    // V10.6 — aplicar não fecha mais a caixa; quem fecha é o "Fechar"
-    await dialog.getByRole("button", { name: "Fechar" }).click();
+    await dialog.getByRole("button", { name: "Voltar", exact: true }).click();
 
     // e a música passou a se chamar o que o som disse
-    await page.getByRole("button", { name: "Biblioteca", exact: true }).click();
+    await page.getByRole("button", { name: /^Voltar/ }).click();
     await expect(page.getByText("Viver Feliz").first()).toBeVisible();
     expect(errors).toEqual([]);
   });
@@ -1720,7 +1493,7 @@ test.describe("V9/V10 — o acessório do som e o conflito (F18 fases 2 e 3)", (
     page,
   }) => {
     await resetApp(page);
-    await page.getByRole("button", { name: "Configurações" }).click();
+    await page.getByRole("button", { name: "Organizar minhas músicas" }).click();
     await page.evaluate(() => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (window as any).__CANCIONEIRO_MOCK__._acessorio.atrasoMs = 400;
@@ -1754,15 +1527,15 @@ test.describe("V9/V10 — o acessório do som e o conflito (F18 fases 2 e 3)", (
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (window as any).__CANCIONEIRO_MOCK__._acessorio.atrasoMs = 400;
     });
-    await page.getByRole("button", { name: "Configurações" }).click();
+    await page.getByRole("button", { name: "Organizar minhas músicas" }).click();
     const bloco = page.getByRole("region", { name: "Reconhecer a música pelo som" });
     await bloco.getByRole("button", { name: /^Baixar \(/ }).click();
     await expect(bloco.getByText(/^Baixando…/)).toBeVisible();
 
     // a pessoa vai ouvir música no meio do download, como o PRD promete
-    await page.getByRole("button", { name: "Biblioteca", exact: true }).click();
-    await expect(page.getByRole("region", { name: "Curadoria do acervo" })).toHaveCount(0);
-    await page.getByRole("button", { name: "Configurações" }).click();
+    await page.getByRole("button", { name: /^Voltar/ }).click();
+    await expect(page.getByTestId("curadoria")).toHaveCount(0);
+    await page.getByRole("button", { name: "Organizar minhas músicas" }).click();
 
     // o download está lá, com barra e com o caminho para parar
     await expect(bloco.getByText(/^Baixando…/)).toBeVisible();
@@ -1783,7 +1556,7 @@ test.describe("V9/V10 — o acessório do som e o conflito (F18 fases 2 e 3)", (
     page,
   }) => {
     await resetApp(page);
-    await page.getByRole("button", { name: "Configurações" }).click();
+    await page.getByRole("button", { name: "Organizar minhas músicas" }).click();
     await page.evaluate(() => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (window as any).__CANCIONEIRO_MOCK__._acessorio.erro = "soma";
@@ -1797,7 +1570,7 @@ test.describe("V9/V10 — o acessório do som e o conflito (F18 fases 2 e 3)", (
     await expect(bloco.getByRole("button", { name: /^Baixar \(/ })).toBeVisible();
     // e a etapa do som continua fora do funil: nada foi instalado
     await expect(
-      page.getByRole("region", { name: "Curadoria do acervo" })
+      page.getByTestId("curadoria")
         .getByText(/Reconhecendo pelo som/),
     ).toHaveCount(0);
   });
@@ -1832,11 +1605,16 @@ test.describe("V9/V10 — o acessório do som e o conflito (F18 fases 2 e 3)", (
       );
     });
 
-    await page.getByRole("button", { name: "Configurações" }).click();
-    await page.getByRole("button", { name: "Buscar dados desta pasta" }).click();
+    await page.getByRole("button", { name: "Organizar minhas músicas" }).click();
+    await page.getByRole("button", { name: "Completar agora" }).click();
 
-    const dialog = page.getByRole("dialog", { name: "Completar dados" });
-    // o motivo, com as palavras do backend, na linha da música que falhou
+    // V15 — as sugestões vêm primeiro; o desfecho da busca, no fim
+    const dialog = page.getByRole("dialog", { name: "Conferir sugestões" });
+    while ((await dialog.getByRole("button", { name: "Decidir depois" }).count()) > 0) {
+      await dialog.getByRole("button", { name: "Decidir depois" }).click();
+    }
+    // o motivo, com as palavras do backend, junto da música que falhou
+    await dialog.getByText("1 música não pôde ser procurada").click();
     await expect(
       dialog.getByText(/não conseguiu ser executado neste computador/),
     ).toBeVisible();
@@ -1852,7 +1630,7 @@ test.describe("V9/V10 — o acessório do som e o conflito (F18 fases 2 e 3)", (
     await expect(avisoVisivel).toBeVisible();
     await expect(avisoVisivel).toContainText(/Repita a busca/);
     // e quem ouve a tela recebe o mesmo desfecho, não um resumo otimista
-    await expect(dialog.locator("p[role='status']")).toContainText(
+    await expect(page.locator("p[role='status']")).toContainText(
       /2 músicas não chegaram a ser perguntadas/,
     );
     expect(errors).toEqual([]);
@@ -1877,12 +1655,11 @@ test.describe("V9/V10 — o acessório do som e o conflito (F18 fases 2 e 3)", (
       });
     });
 
-    await page.getByRole("button", { name: "Configurações" }).click();
-    await page.getByRole("button", { name: "Buscar dados desta pasta" }).click();
+    await page.getByRole("button", { name: "Organizar minhas músicas" }).click();
+    await page.getByRole("button", { name: "Completar agora" }).click();
 
-    const dialog = page.getByRole("dialog", { name: "Completar dados" });
-    await expect(dialog.getByText("CONFLITO")).toBeVisible();
-    await expect(dialog.getByText(/chegaram a ser perguntadas/)).toHaveCount(0);
+    const dialog = await irAteASugestao(page, /reconheceu a gravação pelo som/);
+    await expect(page.getByText(/chegaram a ser perguntadas/)).toHaveCount(0);
     await expect(dialog.getByText(/chegou a ser perguntada/)).toHaveCount(0);
   });
 });
@@ -1909,65 +1686,42 @@ test.describe("V10 — a etapa que resolve (F18 fase 3)", () => {
   // O caminho inteiro: a varredura termina, sobra uma música sem letra, e a
   // pergunta é feita AGORA — com o número e o tempo desta máquina. Pergunta
   // feita quando pode ser respondida com informação.
-  test("a pergunta do fim escreve a letra e a manda para a MESMA revisão", async ({
+  test("a pergunta do fim escreve a letra e a manda para a MESMA conferência", async ({
     page,
   }) => {
     const errors = trackErrors(page);
     await resetApp(page);
     await addMockFolder(page);
     await comTranscricao(page);
+    await dispararCuradoria(page);
 
-    await page.getByRole("button", { name: "Configurações" }).click();
-    await page.getByRole("button", { name: "Buscar dados desta pasta" }).click();
+    // a sugestão da letra em MÉDIA fica para depois: a pergunta é feita no FIM,
+    // quando o app já sabe quantas sobraram e quanto tempo leva
+    const conferir = page.getByRole("dialog", { name: "Conferir sugestões" });
+    await conferir.getByRole("button", { name: "Decidir depois" }).click();
+    await expect(conferir.getByText(/Sobrou 1 música sem letra/)).toBeVisible();
+    await expect(conferir.getByText(/Escrever a letra ouvindo o áudio leva/)).toBeVisible();
+    await conferir.getByRole("button", { name: "Começar agora" }).click();
 
-    const dialog = page.getByRole("dialog", { name: "Completar dados" });
-    // a pergunta traz o NÚMERO e o TEMPO — e não pede nada antes de existir
-    await expect(dialog.getByText(/Sobrou 1 música sem letra/)).toBeVisible();
-    await expect(
-      dialog.getByText(/Escrever a letra ouvindo o áudio leva/),
-    ).toBeVisible();
-
-    await dialog.getByRole("button", { name: "Começar agora" }).click();
-
-    // a letra escrita entra na revisão, com o refrão para reconhecer a música
-    // SEM abrir a letra, e o aviso de que ela é de máquina
-    await expect(
-      dialog.getByText(/Trecho mais repetido: “na beira do mar sagrado”/),
-    ).toBeVisible();
-    await expect(
-      dialog.getByText("Letra escrita pela máquina ouvindo o áudio — confira antes de aplicar."),
-    ).toBeVisible();
-    await expect(dialog.getByText("via transcrição do áudio")).toBeVisible();
-
-    // aplicar grava a letra, e o painel avisa que ela é automática (V5/F14).
-    // O rótulo da caixa diz TUDO que ELA decide, e nada além: a etapa 5 ECOA o
-    // nome do arquivo em vez de propor um (QA A2 — o palpite da etapa 1 já foi
-    // entregue, nesta mesma revisão, na outra linha desta música), então a
-    // linha decide só a letra e o rótulo diz só isso. O texto é DERIVADO da
-    // proposta: ele voltou sozinho quando o backend parou de propor nome.
-    await dialog
-      .getByRole("checkbox", {
-        name: "Aplicar a letra escrita ouvindo o áudio: sem_tags",
-      })
-      .check();
-    await dialog.getByRole("button", { name: /Aplicar selecionadas/ }).click();
-    await expect(page.getByText(/A biblioteca já está atualizada/)).toBeVisible();
-    // V10.6 — aplicar não fecha mais a caixa; quem fecha é o "Fechar"
-    await dialog.getByRole("button", { name: "Fechar" }).click();
-
-    // UMA gravação, com as duas decisões juntas: esta música tinha o nome
-    // pendente do grupo dobrado (que chega marcado) MAIS a letra da etapa 5.
-    // Duas gravações seriam recusadas pelo eco do `apply` (QA A5).
-    await page.getByRole("button", { name: "Biblioteca", exact: true }).click();
-    await page.getByText("sem tags", { exact: true }).first().click();
-    const panel = page.getByLabel("Painel de letra");
-    await expect(panel.getByTestId("lyrics-body")).toContainText(
+    // a letra escrita entra na MESMA conferência, com o aviso de máquina — e,
+    // por ser de máquina, nunca é gravada sozinha
+    const dialog = await irAteASugestao(page, "Letra escrita pela máquina ouvindo o áudio — confira antes de aplicar.");
+    await expect(dialog.getByText(/escreveu a letra ouvindo a música/)).toBeVisible();
+    await expect(dialog.getByRole("region", { name: "Como ficaria" })).toContainText(
       "na beira do mar sagrado",
     );
+    await dialog.getByRole("button", { name: "Usar o novo", exact: true }).click();
+    await expect(page.getByText(/ganhou letra/).last()).toBeVisible();
+    await dialog.getByRole("button", { name: "Voltar", exact: true }).click();
+    await page.getByRole("button", { name: /^Voltar/ }).click();
+
+    // o nome (gravado sozinho, antes) e a letra (gravada agora): a segunda
+    // gravação usou o eco do arquivo já renomeado (QA A5, V10.6)
+    await page.getByText("sem tags", { exact: true }).first().click();
+    const panel = page.getByLabel("Painel de letra");
+    await expect(panel.getByTestId("lyrics-body")).toContainText("na beira do mar sagrado");
     // e a letra fica marcada como de máquina: é o que faz o painel avisar
-    await expect(panel.getByTestId("lyrics-origem")).toContainText(
-      "pode conter erros",
-    );
+    await expect(panel.getByTestId("lyrics-origem")).toContainText("pode conter erros");
     expect(errors).toEqual([]);
   });
 
@@ -1979,7 +1733,7 @@ test.describe("V10 — a etapa que resolve (F18 fase 3)", () => {
     await resetApp(page);
     await addMockFolder(page);
 
-    await page.getByRole("button", { name: "Configurações" }).click();
+    await page.getByRole("button", { name: "Organizar minhas músicas" }).click();
     // o modelo é DADO, não programa, e o bloco dele diz isso
     const bloco = page.getByRole("region", {
       name: /Entender o que é cantado/,
@@ -2007,11 +1761,12 @@ test.describe("V10 — a etapa que resolve (F18 fase 3)", () => {
       ),
     ).toBeVisible();
 
-    await page.getByRole("button", { name: "Buscar dados desta pasta" }).click();
-    const dialog = page.getByRole("dialog", { name: "Completar dados" });
+    await page.getByRole("button", { name: "Completar agora" }).click();
+    const dialog = page.getByRole("dialog", { name: "Conferir sugestões" });
+    await dialog.getByRole("button", { name: "Decidir depois" }).click();
     await expect(dialog.getByText(/Sobrou 1 música sem letra/)).toBeVisible();
     // o programa (1.635.784 bytes) MAIS o modelo: 1,4 GB, e o mesmo "cerca de"
-    await expect(dialog.getByText(/baixe 1,4 GB em Configurações/)).toBeVisible();
+    await expect(dialog.getByText(/baixe 1,4 GB em "Organizar minhas músicas"/)).toBeVisible();
     // e não há o que começar: o trabalho não existe nesta máquina
     await expect(dialog.getByRole("button", { name: "Começar agora" })).toHaveCount(
       0,
@@ -2031,14 +1786,12 @@ test.describe("V10 — a etapa que resolve (F18 fase 3)", () => {
       (window as any).__CANCIONEIRO_MOCK__._enrichDelayMs = 800;
     });
 
-    await page.getByRole("button", { name: "Configurações" }).click();
-    await page.getByRole("button", { name: "Buscar dados desta pasta" }).click();
-    const dialog = page.getByRole("dialog", { name: "Completar dados" });
-    await expect(dialog.getByText(/Sobrou 1 música sem letra/)).toBeVisible({
-      timeout: 20000,
-    });
-    await dialog.getByRole("button", { name: "Começar agora" }).click();
+    await dispararCuradoria(page);
+    const conferir = page.getByRole("dialog", { name: "Conferir sugestões" });
+    await conferir.getByRole("button", { name: "Decidir depois" }).click({ timeout: 20000 });
+    await conferir.getByRole("button", { name: "Começar agora" }).click();
 
+    const dialog = page.getByRole("dialog", { name: "Completar dados" });
     await expect(dialog.getByText(/Escrevendo as letras… 0 de 1/)).toBeVisible();
     // o tempo que falta só aparece quando houver o que medir
     await expect(
@@ -2050,10 +1803,10 @@ test.describe("V10 — a etapa que resolve (F18 fase 3)", () => {
       .getByRole("button", { name: "Deixar rodando em segundo plano" })
       .click();
     await expect(dialog).toHaveCount(0);
-    await page.getByRole("button", { name: "Biblioteca", exact: true }).click();
-    const search = page.getByPlaceholder("Buscar por letra, título ou artista…");
+    await page.getByRole("button", { name: /^Voltar/ }).click();
+    const search = page.getByPlaceholder("Um pedaço da letra, o nome ou quem canta");
     await search.fill(LETRA_TRECHO);
-    await expect(page.getByText("1 resultados")).toBeVisible();
+    await expect(page.getByText(/^1 música\s+encontrada$/)).toBeVisible();
   });
 
   // =========================================================================
@@ -2066,34 +1819,27 @@ test.describe("V10 — a etapa que resolve (F18 fase 3)", () => {
   // na parte de transcrição de novo."*
   //
   // O que se perdia não era um clique: era a varredura inteira.
-  test("aplicar NÃO fecha a caixa, e a transcrição continua ali (o caminho do relato)", async ({
+  test("decidir não fecha a conferência, e a transcrição continua ali (o caminho do relato)", async ({
     page,
   }) => {
     const errors = trackErrors(page);
     await resetApp(page);
     await addMockFolder(page);
     await comTranscricao(page);
+    await dispararCuradoria(page);
 
-    await page.getByRole("button", { name: "Configurações" }).click();
-    await page.getByRole("button", { name: "Buscar dados desta pasta" }).click();
+    // 1) USAR o novo na sugestão que sobrou
+    const conferir = page.getByRole("dialog", { name: "Conferir sugestões" });
+    await conferir.getByRole("button", { name: "Usar o novo", exact: true }).click();
+    await expect(page.getByText(/A biblioteca já está atualizada/).last()).toBeVisible();
 
-    const dialog = page.getByRole("dialog", { name: "Completar dados" });
-    await expect(dialog.getByText(/Sobrou 1 música sem letra/)).toBeVisible();
-
-    // 1) APLICAR as propostas que chegaram marcadas
-    await dialog.getByRole("button", { name: /Aplicar selecionadas \(\d+\)/ }).click();
-    await expect(page.getByText(/A biblioteca já está atualizada/)).toBeVisible();
-
-    // 2) a caixa CONTINUA ABERTA, com o desfecho e a oferta intactos
-    await expect(dialog).toBeVisible();
-    await expect(dialog.getByText(/músicas? gravadas? no arquivo/)).toBeVisible();
-    await expect(dialog.getByText(/Sobrou 1 música sem letra/)).toBeVisible();
+    // 2) a conferência CONTINUA, com o desfecho e a oferta intactos
+    await expect(conferir.getByRole("heading", { name: "Pronto! Você conferiu todas." })).toBeVisible();
+    await expect(conferir.getByText(/Sobrou 1 música sem letra/)).toBeVisible();
 
     // 3) e a transcrição roda daqui, sem varrer de novo
-    await dialog.getByRole("button", { name: "Começar agora" }).click();
-    await expect(
-      dialog.getByText("Letra escrita pela máquina ouvindo o áudio — confira antes de aplicar."),
-    ).toBeVisible();
+    await conferir.getByRole("button", { name: "Começar agora" }).click();
+    await irAteASugestao(page, "Letra escrita pela máquina ouvindo o áudio — confira antes de aplicar.");
     expect(errors).toEqual([]);
   });
 
@@ -2112,42 +1858,33 @@ test.describe("V10 — a etapa que resolve (F18 fase 3)", () => {
     tem a quem perguntar (DECISIONS #102). O que ela recebe é o DESFECHO, e é isso
     que este teste percorre até a tela.
   */
-  test("o arquivo que recusava toda gravação grava — e a linha conta o que foi feito", async ({
+  test("o arquivo que recusava toda gravação grava — e o fim conta o que foi feito", async ({
     page,
   }) => {
     const errors = trackErrors(page);
     await resetApp(page);
     await addMockFolder(page);
     // ensina ao mock que a etiqueta DESTE arquivo precisa ser normalizada (o
-    // mock não tem leitor de MP3: a anomalia é ensinada, como o que o som
-    // responde)
+    // mock não tem leitor de MP3: a anomalia é ensinada)
     await page.evaluate(() => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (window as any).__CANCIONEIRO_MOCK__._marcarEtiquetaParaNormalizar(
         "/musicas/mock/sem_tags.mp3",
       );
     });
+    await dispararCuradoria(page);
 
-    await page.getByRole("button", { name: "Configurações" }).click();
-    await page.getByRole("button", { name: "Buscar dados desta pasta" }).click();
+    // 1) GRAVOU: o nome do arquivo só preenchia, e foi gravado sozinho — sem
+    //    nenhum "não pôde ser gravada" (dizer o contrário é a DECISIONS #139)
+    await expect(page.getByText(/1 música teve título ou artista corrigido/)).toBeVisible();
+    const conferir = page.getByRole("dialog", { name: "Conferir sugestões" });
+    await conferir.getByRole("button", { name: "Decidir depois" }).click();
+    await expect(conferir.getByText(/não puderam ser gravadas|não pôde ser gravada/)).toHaveCount(0);
 
-    const dialog = page.getByRole("dialog", { name: "Completar dados" });
-    await dialog.getByRole("button", { name: /Aplicar selecionadas \(\d+\)/ }).click();
-
-    // 1) GRAVOU: o grupo é o das gravadas, e não o das que não puderam ser
-    //    gravadas — dizer o contrário do que aconteceu é a DECISIONS #139
-    await expect(dialog.getByText(/gravadas? no arquivo/)).toBeVisible();
+    // 2) e o fim DIZ o que foi preciso fazer para gravar, em português
+    await conferir.getByText("1 arquivo precisou de um ajuste para gravar").click();
     await expect(
-      dialog.getByText(/não puderam ser gravadas|não pôde ser gravada/),
-    ).toHaveCount(0);
-
-    // 2) e a linha DIZ o que foi preciso fazer para gravar, em português, com o
-    //    áudio conferido — o grupo das gravadas nasce fechado, e abri-lo é o que
-    //    a pessoa faz para conferir
-    const gravadas = dialog.getByRole("button", { name: /abrir para ver/i });
-    await gravadas.last().click();
-    await expect(
-      dialog.getByText(
+      conferir.getByText(
         "para conseguir gravar, o programa corrigiu uma medida errada por dentro da " +
           "etiqueta deste MP3 — a música em si não foi alterada, e o programa conferiu " +
           "isso depois de gravar",
@@ -2158,22 +1895,22 @@ test.describe("V10 — a etapa que resolve (F18 fase 3)", () => {
 
   // Fechar com a oferta na tela AVISA, e diz para onde ela foi. Informativo, e
   // não uma confirmação: a lista já não se perde.
-  test("fechar com a oferta pendente avisa que ela continua em Configurações", async ({
+  test("fechar com a oferta pendente avisa que ela continua em Organizar", async ({
     page,
   }) => {
     await resetApp(page);
     await addMockFolder(page);
     await comTranscricao(page);
+    await dispararCuradoria(page);
+    const conferir = page.getByRole("dialog", { name: "Conferir sugestões" });
+    // decidida (mantida), nada fica pendente: sair encerra a conferência
+    await conferir.getByRole("button", { name: "Manter como está" }).click();
+    await expect(conferir.getByText(/Sobrou 1 música sem letra/)).toBeVisible();
 
-    await page.getByRole("button", { name: "Configurações" }).click();
-    await page.getByRole("button", { name: "Buscar dados desta pasta" }).click();
-    const dialog = page.getByRole("dialog", { name: "Completar dados" });
-    await expect(dialog.getByText(/Sobrou 1 música sem letra/)).toBeVisible();
-
-    await dialog.getByRole("button", { name: "Fechar" }).click();
-    await expect(dialog).toHaveCount(0);
+    await conferir.getByRole("button", { name: "Voltar para Organizar" }).click();
+    await expect(conferir).toHaveCount(0);
     await expect(
-      page.getByText(/Ainda há 1 música sem letra\. Escrever a letra ouvindo o áudio continua em Configurações/),
+      page.getByText(/Ainda há 1 música sem letra\. Escrever a letra ouvindo o áudio continua em "Organizar minhas músicas"/),
     ).toBeVisible();
   });
 
@@ -2192,8 +1929,8 @@ test.describe("V10 — a etapa que resolve (F18 fase 3)", () => {
     await addMockFolder(page);
     await comTranscricao(page);
 
-    await page.getByRole("button", { name: "Configurações" }).click();
-    const secao = page.getByRole("region", { name: "Curadoria do acervo" });
+    await page.getByRole("button", { name: "Organizar minhas músicas" }).click();
+    const secao = page.getByTestId("curadoria");
     // o bloco existe SEM ninguém ter varrido nada
     await expect(
       secao.getByText(/músicas da biblioteca estão sem letra/),
@@ -2204,14 +1941,9 @@ test.describe("V10 — a etapa que resolve (F18 fase 3)", () => {
 
     await secao.getByRole("button", { name: "Começar agora" }).click();
 
-    // e é a MESMA revisão do fim da varredura: a letra de máquina, com o aviso
-    const dialog = page.getByRole("dialog", { name: "Completar dados" });
-    await expect(
-      dialog.getByText("Letra escrita pela máquina ouvindo o áudio — confira antes de aplicar."),
-    ).toBeVisible();
-    // a porta permanente cobre TODAS as músicas sem letra da pasta — são duas
-    // no acervo de teste, daí o `.first()`
-    await expect(dialog.getByText("via transcrição do áudio").first()).toBeVisible();
+    // e é a MESMA conferência do fim da varredura: a letra de máquina, com o aviso
+    const dialog = await irAteASugestao(page, "Letra escrita pela máquina ouvindo o áudio — confira antes de aplicar.");
+    await expect(dialog.getByText(/escreveu a letra ouvindo a música/)).toBeVisible();
     expect(errors).toEqual([]);
   });
 
@@ -2252,22 +1984,11 @@ test.describe("V10 — a etapa que resolve (F18 fase 3)", () => {
 
     await transcrever.click();
 
-    // é a MESMA revisão das outras duas portas, com a fila de UM item
-    const dialog = page.getByRole("dialog", { name: "Completar dados" });
-    await expect(
-      dialog.getByText(
-        "Letra escrita pela máquina ouvindo o áudio — confira antes de aplicar.",
-      ),
-    ).toBeVisible();
-    await expect(dialog.getByText("via transcrição do áudio")).toHaveCount(1);
-
-    await dialog
-      .getByRole("checkbox", {
-        name: "Aplicar a letra escrita ouvindo o áudio: sem_tags",
-      })
-      .check();
-    await dialog.getByRole("button", { name: /Aplicar selecionadas/ }).click();
-    await dialog.getByRole("button", { name: "Fechar" }).click();
+    // é a MESMA conferência das outras duas portas, com a fila de UM item
+    const dialog = await irAteASugestao(page, "Letra escrita pela máquina ouvindo o áudio — confira antes de aplicar.");
+    await expect(dialog.getByText(/^Falta\s+1\s+para conferir$/)).toBeVisible();
+    await dialog.getByRole("button", { name: "Usar o novo", exact: true }).click();
+    await dialog.getByRole("button", { name: "Ir ouvir música" }).click();
 
     /*
       E a ficha, que continuou aberta atrás da revisão, mostra a letra que
@@ -2328,28 +2049,15 @@ test.describe("V10 — a etapa que resolve (F18 fase 3)", () => {
     await transcrever.click();
 
     /*
-      A REVISÃO DE SEMPRE, com o consentimento de substituição no lugar: a linha
-      DIZ que já há letra e o que acontece sem a marcação, e a caixa chega
-      DESMARCADA. É aqui que a promessa se cumpre — nada é sobrescrito sem
-      clique (DECISIONS #79 e CRÍTICO-1).
+      A CONFERÊNCIA, com a substituição dita no próprio botão: a sugestão DIZ
+      que já há letra, mostra as duas lado a lado, e não existe "Usar o novo"
+      genérico — só "Trocar a letra pela nova". É aqui que a promessa se
+      cumpre: nada é sobrescrito sem um clique que diga isso (#79, CRÍTICO-1).
     */
-    const dialog = page.getByRole("dialog", { name: "Completar dados" });
-    await expect(
-      dialog.getByText("Já tem letra. Sem marcar abaixo, aplica só título e artista."),
-    ).toBeVisible();
-    const substituir = dialog.getByRole("checkbox", {
-      name: /Substituir a letra atual/,
-    });
-    await expect(substituir).not.toBeChecked();
-
-    // com a marcação, e só com ela, a letra refeita entra no arquivo
-    await substituir.check();
-    await dialog
-      .getByRole("checkbox", {
-        name: "Aplicar a letra escrita ouvindo o áudio: Coração Sertanejo",
-      })
-      .check();
-    await dialog.getByRole("button", { name: /Aplicar selecionadas/ }).click();
+    const dialog = await irAteASugestao(page, /refeita ouvindo o áudio de novo/);
+    await expect(dialog.getByText(/Já tem letra\. Compare as duas/)).toBeVisible();
+    await expect(dialog.getByRole("button", { name: "Usar o novo", exact: true })).toHaveCount(0);
+    await dialog.getByRole("button", { name: "Trocar a letra pela nova" }).click();
     await expect(
       page.getByText("1 música teve a letra substituída."),
     ).toBeVisible();
@@ -2365,8 +2073,6 @@ test.describe("V10 — a etapa que resolve (F18 fase 3)", () => {
       return mock.getLyrics(alvo.id);
     });
     expect(noArquivo).toContain("refeita ouvindo o áudio");
-
-    await dialog.getByRole("button", { name: "Fechar" }).click();
     expect(errors).toEqual([]);
   });
 });
@@ -2437,20 +2143,13 @@ test.describe("V8 — Marca de instrumental (F17)", () => {
 
     await dispararCuradoria(page);
 
-    const dialog = page.getByRole("dialog", { name: "Completar dados" });
-    // sobra só a sem_tags, no grupo dobrado: a instrumental é OLHADA (V10 — o
-    // caminho único não filtra na porta) mas nenhuma etapa de letra roda para
-    // ela, e a etapa 1 não tem o que propor, então ela não vira linha
-    await expect(dialog.getByText("1 proposta para conferir")).toBeVisible();
-    await expect(
-      dialog.getByText("1 música sem título ou artista vai receber o nome que está no arquivo"),
-    ).toBeVisible();
+    // sobra só a sem_tags, que só preenchia e foi gravada sozinha: a
+    // instrumental é OLHADA (V10 — o caminho único não filtra na porta), mas
+    // nenhuma etapa de letra roda para ela, e não sobra decisão nenhuma
+    await expect(page.getByText(/1 música teve título ou artista corrigido/)).toBeVisible();
+    const dialog = page.getByRole("dialog", { name: "Conferir sugestões" });
+    await expect(dialog.getByRole("heading", { name: "Pronto! Você conferiu todas." })).toBeVisible();
     await expect(dialog.getByText("Instrumental Sem Letra")).toHaveCount(0);
-    await expect(
-      dialog.getByRole("checkbox", {
-        name: "Aplicar proposta: Instrumental Sem Letra",
-      }),
-    ).toHaveCount(0);
     expect(errors).toEqual([]);
   });
 });
@@ -2476,26 +2175,72 @@ test.describe("V8 — instrumental sem etiqueta (QA ALTO-5)", () => {
     await page.reload();
 
     // a contagem (que vem do backend) olha as TRÊS, e o disparo continua vivo
-    await page.getByRole("button", { name: "Configurações" }).click();
+    await page.getByRole("button", { name: "Organizar minhas músicas" }).click();
     await expect(page.getByText(/3 músicas nesta pasta/)).toBeVisible();
-    const disparo = page.getByRole("button", { name: "Buscar dados desta pasta" });
+    const disparo = page.getByRole("button", { name: "Completar agora" });
     await expect(disparo).toBeEnabled();
     await disparo.click();
 
-    const dialog = page.getByRole("dialog", { name: "Completar dados" });
-    await expect(dialog.getByText("2 propostas para conferir")).toBeVisible();
-    // ela está na lista: o que ela pode ganhar é NOME. A linha mora no grupo
-    // dobrado, e abrir é o que a pessoa faz para conferir.
-    await dialog.getByRole("button", { name: /abrir para ver/i }).click();
-    await expect(
-      dialog.getByRole("checkbox", { name: "Aplicar proposta: sem_tags" }),
-    ).toBeVisible();
-    // e nenhuma etapa de letra rodou para ela: só a outra traz letra
-    // (`exact` porque o cabeçalho do grupo também diz "1 letra encontrada")
-    await expect(
-      dialog.getByText("letra encontrada", { exact: true }),
-    ).toHaveCount(1);
+    // ela entra: o que ela pode ganhar é NOME, que só preenchia — gravado
+    // sozinho. E nenhuma etapa de letra rodou para ela: a única sugestão que
+    // sobra é a letra da OUTRA música
+    await expect(page.getByText(/1 música teve título ou artista corrigido/)).toBeVisible();
+    const dialog = page.getByRole("dialog", { name: "Conferir sugestões" });
+    await expect(dialog.getByText(/^Falta\s+1\s+para conferir$/)).toBeVisible();
+    await expect(dialog.getByRole("heading", { level: 2 })).toContainText("Instrumental Sem Letra");
     expect(errors).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V15 — telas pequenas e letra grande
+// ---------------------------------------------------------------------------
+//
+// Um notebook 1366×768 com o Windows em 150% deixa ~910×450 de tela útil. É o
+// pior caso real do público (pessoas mais velhas, que aumentam tudo), e só um
+// navegador de verdade mede se a busca, a lista e o player cabem.
+test.describe("V15 — tela pequena e tamanho da letra", () => {
+  test.use({ viewport: { width: 910, height: 450 } });
+
+  test("a 910×450 a lateral vira gaveta, e busca, lista e player continuam à vista", async ({
+    page,
+  }) => {
+    const errors = trackErrors(page);
+    await resetApp(page);
+    await addMockFolder(page);
+
+    // a lateral sumiu para dar espaço; a busca e o player estão na tela
+    await expect(page.getByRole("navigation", { name: "Listas e pastas" })).toBeHidden();
+    const busca = page.getByPlaceholder("Um pedaço da letra, o nome ou quem canta");
+    await expect(busca).toBeInViewport();
+    await expect(page.getByRole("button", { name: "Tocar", exact: true })).toBeInViewport();
+    await busca.fill(LETRA_TRECHO);
+    await expect(page.getByRole("option").first()).toBeInViewport();
+
+    // a gaveta abre pelo nome, mostra as listas, e fecha pelo nome
+    await page.getByRole("button", { name: "Listas e pastas" }).click();
+    const gaveta = page.getByRole("navigation", { name: "Listas e pastas" });
+    await expect(gaveta).toBeVisible();
+    await expect(gaveta.getByRole("button", { name: "Nova lista" })).toBeVisible();
+    await gaveta.getByRole("button", { name: "Fechar" }).click();
+    await expect(gaveta).toBeHidden();
+
+    // nada passa da largura da janela: rolar de lado é perder metade da tela
+    const larguraDoConteudo = await page.evaluate(() => document.documentElement.scrollWidth);
+    expect(larguraDoConteudo).toBeLessThanOrEqual(910);
+    expect(errors).toEqual([]);
+  });
+
+  test("o tamanho da letra fica guardado e volta ao reabrir", async ({ page }) => {
+    await resetApp(page);
+    const grande = page.getByRole("button", { name: "Letra muito grande" });
+    await grande.click();
+    await expect(grande).toHaveAttribute("aria-pressed", "true");
+    await page.reload();
+    await expect(page.getByRole("button", { name: "Letra muito grande" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
 });
 
@@ -2521,10 +2266,10 @@ test.describe("Escala: 2.000 músicas", () => {
     const renderedRows = await page.getByRole("option").count();
     expect(renderedRows).toBeLessThan(120);
 
-    const search = page.getByPlaceholder("Buscar por letra, título ou artista…");
+    const search = page.getByPlaceholder("Um pedaço da letra, o nome ou quem canta");
     const t0 = Date.now();
     await search.fill("Música 1999");
-    await expect(page.getByText("1 resultados")).toBeVisible();
+    await expect(page.getByText(/^1 música\s+encontrada$/)).toBeVisible();
     // limite folgado para E2E (inclui debounce 150ms + render)
     expect(Date.now() - t0).toBeLessThan(2000);
   });

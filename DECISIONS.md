@@ -2798,3 +2798,27 @@ renomeado — o que já estava no índice sai pela mesma linha que remove músic
 que saiu da pasta. As duas varreduras (a que conta e a que indexa) viraram
 uma função só: elas TÊM de concordar, senão a barra promete um número e o
 trabalho entrega outro.
+
+## V15 — o redesenho para quem tem pouca prática com computador
+
+Aprovado em maquete (telas de ouvir, organizar e conferir, em cinco tamanhos
+de tela e no escuro). Público: pessoas mais velhas, sem ninguém a quem
+perguntar.
+
+- **Ouvir separado de organizar.** A tela principal é busca, lista e player;
+  curadoria, transcrição e pastas moram em "Organizar minhas músicas", no topo.
+- **"Tamanho da letra" é zoom da janela** (`setZoom`), e não só fonte: o app
+  é escrito em px fixos, e só a fonte deixaria botões pequenos com letra
+  grande dentro. Com zoom, a tela estreita (gaveta) entra sozinha.
+- **Botão de tocar em cada linha.** Duplo-clique é o gesto que mais falha em
+  mão menos firme. "Pôr numa lista" sempre visível, com palavra.
+- **Janela mínima 640×440** (era 1024×640, maior que a tela útil de um
+  1366×768 em 150%), abrindo maximizada.
+- **Conferir uma por vez, e o que só preenche é gravado sozinho** — o mesmo
+  conjunto que a lista já pré-marcava ("nada a perder"), menos a letra de
+  máquina. O clique em "Completar agora" autoriza; o cartão diz isso antes.
+  "Usar o novo em todas" pergunta antes e NÃO alcança troca de letra nem
+  instrumental (CRÍTICO-1, #71 continuam um por um). A gravação saiu da tela
+  para `lib/aplicacao.ts`: automático e clique usam o mesmo código.
+- **Avisos no centro, acima do player.** No canto, com o player mais alto, o
+  aviso cobria o "Salvar no arquivo" dos detalhes (achado do E2E).
