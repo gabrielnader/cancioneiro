@@ -165,8 +165,8 @@ export function etapasDoFunil(nomes: readonly string[]): EtapaDoFunil[] {
  * ou volta a mentir sobre o próprio produto.
  */
 export const TRANSCRICAO_NO_FIM =
-  "Escrever a letra ouvindo o áudio é oferecido no fim da busca — e aqui" +
-  " embaixo, a qualquer momento.";
+  "Escrever a letra ouvindo o áudio é oferecido no fim da busca — e no" +
+  " cartão \"Escrever a letra ouvindo a música\", a qualquer momento.";
 
 // ---------------------------------------------------------------------------
 // A contagem e a estimativa — números do backend, formatados aqui
@@ -230,7 +230,9 @@ export function estimativaTexto({ contagem, musicasNaPasta }: Estimativa): strin
 }
 
 /** O botão. Um só — não há mais o que escolher (DECISIONS #102). */
-export const ROTULO_DO_DISPARO = "Buscar dados desta pasta";
+// V15 — o botão diz o RESULTADO, no vocabulário do cartão onde mora
+// ("Completar nome, cantor e letra"), e não o mecanismo ("buscar dados").
+export const ROTULO_DO_DISPARO = "Completar agora";
 
 /** Uma linha do seletor de pasta da seção de curadoria. */
 export interface OpcaoDePasta {
@@ -1041,15 +1043,17 @@ export function textoDoBlocoDeTranscricao({
   if (!disponivel) {
     /*
       Aqui a saída NÃO é "vá em Configurações": já estamos nela, e os blocos de
-      download estão a poucos pixels acima. Repetir o TEMPO que eles já dizem
+      download estão no cartão "Programas extras", na mesma tela (V15 — antes
+      ficavam logo acima; o texto aponta pelo NOME do cartão, que não muda
+      quando a tela se reorganiza em uma coluna). Repetir o TEMPO que eles já dizem
       seria o ruído que a régua da #100 proíbe; o tamanho fica porque é ele que
       responde à pergunta daquele segundo — "por que não posso, e o que faço?".
       Sem saber o tamanho, não se inventa número nenhum (DECISIONS #86).
     */
     const oQue =
       download === null
-        ? "de um download oferecido acima"
-        : `de um download de ${formatarTamanho(download.bytes)}, oferecido acima`;
+        ? 'de um download, oferecido em "Programas extras"'
+        : `de um download de ${formatarTamanho(download.bytes)}, oferecido em "Programas extras"`;
     return `${quantasFrase}. Escrever a letra ouvindo o áudio precisa ${oQue}.`;
   }
   return `${quantasFrase}. ${fraseDoTempoDaTranscricao(segundos, medidaNestaMaquina)}`;

@@ -39,6 +39,75 @@ import { AddFolderButton } from "./AddFolderButton";
 import { ConfirmDialog } from "./ConfirmDialog";
 
 /**
+ * Um cartão de "Organizar minhas músicas" (V15): uma tarefa por cartão, com o
+ * título dizendo o RESULTADO ("Completar nome, cantor e letra"), e não o
+ * mecanismo ("Curadoria do acervo"). Quem cura são ~40 pessoas sem ninguém a
+ * quem perguntar o que "curadoria" quer dizer.
+ */
+function Cartao({
+  id,
+  titulo,
+  descricao,
+  icone,
+  destaque = false,
+  children,
+}: {
+  id: string;
+  titulo: string;
+  descricao?: React.ReactNode;
+  icone: React.ReactNode;
+  /** âmbar: há algo esperando a pessoa (só o cartão de conferir usa) */
+  destaque?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <section
+      aria-labelledby={id}
+      className={`flex flex-col gap-4 rounded-2xl border-2 p-6 max-lg:p-4 ${
+        destaque ? "border-warning bg-warning-soft" : "border-border bg-surface"
+      }`}
+    >
+      <div className="flex items-start gap-4">
+        <div
+          aria-hidden="true"
+          className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl ${
+            destaque ? "bg-surface text-warning" : "bg-brand-soft text-brand"
+          }`}
+        >
+          {icone}
+        </div>
+        <div className="min-w-0">
+          <h2 id={id} className="text-[21px] font-bold leading-tight text-ink">
+            {titulo}
+          </h2>
+          {descricao && (
+            <p className="mt-1.5 text-[17px] leading-relaxed text-ink-secondary">{descricao}</p>
+          )}
+        </div>
+      </div>
+      {children}
+    </section>
+  );
+}
+
+/** Ícones de traço dos cartões — desenhados aqui, sem biblioteca de ícones. */
+const ICONES = {
+  musica: <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 18V5l12-2v13" /><circle cx="6" cy="18" r="3" /><circle cx="18" cy="16" r="3" /></svg>,
+  conferir: <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 11l3 3 8-8" /><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9" /></svg>,
+  ouvir: <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="2" width="6" height="12" rx="3" /><path d="M5 10a7 7 0 0 0 14 0" /><path d="M12 17v4" /></svg>,
+  lapis: <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>,
+  pasta: <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /></svg>,
+  programa: <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 3v12" /><path d="m7 10 5 5 5-5" /><path d="M5 21h14" /></svg>,
+  aparencia: <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" /></svg>,
+};
+
+/** Classes dos botões grandes de "Organizar": sólido e de contorno. */
+const BOTAO_PRINCIPAL =
+  "min-h-12 rounded-xl bg-brand-fill px-5 text-[17px] font-semibold text-white hover:bg-brand-fill-hover disabled:cursor-not-allowed disabled:bg-disabled";
+const BOTAO_SECUNDARIO =
+  "min-h-12 rounded-xl border-2 border-brand bg-surface px-5 text-[17px] font-semibold text-brand hover:bg-brand-soft disabled:opacity-50";
+
+/**
  * Configurações (F1): pastas observadas, remover, reindexar. (V7/F16:
  * atualização. V8/F18: a curadoria do acervo, que saiu da árvore de pastas.)
  */
@@ -83,131 +152,188 @@ export function SettingsView() {
     }
   }
 
+  const allSongs = useLibraryStore((s) => s.allSongs);
+  const setQuery = useLibraryStore((s) => s.setQuery);
+  const setView = useUiStore((s) => s.setView);
+  const [qualMusica, setQualMusica] = useState("");
+
+  /** "Corrigir uma música à mão": leva a busca para a tela de ouvir, com os
+      detalhes abertos — é lá que mora o "Editar", e não um segundo editor. */
+  function procurarParaCorrigir() {
+    const texto = qualMusica.trim();
+    if (!texto) return;
+    setQuery(texto);
+    if (!useUiStore.getState().lyricsPanelVisible) useUiStore.getState().toggleLyricsPanel();
+    setView("library");
+  }
+
   return (
-    <div className="flex h-full min-w-0 flex-1 flex-col overflow-y-auto bg-canvas p-6">
-      <h1 className="text-[22px] font-semibold text-ink">
-        Configurações
-      </h1>
-
-      <section className="mt-6">
-        <h2 className="text-[15px] font-medium text-ink">
-          Pastas de música
-        </h2>
-        {folders.length === 0 ? (
-          <p className="mt-2 text-ink-tertiary">Nenhuma pasta adicionada.</p>
-        ) : (
-          <ul className="mt-2 divide-y divide-border rounded-md border border-border bg-surface">
-            {folders.map((f) => (
-              <li
-                key={f.id}
-                className="flex items-center justify-between gap-4 px-4 py-2.5"
-              >
-                <span className="min-w-0 truncate text-ink">{f.path}</span>
-                <button
-                  type="button"
-                  className="shrink-0 rounded px-2 py-1 text-[14px] font-medium text-danger hover:bg-danger-soft"
-                  onClick={() => setConfirmingFolderId(f.id)}
-                >
-                  Remover
-                </button>
-              </li>
-            ))}
-          </ul>
-        )}
-        <div className="mt-4 flex gap-3">
-          <AddFolderButton variant="outline" />
-          <button
-            type="button"
-            disabled={scanning !== null}
-            className="rounded-md border border-brand bg-transparent px-4 py-2 text-[15px] font-medium text-brand hover:bg-brand-soft disabled:opacity-50"
-            onClick={() => void handleRescan()}
-          >
-            Reindexar tudo
-          </button>
-        </div>
-        {scanning && (
-          <div className="mt-4 max-w-md">
-            <p className="mb-1 text-[13px] text-ink-tertiary">
-              Indexando… {scanning.done} de {scanning.total} arquivos
-            </p>
-            <div className="h-1.5 w-full overflow-hidden rounded bg-border">
-              <div
-                className="h-full bg-brand transition-[width]"
-                style={{
-                  width:
-                    scanning.total > 0
-                      ? `${(scanning.done / scanning.total) * 100}%`
-                      : "0%",
-                }}
-              />
-            </div>
-          </div>
-        )}
-      </section>
-
-      <CuradoriaSection />
-
-      <section className="mt-8">
-        <h2 className="text-[15px] font-medium text-ink">Atualizações</h2>
-        <label className="mt-2 flex max-w-md items-start gap-3">
-          <input
-            type="checkbox"
-            className="mt-1 h-4 w-4 accent-brand"
-            checked={checkUpdatesOnStart}
-            onChange={(e) => setCheckUpdatesOnStart(e.target.checked)}
-          />
-          <span>
-            <span className="text-ink">
-              Verificar atualizações ao abrir
-            </span>
-            <span className="mt-0.5 block text-[13px] text-ink-tertiary">
-              Consulta apenas se existe uma versão nova. Nada do seu acervo sai
-              do computador. Desligado, o Cancioneiro não acessa a internet ao
-              abrir.
-            </span>
-          </span>
-        </label>
-        {appVersion && (
-          <p className="mt-4 text-[13px] text-ink-tertiary">
-            Versão instalada: {appVersion}
-          </p>
-        )}
-      </section>
-
-      <section className="mt-8">
-        <h2 className="text-[15px] font-medium text-ink">Aparência</h2>
-        <p className="mt-2 max-w-md text-[13px] text-ink-tertiary">
-          Automático segue o tema claro/escuro do sistema operacional.
+    <div className="flex h-full min-w-0 flex-1 flex-col overflow-y-auto bg-canvas px-8 py-6 max-lg:px-4 max-lg:py-4">
+      {/*
+        V15 — "Organizar minhas músicas": cartões, um por tarefa. O título da
+        tela está na barra do topo, ao lado do "Voltar para ouvir".
+      */}
+      <div className="mx-auto flex w-full max-w-[1120px] flex-col gap-5">
+        <p className="text-[18px] text-ink-secondary">
+          Você tem{" "}
+          <strong className="font-semibold text-ink">
+            {allSongs.length === 1
+              ? "1 música"
+              : `${allSongs.length.toLocaleString("pt-BR")} músicas`}
+          </strong>{" "}
+          {folders.length === 1 ? "em 1 pasta" : `em ${folders.length} pastas`}. Aqui
+          você completa o que falta nelas.
         </p>
-        <div
-          role="radiogroup"
-          aria-label="Tema"
-          className="mt-3 inline-flex rounded-md border border-border-strong p-0.5"
-        >
-          {(
-            [
-              ["light", "Claro"],
-              ["dark", "Escuro"],
-              ["auto", "Automático"],
-            ] as [ThemePref, string][]
-          ).map(([valor, rotulo]) => (
-            <button
-              key={valor}
-              type="button"
-              role="radio"
-              aria-checked={theme === valor}
-              onClick={() => setTheme(valor)}
-              className={`rounded px-3 py-1.5 text-[14px] font-medium ${
-                theme === valor
-                  ? "bg-brand-fill text-white"
-                  : "text-ink-secondary hover:bg-surface-hover"
-              }`}
+
+        <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,440px),1fr))] items-start gap-5">
+          <CuradoriaSection />
+
+          <Cartao
+            id="cartao-corrigir"
+            titulo="Corrigir uma música à mão"
+            descricao="Mudar o nome, quem canta, a letra ou os temas de uma música."
+            icone={ICONES.lapis}
+          >
+            <form
+              className="flex flex-wrap gap-3"
+              onSubmit={(e) => {
+                e.preventDefault();
+                procurarParaCorrigir();
+              }}
             >
-              {rotulo}
-            </button>
-          ))}
+              <label htmlFor="qual-musica" className="sr-only">
+                Qual música?
+              </label>
+              <input
+                id="qual-musica"
+                type="text"
+                value={qualMusica}
+                onChange={(e) => setQualMusica(e.target.value)}
+                placeholder="O nome ou um pedaço da letra"
+                className="min-h-12 min-w-0 flex-1 basis-56 rounded-xl border-2 border-border-strong bg-surface px-4 text-[17px] text-ink outline-none placeholder:text-ink-tertiary focus:border-brand"
+              />
+              <button type="submit" disabled={!qualMusica.trim()} className={BOTAO_SECUNDARIO}>
+                Procurar
+              </button>
+            </form>
+            <p className="text-[15px] text-ink-secondary">
+              Depois, clique na música e use <strong className="font-semibold">Editar</strong>, nos
+              detalhes, à direita.
+            </p>
+          </Cartao>
+
+          <Cartao
+            id="cartao-pastas"
+            titulo="Onde estão suas músicas"
+            descricao="As pastas do computador que o Cancioneiro olha. Nada é apagado delas."
+            icone={ICONES.pasta}
+          >
+            {folders.length === 0 ? (
+              <p className="text-[17px] text-ink-tertiary">Nenhuma pasta adicionada.</p>
+            ) : (
+              <ul className="flex flex-col gap-2">
+                {folders.map((f) => (
+                  <li
+                    key={f.id}
+                    className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 rounded-xl bg-canvas px-4 py-2"
+                  >
+                    <span className="min-w-0 break-all text-[16px] text-ink">{f.path}</span>
+                    <button
+                      type="button"
+                      className="min-h-11 shrink-0 rounded-xl px-3 text-[16px] font-semibold text-danger hover:bg-danger-soft"
+                      onClick={() => setConfirmingFolderId(f.id)}
+                    >
+                      Remover
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="flex flex-wrap gap-3">
+              <AddFolderButton variant="outline" />
+              <button
+                type="button"
+                disabled={scanning !== null}
+                className={BOTAO_SECUNDARIO}
+                onClick={() => void handleRescan()}
+              >
+                Procurar músicas novas
+              </button>
+            </div>
+            {scanning && (
+              <div>
+                <p className="mb-1 text-[15px] text-ink-secondary">
+                  Procurando… {scanning.done} de {scanning.total} arquivos
+                </p>
+                <div className="h-2.5 w-full overflow-hidden rounded-full bg-border">
+                  <div
+                    className="h-full bg-brand transition-[width]"
+                    style={{
+                      width:
+                        scanning.total > 0
+                          ? `${(scanning.done / scanning.total) * 100}%`
+                          : "0%",
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+          </Cartao>
+
+          <Cartao id="cartao-aparencia" titulo="Aparência e atualizações" icone={ICONES.aparencia}>
+            <div>
+              <p className="mb-2 text-[16px] text-ink-secondary">Cores da tela</p>
+              <div
+                role="radiogroup"
+                aria-label="Tema"
+                className="inline-flex flex-wrap overflow-hidden rounded-xl border-2 border-border-strong"
+              >
+                {(
+                  [
+                    ["light", "Claro"],
+                    ["dark", "Escuro"],
+                    ["auto", "Igual ao computador"],
+                  ] as [ThemePref, string][]
+                ).map(([valor, rotulo]) => (
+                  <button
+                    key={valor}
+                    type="button"
+                    role="radio"
+                    aria-checked={theme === valor}
+                    onClick={() => setTheme(valor)}
+                    className={`min-h-12 px-4 text-[16px] font-semibold ${
+                      theme === valor
+                        ? "bg-brand-fill text-white"
+                        : "bg-surface text-ink hover:bg-surface-hover"
+                    }`}
+                  >
+                    {rotulo}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <label className="flex items-start gap-3">
+              <input
+                type="checkbox"
+                className="mt-1 h-6 w-6 shrink-0 accent-brand"
+                checked={checkUpdatesOnStart}
+                onChange={(e) => setCheckUpdatesOnStart(e.target.checked)}
+              />
+              <span>
+                <span className="text-[17px] text-ink">Verificar atualizações ao abrir</span>
+                <span className="mt-0.5 block text-[15px] text-ink-secondary">
+                  Consulta apenas se existe uma versão nova. Nada do seu acervo sai
+                  do computador. Desligado, o Cancioneiro não acessa a internet ao
+                  abrir.
+                </span>
+              </span>
+            </label>
+            {appVersion && (
+              <p className="text-[15px] text-ink-tertiary">Versão instalada: {appVersion}</p>
+            )}
+          </Cartao>
         </div>
-      </section>
+      </div>
 
       <ConfirmDialog
         open={confirmingFolderId !== null}
@@ -445,206 +571,243 @@ function CuradoriaSection() {
             : null;
 
   return (
-    <section className="mt-8 max-w-2xl" aria-labelledby="curadoria-titulo">
-      <h2
+    // `contents`: os cartões continuam filhos diretos da grade (é ela que os
+    // arruma em uma ou duas colunas); o invólucro só marca o que é curadoria
+    <div className="contents" data-testid="curadoria">
+      <Cartao
         id="curadoria-titulo"
-        className="text-[15px] font-medium text-ink"
+        titulo="Completar nome, cantor e letra"
+        descricao="O Cancioneiro procura na internet o que falta em cada música."
+        icone={ICONES.musica}
       >
-        Curadoria do acervo
-      </h2>
+        {/*
+          V15 — a promessa que vale para o botão logo abaixo, escrita ANTES do
+          clique: é o clique nele que autoriza preencher o que está vazio. O
+          que trocaria algo já escrito continua esperando a pessoa decidir.
+        */}
+        <div className="flex gap-3 rounded-xl bg-brand-soft px-4 py-3 text-[16px] leading-relaxed text-brand-strong">
+          <svg aria-hidden="true" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mt-0.5 shrink-0"><path d="M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6z" /><path d="m9 12 2 2 4-4" /></svg>
+          <span>
+            O que está <strong className="font-semibold">vazio</strong> é preenchido sozinho. Se for{" "}
+            <strong className="font-semibold">trocar</strong> algo que já está escrito, a gente
+            pergunta antes. Nada é apagado.
+          </span>
+        </div>
 
-      <p className="mt-2 text-[14px] leading-relaxed text-ink-secondary">
-        Procura o que falta nas músicas de uma pasta — título, artista e letra.{" "}
-        <strong className="font-medium">
-          Nada é gravado sem você conferir
-        </strong>{" "}
-        e marcar o que quer aplicar.
-      </p>
-
-      <ol className="mt-2 list-decimal space-y-0.5 pl-6 text-[14px] text-ink-secondary">
-        {etapas.map((etapa) => (
-          <li key={etapa.nome}>
-            <span className="font-medium">{etapa.nome}</span>
-            {etapa.explicacao && <> — {etapa.explicacao}</>}
-          </li>
-        ))}
-      </ol>
-
-      {/*
-        V10 — a etapa 5 NÃO entra na lista numerada: ela não é uma etapa da
-        varredura. Custa minutos por música, e a pergunta é feita no fim,
-        quando o app já sabe quantas sobraram sem letra.
-      */}
-      <p className="mt-2 text-[13px] leading-relaxed text-ink-quaternary">
-        {TRANSCRICAO_NO_FIM} Roda em segundo plano: dá para continuar ouvindo
-        música, e interromper quando quiser.
-      </p>
-
-      <Acessorios lista={acessorios} />
-
-      <div className="mt-4 max-w-md">
-        <label
-          htmlFor="curadoria-pasta"
-          className="mb-1 block text-[13px] font-medium text-ink-secondary"
-        >
-          Pasta a curar
-        </label>
-        <select
-          id="curadoria-pasta"
-          value={pasta}
-          onChange={(e) => setEscolhida(e.target.value)}
-          className="w-full rounded-md border border-border-strong bg-surface px-3 py-2 text-[15px] text-ink outline-none focus:border-brand"
-        >
-          {opcoes.map((o) => (
-            <option key={o.path || "__tudo__"} value={o.path}>
-              {/* recuo com espaço inquebrável: <option> não aceita layout */}
-              {"  ".repeat(o.nivel)}
-              {o.label}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <p className="mt-2 text-[13px] text-ink-quaternary">
-        {estimativaTexto({ contagem, musicasNaPasta })}
-      </p>
-
-      <div className="mt-3">
-        <button
-          type="button"
-          disabled={bloqueado}
-          aria-describedby={motivo ? "curadoria-motivo" : undefined}
-          onClick={() =>
-            void startScan(pasta, {
-              // quem sabe se a etapa 5 existe nesta máquina é a CONTAGEM:
-              // combinar dois estados de acessório é regra, e regra duplicada
-              // em duas linguagens diverge (DECISIONS #80)
-              disponivel:
-                contagem.estado === "pronta" &&
-                contagem.contagem.transcricao_disponivel,
-              // e o que falta baixar, quando falta — com tamanho e tempo
-              download: downloadParaTranscrever(acessorios),
-            })
-          }
-          className="rounded-md bg-brand-fill px-4 py-2 text-[15px] font-medium text-white hover:bg-brand-fill-hover disabled:cursor-not-allowed disabled:bg-disabled"
-        >
-          {ROTULO_DO_DISPARO}
-        </button>
-        {motivo && (
-          <p id="curadoria-motivo" className="mt-1 text-[13px] text-ink-quaternary">
-            {motivo}
+        <div>
+          <label
+            htmlFor="curadoria-pasta"
+            className="mb-1.5 block text-[16px] font-semibold text-ink-secondary"
+          >
+            Pasta a curar
+          </label>
+          <select
+            id="curadoria-pasta"
+            value={pasta}
+            onChange={(e) => setEscolhida(e.target.value)}
+            className="min-h-12 w-full rounded-xl border-2 border-border-strong bg-surface px-3 text-[17px] text-ink outline-none focus:border-brand"
+          >
+            {opcoes.map((o) => (
+              <option key={o.path || "__tudo__"} value={o.path}>
+                {/* recuo com espaço inquebrável: <option> não aceita layout */}
+                {"  ".repeat(o.nivel)}
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1.5 text-[15px] text-ink-secondary">
+            {estimativaTexto({ contagem, musicasNaPasta })}
           </p>
+        </div>
+
+        {/* o passo a passo continua à mão, mas recolhido: é explicação para
+            quem quer saber, e não instrução que todo mundo precisa ler */}
+        <details className="text-[15px] text-ink-secondary">
+          <summary className="cursor-pointer font-semibold text-brand">
+            Como funciona
+          </summary>
+          <ol className="mt-2 list-decimal space-y-1 pl-6">
+            {etapas.map((etapa) => (
+              <li key={etapa.nome}>
+                <span className="font-medium">{etapa.nome}</span>
+                {etapa.explicacao && <> — {etapa.explicacao}</>}
+              </li>
+            ))}
+          </ol>
+          <p className="mt-2">
+            {TRANSCRICAO_NO_FIM} Roda em segundo plano: dá para continuar ouvindo
+            música, e interromper quando quiser.
+          </p>
+        </details>
+
+        {/*
+          O trabalho roda em segundo plano e o disparo acontece AQUI: voltar a
+          esta tela tem de mostrar em que pé ele está.
+        */}
+        {varrendo && (
+          <div className="rounded-xl bg-brand-soft px-4 py-3">
+            <p className="text-[17px] font-semibold text-brand-strong">
+              {progress
+                ? `Buscando dados… ${progress.done} de ${progress.total}`
+                : "Buscando dados…"}
+            </p>
+            {progress && progress.total > 0 && (
+              <div className="mt-2 h-2.5 w-full overflow-hidden rounded-full bg-surface">
+                <div
+                  className="h-full bg-brand transition-[width]"
+                  style={{ width: `${(progress.done / progress.total) * 100}%` }}
+                />
+              </div>
+            )}
+            {progress?.etapa && (
+              <p className="mt-1 text-[15px] text-brand-strong">{progress.etapa}</p>
+            )}
+            <p className="mt-1 text-[15px] text-brand-strong">
+              Pode voltar a ouvir música enquanto isso: o trabalho continua.
+            </p>
+            <button type="button" onClick={openOverlay} className={`mt-3 ${BOTAO_SECUNDARIO}`}>
+              Acompanhar a busca
+            </button>
+          </div>
         )}
-      </div>
-
-      {/*
-        O trabalho roda em segundo plano e o disparo acontece AQUI: voltar a
-        Configurações tem de mostrar em que pé ele está, sem depender de a
-        pessoa achar o indicador da lateral.
-      */}
-      {varrendo && (
-        <div className="mt-4 rounded-md bg-brand-soft px-4 py-3">
-          <p className="text-[14px] font-medium text-brand-strong">
-            {progress
-              ? `Buscando dados… ${progress.done} de ${progress.total}`
-              : "Buscando dados…"}
-          </p>
-          {progress?.etapa && (
-            <p className="mt-0.5 text-[13px] text-brand-strong">{progress.etapa}</p>
-          )}
-          <button
-            type="button"
-            onClick={openOverlay}
-            className="mt-2 rounded-md border border-brand px-3 py-1.5 text-[14px] font-medium text-brand hover:bg-brand-soft-hover"
-          >
-            Acompanhar a busca
-          </button>
-        </div>
-      )}
-      {/* V10 — a etapa 5 leva HORAS: ela precisa do mesmo caminho de volta */}
-      {transcrevendo && (
-        <div className="mt-4 rounded-md bg-brand-soft px-4 py-3">
-          <p className="text-[14px] font-medium text-brand-strong">
-            {transcricaoProgress
-              ? textoDoProgressoDaTranscricao(
-                  transcricaoProgress.done,
-                  transcricaoProgress.total,
-                )
-              : "Escrevendo as letras…"}
-          </p>
-          <button
-            type="button"
-            onClick={openOverlay}
-            className="mt-2 rounded-md border border-brand px-3 py-1.5 text-[14px] font-medium text-brand hover:bg-brand-soft-hover"
-          >
-            Acompanhar a escrita
-          </button>
-        </div>
-      )}
-      {status === "review" && (
-        <div className="mt-4 rounded-md bg-brand-soft px-4 py-3">
-          <p className="text-[14px] font-medium text-brand-strong">
-            {propostas === 1
-              ? "1 proposta esperando a sua conferência."
-              : `${propostas} propostas esperando a sua conferência.`}
-          </p>
-          <button
-            type="button"
-            onClick={openOverlay}
-            className="mt-2 rounded-md border border-brand px-3 py-1.5 text-[14px] font-medium text-brand hover:bg-brand-soft-hover"
-          >
-            Abrir a revisão
-          </button>
-        </div>
-      )}
-
-      {/*
-        V10.6 — A SEGUNDA PORTA DA ETAPA 5, e ela é permanente.
-
-        A pergunta do fim da varredura continua existindo: ela é o momento
-        natural, feita quando pode ser respondida com informação. O que muda é
-        que ela deixou de ser a ÚNICA porta — e era isso que fazia "aplicar as 28
-        propostas" e "transcrever as que sobraram" competirem, com a varredura
-        inteira como preço de escolher a ordem errada.
-
-        Mora no fim da seção de curadoria, embaixo do MESMO seletor de pasta: a
-        seção não pode inventar um segundo vocabulário de pastas, e o texto diz
-        de qual escopo o número fala.
-      */}
-      {pendentes != null && (
-        <div className="mt-6 border-t border-border pt-4">
-          <h3 className="text-[14px] font-medium text-ink">
-            Escrever a letra ouvindo o áudio
-          </h3>
-          <p className="mt-1 text-[14px] leading-relaxed text-ink-secondary">
-            {textoDoBlocoDeTranscricao({
-              quantas: pendentes.musicas.length,
-              segundos: pendentes.segundos_estimados,
-              medidaNestaMaquina: pendentes.estimativa_medida_nesta_maquina,
-              disponivel: pendentes.disponivel,
-              // o que falta baixar sai da MESMA leitura dos acessórios que a
-              // pergunta do fim usa
-              download: downloadParaTranscrever(acessorios),
-              todaABiblioteca: pasta === "",
-            })}
-          </p>
-          {pendentes.disponivel && pendentes.musicas.length > 0 && (
+        {/* desligado, e não escondido, enquanto há trabalho: o motivo escrito
+            ao lado é o que responde "por que não posso clicar?" (MÉDIO-14) */}
+        <div>
             <button
               type="button"
-              // duas filas ao mesmo tempo disputariam a CPU e embaralhariam as
-              // duas barras (a disciplina do M4): a store recusaria, e um botão
-              // que não faz nada é pior que um botão desabilitado com motivo
               disabled={bloqueado}
               aria-describedby={motivo ? "curadoria-motivo" : undefined}
-              onClick={() => void startTranscricao(pendentes.musicas)}
-              className="mt-2 rounded-md bg-brand-fill px-4 py-2 text-[15px] font-medium text-white hover:bg-brand-fill-hover disabled:cursor-not-allowed disabled:bg-disabled"
+              onClick={() =>
+                void startScan(pasta, {
+                  // quem sabe se a etapa 5 existe nesta máquina é a CONTAGEM:
+                  // combinar dois estados de acessório é regra, e regra duplicada
+                  // em duas linguagens diverge (DECISIONS #80)
+                  disponivel:
+                    contagem.estado === "pronta" &&
+                    contagem.contagem.transcricao_disponivel,
+                  // e o que falta baixar, quando falta — com tamanho e tempo
+                  download: downloadParaTranscrever(acessorios),
+                })
+              }
+              className={BOTAO_PRINCIPAL}
             >
-              {ROTULO_COMECAR_TRANSCRICAO}
+              {ROTULO_DO_DISPARO}
             </button>
-          )}
+            {motivo && (
+              <p id="curadoria-motivo" className="mt-2 text-[15px] text-ink-secondary">
+                {motivo}
+              </p>
+            )}
         </div>
+      </Cartao>
+
+      {/*
+        V15 — o que espera decisão ganha cartão próprio, em âmbar, e só existe
+        quando há o que decidir: um cartão "0 esperando" é ruído que ensina a
+        não olhar para ele.
+      */}
+      {status === "review" && propostas > 0 && (
+        <Cartao
+          id="cartao-decidir"
+          titulo="Esperando sua decisão"
+          descricao={
+            propostas === 1
+              ? "1 sugestão trocaria algo que já está escrito numa música."
+              : `${propostas} sugestões trocariam algo que já está escrito nas músicas.`
+          }
+          icone={ICONES.conferir}
+          destaque
+        >
+          <p className="text-[16px] text-ink-secondary">
+            Você vê o que está hoje e o que seria, lado a lado, e escolhe. Pode deixar
+            para depois.
+          </p>
+          <div>
+            <button type="button" onClick={openOverlay} className={BOTAO_PRINCIPAL}>
+              Conferir agora
+            </button>
+          </div>
+        </Cartao>
       )}
-    </section>
+
+      {/*
+        V10.6 — A SEGUNDA PORTA DA ETAPA 5, e ela é permanente. A pergunta do
+        fim da varredura continua existindo; esta é a porta que não depende de
+        varredura nenhuma. V15 — virou cartão próprio, com o escopo da MESMA
+        pasta escolhida no cartão de cima.
+      */}
+      <Cartao
+        id="cartao-ouvir"
+        titulo="Escrever a letra ouvindo a música"
+        descricao="Para as músicas que nenhum site conhece, como gravações do próprio grupo."
+        icone={ICONES.ouvir}
+      >
+        {transcrevendo && (
+          <div className="rounded-xl bg-brand-soft px-4 py-3">
+            <p className="text-[17px] font-semibold text-brand-strong">
+              {transcricaoProgress
+                ? textoDoProgressoDaTranscricao(
+                    transcricaoProgress.done,
+                    transcricaoProgress.total,
+                  )
+                : "Escrevendo as letras…"}
+            </p>
+            <button type="button" onClick={openOverlay} className={`mt-3 ${BOTAO_SECUNDARIO}`}>
+              Acompanhar a escrita
+            </button>
+          </div>
+        )}
+        {pendentes != null ? (
+          <>
+            <p className="text-[16px] leading-relaxed text-ink-secondary">
+              {textoDoBlocoDeTranscricao({
+                quantas: pendentes.musicas.length,
+                segundos: pendentes.segundos_estimados,
+                medidaNestaMaquina: pendentes.estimativa_medida_nesta_maquina,
+                disponivel: pendentes.disponivel,
+                // o que falta baixar sai da MESMA leitura dos acessórios que a
+                // pergunta do fim usa
+                download: downloadParaTranscrever(acessorios),
+                todaABiblioteca: pasta === "",
+              })}
+            </p>
+            {pendentes.disponivel && pendentes.musicas.length > 0 && (
+              <div>
+                <button
+                  type="button"
+                  // duas filas ao mesmo tempo disputariam a CPU e embaralhariam as
+                  // duas barras (a disciplina do M4): a store recusaria, e um botão
+                  // que não faz nada é pior que um botão desabilitado com motivo
+                  disabled={bloqueado}
+                  aria-describedby={motivo ? "curadoria-motivo" : undefined}
+                  onClick={() => void startTranscricao(pendentes.musicas)}
+                  className={BOTAO_PRINCIPAL}
+                >
+                  {ROTULO_COMECAR_TRANSCRICAO}
+                </button>
+              </div>
+            )}
+          </>
+        ) : pendentes === undefined ? (
+          <p className="text-[16px] text-ink-tertiary">Contando as músicas sem letra…</p>
+        ) : (
+          // a pergunta falhou: "não sabemos" é um estado (DECISIONS #86), e
+          // não vira zero nem promessa
+          <p className="text-[16px] text-ink-tertiary">
+            Não foi possível contar as músicas sem letra agora.
+          </p>
+        )}
+      </Cartao>
+
+      <Cartao
+        id="cartao-programas"
+        titulo="Programas extras"
+        descricao="Baixados uma vez só, quando você quiser. Sem eles, o resto funciona igual."
+        icone={ICONES.programa}
+      >
+        <Acessorios lista={acessorios} />
+      </Cartao>
+    </div>
   );
 }
 
@@ -672,14 +835,14 @@ function Acessorios({
   lista: AcessorioInfo[] | null | undefined;
 }) {
   return (
-    <div className="mt-4 space-y-3">
+    <div className="space-y-3">
       {/* enquanto a pergunta não volta nada é afirmado: nem que existe, nem
           que não existe, nem que está pronto (DECISIONS #86) */}
       {lista === null && (
-        <p className="text-[13px] text-ink-quaternary">{ACESSORIO_INDETERMINADO}</p>
+        <p className="text-[15px] text-ink-quaternary">{ACESSORIO_INDETERMINADO}</p>
       )}
       {lista?.length === 0 && (
-        <p className="text-[13px] text-ink-quaternary">{ACESSORIO_SEM_BINARIO}</p>
+        <p className="text-[15px] text-ink-quaternary">{ACESSORIO_SEM_BINARIO}</p>
       )}
       {(lista ?? []).map((info) => (
         <CartaoDoAcessorio key={info.nome} info={info} lista={lista} />
@@ -737,33 +900,33 @@ function CartaoDoAcessorio({
   return (
     <section
       aria-labelledby={tituloId}
-      className="rounded-md border border-border bg-surface p-4"
+      className="rounded-xl border border-border bg-canvas p-4"
     >
       {/* o "para que serve" vem PRONTO do backend, em pt-BR: quem cura não
           sabe (e não precisa saber) o que é "impressão digital acústica" */}
-      <h3 id={tituloId} className="text-[14px] font-medium text-ink">
+      <h3 id={tituloId} className="text-[17px] font-semibold text-ink">
         {tituloDoAcessorio(info)}
       </h3>
 
       {estado === "indisponivel" && (
-        <p className="mt-1 text-[13px] text-ink-quaternary">{ACESSORIO_INDISPONIVEL}</p>
+        <p className="mt-1 text-[15px] text-ink-quaternary">{ACESSORIO_INDISPONIVEL}</p>
       )}
 
       {estado === "pronto" && (
-        <p className="mt-1 text-[13px] text-brand-strong">{ACESSORIO_PRONTO}</p>
+        <p className="mt-1 text-[15px] text-brand-strong">{ACESSORIO_PRONTO}</p>
       )}
 
       {estado === "corrompido" && (
-        <p className="mt-1 text-[13px] text-warning">{ACESSORIO_CORROMPIDO}</p>
+        <p className="mt-1 text-[15px] text-warning">{ACESSORIO_CORROMPIDO}</p>
       )}
 
       {podeBaixar && (
         <>
-          <p className="mt-1 text-[13px] leading-relaxed text-ink-secondary">
+          <p className="mt-1 text-[15px] leading-relaxed text-ink-secondary">
             {textoDoAcessorioAusente(info)}
           </p>
           {/* a origem à vista: é o que permite a alguém conferir de onde veio */}
-          <p className="mt-1 text-[13px] leading-relaxed text-ink-quaternary">
+          <p className="mt-1 text-[15px] leading-relaxed text-ink-quaternary">
             Vem de{" "}
             <span className="select-text break-all text-brand">
               {info.origem}
@@ -773,7 +936,7 @@ function CartaoDoAcessorio({
             <button
               type="button"
               onClick={() => void baixar(info.nome)}
-              className="mt-2 rounded-md border border-brand px-3 py-1.5 text-[14px] font-medium text-brand hover:bg-brand-soft"
+              className="mt-3 min-h-11 rounded-xl border-2 border-brand px-4 text-[16px] font-semibold text-brand hover:bg-brand-soft"
             >
               {rotuloBaixarAcessorio(info, estado === "corrompido")}
             </button>
@@ -783,7 +946,7 @@ function CartaoDoAcessorio({
 
       {baixando !== null && (
         <div className="mt-2">
-          <p className="text-[13px] text-ink-secondary">
+          <p className="text-[15px] text-ink-secondary">
             {textoDoDownload(
               baixando.baixados,
               totalConfiavel(baixando),
@@ -804,7 +967,7 @@ function CartaoDoAcessorio({
               aria-valuemax={baixando.total!}
               aria-valuenow={baixando.baixados}
               aria-valuetext={`${formatarTamanho(baixando.baixados)} de ${formatarTamanho(baixando.total!)}`}
-              className="mt-1 h-1.5 w-full overflow-hidden rounded bg-border"
+              className="mt-2 h-2.5 w-full overflow-hidden rounded-full bg-border"
             >
               <div
                 className="h-full bg-brand transition-[width]"
@@ -815,7 +978,7 @@ function CartaoDoAcessorio({
           <button
             type="button"
             onClick={() => parar(info.nome)}
-            className="mt-2 rounded-md px-3 py-1.5 text-[14px] font-medium text-ink-secondary hover:bg-surface-hover"
+            className="mt-3 min-h-11 rounded-xl px-4 text-[16px] font-semibold text-ink-secondary hover:bg-surface-hover"
           >
             Parar
           </button>
@@ -823,7 +986,7 @@ function CartaoDoAcessorio({
       )}
 
       {mensagem !== null && baixando === null && (
-        <p className="mt-2 text-[13px] leading-relaxed text-warning">
+        <p className="mt-2 text-[15px] leading-relaxed text-warning">
           {mensagem}
         </p>
       )}

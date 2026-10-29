@@ -256,7 +256,8 @@ describe("a régua da copy (DECISIONS #100)", () => {
 
 describe("o caminho único (DECISIONS #102)", () => {
   it("há UM disparo, e o rótulo não pergunta qual trabalho fazer", () => {
-    expect(ROTULO_DO_DISPARO).toBe("Buscar dados desta pasta");
+    // V15 — o rótulo diz o resultado, no vocabulário do cartão onde mora
+    expect(ROTULO_DO_DISPARO).toBe("Completar agora");
     expect(ROTULO_DO_DISPARO.toLowerCase()).not.toContain("conferir");
   });
 
@@ -1825,7 +1826,7 @@ describe("o bloco permanente da transcrição (V10.6)", () => {
     tempo que eles já dizem seria o ruído que a régua da #100 proíbe — o que
     falta responder é "por que não posso, e o que faço".
   */
-  it("indisponível aqui aponta para cima, e não para Configurações", () => {
+  it("indisponível aqui aponta para o cartão dos programas, e não para Configurações", () => {
     const t = textoDoBlocoDeTranscricao({
       ...CHEIO,
       disponivel: false,
@@ -1833,14 +1834,16 @@ describe("o bloco permanente da transcrição (V10.6)", () => {
     });
     expect(t).toContain("47 músicas da biblioteca estão sem letra.");
     expect(t).toContain("1,4 GB");
-    expect(t.toLowerCase()).toContain("acima");
+    // V15 — aponta pelo NOME do cartão: "acima" deixa de ser verdade quando a
+    // tela se reorganiza em uma coluna
+    expect(t).toContain('"Programas extras"');
     expect(t).not.toContain("em Configurações");
   });
 
   it("indisponível sem saber o tamanho não inventa número (DECISIONS #86)", () => {
     const t = textoDoBlocoDeTranscricao({ ...CHEIO, disponivel: false });
     expect(t).toContain("47 músicas da biblioteca estão sem letra.");
-    expect(t.toLowerCase()).toContain("acima");
+    expect(t).toContain('"Programas extras"');
     expect(t).not.toMatch(/\d+(,\d)? (kB|MB|GB)/);
   });
 

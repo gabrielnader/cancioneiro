@@ -223,8 +223,13 @@ function estadoBase() {
   });
 }
 
+/**
+ * V15 — a "seção de curadoria" virou cartões vizinhos (completar, conferir,
+ * escrever ouvindo, programas extras). O que estes testes protegem vale para
+ * o CONJUNTO, então o escopo é a grade que os contém.
+ */
 function secaoCuradoria(): HTMLElement {
-  return screen.getByRole("region", { name: "Curadoria do acervo" });
+  return screen.getByTestId("curadoria");
 }
 
 describe("SettingsView — seção de curadoria (V8 F18)", () => {
@@ -240,8 +245,12 @@ describe("SettingsView — seção de curadoria (V8 F18)", () => {
     expect(texto.indexOf("Lendo etiquetas e nome do arquivo")).toBeLessThan(
       texto.indexOf("Procurando no LRCLIB"),
     );
-    // nada é gravado sem revisão (DECISIONS #49/#58)
-    expect(texto).toContain("Nada é gravado sem você conferir");
+    // V15 — a promessa ANTES do clique: o vazio é preenchido sozinho (é o
+    // clique que autoriza), o que TROCA algo escrito espera a pessoa, e nada
+    // é apagado. É a regra de sempre (DECISIONS #49/#58) dita do novo jeito.
+    expect(texto).toContain("é preenchido sozinho");
+    expect(texto).toContain("a gente pergunta antes");
+    expect(texto).toContain("Nada é apagado");
     // roda em segundo plano, e isso é dito antes de começar
     expect(texto).toContain("segundo plano");
   });
@@ -338,7 +347,7 @@ describe("SettingsView — seção de curadoria (V8 F18)", () => {
       screen.getByText(estimativa({ estado: "contando" }, 3)),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Buscar dados desta pasta" }),
+      screen.getByRole("button", { name: "Completar agora" }),
     ).toBeEnabled();
   });
 
@@ -349,7 +358,7 @@ describe("SettingsView — seção de curadoria (V8 F18)", () => {
       await screen.findByText(estimativa({ estado: "indisponivel" }, 3)),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Buscar dados desta pasta" }),
+      screen.getByRole("button", { name: "Completar agora" }),
     ).toBeEnabled();
   });
 
@@ -360,7 +369,7 @@ describe("SettingsView — seção de curadoria (V8 F18)", () => {
     fireEvent.change(screen.getByLabelText("Pasta a curar"), {
       target: { value: "/acervo/2" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "Buscar dados desta pasta" }));
+    fireEvent.click(screen.getByRole("button", { name: "Completar agora" }));
     expect(startScan).toHaveBeenCalledWith("/acervo/2", {
       disponivel: false,
       download: null,
@@ -377,7 +386,7 @@ describe("SettingsView — seção de curadoria (V8 F18)", () => {
       ),
     ).toBeInTheDocument();
     expect(
-      screen.getByRole("button", { name: "Buscar dados desta pasta" }),
+      screen.getByRole("button", { name: "Completar agora" }),
     ).toBeDisabled();
   });
 
@@ -401,7 +410,7 @@ describe("SettingsView — seção de curadoria (V8 F18)", () => {
   it("uma varredura já rodando bloqueia o disparo, com o motivo VISÍVEL", () => {
     useEnrichStore.setState({ status: "scanning" });
     render(<SettingsView />);
-    const botao = screen.getByRole("button", { name: "Buscar dados desta pasta" });
+    const botao = screen.getByRole("button", { name: "Completar agora" });
     expect(botao).toBeDisabled();
     const motivo = screen.getByText(
       "Uma busca de dados já está em andamento — espere ela terminar.",
@@ -416,7 +425,7 @@ describe("SettingsView — seção de curadoria (V8 F18)", () => {
     useEnrichStore.setState({ status: "idle", scanInFlight: true });
     render(<SettingsView />);
     expect(
-      screen.getByRole("button", { name: "Buscar dados desta pasta" }),
+      screen.getByRole("button", { name: "Completar agora" }),
     ).toBeDisabled();
     expect(
       screen.getByText(
@@ -1634,7 +1643,7 @@ describe("SettingsView — seletor de tema (V11)", () => {
     render(<SettingsView />);
     const claro = screen.getByRole("radio", { name: "Claro" });
     const escuro = screen.getByRole("radio", { name: "Escuro" });
-    const automatico = screen.getByRole("radio", { name: "Automático" });
+    const automatico = screen.getByRole("radio", { name: "Igual ao computador" });
     expect(automatico).toHaveAttribute("aria-checked", "true");
     expect(claro).toHaveAttribute("aria-checked", "false");
     expect(escuro).toHaveAttribute("aria-checked", "false");
@@ -1648,7 +1657,7 @@ describe("SettingsView — seletor de tema (V11)", () => {
       "aria-checked",
       "true",
     );
-    expect(screen.getByRole("radio", { name: "Automático" })).toHaveAttribute(
+    expect(screen.getByRole("radio", { name: "Igual ao computador" })).toHaveAttribute(
       "aria-checked",
       "false",
     );
