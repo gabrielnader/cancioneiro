@@ -6,13 +6,23 @@ import {
   type EnrichProposal,
   type TranscricaoProgresso,
 } from "../lib/api";
+import { audioController } from "../hooks/playerAudioCore";
+import {
+  contarMudancas,
+  linhasQueSoPreenchem,
+  montarAplicacoes,
+} from "../lib/aplicacao";
 import {
   avisoDeFalhasDeGravacao,
   avisoDeTranscricaoPendente,
+  textoAplicado,
   textoSemPropostas,
   type DownloadPendente,
 } from "../lib/curadoria";
 import type { Song } from "../lib/types";
+import { useLibraryStore } from "./libraryStore";
+import { usePlayerStore } from "./playerStore";
+import { usePlaylistStore } from "./playlistStore";
 import { useToastStore } from "./toastStore";
 
 /**
@@ -156,6 +166,30 @@ interface EnrichState {
    * varredura sobreporia as duas (M4).
    */
   scanInFlight: boolean;
+  /**
+   * V15 — as linhas que a pessoa decidiu MANTER como estão, por posição. Não
+   * gravam nada; só deixam de ser uma decisão pendente. Moram aqui, e não na
+   * tela, porque "Esperando sua decisão" (em Organizar) conta o que falta, e
+   * fechar a tela de conferir não pode trazer de volta o que já foi recusado.
+   */
+  mantidas: number[];
+  /** V15 — quantas músicas foram completadas sozinhas nesta revisão. */
+  autoAplicadas: number;
+  /** V15 — "Manter como está": a linha sai das pendentes, sem gravar nada. */
+  manter: (linha: number) => void;
+  /**
+   * V15 — grava as linhas escolhidas. É O caminho de gravação da revisão: o
+   * automático (o que só preenche) e o clique em "Usar o novo" passam por
+   * aqui, com as mesmas regras (ver `lib/aplicacao.ts`).
+   *
+   * `consentiu(songId)`: a pessoa autorizou trocar a letra existente daquela
+   * música. `abrir`: trazer a revisão para a tela ao terminar (o automático
+   * roda em segundo plano e não abre nada).
+   */
+  aplicarLinhas: (
+    linhas: readonly number[],
+    opcoes?: { consentiu?: (songId: number) => boolean; abrir?: boolean },
+  ) => Promise<{ gravadas: number; falhas: number }>;
 
   /**
    * Dispara a varredura; ignora chamadas com uma varredura em andamento.
@@ -205,7 +239,38 @@ interface EnrichState {
   registrarAplicacao: (
     linhas: readonly number[],
     resultados: readonly EnrichApplyResult[],
+    abrir?: boolean,
   ) => void;
+}
+
+/**
+ * V15 — as decisões que ainda esperam a pessoa, por posição: tudo que não deu
+ * erro de CONSULTA, não foi gravado e não foi mantido. A linha que falhou ao
+ * GRAVAR continua aqui: é com ela na tela que a pessoa tenta de novo.
+ */
+export function decisoesPendentes(
+  s: Pick<EnrichState, "proposals" | "aplicadas" | "mantidas">,
+): number[] {
+  const fora = new Set([...s.aplicadas, ...s.mantidas]);
+  return s.proposals.flatMap((p, i) => (p.error === null && !fora.has(i) ? [i] : []));
+}
+
+/**
+ * V15 — grava sozinho o que só preenche, logo que as propostas chegam. É o
+ * clique em "Completar agora" que autoriza: o cartão diz, ANTES dele, que o
+ * vazio é preenchido sozinho e que trocar algo escrito espera a pessoa.
+ */
+async function aplicarOQueSoPreenche(): Promise<void> {
+  const s = useEnrichStore.getState();
+  const linhas = linhasQueSoPreenchem(
+    s.proposals,
+    s.applyErrors,
+    new Set(s.aplicadas),
+    s.gravadas,
+  );
+  if (linhas.length === 0) return;
+  const { gravadas } = await s.aplicarLinhas(linhas, { abrir: false });
+  useEnrichStore.setState((atual) => ({ autoAplicadas: atual.autoAplicadas + gravadas }));
 }
 
 // Guarda de corrida (mesmo padrão do runSearch do libraryStore): cancelar
@@ -227,8 +292,8 @@ export function novoScanId(): string {
 
 function textoEncontrado(n: number): string {
   return n === 1
-    ? "Dados encontrados para 1 música — abra a revisão para conferir."
-    : `Dados encontrados para ${n} músicas — abra a revisão para conferir.`;
+    ? "1 sugestão espera a sua decisão — veja em Organizar."
+    : `${n} sugestões esperam a sua decisão — veja em Organizar.`;
 }
 
 /** Estado inicial da etapa 5: nada sabido, nada oferecido. */
@@ -254,6 +319,88 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
   gravadas: {},
   avisosDaGravacao: {},
   scanInFlight: false,
+  mantidas: [],
+  autoAplicadas: 0,
+
+  manter: (linha) =>
+    set((s) => (s.mantidas.includes(linha) ? s : { mantidas: [...s.mantidas, linha] })),
+
+  aplicarLinhas: async (linhas, { consentiu = () => false, abrir = true } = {}) => {
+    const s = get();
+    const jaGravadas = new Set(s.aplicadas);
+    // a linha já gravada nunca vai de novo: escreveria o mesmo dado por cima e,
+    // com o nome mudado, seria recusada com "a música mudou depois da busca"
+    const validas = linhas.filter((i) => {
+      const p = s.proposals[i];
+      return p !== undefined && p.error === null && !jaGravadas.has(i);
+    });
+    if (validas.length === 0) return { gravadas: 0, falhas: 0 };
+    const aplicacoes = montarAplicacoes(s.proposals, validas, {
+      gravadas: s.gravadas,
+      applyErrors: s.applyErrors,
+      consentiu,
+    });
+
+    // Se a música tocando está entre elas, pausa ANTES de gravar (o MP3 é
+    // reescrito; espelha o EditSongForm — lock de arquivo no Windows).
+    const player = usePlayerStore.getState();
+    if (
+      player.current &&
+      player.isPlaying &&
+      aplicacoes.some((a) => a.song_id === player.current!.id)
+    ) {
+      player.setPlaying(false);
+      audioController.pause();
+    }
+
+    // Estado ANTES da gravação: é a única forma honesta de dizer "ganhou
+    // letra" — uma proposta com letra pode ser para uma música que já tinha
+    // letra e só estava sem artista.
+    const antes = new Map(
+      useLibraryStore.getState().allSongs.map((m) => [m.id, m.has_lyrics]),
+    );
+    try {
+      // o lote nunca aborta: um resultado por música, gravadas E falhas
+      const results = await getBackend().enrichApply(aplicacoes);
+      const gravadas = results.filter((r) => r.song !== null);
+      const falhas = results.filter((r) => r.song === null);
+      // pós-save igual ao EditSongForm: library + playlists + player
+      for (const r of gravadas) {
+        useLibraryStore.getState().updateSong(r.song!);
+        usePlaylistStore.getState().updateSongInItems(r.song!);
+        usePlayerStore.getState().updateSongRefs(r.song!);
+      }
+      if (gravadas.length > 0) {
+        const gravou = new Set(gravadas.map((r) => r.song_id));
+        // PRD V8: o aviso diz o que mudou, não uma tarefa a fazer
+        useToastStore.getState().push(
+          textoAplicado({
+            ...contarMudancas(
+              aplicacoes,
+              (id) => gravou.has(id),
+              (id) => antes.get(id) === true,
+            ),
+            gravadas: gravadas.length,
+          }),
+          "success",
+        );
+      }
+      if (falhas.length > 0) {
+        useToastStore.getState().push(
+          falhas.length === 1
+            ? "1 não pôde ser gravada."
+            : `${falhas.length} não puderam ser gravadas.`,
+          "error",
+        );
+      }
+      get().registrarAplicacao(validas, results, abrir);
+      return { gravadas: gravadas.length, falhas: falhas.length };
+    } catch {
+      // defensivo: invoke rejeitado (erro de infraestrutura, não por música)
+      useToastStore.getState().push("Não foi possível aplicar as alterações.", "error");
+      return { gravadas: 0, falhas: aplicacoes.length };
+    }
+  },
 
   startScan: async (folderPrefix, transcricao = SEM_TRANSCRICAO) => {
     // bloqueia disparo duplo — inclusive com a varredura anterior cancelada
@@ -281,6 +428,8 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
       aplicadas: [],
       gravadas: {},
       avisosDaGravacao: {},
+      mantidas: [],
+      autoAplicadas: 0,
       scanInFlight: true,
     });
 
@@ -363,10 +512,14 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
         segundosDeTranscricao: segundosDeTranscricao ?? 0,
         estimativaMedidaNestaMaquina: estimativaMedida ?? false,
       });
-      if (emSegundoPlano && propostas.length > 0) {
+      // V15 — o que só preenche é gravado já, sem perguntar; o resto espera
+      await aplicarOQueSoPreenche();
+      if (seq !== scanSeq) return; // cancelado enquanto gravava: nada a avisar
+      const pendentes = decisoesPendentes(get()).length;
+      if (emSegundoPlano && pendentes > 0) {
         // o toast desta base não carrega ação de clique: quem leva de volta à
-        // revisão é o indicador "Revisar N propostas" da sidebar
-        useToastStore.getState().push(textoEncontrado(propostas.length), "success");
+        // revisão é o indicador da lateral e o cartão de Organizar
+        useToastStore.getState().push(textoEncontrado(pendentes), "success");
       }
     } catch {
       if (seq !== scanSeq) return;
@@ -455,8 +608,13 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
         segundosDeTranscricao: 0,
         estimativaMedidaNestaMaquina: false,
       }));
-      if (!get().overlayOpen && propostas.length > 0) {
-        useToastStore.getState().push(textoEncontrado(propostas.length), "success");
+      // V15 — mesma regra da varredura (a letra escrita pelo computador nunca
+      // entra sozinha: ver `linhasQueSoPreenchem`)
+      await aplicarOQueSoPreenche();
+      if (!get().overlayOpen && decisoesPendentes(get()).length > 0) {
+        useToastStore
+          .getState()
+          .push(textoEncontrado(decisoesPendentes(get()).length), "success");
       }
     } catch (e) {
       if (seq !== scanSeq) return;
@@ -571,6 +729,8 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
       aplicadas: [],
       gravadas: {},
       avisosDaGravacao: {},
+      mantidas: [],
+      autoAplicadas: 0,
     });
     // Cancelar de verdade: a guarda de corrida acima só descarta o RESULTADO;
     // sem isto a varredura seguia consultando o LRCLIB até o fim (M4) — e a
@@ -589,7 +749,7 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
     }
   },
 
-  registrarAplicacao: (linhas, resultados) => {
+  registrarAplicacao: (linhas, resultados, abrir = true) => {
     const gravadasAgora: Record<number, Song> = {};
     const avisosAgora: Record<number, string> = {};
     set((s) => {
@@ -616,7 +776,8 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
       });
       return {
         status: "review",
-        overlayOpen: true,
+        // o automático grava em segundo plano: não abre a tela de ninguém
+        overlayOpen: abrir ? true : s.overlayOpen,
         // A LISTA INTEIRA FICA. Aplicar não fecha mais a caixa, e era o
         // fechamento que jogava fora a oferta de transcrição.
         aplicadas: [...s.aplicadas, ...novas],

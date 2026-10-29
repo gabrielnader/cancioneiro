@@ -12,7 +12,7 @@ import {
   avisoDeTranscricaoPendente,
   textoSemPropostas,
 } from "../lib/curadoria";
-import { useEnrichStore } from "./enrichStore";
+import { decisoesPendentes, useEnrichStore } from "./enrichStore";
 import { useToastStore } from "./toastStore";
 
 function proposal(overrides: Partial<EnrichProposal> = {}): EnrichProposal {
@@ -24,7 +24,10 @@ function proposal(overrides: Partial<EnrichProposal> = {}): EnrichProposal {
     proposed_title: "A Canção",
     proposed_artist: "Artista",
     lyrics: "letra",
-    confidence: "alta",
+    // V15 — MÉDIA de propósito: a proposta comum destes testes é uma DECISÃO
+    // que espera a pessoa. A ALTA para música sem letra seria gravada sozinha
+    // logo que a busca termina (ver "o que só preenche", mais abaixo)
+    confidence: "media",
     fonte: "LRCLIB",
     // a música não tinha letra: a proposta acrescenta (CRÍTICO-1 — é o par
     // has_lyrics + lyrics que diz se a aplicação DESTRUIRIA uma letra)
@@ -439,7 +442,7 @@ describe("enrichStore (V5 — F13)", () => {
       const toasts = useToastStore.getState().toasts;
       expect(toasts).toHaveLength(1);
       expect(toasts[0].message).toBe(
-        "Dados encontrados para 2 músicas — abra a revisão para conferir.",
+        "2 sugestões esperam a sua decisão — veja em Organizar.",
       );
       expect(useEnrichStore.getState().status).toBe("review");
     });
@@ -454,7 +457,7 @@ describe("enrichStore (V5 — F13)", () => {
       await pending;
 
       expect(useToastStore.getState().toasts[0].message).toBe(
-        "Dados encontrados para 1 música — abra a revisão para conferir.",
+        "1 sugestão espera a sua decisão — veja em Organizar.",
       );
     });
 
@@ -1502,5 +1505,110 @@ describe("enrichStore (V5 — F13)", () => {
       expect(toast.kind).toBe("error");
       expect(useEnrichStore.getState().status).not.toBe("transcribing");
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// V15 — o que só preenche é gravado sozinho; o resto espera a pessoa
+// ---------------------------------------------------------------------------
+describe("enrichStore — o que só preenche é gravado sozinho (V15)", () => {
+  /** Backend que grava tudo o que recebe, e devolve a música gravada. */
+  function backendQueGrava(propostas: EnrichProposal[]) {
+    const enrichApply = vi.fn(async (aplicacoes: { song_id: number; title: string; artist: string | null; lyrics: string | null }[]) =>
+      aplicacoes.map((a) => ({
+        song_id: a.song_id,
+        song: {
+          id: a.song_id,
+          title: a.title,
+          artist: a.artist,
+          file_path: `/acervo/${a.song_id}.mp3`,
+          has_lyrics: a.lyrics !== null,
+          available: true,
+        },
+        error: null,
+        aviso: null,
+      })),
+    );
+    setBackendForTests({
+      enrichFolderScan: vi.fn(async () => scanResult(propostas)),
+      enrichApply,
+    } as unknown as Backend);
+    return enrichApply;
+  }
+
+  beforeEach(() => {
+    useEnrichStore.setState({
+      status: "idle",
+      overlayOpen: false,
+      proposals: [],
+      aplicadas: [],
+      mantidas: [],
+      gravadas: {},
+      applyErrors: {},
+      autoAplicadas: 0,
+      scanInFlight: false,
+    });
+    useToastStore.setState({ toasts: [] });
+  });
+
+  it("grava sozinho SÓ o que preenche, e deixa a decisão pendente esperando", async () => {
+    const enrichApply = backendQueGrava([
+      // letra em ALTA para música sem letra: preenche
+      proposal({ song_id: 1, confidence: "alta" }),
+      // letra em MÉDIA: decisão
+      proposal({ song_id: 2, confidence: "media" }),
+      // trocaria um nome escrito por gente: decisão
+      proposal({ song_id: 3, lyrics: null, substitui_nome_escrito: true }),
+    ]);
+    await useEnrichStore.getState().startScan("");
+
+    expect(enrichApply).toHaveBeenCalledTimes(1);
+    const enviadas = enrichApply.mock.calls[0][0];
+    expect(enviadas.map((a) => a.song_id)).toEqual([1]);
+    const s = useEnrichStore.getState();
+    expect(s.autoAplicadas).toBe(1);
+    expect(s.aplicadas).toEqual([0]);
+    expect(decisoesPendentes(s)).toEqual([1, 2]);
+  });
+
+  it("nunca troca sozinho uma letra que existe, mesmo em ALTA (CRÍTICO-1)", async () => {
+    const enrichApply = backendQueGrava([
+      proposal({ song_id: 1, confidence: "alta", has_lyrics: true, letra_origem: "manual" }),
+    ]);
+    await useEnrichStore.getState().startScan("");
+    expect(enrichApply).not.toHaveBeenCalled();
+    expect(decisoesPendentes(useEnrichStore.getState())).toEqual([0]);
+  });
+
+  it("em segundo plano, gravar sozinho não abre a tela de ninguém", async () => {
+    backendQueGrava([proposal({ song_id: 1, confidence: "alta" })]);
+    const pendente = useEnrichStore.getState().startScan("");
+    useEnrichStore.getState().hideOverlay();
+    await pendente;
+    const s = useEnrichStore.getState();
+    expect(s.overlayOpen).toBe(false);
+    // nada sobrou para decidir: não há "esperam a sua decisão" — o aviso é
+    // o do que foi feito
+    const mensagens = useToastStore.getState().toasts.map((t) => t.message);
+    expect(mensagens.some((m) => m.includes("esperam") || m.includes("espera a"))).toBe(false);
+    expect(mensagens.some((m) => m.includes("ganhou letra") || m.includes("ganharam letra"))).toBe(true);
+  });
+
+  it("'Manter como está' tira a linha das pendentes sem gravar nada", async () => {
+    const enrichApply = backendQueGrava([proposal({ song_id: 2, confidence: "media" })]);
+    await useEnrichStore.getState().startScan("");
+    useEnrichStore.getState().manter(0);
+    expect(decisoesPendentes(useEnrichStore.getState())).toEqual([]);
+    expect(enrichApply).not.toHaveBeenCalled();
+  });
+
+  it("a linha que nem pôde ser consultada não é decisão pendente", () => {
+    expect(
+      decisoesPendentes({
+        proposals: [proposal({ error: "sem conexão" }), proposal({ song_id: 2 })],
+        aplicadas: [],
+        mantidas: [],
+      }),
+    ).toEqual([1]);
   });
 });

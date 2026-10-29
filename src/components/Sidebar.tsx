@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { textoDoProgressoDaTranscricao } from "../lib/curadoria";
 import { buildFolderTree, isUnderFolder, type FolderNode } from "../lib/folderTree";
-import { useEnrichStore } from "../stores/enrichStore";
+import { decisoesPendentes, useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlaylistStore } from "../stores/playlistStore";
 import { useUiStore } from "../stores/uiStore";
@@ -301,7 +301,7 @@ function EnrichBackgroundIndicator() {
   const overlayOpen = useEnrichStore((s) => s.overlayOpen);
   const progress = useEnrichStore((s) => s.progress);
   const transcricaoProgress = useEnrichStore((s) => s.transcricaoProgress);
-  const proposals = useEnrichStore((s) => s.proposals);
+  const pendentes = useEnrichStore((s) => decisoesPendentes(s).length);
   const openOverlay = useEnrichStore((s) => s.openOverlay);
 
   if (status === "idle" || overlayOpen) return null;
@@ -320,9 +320,11 @@ function EnrichBackgroundIndicator() {
               transcricaoProgress.total,
             )
           : "Escrevendo as letras…"
-        : proposals.length === 1
-          ? "Revisar 1 proposta"
-          : `Revisar ${proposals.length} propostas`;
+        : pendentes === 0
+          ? "Busca concluída — ver o resultado"
+          : pendentes === 1
+            ? "Conferir 1 sugestão"
+            : `Conferir ${pendentes} sugestões`;
   // backend antigo (ou evento inicial) pode vir sem etapa: a linha some
   const etapa =
     status === "scanning"

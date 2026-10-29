@@ -31,7 +31,7 @@ import { buildFolderTree, isUnderFolder } from "../lib/folderTree";
 import type { ThemePref } from "../lib/theme";
 import { getAppVersion } from "../lib/updater";
 import { useDownloadStore } from "../stores/downloadStore";
-import { useEnrichStore } from "../stores/enrichStore";
+import { decisoesPendentes, useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
 import { useToastStore } from "../stores/toastStore";
 import { useUiStore } from "../stores/uiStore";
@@ -376,7 +376,9 @@ function CuradoriaSection() {
   const status = useEnrichStore((s) => s.status);
   const progress = useEnrichStore((s) => s.progress);
   const transcricaoProgress = useEnrichStore((s) => s.transcricaoProgress);
-  const propostas = useEnrichStore((s) => s.proposals.length);
+  // V15 — o que FALTA decidir, e não o total: o que só preenchia já foi
+  // gravado sozinho, e o que a pessoa já decidiu não é mais pendência
+  const propostas = useEnrichStore((s) => decisoesPendentes(s).length);
   // depois do "Cancelar" o invoke ainda leva alguns segundos para responder:
   // liberar o disparo aí faria a segunda varredura correr por cima (M4)
   const encerrando = useEnrichStore(

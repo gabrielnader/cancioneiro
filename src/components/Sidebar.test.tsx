@@ -408,18 +408,18 @@ describe("Sidebar — indicador de varredura em segundo plano (V5 F13)", () => {
     ).toBeInTheDocument();
   });
 
-  it("varredura terminada em segundo plano: botão 'Revisar N propostas' reabre a revisão", () => {
+  it("varredura terminada em segundo plano: botão 'Conferir N sugestões' reabre a revisão", () => {
     useEnrichStore.setState({
       status: "review",
       overlayOpen: false,
       proposals: [
-        { song_id: 1 } as never,
-        { song_id: 2 } as never,
-        { song_id: 3 } as never,
+        { song_id: 1, error: null } as never,
+        { song_id: 2, error: null } as never,
+        { song_id: 3, error: null } as never,
       ],
     });
     render(<Sidebar />);
-    fireEvent.click(screen.getByRole("button", { name: "Revisar 3 propostas" }));
+    fireEvent.click(screen.getByRole("button", { name: "Conferir 3 sugestões" }));
     expect(useEnrichStore.getState().overlayOpen).toBe(true);
   });
 
@@ -427,11 +427,11 @@ describe("Sidebar — indicador de varredura em segundo plano (V5 F13)", () => {
     useEnrichStore.setState({
       status: "review",
       overlayOpen: false,
-      proposals: [{ song_id: 1 } as never],
+      proposals: [{ song_id: 1, error: null } as never],
     });
     render(<Sidebar />);
     expect(
-      screen.getByRole("button", { name: "Revisar 1 proposta" }),
+      screen.getByRole("button", { name: "Conferir 1 sugestão" }),
     ).toBeInTheDocument();
   });
 
