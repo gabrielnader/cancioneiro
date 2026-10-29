@@ -55,7 +55,9 @@ export function LyricsPanel() {
 
   return (
     <aside
-      className="flex h-full w-[380px] shrink-0 flex-col border-l border-border bg-surface"
+      // V15 — em tela estreita os detalhes passam POR CIMA da lista, presos à
+      // direita: lado a lado, 380px de painel deixavam a lista sem largura
+      className="flex h-full w-[380px] shrink-0 flex-col border-l border-border bg-surface max-lg:absolute max-lg:inset-y-0 max-lg:right-0 max-lg:z-30 max-lg:max-w-[calc(100%-2rem)] max-lg:shadow-2xl"
       aria-label="Painel de letra"
     >
       {selected === null ? (

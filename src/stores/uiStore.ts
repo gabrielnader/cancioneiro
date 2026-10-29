@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { applyTheme, type ThemePref } from "../lib/theme";
+import { aplicarZoom, type NivelDeZoom } from "../lib/zoom";
 
 /** Níveis de fonte da letra (F3): 16/20/24px. */
 export const FONT_SIZES_PX = [16, 20, 24] as const;
@@ -56,6 +57,21 @@ interface UiState {
    * inerte: o `persist` do zustand ignora chave que o estado não declara, e
    * apagar preferência alheia não é trabalho desta versão.
    */
+  /**
+   * V15 — o "Tamanho da letra" do topo: zoom da janela inteira (ver
+   * `lib/zoom.ts`). Separado do `fontLevel`, que é o tamanho da LETRA DA
+   * MÚSICA no painel de detalhes — são duas perguntas diferentes, e quem
+   * enxerga pouco pode querer as duas no máximo.
+   */
+  zoomLevel: NivelDeZoom;
+  setZoomLevel: (nivel: NivelDeZoom) => void;
+  /**
+   * V15 — em tela estreita (zoom alto, notebook pequeno) a lateral vira uma
+   * gaveta, aberta pelo botão "Listas e pastas". Não é guardado: abrir o app
+   * com uma gaveta cobrindo a lista seria esconder justamente a busca.
+   */
+  gavetaAberta: boolean;
+  setGavetaAberta: (aberta: boolean) => void;
   toggleLyricsPanel: () => void;
   cycleFontLevel: () => void;
   setView: (view: View) => void;
@@ -74,7 +90,14 @@ export function createUiStore() {
         checkUpdatesOnStart: true,
         theme: "auto",
         openFolders: [],
-        larguraLateral: 240,
+        zoomLevel: 0 as NivelDeZoom,
+        setZoomLevel: (nivel) => {
+          set({ zoomLevel: nivel });
+          void aplicarZoom(nivel);
+        },
+        gavetaAberta: false,
+        setGavetaAberta: (aberta) => set({ gavetaAberta: aberta }),
+        larguraLateral: 288,
         // limites: estreita demais some com o texto, larga demais come a lista
         setLarguraLateral: (px) =>
           set({ larguraLateral: Math.max(180, Math.min(480, Math.round(px))) }),
@@ -104,6 +127,7 @@ export function createUiStore() {
         partialize: (s) => ({
           lyricsPanelVisible: s.lyricsPanelVisible,
           fontLevel: s.fontLevel,
+          zoomLevel: s.zoomLevel,
           checkUpdatesOnStart: s.checkUpdatesOnStart,
           theme: s.theme,
           openFolders: s.openFolders,
@@ -114,7 +138,11 @@ export function createUiStore() {
         // (evita a piscada); isto cobre o caso raro de a hidratação mudar o
         // valor depois disso.
         onRehydrateStorage: () => (state) => {
-          if (state) applyTheme(state.theme);
+          if (state) {
+            applyTheme(state.theme);
+            // o zoom não sobrevive ao reinício da janela: reaplica o guardado
+            if (state.zoomLevel) void aplicarZoom(state.zoomLevel);
+          }
         },
       },
     ),

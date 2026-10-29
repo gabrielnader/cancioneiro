@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { textoDoProgressoDaTranscricao } from "../lib/curadoria";
-import { versaoDoApp } from "../lib/versao";
 import { buildFolderTree, isUnderFolder, type FolderNode } from "../lib/folderTree";
 import { useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
@@ -30,12 +29,11 @@ export function Sidebar() {
   const setLarguraLateral = useUiStore((s) => s.setLarguraLateral);
   const alturaArvore = useUiStore((s) => s.alturaArvore);
   const setAlturaArvore = useUiStore((s) => s.setAlturaArvore);
-  /** V14.1 — a versão ao lado do nome: é o que a pessoa lê para dizer qual
-      tem, quando relata algo e não há a quem perguntar. */
-  const [versao, setVersao] = useState("");
-  useEffect(() => {
-    void versaoDoApp().then(setVersao).catch(() => setVersao(""));
-  }, []);
+  /** V15 — em tela estreita a lateral é uma gaveta (ver `uiStore`). */
+  const gavetaAberta = useUiStore((s) => s.gavetaAberta);
+  const setGavetaAberta = useUiStore((s) => s.setGavetaAberta);
+  /** Navegar pela gaveta fecha a gaveta: ela estava cobrindo o que se abriu. */
+  const fecharGaveta = () => setGavetaAberta(false);
 
   // Árvore de pastas do acervo (V4 — F11), derivada dos file_path.
   const folderTree = useMemo(
@@ -72,7 +70,7 @@ export function Sidebar() {
   }, [folderFilterAtual, folderTree]);
 
   function navClass(active: boolean) {
-    return `block w-full rounded-md px-3 py-2 text-left text-[15px] ${
+    return `block min-h-12 w-full rounded-xl px-3 py-2.5 text-left text-[17px] ${
       active
         ? "bg-brand-soft font-medium text-brand"
         : "text-ink hover:bg-surface-hover"
@@ -80,8 +78,25 @@ export function Sidebar() {
   }
 
   return (
+    <>
+    {/* V15 — o fundo escuro da gaveta: clicar fora fecha, como em todo app */}
+    {gavetaAberta && (
+      <div
+        aria-hidden="true"
+        className="absolute inset-0 z-30 bg-black/40 lg:hidden"
+        onClick={fecharGaveta}
+      />
+    )}
     <nav
-      className="relative flex h-full shrink-0 flex-col border-r border-border bg-surface p-3"
+      aria-label="Listas e pastas"
+      // V15 — tela larga: coluna fixa ao lado da lista. Tela estreita (zoom
+      // alto, notebook pequeno): some, e volta como gaveta por cima da lista
+      // pelo botão "Listas e pastas" do topo
+      className={`relative flex h-full shrink-0 flex-col border-r border-border bg-surface p-3 max-lg:overflow-y-auto baixa:overflow-y-auto ${
+        gavetaAberta
+          ? "max-lg:absolute max-lg:inset-y-0 max-lg:left-0 max-lg:z-40 max-lg:max-w-[calc(100%-3rem)] max-lg:shadow-2xl"
+          : "max-lg:hidden"
+      }`}
       style={{ width: larguraLateral }}
     >
       {/* V14.1 — a alça de largura. Nomes de playlist são longos ("Chamada -
@@ -91,7 +106,7 @@ export function Sidebar() {
         aria-orientation="vertical"
         aria-label="Ajustar largura do menu"
         title="Arraste para ajustar a largura"
-        className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-brand-soft"
+        className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-brand-soft max-lg:hidden"
         onMouseDown={(e) => {
           e.preventDefault();
           const inicioX = e.clientX;
@@ -106,29 +121,39 @@ export function Sidebar() {
           window.addEventListener("mouseup", soltar);
         }}
       />
-      <p className="flex items-baseline gap-1.5 px-3 pb-2 pt-1 text-[17px] font-semibold text-brand">
-        Cancioneiro
-        {versao && (
-          <span className="text-[11px] font-normal text-ink-tertiary">
-            v{versao}
-          </span>
-        )}
-      </p>
+      {/* o nome e a versão subiram para a barra do topo (V15) */}
       <button
         type="button"
-        className={navClass(view === "library")}
+        onClick={fecharGaveta}
+        className="mb-2 hidden min-h-12 items-center justify-center gap-2 rounded-xl border-2 border-border-strong text-[16px] font-semibold text-ink hover:bg-surface-hover max-lg:flex"
+      >
+        <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M6 6l12 12M18 6 6 18" /></svg>
+        Fechar
+      </button>
+      <button
+        type="button"
+        className={navClass(view === "library" && folderFilterAtual === null)}
         onClick={() => {
           closePlaylist();
           setFolderFilter(null);
           setView("library");
+          fecharGaveta();
         }}
       >
-        Biblioteca
+        <span className="flex items-center justify-between gap-2">
+          <span>Todas as músicas</span>
+          <span className="shrink-0 text-[14px] font-normal text-ink-tertiary">
+            {allSongs.length.toLocaleString("pt-BR")}
+          </span>
+        </span>
       </button>
       {folderTree.length > 0 && (
         <>
+          {/* em tela estreita ou baixa a árvore perde a altura fixa e a
+              lateral inteira rola: com 450px de tela, uma árvore de 256px
+              escondia as listas sem caminho até elas */}
           <div
-            className="shrink-0 overflow-y-auto"
+            className="shrink-0 overflow-y-auto max-lg:!h-auto baixa:!h-auto"
             style={{ height: alturaArvore }}
           >
             {folderTree.map((node) => (
@@ -143,7 +168,7 @@ export function Sidebar() {
             aria-orientation="horizontal"
             aria-label="Ajustar altura da árvore de pastas"
             title="Arraste para ajustar a altura"
-            className="my-1 h-1.5 shrink-0 cursor-row-resize rounded hover:bg-brand-soft"
+            className="my-1 h-1.5 shrink-0 cursor-row-resize rounded hover:bg-brand-soft max-lg:hidden baixa:hidden"
             onMouseDown={(e) => {
               e.preventDefault();
               const inicioY = e.clientY;
@@ -160,23 +185,22 @@ export function Sidebar() {
           />
         </>
       )}
-      {/* V13 — o "+" fica ao lado do título da seção que ele preenche, e
-          Configurações desceu para o pé: é ajuste, não navegação do dia a dia. */}
-      <div className="mt-5 flex items-center justify-between gap-2 px-3">
-        <p className="text-[12px] font-medium uppercase text-ink-tertiary">
-          PLAYLISTS
+      {/* V13 — o "+" fica ao lado do título da seção que ele preenche.
+          V15 — e ganhou palavra: um "+" sozinho é ícone a adivinhar. */}
+      <div className="mt-4 flex items-center justify-between gap-2 px-1">
+        <p className="whitespace-nowrap px-2 text-[15px] font-semibold text-ink-secondary">
+          Minhas listas
         </p>
         <button
           type="button"
-          aria-label="Nova playlist"
-          title="Nova playlist"
-          className="rounded p-0.5 text-[16px] leading-none text-brand hover:bg-brand-soft"
+          className="flex min-h-11 items-center gap-1 whitespace-nowrap rounded-xl border-2 border-dashed border-border-strong px-3 text-[15px] font-semibold text-brand hover:bg-brand-soft"
           onClick={() => setDialogOpen(true)}
         >
-          +
+          <span aria-hidden="true" className="text-[18px] leading-none">+</span>
+          Nova lista
         </button>
       </div>
-      <div className="mt-1 flex-1 overflow-y-auto">
+      <div className="mt-1 flex-1 overflow-y-auto max-lg:flex-none max-lg:overflow-visible baixa:flex-none baixa:overflow-visible">
         {playlists.map((p) => (
           <div key={p.id} className="group flex items-center gap-1">
           {renomeando === p.id ? (
@@ -184,7 +208,7 @@ export function Sidebar() {
             <input
               autoFocus
               aria-label={`Novo nome para ${p.name}`}
-              className="w-full rounded-md border border-border bg-canvas px-3 py-2 text-[15px] text-ink"
+              className="min-h-12 w-full rounded-xl border-2 border-brand bg-canvas px-3 py-2 text-[17px] text-ink"
               value={nomeNovo}
               onChange={(e) => setNomeNovo(e.target.value)}
               onBlur={() => setRenomeando(null)}
@@ -207,6 +231,7 @@ export function Sidebar() {
             onClick={() => {
               void openPlaylist(p.id);
               setView("playlist");
+              fecharGaveta();
             }}
             onDragOver={(e) => {
               if (e.dataTransfer.types.includes("application/x-cancioneiro-song")) {
@@ -228,7 +253,7 @@ export function Sidebar() {
           >
             <span className="flex items-center justify-between gap-2">
               <span className="truncate">{p.name}</span>
-              <span className="shrink-0 text-[12px] text-disabled">
+              <span className="shrink-0 text-[14px] text-ink-tertiary">
                 {p.song_count}
               </span>
             </span>
@@ -239,7 +264,7 @@ export function Sidebar() {
             type="button"
             aria-label={`Renomear playlist ${p.name}`}
             title="Renomear"
-            className="shrink-0 rounded px-1 text-[12px] text-ink-tertiary hover:bg-surface-hover"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl text-[16px] text-ink-tertiary hover:bg-surface-hover"
             onClick={() => {
               setNomeNovo(p.name);
               setRenomeando(p.id);
@@ -252,21 +277,13 @@ export function Sidebar() {
           </div>
         ))}
       </div>
-      <button
-        type="button"
-        className={`mt-2 ${navClass(view === "settings")}`}
-        onClick={() => {
-          closePlaylist();
-          setView("settings");
-        }}
-      >
-        Configurações
-      </button>
-
+      {/* "Configurações" saiu daqui: virou "Organizar minhas músicas", no
+          topo, à vista o tempo todo (V15) */}
       <EnrichBackgroundIndicator />
 
       <NewPlaylistDialog open={dialogOpen} onClose={() => setDialogOpen(false)} />
     </nav>
+    </>
   );
 }
 
@@ -320,12 +337,12 @@ function EnrichBackgroundIndicator() {
       onClick={openOverlay}
       title="Abrir a revisão de dados"
       aria-label={etapa ? `${contagem} — ${etapa}` : contagem}
-      className="mt-2 rounded-md bg-brand-soft px-3 py-2 text-left text-[13px] font-medium text-brand hover:bg-brand-soft-hover"
+      className="mt-2 rounded-xl bg-brand-soft px-3 py-2.5 text-left text-[15px] font-medium text-brand hover:bg-brand-soft-hover"
     >
       <span className="block truncate">{contagem}</span>
       {etapa && (
         // brand-strong sobre brand-soft = 7,27:1 no claro (e passa também no escuro)
-        <span className="block truncate text-[12px] font-normal text-brand-strong">
+        <span className="block truncate text-[14px] font-normal text-brand-strong">
           {etapa}
         </span>
       )}
@@ -362,6 +379,7 @@ function FolderTreeItem({ node, level }: { node: FolderNode; level: number }) {
   const closePlaylist = usePlaylistStore((s) => s.closePlaylist);
   const openFolders = useUiStore((s) => s.openFolders);
   const toggleFolder = useUiStore((s) => s.toggleFolder);
+  const setGavetaAberta = useUiStore((s) => s.setGavetaAberta);
   const isRoot = level === 0;
   const active = !isRoot && folderFilter === node.path;
   const hasChildren = node.children.length > 0;
@@ -388,12 +406,12 @@ function FolderTreeItem({ node, level }: { node: FolderNode; level: number }) {
             aria-label={`${aberta ? "Fechar" : "Abrir"} pasta ${node.name}`}
             aria-expanded={aberta}
             onClick={() => toggleFolder(node.path)}
-            className="shrink-0 rounded p-0.5 text-ink-tertiary hover:bg-surface-hover"
-            style={{ marginLeft: 8 + level * 14 }}
+            className="flex h-10 w-9 shrink-0 items-center justify-center rounded-lg text-ink-tertiary hover:bg-surface-hover"
+            style={{ marginLeft: 2 + level * 16 }}
           >
             <span
               aria-hidden="true"
-              className={`inline-block text-[10px] transition-transform ${aberta ? "rotate-90" : ""}`}
+              className={`inline-block text-[12px] transition-transform ${aberta ? "rotate-90" : ""}`}
             >
               ▶
             </span>
@@ -401,13 +419,13 @@ function FolderTreeItem({ node, level }: { node: FolderNode; level: number }) {
         ) : (
           // espaço reservado do tamanho da setinha: sem isso o nome de uma
           // pasta-folha desalinharia com o das pastas que têm seta
-          <span className="w-[22px] shrink-0" style={{ marginLeft: 8 + level * 14 }} />
+          <span className="w-9 shrink-0" style={{ marginLeft: 2 + level * 16 }} />
         )}
         <button
           type="button"
           aria-label={`Pasta ${node.name}`}
           title={node.path}
-          className={`flex w-full min-w-0 items-center justify-between gap-2 rounded-md py-1 pl-1 text-left text-[14px] ${
+          className={`flex min-h-10 w-full min-w-0 items-center justify-between gap-2 rounded-lg py-1.5 pl-1 text-left text-[16px] ${
             active
               ? "bg-brand-soft font-medium text-brand"
               : "text-ink-secondary hover:bg-surface-hover"
@@ -416,10 +434,11 @@ function FolderTreeItem({ node, level }: { node: FolderNode; level: number }) {
             closePlaylist();
             setFolderFilter(isRoot ? null : node.path);
             setView("library");
+            setGavetaAberta(false);
           }}
         >
           <span className="truncate">{node.name}</span>
-          <span className="shrink-0 text-[12px] text-disabled">{node.count}</span>
+          <span className="shrink-0 text-[14px] text-ink-tertiary">{node.count}</span>
         </button>
       </div>
       {aberta &&

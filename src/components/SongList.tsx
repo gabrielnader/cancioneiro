@@ -7,22 +7,33 @@ import type { SearchResult } from "../lib/types";
 import { SongRow } from "./SongRow";
 
 /**
- * Alturas fixas da virtualização (a linha não é medida). Cada linha extra tem
- * altura própria e SOMA à base — a linha do nome do arquivo (V6) usa
- * leading-4 = 16px, o snippet mantém os 22px de sempre.
+ * Alturas fixas da virtualização (a linha não é medida). Cada linha de texto
+ * tem `leading-*` explícito no `SongRow`, e é dele que saem estes números:
+ * título e artista 24px, nome do arquivo 20px, trecho da letra 24px. A coluna
+ * de texto nunca fica mais baixa que o botão de tocar (48px). O `py-2.5` da
+ * linha soma 20px.
+ *
+ * V15 — linhas bem mais altas que antes (eram 40px): letra maior e um botão
+ * de tocar do tamanho de um dedo. Com 8.000 músicas isso não pesa: só as
+ * linhas na tela existem.
  */
-const ROW_HEIGHT = 40;
-const FILENAME_LINE_HEIGHT = 16;
-const SNIPPET_LINE_HEIGHT = 22;
+const PADDING_DA_LINHA = 20;
+const BOTAO_DE_TOCAR = 48;
+const LINHA_DO_TITULO = 24;
+const LINHA_DO_ARTISTA = 24;
+const FILENAME_LINE_HEIGHT = 20;
+const SNIPPET_LINE_HEIGHT = 24;
 
-/** Altura da linha: base + nome do arquivo (quando exibido) + snippet. */
+/** Altura da linha: o texto empilhado, nunca menos que o botão de tocar. */
 function rowHeight(result: SearchResult | undefined): number {
-  if (!result) return ROW_HEIGHT;
-  return (
-    ROW_HEIGHT +
+  if (!result) return PADDING_DA_LINHA + BOTAO_DE_TOCAR;
+  const texto =
+    LINHA_DO_TITULO +
+    (result.song.artist ? LINHA_DO_ARTISTA : 0) +
     (songFileName(result.song) ? FILENAME_LINE_HEIGHT : 0) +
-    (result.snippet ? SNIPPET_LINE_HEIGHT : 0)
-  );
+    (result.snippet ? SNIPPET_LINE_HEIGHT : 0);
+  // +1: a borda de baixo da linha
+  return PADDING_DA_LINHA + Math.max(BOTAO_DE_TOCAR, texto) + 1;
 }
 
 /** Lista virtualizada de músicas (biblioteca/resultados de busca). */

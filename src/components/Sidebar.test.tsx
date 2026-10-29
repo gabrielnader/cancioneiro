@@ -97,7 +97,7 @@ describe("Sidebar — árvore de pastas (V4 F11)", () => {
   it("clicar em Biblioteca limpa o filtro de pasta", () => {
     useLibraryStore.setState({ folderFilter: "/acervo/1" });
     render(<Sidebar />);
-    fireEvent.click(screen.getByRole("button", { name: "Biblioteca" }));
+    fireEvent.click(screen.getByRole("button", { name: /^Todas as músicas/ }));
     expect(useLibraryStore.getState().folderFilter).toBeNull();
   });
 
@@ -309,10 +309,13 @@ describe("Sidebar — a árvore de pastas voltou a ser só navegação (V8 F18)"
   });
 
   // Ordem obrigatória do PRD: a varredura em lote não pode sumir do produto.
-  it("a varredura em lote continua alcançável: Configurações está na lateral", () => {
+  // V15 — a porta para a curadoria SUBIU para a barra do topo ("Organizar
+  // minhas músicas", ver TopBar.test): a lateral ficou só com o que se usa
+  // para ouvir. O teste que garante que ela continua alcançável mora lá.
+  it("a lateral não carrega mais a porta da curadoria (V15: mora no topo)", () => {
     render(<Sidebar />);
-    fireEvent.click(screen.getByRole("button", { name: "Configurações" }));
-    expect(useUiStore.getState().view).toBe("settings");
+    expect(screen.queryByRole("button", { name: "Configurações" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Organizar/ })).toBeNull();
   });
 });
 

@@ -145,25 +145,24 @@ describe("SongList (F1 UI / F2 / F3)", () => {
 
   // Uso real: com título curto, o chip caía quase em cima de onde a pessoa
   // clica para selecionar — e clique errado no chip TROCA a busca inteira.
-  // Chips e "+" passam a viver no mesmo grupo à direita, separados do bloco
-  // de texto, deixando a esquerda da linha como área segura de seleção.
+  // Chips e o botão de lista vivem no mesmo grupo à direita, separados do
+  // bloco de texto (V15: a coluna de texto fica entre o botão de tocar e eles).
   it("chips ficam no grupo de ações à direita, longe do título e do artista", () => {
-    // o "+" só existe havendo playlist, e ele é a outra metade do grupo
+    // o botão de lista só existe havendo playlist, e ele é a outra metade do grupo
     usePlaylistStore.setState({
       playlists: [{ id: 1, name: "Culto", song_count: 0 }],
     });
     render(<SongList />);
     const chip = screen.getByRole("button", { name: "Tema: água" });
-    const acoes = chip.closest(".ml-auto")!;
-    expect(acoes).not.toBeNull();
-    // o "+" da mesma linha vive no MESMO grupo
     const linha = chip.closest('[role="option"]')!;
-    const mais = linha.querySelector('[aria-label="Adicionar à playlist"]');
-    expect(acoes.contains(mais!)).toBe(true);
+    const lista = linha.querySelector('[data-testid="por-na-lista"]')!;
+    // o menor ancestral comum do chip e do botão de lista é o grupo de ações
+    let acoes: Element = chip.parentElement!;
+    while (!acoes.contains(lista)) acoes = acoes.parentElement!;
+    expect(acoes).not.toBe(linha);
     // e o título/artista ficam FORA dele
     expect(acoes.textContent).not.toContain("Rio Divino");
-    // respiro fixo entre o texto e as ações
-    expect(acoes.className).toContain("pl-6");
+    expect(acoes.textContent).not.toContain("Alguém");
   });
 
   it("música sem temas não exibe chips", () => {
@@ -172,7 +171,7 @@ describe("SongList (F1 UI / F2 / F3)", () => {
     expect(row.querySelectorAll('[data-testid="tema-chip"]')).toHaveLength(0);
   });
 
-  describe("ordem da linha (V5 Q3): título → artista → badge/temas → '+' no fim", () => {
+  describe("ordem da linha (V15): tocar → título e selo → artista → temas → lista no fim", () => {
     /** a aparece antes de b no DOM? */
     function before(a: Element, b: Element): boolean {
       return Boolean(
@@ -186,27 +185,32 @@ describe("SongList (F1 UI / F2 / F3)", () => {
       });
     });
 
-    it("artista vem logo após o título, antes do badge 'Sem letra'", () => {
+    it("o selo 'Sem letra' acompanha o título, e o artista vem na linha de baixo", () => {
       render(<SongList />);
       const row = screen.getByText("Brisa").closest('[role="option"]')!;
       const title = screen.getByText("Brisa");
-      const artist = row.querySelector("span.text-\\[13px\\]")!;
-      expect(artist).toHaveTextContent("Alguém");
+      const artist = Array.from(row.querySelectorAll("p")).find(
+        (el) => el.textContent === "Alguém",
+      )!;
       const badge = Array.from(row.querySelectorAll("span")).find(
         (el) => el.textContent === "Sem letra",
       )!;
-      expect(before(title, artist)).toBe(true);
-      expect(before(artist, badge)).toBe(true);
+      // o botão de tocar vem antes de tudo: é a primeira coisa que a mão acha
+      const tocar = screen.getByRole("button", { name: "Tocar Brisa" });
+      expect(before(tocar, title)).toBe(true);
+      expect(before(title, badge)).toBe(true);
+      expect(before(badge, artist)).toBe(true);
+      expect(title.parentElement!.contains(badge)).toBe(true);
     });
 
-    it("artista antes dos chips de tema; botão '+' é o último elemento da linha", () => {
+    it("artista antes dos chips de tema; o botão de lista é o último elemento da linha", () => {
       render(<SongList />);
       const row = screen.getByText("Rio Divino").closest('[role="option"]')!;
-      const artist = Array.from(row.querySelectorAll("span")).find(
+      const artist = Array.from(row.querySelectorAll("p")).find(
         (el) => el.textContent === "Alguém",
       )!;
       const chip = screen.getByRole("button", { name: "Tema: água" });
-      const plus = row.querySelector('[aria-label="Adicionar à playlist"]')!;
+      const plus = row.querySelector('[data-testid="por-na-lista"]')!;
       expect(before(artist, chip)).toBe(true);
       expect(before(chip, plus)).toBe(true);
     });
@@ -214,7 +218,7 @@ describe("SongList (F1 UI / F2 / F3)", () => {
     it("artista mantém truncate para não estourar a linha", () => {
       render(<SongList />);
       const row = screen.getByText("Aurora").closest('[role="option"]')!;
-      const artist = Array.from(row.querySelectorAll("span")).find(
+      const artist = Array.from(row.querySelectorAll("p")).find(
         (el) => el.textContent === "Alguém",
       )!;
       expect(artist.className).toContain("truncate");
@@ -259,8 +263,8 @@ describe("SongList (F1 UI / F2 / F3)", () => {
       expect(
         titulo.compareDocumentPosition(nome) & Node.DOCUMENT_POSITION_FOLLOWING,
       ).toBeTruthy();
-      expect(titulo.className).toContain("text-[15px]");
-      expect(nome.className).toContain("text-[12px]");
+      expect(titulo.className).toContain("text-[17px]");
+      expect(nome.className).toContain("text-[14px]");
     });
 
     it("nome longo trunca com reticências e expõe o nome inteiro no title", () => {
@@ -300,7 +304,7 @@ describe("SongList (F1 UI / F2 / F3)", () => {
       expect(row.querySelector('[data-testid="song-filename"]')).toBeNull();
     });
 
-    it("a linha do nome não empurra badge/chips/'+' para fora: eles seguem na linha do título", () => {
+    it("a linha do nome não engole badge/chips/lista: o selo fica com o título, e as ações à direita", () => {
       usePlaylistStore.setState({
         playlists: [{ id: 1, name: "Culto", song_count: 0 }],
       });
@@ -321,14 +325,15 @@ describe("SongList (F1 UI / F2 / F3)", () => {
       const row = screen.getByText("Marinheiro só").closest('[role="option"]')!;
       const linhaDoTitulo = screen.getByText("Marinheiro só").parentElement!;
       const nome = row.querySelector('[data-testid="song-filename"]')!;
+      const selo = Array.from(row.querySelectorAll("span")).find(
+        (e) => e.textContent === "Sem letra",
+      )!;
+      expect(linhaDoTitulo.contains(selo)).toBe(true);
       for (const el of [
-        Array.from(row.querySelectorAll("span")).find(
-          (e) => e.textContent === "Sem letra",
-        )!,
+        selo,
         screen.getByRole("button", { name: "Tema: capoeira" }),
-        row.querySelector('[aria-label="Adicionar à playlist"]')!,
+        row.querySelector('[data-testid="por-na-lista"]')!,
       ]) {
-        expect(linhaDoTitulo.contains(el)).toBe(true);
         expect(nome.contains(el)).toBe(false);
       }
     });
@@ -397,8 +402,10 @@ describe("SongList (F1 UI / F2 / F3)", () => {
       return { song: { ...song(id, title), file_path: filePath }, snippet: null };
     }
 
-    // /a: título = nome do arquivo → sem segunda linha (40px).
-    // /b: nome do arquivo diferente do título → segunda linha (40 + 16 = 56px).
+    // V15 — padding 20 + borda 1 + a coluna de texto (título 24, artista 24,
+    // nome do arquivo 20), nunca menos que o botão de tocar (48).
+    // /a: título = nome do arquivo → sem linha do nome: 20 + 48 + 1 = 69px.
+    // /b: nome do arquivo diferente do título → 20 + 68 + 1 = 89px.
     const PASTA_A = [
       comCaminho(1, "um", "/a/um.mp3"),
       comCaminho(2, "dois", "/a/dois.mp3"),
@@ -414,23 +421,23 @@ describe("SongList (F1 UI / F2 / F3)", () => {
         folderFilter: "/a",
       });
       render(<SongList />);
-      expect(alturas()).toEqual(["40px", "40px"]);
+      expect(alturas()).toEqual(["69px", "69px"]);
 
       act(() => {
         useLibraryStore.setState({ folderFilter: "/b" });
       });
       expect(screen.getByText("Marinheiro só")).toBeInTheDocument();
-      expect(alturas()).toEqual(["56px", "56px"]);
+      expect(alturas()).toEqual(["89px", "89px"]);
       expect(deslocamentos()).toEqual([
         "translateY(0px)",
-        "translateY(56px)",
+        "translateY(89px)",
       ]);
     });
 
     it("repopular os resultados com a mesma contagem (ex.: salvar um título) remede as linhas", () => {
       useLibraryStore.setState({ results: PASTA_B, folderFilter: null });
       render(<SongList />);
-      expect(alturas()).toEqual(["56px", "56px"]);
+      expect(alturas()).toEqual(["89px", "89px"]);
 
       // título passa a ser o próprio nome do arquivo → a segunda linha some
       act(() => {
@@ -442,10 +449,10 @@ describe("SongList (F1 UI / F2 / F3)", () => {
         });
       });
       expect(screen.getByText("barco - Marinheiro")).toBeInTheDocument();
-      expect(alturas()).toEqual(["40px", "40px"]);
+      expect(alturas()).toEqual(["69px", "69px"]);
       expect(deslocamentos()).toEqual([
         "translateY(0px)",
-        "translateY(40px)",
+        "translateY(69px)",
       ]);
     });
   });

@@ -85,11 +85,7 @@ export function SettingsView() {
 
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col overflow-y-auto bg-canvas p-6">
-      {/*
-        A faixa do botão flutuante (App.tsx) é reservada SÓ na linha do
-        título, não na página inteira (DECISIONS #76).
-      */}
-      <h1 className="pr-[var(--faixa-detalhes)] text-[22px] font-semibold text-ink">
+      <h1 className="text-[22px] font-semibold text-ink">
         Configurações
       </h1>
 

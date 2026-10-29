@@ -30,7 +30,7 @@ describe("SearchBar — botão limpar busca (V5 Q1)", () => {
   it("clicar no × limpa a query e devolve o foco ao campo", () => {
     useLibraryStore.setState({ query: "coração" });
     render(<SearchBar />);
-    const input = screen.getByLabelText("Buscar por letra, título ou artista");
+    const input = screen.getByLabelText("Procurar uma música");
 
     fireEvent.click(screen.getByRole("button", { name: "Limpar busca" }));
 
@@ -45,7 +45,7 @@ describe("SearchBar — botão limpar busca (V5 Q1)", () => {
   it("Esc continua limpando a query (comportamento existente)", () => {
     useLibraryStore.setState({ query: "abc" });
     render(<SearchBar />);
-    const input = screen.getByLabelText("Buscar por letra, título ou artista");
+    const input = screen.getByLabelText("Procurar uma música");
     fireEvent.keyDown(input, { key: "Escape" });
     expect(useLibraryStore.getState().query).toBe("");
   });

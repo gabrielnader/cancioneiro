@@ -1,5 +1,14 @@
 @import "tailwindcss";
 
+/*
+  V15 — telas BAIXAS. Um notebook 1366×768 com o Windows em 150% deixa ~450px
+  de altura útil, e com o "Tamanho da letra" no máximo isso cai para ~350. O
+  que fica fixo (topo, busca, player) precisa encolher nessas telas, senão a
+  lista de músicas — a razão da tela existir — some.
+*/
+@custom-variant baixa (@media (max-height: 620px));
+@custom-variant muito-baixa (@media (max-height: 440px));
+
 @theme {
   --font-sans: "Inter", system-ui, sans-serif;
 
@@ -218,42 +227,6 @@
   --color-success-soft: #0f2a1b;
   --color-success-strong: #34d399;
   --color-success-soft-alt: #122b1d;
-}
-
-:root {
-  /*
-    Faixa horizontal reservada para o botão flutuante "Ocultar/Mostrar
-    detalhes" (App.tsx). Ele é `absolute` e existe em TODAS as views
-    (decisão 25), então cada cabeçalho de view tem de deixar essa faixa
-    livre — e a conta precisa morar num lugar só, porque ela já foi feita
-    errado três vezes em views diferentes.
-
-    Conta (medida no Chromium, fonte Inter 15px):
-      "Mostrar detalhes"  151 px  (o rótulo mais largo dos dois)
-    + `right-4` do botão   16 px
-    = 167 px mínimos. 12rem = 192 px deixa 25 px de folga para o rótulo
-    crescer um pouco sem voltar a cobrir botão de ninguém.
-
-    Quem depende disto: LibraryView (linha da busca), PlaylistView
-    (título + ações) e SettingsView (título). O E2E mede as três, com o
-    painel aberto e fechado, a 1280 e a 1024 (o minWidth do tauri.conf).
-  */
-  --faixa-detalhes: 12rem;
-
-  /*
-    Barra do player (PlayerBar): PROPOSITALMENTE constante nos dois temas.
-    Ela já era uma barra escura sobre um app claro antes desta versão — não
-    é "o fundo do app", é a cor própria do componente, como a capa de um
-    rádio. Trocar de tema não deveria apagar esse desenho nem (pior) fazer a
-    barra ficar clara no tema escuro.
-  */
-  --playerbar-bg: #111827;
-  --playerbar-fg: #f9fafb;
-  --playerbar-fg-muted: #9ca3af;
-  --playerbar-surface: #374151;
-  --playerbar-accent: #14b8a6;
-  --playerbar-button-bg: #ffffff;
-  --playerbar-button-fg: #111827;
 }
 
 html,

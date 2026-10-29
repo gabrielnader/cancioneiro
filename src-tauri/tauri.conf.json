@@ -15,8 +15,9 @@
         "title": "Cancioneiro",
         "width": 1200,
         "height": 760,
-        "minWidth": 1024,
-        "minHeight": 640
+        "minWidth": 640,
+        "minHeight": 440,
+        "maximized": true
       }
     ],
     "security": {

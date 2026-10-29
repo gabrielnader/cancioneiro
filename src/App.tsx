@@ -7,6 +7,7 @@ import { PlaylistView } from "./components/PlaylistView";
 import { SettingsView } from "./components/SettingsView";
 import { Sidebar } from "./components/Sidebar";
 import { Toasts } from "./components/Toasts";
+import { TopBar } from "./components/TopBar";
 import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { getBackend } from "./lib/api";
 import { watchSystemTheme } from "./lib/theme";
@@ -61,7 +62,6 @@ function App() {
   useKeyboardShortcuts();
   const view = useUiStore((s) => s.view);
   const lyricsPanelVisible = useUiStore((s) => s.lyricsPanelVisible);
-  const toggleLyricsPanel = useUiStore((s) => s.toggleLyricsPanel);
   const startedRef = useRef(false);
 
   // Inicialização: carrega biblioteca/playlists e roda rescan incremental em
@@ -92,6 +92,15 @@ function App() {
     void checkForUpdatesOnStartup();
   }, []);
 
+  // V15 — em tela estreita os detalhes abrem POR CIMA da lista. Abrir o app
+  // assim seria esconder a busca logo na chegada: começam fechados, e o botão
+  // "Mostrar detalhes" do topo os traz quando a pessoa quiser.
+  useEffect(() => {
+    if (window.innerWidth < 1024 && useUiStore.getState().lyricsPanelVisible) {
+      useUiStore.getState().toggleLyricsPanel();
+    }
+  }, []);
+
   // V11 — só importa para "automático": se o SO mudar de aparência com o
   // app aberto, o tema segue junto sem precisar reabrir (main.tsx só cobre
   // o instante inicial).
@@ -101,8 +110,14 @@ function App() {
 
   return (
     <div className="flex h-screen flex-col overflow-hidden">
-      <div className="flex min-h-0 flex-1">
-        <Sidebar />
+      {/* V15 — a barra do topo: tamanho da letra, detalhes e a porta entre
+          ouvir e organizar. Substitui o botão flutuante de detalhes, que
+          precisava de uma faixa reservada em cada tela para não cobrir nada. */}
+      <TopBar />
+      {/* `relative`: em tela estreita a lateral e os detalhes viram camadas
+          por cima da lista, presas a esta faixa (nunca ao topo nem ao player) */}
+      <div className="relative flex min-h-0 flex-1">
+        {view !== "settings" && <Sidebar />}
         <main className="relative flex min-w-0 flex-1">
           {view === "settings" ? (
             <SettingsView />
@@ -111,30 +126,8 @@ function App() {
           ) : (
             <LibraryView />
           )}
-          {/*
-            Flutuante porque precisa existir em TODAS as views (decisão 25):
-            escondido o painel, é o único caminho de volta. Sendo flutuante,
-            ele passa POR CIMA do cabeçalho de quem estiver embaixo — as três
-            views reservam a faixa dele com `pr-[var(--faixa-detalhes)]`, e a
-            medida dessa faixa vive num lugar só (index.css). Mexer em
-            `right-4`, no `px-3` ou no rótulo é mexer na conta que está lá.
-
-            top-4/right-4 alinham com o p-4 do cabeçalho da LibraryView e
-            py-2/text-[15px] igualam a altura do campo de busca. O E2E mede
-            as três views, a 1280 e a 1024, com o painel aberto e fechado.
-          */}
-          <button
-            type="button"
-            data-testid="toggle-detalhes"
-            className="absolute right-4 top-4 z-10 whitespace-nowrap rounded-md bg-surface/90 px-3 py-2 text-[15px] font-medium text-brand shadow-sm ring-1 ring-border hover:bg-brand-soft"
-            onClick={toggleLyricsPanel}
-          >
-            {/* o painel virou ficha completa (título, artista, temas, letra,
-                edição) — a copy fala em "detalhes" (V5 Q4) */}
-            {lyricsPanelVisible ? "Ocultar detalhes" : "Mostrar detalhes"}
-          </button>
         </main>
-        {lyricsPanelVisible && <LyricsPanel />}
+        {lyricsPanelVisible && view !== "settings" && <LyricsPanel />}
       </div>
       <PlayerBar />
       <EnrichReview />

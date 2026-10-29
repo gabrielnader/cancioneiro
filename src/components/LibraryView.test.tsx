@@ -58,7 +58,7 @@ describe("LibraryView (F1 UI / F2)", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("Adicionar pasta")).toBeInTheDocument();
     expect(
-      screen.getByPlaceholderText("Buscar por letra, título ou artista…"),
+      screen.getByPlaceholderText("Um pedaço da letra, o nome ou quem canta"),
     ).toBeInTheDocument();
   });
 
@@ -73,7 +73,7 @@ describe("LibraryView (F1 UI / F2)", () => {
       screen.getByText('Nenhuma música encontrada para "inexistente".'),
     ).toBeInTheDocument();
     expect(
-      screen.getByText("Tente palavras diferentes do trecho que você lembra."),
+      screen.getByText("Tente outras palavras do trecho que você lembra, ou só uma palavra."),
     ).toBeInTheDocument();
   });
 
@@ -84,7 +84,7 @@ describe("LibraryView (F1 UI / F2)", () => {
       folders: [{ id: 1, path: "/m", last_scanned_at: null }],
     });
     render(<LibraryView />);
-    expect(screen.getByText("1 resultados")).toBeInTheDocument();
+    expect(screen.getByText((_, el) => el?.tagName === "P" && el.textContent === "1 música encontrada")).toBeInTheDocument();
   });
 
   it("query só de caracteres especiais: sem contador e sem estado vazio (backend devolve tudo)", () => {
@@ -156,7 +156,7 @@ describe("LibraryView (F1 UI / F2)", () => {
     it("contador '{n} resultados' conta o resultado JÁ filtrado", () => {
       useLibraryStore.setState({ query: "faixa" });
       render(<LibraryView />);
-      expect(screen.getByText("1 resultados")).toBeInTheDocument();
+      expect(screen.getByText((_, el) => el?.tagName === "P" && el.textContent === "1 música encontrada")).toBeInTheDocument();
     });
 
     it("busca sem matches dentro do filtro mostra o empty state de busca", () => {

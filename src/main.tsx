@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import App from "./App";
 import { isTauri } from "./lib/api";
 import { applyTheme } from "./lib/theme";
+import { aplicarZoom } from "./lib/zoom";
 import { installMockBackend } from "./lib/mockBackend";
 import { useUiStore } from "./stores/uiStore";
 import "./index.css";
@@ -19,6 +20,8 @@ if (!isTauri()) {
 // que está no localStorage neste ponto — a hidratação do `persist` é síncrona
 // (storage padrão é o `localStorage`, sem `await` nenhum no meio).
 applyTheme(useUiStore.getState().theme);
+// V15 — o tamanho escolhido volta antes do primeiro desenho, pelo mesmo motivo
+void aplicarZoom(useUiStore.getState().zoomLevel);
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>

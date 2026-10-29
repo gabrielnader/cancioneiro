@@ -1,10 +1,11 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Capability for the main window. O updater recebe check/download/install separados de propósito: `allow-download-and-install` instalaria no meio do uso e, no Windows, encerraria o app sozinho — a instalação só pode acontecer quando a pessoa clicar em 'Reiniciar agora' (V7/F16).",
+  "description": "Capability for the main window. O updater recebe check/download/install separados de propósito: `allow-download-and-install` instalaria no meio do uso e, no Windows, encerraria o app sozinho — a instalação só pode acontecer quando a pessoa clicar em 'Reiniciar agora' (V7/F16). O `set-webview-zoom` é o \"Tamanho da letra\" do topo (V15): aumenta a janela inteira, e não só o texto.",
   "windows": ["main"],
   "permissions": [
     "core:default",
+    "core:webview:allow-set-webview-zoom",
     "dialog:default",
     "updater:allow-check",
     "updater:allow-download",

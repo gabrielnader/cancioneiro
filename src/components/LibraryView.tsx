@@ -31,26 +31,31 @@ export function LibraryView() {
 
   return (
     <div className="flex h-full min-w-0 flex-1 flex-col bg-canvas">
-      {/* Reserva a faixa do botão flutuante "Ocultar/Mostrar detalhes"
-          (App.tsx) — a mesma medida das outras duas views, definida uma vez
-          só em index.css. O E2E mede a sobreposição das caixas. */}
-      <div className="shrink-0 p-4 pb-2 pr-[var(--faixa-detalhes)]">
+      {/* V15 — a busca é a protagonista da tela: título, caixa grande e a
+          frase que tira o medo de errar. É a única coisa que a maioria das
+          pessoas veio fazer aqui. */}
+      <div className="shrink-0 px-6 pb-2 pt-5 max-lg:px-4 max-lg:pt-3 baixa:pt-2 baixa:pb-1">
         <SearchBar />
         {isRealSearch && !isEmptyLibrary && (
-          <p className="mt-2 text-[13px] text-ink-tertiary">
-            {visibleResults.length} resultados
+          <p className="mt-3 text-[16px] text-ink-secondary baixa:mt-1.5 muito-baixa:sr-only" aria-live="polite">
+            <strong className="font-semibold text-ink">
+              {visibleResults.length === 1
+                ? "1 música"
+                : `${visibleResults.length.toLocaleString("pt-BR")} músicas`}
+            </strong>{" "}
+            {visibleResults.length === 1 ? "encontrada" : "encontradas"}
           </p>
         )}
       </div>
 
       {folderFilter && (
-        <div className="mx-4 mb-2 shrink-0">
+        <div className="mx-6 mb-2 shrink-0 max-lg:mx-4">
           <button
             type="button"
             aria-label="Remover filtro de pasta"
             title={`Remover o filtro da pasta ${folderFilter}`}
             onClick={() => setFolderFilter(null)}
-            className="inline-flex items-center gap-1.5 rounded-full bg-brand-soft px-3 py-1 text-[13px] font-medium text-brand hover:bg-brand-soft-hover"
+            className="inline-flex min-h-10 items-center gap-2 rounded-full bg-brand-soft px-4 text-[15px] font-medium text-brand hover:bg-brand-soft-hover"
           >
             <span>📁 {folderName(folderFilter)}</span>
             <span aria-hidden="true">×</span>
@@ -85,11 +90,11 @@ export function LibraryView() {
         <EmptyLibrary />
       ) : visibleResults.length === 0 && isRealSearch ? (
         <div className="flex flex-1 flex-col items-center justify-center px-6 text-center">
-          <p className="text-ink-tertiary">
+          <p className="text-[18px] text-ink-secondary">
             Nenhuma música encontrada para "{query.trim()}".
           </p>
-          <p className="mt-1 text-disabled">
-            Tente palavras diferentes do trecho que você lembra.
+          <p className="mt-2 text-[16px] text-ink-tertiary">
+            Tente outras palavras do trecho que você lembra, ou só uma palavra.
           </p>
         </div>
       ) : (
