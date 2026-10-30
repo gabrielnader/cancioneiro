@@ -209,6 +209,102 @@ def texto_das_etiquetas(caminho: Path) -> list[str]:
     return achados
 
 
+def _partes(carga: bytes, nulo: bytes) -> list[bytes]:
+    """Separa as strings de um quadro pelo terminador da codificação."""
+    if len(nulo) == 1:
+        return carga.split(nulo)
+    partes, atual = [], 0
+    for i in range(0, len(carga) - 1, 2):  # nulo de UTF-16 só vale alinhado
+        if carga[i : i + 2] == nulo:
+            partes.append(carga[atual:i])
+            atual = i + 2
+    partes.append(carga[atual:])
+    return partes
+
+
+def _legivel(carga: bytes) -> str:
+    """Um pedaço do texto, do jeito que der, para a pessoa reconhecer QUAL é."""
+    texto = carga.replace(b"\x00", b"").decode("latin-1", errors="replace")
+    texto = "".join(c if c.isprintable() else "·" for c in texto).strip()
+    return texto[:60] + ("…" if len(texto) > 60 else "")
+
+
+def quadros_que_o_programa_nao_le(dados: bytes) -> list[str]:
+    """Os quadros ID3v2 cujo TEXTO o app não consegue ler — medidos byte a byte.
+
+    O app usa o lofty 0.22, que derruba a leitura do arquivo INTEIRO quando o
+    texto de um único quadro não bate com a codificação que o próprio quadro
+    declara, em qualquer modo de leitura. E sem ler, não grava: um comentário
+    estragado por um programa antigo bloqueia o arquivo todo. O mutagen
+    (`texto_das_etiquetas`) é tolerante e lê o mesmo arquivo sem reclamar — por
+    isso esta leitura própria, com as regras do lofty, só para dizer QUAL.
+    """
+    if len(dados) < 10 or dados[:3] != b"ID3":
+        return []
+    versao, flags = dados[3], dados[5]
+    if versao not in (3, 4):
+        return []  # v2.2 tem outro formato de quadro; não é o caso medido
+    fim = min(tamanho_do_id3(dados), len(dados))  # já conta o cabeçalho
+    pos = 10
+    if flags & 0x40:  # cabeçalho estendido: pula
+        tam = int.from_bytes(dados[10:14], "big")
+        if versao == 4:
+            tam = (dados[10] << 21) | (dados[11] << 14) | (dados[12] << 7) | dados[13]
+            pos = 10 + tam
+        else:
+            pos = 14 + tam
+    achados: list[str] = []
+    while pos + 10 <= fim:
+        ident = dados[pos : pos + 4]
+        if ident[0] == 0 or not all(48 <= b <= 57 or 65 <= b <= 90 for b in ident):
+            break  # preenchimento (zeros) ou fim dos quadros
+        nome = ident.decode("ascii")
+        if versao == 4:
+            b = dados[pos + 4 : pos + 8]
+            tam = (b[0] << 21) | (b[1] << 14) | (b[2] << 7) | b[3]
+        else:
+            tam = int.from_bytes(dados[pos + 4 : pos + 8], "big")
+        flag2 = dados[pos + 9]
+        corpo = dados[pos + 10 : pos + 10 + tam]
+        pos += 10 + tam
+        if versao == 4 and flag2 & 0x01:  # indicador de tamanho: 4 bytes antes
+            corpo = corpo[4:]
+        if flag2 & 0x0C:  # comprimido ou cifrado: não dá para medir o texto
+            continue
+        com_texto = nome.startswith("T") or nome in ("COMM", "USLT", "WXXX")
+        if not com_texto or not corpo:
+            continue
+        cod, carga = corpo[0], corpo[1:]
+        if nome in ("COMM", "USLT"):
+            carga = carga[3:]  # o campo de idioma não é texto codificado
+        if cod > 3:
+            achados.append(f"{nome}: codificação {cod}, que não existe no padrão — \"{_legivel(carga)}\"")
+            continue
+        if cod == 3:
+            for parte in _partes(carga, b"\x00"):
+                try:
+                    parte.decode("utf-8")
+                except UnicodeDecodeError:
+                    achados.append(
+                        f"{nome}: declara UTF-8, mas os bytes não são UTF-8 "
+                        f"(costuma ser Latin-1 gravado por programa antigo) — \"{_legivel(parte)}\""
+                    )
+                    break
+        elif cod in (1, 2):
+            if len(carga) % 2:
+                achados.append(f"{nome}: texto UTF-16 com tamanho ímpar — \"{_legivel(carga)}\"")
+                continue
+            if cod == 1:
+                for parte in _partes(carga, b"\x00\x00"):
+                    if parte and parte[:2] not in (b"\xff\xfe", b"\xfe\xff"):
+                        achados.append(
+                            f"{nome}: texto UTF-16 sem a marca de ordem dos bytes (BOM) — "
+                            f"\"{_legivel(parte)}\""
+                        )
+                        break
+    return achados
+
+
 def diagnosticar(caminho: Path) -> None:
     print(f"\n=== {caminho.name}")
     try:
@@ -248,7 +344,9 @@ def diagnosticar(caminho: Path) -> None:
     else:
         print(f"  quadro MPEG começa em {sync:,}, como esperado")
 
-    problemas = texto_das_etiquetas(caminho)
+    # V15 — a leitura com as regras do app vem PRIMEIRO: é ela que diz qual
+    # quadro faz o app recusar "o texto de uma etiqueta deste MP3"
+    problemas = quadros_que_o_programa_nao_le(dados) + texto_das_etiquetas(caminho)
     if problemas:
         print("  etiquetas:")
         for p in problemas:
