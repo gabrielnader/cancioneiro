@@ -2835,3 +2835,8 @@ leitura já falhou, numa cópia em memória, acrescenta o byte de Latin-1 — em
 que todo byte é caractere, então o texto fica igual. Mesma escolha do idioma
 `und`: consertar o quadro alheio, nunca descartá-lo. Vale para leitura e
 gravação; o desfecho da gravação conta o que foi feito.
+
+## V15.2 — reler quem foi lido pelo conserto
+- Arquivo lido só com o conserto de codificação (V15.1) é guardado com mtime -1: toda varredura o relê, até alguém gravar e ele ficar saudável.
+- SCHEMA_VERSION 7 força UMA releitura completa: quem já tinha sido indexado com nome do arquivo e "(vazio)" passa a mostrar título e artista verdadeiros — senão a curadoria "preencheria" por cima do que já existe.
+- Iniciar fpcalc/whisper tenta de novo em ETXTBSY (binário recém-gravado enquanto outra thread faz fork): falha rara de teste que também podia aparecer no campo.

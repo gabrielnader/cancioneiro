@@ -34,3 +34,29 @@ pub fn comando_sem_janela(programa: &Path) -> Command {
     }
     cmd
 }
+
+/// Inicia o programa, tentando de novo quando o sistema responde "arquivo de
+/// texto ocupado" (`ETXTBSY`, só no Linux e no macOS).
+///
+/// Existe por uma corrida conhecida: um executável recém-escrito — o acessório
+/// que acabou de ser baixado — pode estar aberto para escrita dentro de OUTRO
+/// processo que nasceu naquele instante (o filho herda o arquivo entre o `fork`
+/// e o `exec`), e aí o sistema recusa executá-lo. Dura milissegundos. Sem esta
+/// segunda chance, a recusa vira "o programa não conseguiu ser executado neste
+/// computador", que DESLIGA a etapa inteira — por um engasgo de alguns
+/// milissegundos. Achado pela suíte de testes, que escreve executáveis de
+/// mentira enquanto outros testes criam processos em paralelo.
+pub fn iniciar(cmd: &mut Command) -> std::io::Result<std::process::Child> {
+    // ETXTBSY vale 26 no Linux e no macOS
+    const OCUPADO: i32 = 26;
+    let mut tentativas = 0;
+    loop {
+        match cmd.spawn() {
+            Err(e) if e.raw_os_error() == Some(OCUPADO) && tentativas < 10 => {
+                tentativas += 1;
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+            outro => return outro,
+        }
+    }
+}

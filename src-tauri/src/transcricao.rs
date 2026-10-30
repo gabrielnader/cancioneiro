@@ -1611,12 +1611,13 @@ pub fn transcrever(
         return Ok(None); // cancelado durante a decodificação
     };
 
-    let mut filho = crate::processo::comando_sem_janela(whisper)
-        .args(argumentos(modelo, &temporario.0, idioma))
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
+    let mut filho = crate::processo::iniciar(
+            crate::processo::comando_sem_janela(whisper)
+            .args(argumentos(modelo, &temporario.0, idioma))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped()),
+    )
         .map_err(|_| AppError(ERRO_NAO_EXECUTA.into()))?;
 
     let lendo_saida = filho.stdout.take().map(|mut c| {

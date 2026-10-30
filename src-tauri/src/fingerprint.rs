@@ -190,13 +190,14 @@ pub fn impressao_digital(
     mp3: &Path,
     cancelado: &dyn Fn() -> bool,
 ) -> Result<Impressao> {
-    let mut filho = crate::processo::comando_sem_janela(fpcalc)
-        .arg("-json")
-        .arg(mp3)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
+    let mut filho = crate::processo::iniciar(
+            crate::processo::comando_sem_janela(fpcalc)
+            .arg("-json")
+            .arg(mp3)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped()),
+    )
         // O binário não subiu: não existe, não é executável, é de outra
         // arquitetura. Isso não é um defeito DESTE arquivo — vai acontecer em
         // todos —, e é o único caso em que o funil desliga a etapa.

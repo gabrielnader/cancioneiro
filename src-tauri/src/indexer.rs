@@ -458,7 +458,13 @@ pub fn scan_folder<F: FnMut(usize, usize)>(
             stats.tag_errors += 1;
         }
         let pastas = pastas_for(&folder_path, path);
-        upsert_song(conn, folder_id, &path_str, &tags, pastas.as_deref(), mtime, size)?;
+        // V15.1 — quem NÃO pôde ser lido fica marcado para a próxima varredura
+        // (mtime -1 nunca bate com o do disco). Sem isto a leitura falha ficava
+        // guardada para sempre: o app só relê o que mudou de data ou tamanho, e
+        // nem uma versão que sabe ler o arquivo chegaria a relê-lo. O preço é
+        // reler, a cada varredura, só os poucos arquivos que ainda falham.
+        let mtime_guardado = if tags.fallback { -1 } else { mtime };
+        upsert_song(conn, folder_id, &path_str, &tags, pastas.as_deref(), mtime_guardado, size)?;
         stats.indexed += 1;
         done += 1;
         progress(done, stats.total);

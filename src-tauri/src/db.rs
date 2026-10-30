@@ -239,7 +239,13 @@ pub(crate) fn fold_pt(s: &str) -> String {
         .collect()
 }
 
-const SCHEMA_VERSION: i64 = 6;
+/// V7 (V15.1) — nenhuma coluna nova: a versão sobe para que a migração force a
+/// RELEITURA de todo o acervo uma vez. A v0.13.1 passou a ler arquivos com
+/// quadro de texto sem o byte de codificação, e os que já estavam no banco
+/// guardavam a leitura falha — nome do arquivo no título, artista vazio — e
+/// nunca seriam relidos, porque não mudaram no disco. A releitura é o caminho
+/// que toda migração já faz (`file_mtime = -1`), e não um segundo mecanismo.
+const SCHEMA_VERSION: i64 = 7;
 
 pub fn init_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch("PRAGMA foreign_keys = ON;")?;
@@ -1060,7 +1066,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 6);
+        assert_eq!(version, SCHEMA_VERSION);
         assert!(column_exists(&conn, "temas"));
         assert!(column_exists(&conn, "pastas"));
         assert!(column_exists(&conn, "letra_origem"));
@@ -1138,7 +1144,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 6);
+        assert_eq!(version, SCHEMA_VERSION);
         assert!(column_exists(&conn, "pastas"));
         assert!(column_exists(&conn, "letra_origem"));
         assert!(column_exists(&conn, "instrumental"));
@@ -1212,7 +1218,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 6);
+        assert_eq!(version, SCHEMA_VERSION);
 
         // user_version atual implica FTS repovoada: uma linha por música
         let songs_count: i64 = conn
@@ -1328,7 +1334,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 6);
+        assert_eq!(version, SCHEMA_VERSION);
         assert!(column_exists(&conn, "instrumental"));
         assert!(column_exists(&conn, "arquivo"));
 
@@ -1415,6 +1421,28 @@ mod tests {
         conn
     }
 
+    /// V7 (V15.1) — quem está na v6 (todo mundo com a v0.13.0) não ganha coluna
+    /// nenhuma, mas o acervo inteiro é relido uma vez: os arquivos com quadro de
+    /// texto sem codificação guardavam a leitura falha, e não seriam relidos
+    /// por conta própria. Os dados que não vêm do arquivo (playlists) ficam.
+    #[test]
+    fn v6_database_is_reread_once_keeping_playlists() {
+        let conn = v5_database();
+        init_schema(&conn).unwrap(); // agora na versão atual
+        conn.execute("UPDATE songs SET file_mtime = 123", []).unwrap();
+        conn.pragma_update(None, "user_version", 6).unwrap(); // como a v0.13.0 deixou
+
+        init_schema(&conn).unwrap();
+
+        let version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        let mtime: i64 = conn
+            .query_row("SELECT file_mtime FROM songs WHERE id = 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(mtime, -1, "o acervo precisa ser relido uma vez");
+        assert_eq!(get_playlist_items(&conn, 1).unwrap().len(), 1, "playlists ficam");
+    }
+
     #[test]
     fn v5_database_migrates_to_v6_keeping_data_and_forcing_rescan() {
         // V8: a coluna `arquivo` (nome do arquivo sem extensão, buscável)
@@ -1428,7 +1456,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 6);
+        assert_eq!(version, SCHEMA_VERSION);
         assert!(column_exists(&conn, "arquivo"));
 
         // dados existentes intactos (playlist, temas, letra, procedência, marca)
@@ -1524,7 +1552,7 @@ mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 6);
+        assert_eq!(version, SCHEMA_VERSION);
         assert!(column_exists(&conn, "letra_origem"));
         assert!(column_exists(&conn, "instrumental"));
         assert!(column_exists(&conn, "arquivo"));

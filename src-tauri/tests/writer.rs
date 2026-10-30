@@ -1777,3 +1777,28 @@ fn arquivo_saudavel_grava_sem_aviso_nenhum() {
     let g = writer::write_tags(&conn, song.id, "Outro Nome", None, None, None, None).unwrap();
     assert_eq!(g.aviso, None);
 }
+
+/// O arquivo cujas etiquetas NÃO puderam ser lidas não pode ficar com a
+/// leitura falha guardada para sempre: o app só relê o que mudou de data ou
+/// tamanho, e um arquivo que ninguém tocou nunca seria relido — nem depois de
+/// uma versão que sabe lê-lo. Ele fica marcado para a próxima varredura.
+#[test]
+fn quem_nao_pode_ser_lido_e_relido_na_proxima_varredura() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ilegivel.mp3");
+    mp3_com_codificacao_ausente(&path);
+    // um defeito que nem o conserto cobre: UTF-8 declarado, bytes que não são
+    let mut bytes = fs::read(&path).unwrap();
+    let i = bytes.windows(4).position(|j| j == b"TIT2").unwrap();
+    bytes[i + 10] = 3; // declara UTF-8...
+    bytes[i + 11] = 0xff; // ...e o primeiro caractere não é UTF-8
+    fs::write(&path, &bytes).unwrap();
+
+    let conn = db::open_in_memory().unwrap();
+    let folder_id = db::add_folder(&conn, dir.path().to_str().unwrap()).unwrap();
+    let primeira = indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
+    assert_eq!(primeira.tag_errors, 1, "o arquivo precisa entrar no teste ilegível");
+    let segunda = indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
+    assert_eq!(segunda.skipped, 0, "quem não foi lido não pode ser pulado");
+    assert_eq!(segunda.indexed, 1);
+}
