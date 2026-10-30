@@ -220,6 +220,8 @@ interface DbState {
    * abertura do aplicativo.
    */
   medicaoDaTranscricao?: { audio: number; relogio: number } | null;
+  /** V15.3 — músicas cuja letra a etapa 5 já escreveu e espera conferência. */
+  transcricoesGuardadas?: number[];
   /** O que o som responde, por arquivo. Permanente, como o próprio áudio. */
   somDiz: Record<string, SomDiz>;
   /**
@@ -1457,6 +1459,19 @@ export function createMockBackend(): MockBackend {
     transcricaoProgressListeners.forEach((cb) => cb(payload));
   }
 
+  /** V15.3 — a mesma regra do backend: some quem ganhou letra ou a marca. */
+  function guardadasValidas(): number[] {
+    const validas = (state.transcricoesGuardadas ?? []).filter((id) => {
+      const song = state.songs.find((s) => s.id === id);
+      return song !== undefined && !song.has_lyrics && !song.instrumental;
+    });
+    if (validas.length !== (state.transcricoesGuardadas ?? []).length) {
+      state.transcricoesGuardadas = validas;
+      save();
+    }
+    return validas;
+  }
+
   function save(): void {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -2584,6 +2599,12 @@ export function createMockBackend(): MockBackend {
         const song = state.songs.find((s) => s.id === songIds[feitas]);
         if (!song) continue; // saiu da biblioteca no meio: nada a fazer
         const nome = nomeArquivo(song);
+        // V15.3 — escrita antes (fila cancelada, app reiniciado): volta já
+        if (guardadasValidas().includes(song.id)) {
+          propostas.push(propostaDaTranscricao(song));
+          emitirProgressoDaTranscricao(scanId, feitas + 1, total, nome, 100, null);
+          continue;
+        }
         const restantes = (feitos: number): number | null =>
           feitos > 0
             ? Math.ceil((relogioMedido / feitos) * (total - feitos))
@@ -2618,6 +2639,13 @@ export function createMockBackend(): MockBackend {
           audioMedido += duracao;
           relogioMedido += duracao * RAZAO_DE_REFERENCIA;
         }
+        if (proposta.lyrics !== null || proposta.marcar_instrumental) {
+          state.transcricoesGuardadas = [
+            ...(state.transcricoesGuardadas ?? []).filter((id) => id !== song.id),
+            song.id,
+          ];
+          save();
+        }
         propostas.push(proposta);
         emitirProgressoDaTranscricao(
           scanId,
@@ -2645,6 +2673,20 @@ export function createMockBackend(): MockBackend {
         razao_medida: audioMedido > 0 ? relogioMedido / audioMedido : null,
         razao_desta_maquina: razaoDestaMaquina(),
       };
+    },
+
+    async transcricoesGuardadas(): Promise<EnrichProposal[]> {
+      return guardadasValidas().flatMap((id) => {
+        const song = state.songs.find((s) => s.id === id);
+        return song ? [propostaDaTranscricao(song)] : [];
+      });
+    },
+
+    async descartarTranscricoes(songIds: number[]): Promise<void> {
+      state.transcricoesGuardadas = (state.transcricoesGuardadas ?? []).filter(
+        (id) => !songIds.includes(id),
+      );
+      save();
     },
 
     async onTranscricaoProgresso(

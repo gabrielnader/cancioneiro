@@ -2840,3 +2840,9 @@ gravação; o desfecho da gravação conta o que foi feito.
 - Arquivo lido só com o conserto de codificação (V15.1) é guardado com mtime -1: toda varredura o relê, até alguém gravar e ele ficar saudável.
 - SCHEMA_VERSION 7 força UMA releitura completa: quem já tinha sido indexado com nome do arquivo e "(vazio)" passa a mostrar título e artista verdadeiros — senão a curadoria "preencheria" por cima do que já existe.
 - Iniciar fpcalc/whisper tenta de novo em ETXTBSY (binário recém-gravado enquanto outra thread faz fork): falha rara de teste que também podia aparecer no campo.
+
+## V15.3 — a letra escrita pela máquina não se perde mais
+- Relato: 332 de 5.433 letras escritas e o computador precisava reiniciar — tudo morava só na memória até o fim da fila.
+- Cada letra (ou marca de instrumental) vai para `transcricoes_guardadas`, no banco do APP, no instante em que termina. O MP3 continua só recebendo depois de a pessoa conferir.
+- A fila seguinte devolve as guardadas sem ouvir de novo; o cartão "Escrever a letra" mostra "N letras já foram escritas" com "Conferir as letras".
+- Saem quando a música ganha letra ou a marca, ou com "Manter como está".

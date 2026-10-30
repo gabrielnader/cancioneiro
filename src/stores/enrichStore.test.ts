@@ -1612,3 +1612,58 @@ describe("enrichStore — o que só preenche é gravado sozinho (V15)", () => {
     ).toEqual([1]);
   });
 });
+
+// V15.3 — as letras que a etapa 5 já escreveu ficam guardadas no banco do app
+// até a pessoa conferir (relato: o computador precisava reiniciar no meio).
+describe("letras guardadas da etapa 5", () => {
+  const transcrita = (song_id: number) =>
+    proposal({ song_id, lyrics: "la la", fonte: "transcrição do áudio", confidence: "media" });
+
+  beforeEach(() => {
+    useEnrichStore.setState({
+      status: "idle",
+      overlayOpen: false,
+      proposals: [],
+      mantidas: [],
+      aplicadas: [],
+      scanInFlight: false,
+      letrasGuardadas: 0,
+    });
+  });
+
+  it("conta e abre a conferência com elas", async () => {
+    setBackendForTests({
+      transcricoesGuardadas: vi.fn(async () => [transcrita(1), transcrita(2)]),
+    } as unknown as Backend);
+    await useEnrichStore.getState().contarLetrasGuardadas();
+    expect(useEnrichStore.getState().letrasGuardadas).toBe(2);
+
+    await useEnrichStore.getState().conferirLetrasGuardadas();
+    const s = useEnrichStore.getState();
+    expect(s.status).toBe("review");
+    expect(s.overlayOpen).toBe(true);
+    expect(s.proposals.map((p) => p.song_id)).toEqual([1, 2]);
+  });
+
+  it("com algo rodando, não abre nada", async () => {
+    const transcricoesGuardadas = vi.fn(async () => [transcrita(1)]);
+    setBackendForTests({ transcricoesGuardadas } as unknown as Backend);
+    useEnrichStore.setState({ status: "transcribing" });
+    await useEnrichStore.getState().conferirLetrasGuardadas();
+    expect(useEnrichStore.getState().status).toBe("transcribing");
+    expect(transcricoesGuardadas).not.toHaveBeenCalled();
+  });
+
+  it("'Manter como está' numa letra de máquina a tira do banco; numa sugestão comum, não", () => {
+    const descartarTranscricoes = vi.fn(async () => {});
+    setBackendForTests({ descartarTranscricoes } as unknown as Backend);
+    useEnrichStore.setState({
+      status: "review",
+      proposals: [proposal({ song_id: 5 }), transcrita(7)],
+    });
+    useEnrichStore.getState().manter(0);
+    expect(descartarTranscricoes).not.toHaveBeenCalled();
+    useEnrichStore.getState().manter(1);
+    expect(descartarTranscricoes).toHaveBeenCalledWith([7]);
+  });
+});

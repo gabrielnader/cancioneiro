@@ -589,6 +589,14 @@ export interface Backend {
     songIds: number[],
     scanId: string,
   ): Promise<TranscricaoResultado>;
+  /**
+   * V15.3 — as letras que a etapa 5 já escreveu e esperam conferência,
+   * inclusive de uma fila cancelada ou de antes de reiniciar o computador.
+   * Ficam no banco do app; o MP3 só recebe depois de a pessoa conferir.
+   */
+  transcricoesGuardadas(): Promise<EnrichProposal[]>;
+  /** V15.3 — "Manter como está": a letra guardada deixa de esperar. */
+  descartarTranscricoes(songIds: number[]): Promise<void>;
   /** Assina `transcricao:progresso` — mesmo contrato dos outros progressos. */
   onTranscricaoProgresso(
     cb: (p: TranscricaoProgresso) => void,
@@ -796,6 +804,14 @@ function tauriBackend(): Backend {
         songIds,
         scanId,
       });
+    },
+    async transcricoesGuardadas() {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<EnrichProposal[]>("transcricoes_guardadas");
+    },
+    async descartarTranscricoes(songIds) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("descartar_transcricoes", { songIds });
     },
     async onTranscricaoProgresso(cb) {
       const { listen } = await import("@tauri-apps/api/event");

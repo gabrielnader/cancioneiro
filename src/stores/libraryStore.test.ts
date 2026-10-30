@@ -101,6 +101,8 @@ function fakeBackend(overrides: Partial<Backend> = {}): Backend {
       razao_desta_maquina: 1,
     })),
     onTranscricaoProgresso: vi.fn(async () => () => {}),
+    transcricoesGuardadas: vi.fn(async () => []),
+    descartarTranscricoes: vi.fn(async () => {}),
     enrichSongScan: vi.fn(async () => null),
     enrichCancelScan: vi.fn(async () => {}),
     enrichApply: vi.fn(async () => []),

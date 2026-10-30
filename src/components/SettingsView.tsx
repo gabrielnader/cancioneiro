@@ -374,6 +374,14 @@ function CuradoriaSection() {
   const startTranscricao = useEnrichStore((s) => s.startTranscricao);
   const openOverlay = useEnrichStore((s) => s.openOverlay);
   const status = useEnrichStore((s) => s.status);
+  const letrasGuardadas = useEnrichStore((s) => s.letrasGuardadas);
+  const contarLetrasGuardadas = useEnrichStore((s) => s.contarLetrasGuardadas);
+  const conferirLetrasGuardadas = useEnrichStore((s) => s.conferirLetrasGuardadas);
+  // V15.3 — ao abrir e sempre que nada está rodando: a fila cancelada, ou a de
+  // antes de reiniciar, deixou letras escritas esperando
+  useEffect(() => {
+    if (status === "idle") void contarLetrasGuardadas();
+  }, [status, contarLetrasGuardadas]);
   const progress = useEnrichStore((s) => s.progress);
   const transcricaoProgress = useEnrichStore((s) => s.transcricaoProgress);
   // V15 — o que FALTA decidir, e não o total: o que só preenchia já foi
@@ -759,6 +767,23 @@ function CuradoriaSection() {
             </button>
           </div>
         )}
+        {status === "idle" && letrasGuardadas > 0 && (
+          <div className="rounded-xl bg-brand-soft px-4 py-3" data-testid="letras-guardadas">
+            <p className="text-[17px] font-semibold text-brand-strong">
+              {textoDasLetrasGuardadas(letrasGuardadas)}
+            </p>
+            <p className="mt-1 text-[16px] text-ink-secondary">
+              Nada foi gravado nas músicas ainda: você confere antes.
+            </p>
+            <button
+              type="button"
+              onClick={() => void conferirLetrasGuardadas()}
+              className={`mt-3 ${BOTAO_PRINCIPAL}`}
+            >
+              Conferir as letras
+            </button>
+          </div>
+        )}
         {pendentes != null ? (
           <>
             <p className="text-[16px] leading-relaxed text-ink-secondary">
@@ -811,6 +836,13 @@ function CuradoriaSection() {
       </Cartao>
     </div>
   );
+}
+
+/** V15.3 — o aviso das letras que a etapa 5 já escreveu e esperam conferência. */
+export function textoDasLetrasGuardadas(n: number): string {
+  return n === 1
+    ? "1 letra já foi escrita e espera você conferir."
+    : `${n} letras já foram escritas e esperam você conferir.`;
 }
 
 /**

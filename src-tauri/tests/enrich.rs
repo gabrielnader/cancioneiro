@@ -5076,6 +5076,9 @@ fn a_medicao_acumula_entre_execucoes() {
             SEM_CANCELAMENTO,
         )
         .unwrap();
+        // V15.3 — sem isto a segunda execução devolveria a letra guardada sem
+        // ouvir de novo, e não haveria o que medir
+        db::descartar_transcricoes(&conn, &[song.id]).unwrap();
     }
     // V10.2 — a chave é a DO MODELO, e não mais a genérica: a soma de um
     // modelo três vezes mais lento com a de outro não descreve nenhum dos dois.
@@ -5938,4 +5941,82 @@ fn a_letra_refeita_nao_entra_no_arquivo_sem_o_consentimento() {
         antes,
         "e o arquivo continua com a letra que tinha"
     );
+}
+
+// ===========================================================================
+// V15.3 — a letra escrita pela máquina sobrevive a cancelar e a reiniciar.
+// Relato de campo: 332 de 5.433 escritas, e o computador precisava reiniciar.
+// ===========================================================================
+
+/// Cancelada no meio, a fila guarda o que já terminou; a próxima fila devolve
+/// essas letras SEM chamar o motor de novo, e só escreve as que faltam.
+#[test]
+fn a_letra_ja_escrita_volta_sem_transcrever_de_novo() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "a.mp3"), ("sem_letra.mp3", "b.mp3")]);
+    let a = song_by_suffix(&conn, "a.mp3");
+    let b = song_by_suffix(&conn, "b.mp3");
+
+    // a primeira fila termina "a" e é cancelada durante "b"
+    let chamadas = RefCell::new(0);
+    enrich::transcricao_scan(
+        &conn,
+        transcricao::modelo_oferecido(),
+        &[a.id, b.id],
+        |_mp3: &Path, _c: &dyn Fn() -> bool, _p: &dyn Fn(u8)| {
+            *chamadas.borrow_mut() += 1;
+            if *chamadas.borrow() == 1 {
+                Ok(Some(SaidaDoMotor { texto: "Na beira do mar sagrado\nEu vi Iemanjá chegar".into(), duracao: Duracao::completa(100.0) }))
+            } else {
+                Ok(None) // cancelado no meio de "b"
+            }
+        },
+        SEM_PROGRESSO_5,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+
+    // depois de reiniciar: o motor só pode ser chamado para "b"
+    let ouvidas = RefCell::new(Vec::new());
+    let r = enrich::transcricao_scan(
+        &conn,
+        transcricao::modelo_oferecido(),
+        &[a.id, b.id],
+        |mp3: &Path, _c: &dyn Fn() -> bool, _p: &dyn Fn(u8)| {
+            ouvidas.borrow_mut().push(mp3.to_path_buf());
+            Ok(Some(SaidaDoMotor { texto: "Ô lua cheia\nClareia o caminho da gente".into(), duracao: Duracao::completa(100.0) }))
+        },
+        SEM_PROGRESSO_5,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+    assert_eq!(ouvidas.borrow().len(), 1, "a letra da \"a\" não é escrita de novo");
+    assert!(ouvidas.borrow()[0].ends_with("b.mp3"));
+    assert_eq!(r.propostas[0].lyrics.as_deref(), Some("Na beira do mar sagrado\nEu vi Iemanjá chegar"));
+    assert_eq!(r.propostas[0].fonte, enrich::FONTE_TRANSCRICAO);
+    assert_eq!(r.propostas[1].lyrics.as_deref(), Some("Ô lua cheia\nClareia o caminho da gente"));
+}
+
+/// O que espera conferência é listado com o eco do que a música é AGORA, e
+/// some quando a música ganha letra ou quando a pessoa a mantém como está. O
+/// MP3 não recebe nada até alguém conferir.
+#[test]
+fn as_letras_guardadas_esperam_a_pessoa_e_somem_quando_resolvidas() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "a.mp3"), ("sem_letra.mp3", "b.mp3")]);
+    let a = song_by_suffix(&conn, "a.mp3");
+    let b = song_by_suffix(&conn, "b.mp3");
+    let antes = fs::read(&a.file_path).unwrap();
+    transcrever(&conn, &[a.id, b.id], motor("Na beira do mar sagrado\nEu vi Iemanjá chegar", 100.0));
+    assert_eq!(fs::read(&a.file_path).unwrap(), antes, "o arquivo não foi tocado");
+
+    // o nome mudou depois de escrita a letra: o eco acompanha
+    writer::write_tags(&conn, a.id, "Novo Nome", None, None, None, None).unwrap();
+    let ps = enrich::propostas_guardadas(&conn).unwrap();
+    assert_eq!(ps.len(), 2);
+    assert_eq!(ps[0].current_title, "Novo Nome");
+    assert_eq!(ps[0].lyrics.as_deref(), Some("Na beira do mar sagrado\nEu vi Iemanjá chegar"));
+
+    // "a" ganhou letra; "b" a pessoa manteve como está
+    writer::write_tags(&conn, a.id, "Novo Nome", None, Some("outra"), None, None).unwrap();
+    db::descartar_transcricoes(&conn, &[b.id]).unwrap();
+    assert!(enrich::propostas_guardadas(&conn).unwrap().is_empty());
 }

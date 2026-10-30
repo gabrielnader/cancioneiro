@@ -1014,6 +1014,22 @@ pub fn transcrever_musicas(
     resultado
 }
 
+/// V15.3 — as letras que a etapa 5 já escreveu e que esperam conferência,
+/// inclusive de uma fila cancelada ou de antes de reiniciar o computador.
+#[tauri::command(async)]
+pub fn transcricoes_guardadas(state: State<'_, Db>) -> Result<Vec<crate::enrich::EnrichProposal>> {
+    let conn = state.lock()?;
+    crate::enrich::propostas_guardadas(&conn)
+}
+
+/// V15.3 — "Manter como está" numa letra escrita pelo computador: ela deixa de
+/// esperar. Só apaga do banco do app; o MP3 nunca teve essa letra.
+#[tauri::command(async)]
+pub fn descartar_transcricoes(state: State<'_, Db>, song_ids: Vec<i64>) -> Result<()> {
+    let conn = state.lock()?;
+    crate::db::descartar_transcricoes(&conn, &song_ids)
+}
+
 /// Cancela a varredura `scan_id` de verdade (QA M4): a bandeira é lida entre
 /// músicas e a varredura volta cedo, parando de consultar o LRCLIB e de emitir
 /// progresso. Id desconhecido (varredura já encerrada) é no-op silencioso.

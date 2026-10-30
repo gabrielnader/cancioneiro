@@ -157,6 +157,22 @@ CREATE TABLE IF NOT EXISTS medicoes_de_banda (
     bytes REAL NOT NULL DEFAULT 0,
     segundos REAL NOT NULL DEFAULT 0
 );
+
+-- V15.3 — a letra que a etapa 5 escreveu e que ainda espera a pessoa conferir.
+-- Relato de campo: 332 letras escritas de 5.433, e o computador precisava
+-- reiniciar — tudo morava só na memória até a fila inteira acabar. Agora cada
+-- música entra aqui no instante em que termina: reiniciar, fechar ou cancelar
+-- não joga horas de CPU fora. É o banco do APP, nunca o MP3 (nada é gravado
+-- no arquivo sem a pessoa conferir). Sai daqui quando a música ganha letra ou
+-- marca de instrumental, ou quando a pessoa escolhe "Manter como está".
+-- Entra pelo `CREATE TABLE IF NOT EXISTS`, como a tabela acima.
+CREATE TABLE IF NOT EXISTS transcricoes_guardadas (
+    song_id INTEGER PRIMARY KEY,
+    -- uma das duas: a letra escrita, ou o motivo de parecer instrumental
+    letra TEXT,
+    refrao TEXT,
+    motivo_instrumental TEXT
+);
 "#;
 
 /// DDL da FTS5 e seus triggers, separada do SCHEMA para a migração poder
@@ -1800,4 +1816,47 @@ mod tests {
         assert_eq!(count, 0);
         assert_eq!(list_songs(&conn).unwrap().len(), 1);
     }
+}
+
+/// V15.3 — o que a etapa 5 concluiu sobre uma música, guardado até a pessoa
+/// conferir. `letra` OU `motivo_instrumental`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TranscricaoGuardada {
+    pub song_id: i64,
+    pub letra: Option<String>,
+    pub refrao: Option<String>,
+    pub motivo_instrumental: Option<String>,
+}
+
+pub fn guardar_transcricao(conn: &Connection, t: &TranscricaoGuardada) -> Result<()> {
+    conn.execute(
+        "INSERT OR REPLACE INTO transcricoes_guardadas (song_id, letra, refrao, motivo_instrumental)
+         VALUES (?1, ?2, ?3, ?4)",
+        params![t.song_id, t.letra, t.refrao, t.motivo_instrumental],
+    )?;
+    Ok(())
+}
+
+pub fn transcricoes_guardadas(conn: &Connection) -> Result<Vec<TranscricaoGuardada>> {
+    let mut stmt = conn.prepare(
+        "SELECT song_id, letra, refrao, motivo_instrumental FROM transcricoes_guardadas ORDER BY rowid",
+    )?;
+    let linhas = stmt
+        .query_map([], |r| {
+            Ok(TranscricaoGuardada {
+                song_id: r.get(0)?,
+                letra: r.get(1)?,
+                refrao: r.get(2)?,
+                motivo_instrumental: r.get(3)?,
+            })
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(linhas)
+}
+
+pub fn descartar_transcricoes(conn: &Connection, song_ids: &[i64]) -> Result<()> {
+    for id in song_ids {
+        conn.execute("DELETE FROM transcricoes_guardadas WHERE song_id = ?1", params![id])?;
+    }
+    Ok(())
 }

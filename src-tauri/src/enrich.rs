@@ -2467,6 +2467,12 @@ where
     // quarenta pessoas sem suporte procurar defeito no lugar errado.
     let mut desligado: Option<String> = None;
 
+    let mut guardada: std::collections::HashMap<i64, db::TranscricaoGuardada> =
+        transcricoes_ainda_validas(conn)?
+            .into_iter()
+            .map(|g| (g.song_id, g))
+            .collect();
+
     on_progress(0, total, "", 0);
     for (feitas, id) in song_ids.iter().enumerate() {
         if cancelled() {
@@ -2478,6 +2484,14 @@ where
         let cand = montar_candidata(song, None, None);
         let nome = cand.nome.clone();
         on_progress(feitas, total, &nome, 0);
+
+        // V15.3 — escrita antes (fila cancelada, computador reiniciado):
+        // volta sem gastar a CPU de novo
+        if let Some(g) = guardada.remove(id) {
+            propostas.push(proposta_da_transcricao(&cand, desfecho_guardado(g)));
+            on_progress(feitas + 1, total, &nome, 100);
+            continue;
+        }
 
         let desfecho = if let Some(veredito) = &desligado {
             Desfecho::Erro {
@@ -2563,6 +2577,26 @@ where
                 }
             }
         };
+        // V15.3 — guardada NO INSTANTE em que termina, no banco do app (nunca
+        // no MP3): reiniciar no meio de uma fila de dias não perde nada
+        let guardar = match &desfecho {
+            Desfecho::Transcrita { letra, refrao, .. } => Some(db::TranscricaoGuardada {
+                song_id: *id,
+                letra: Some(letra.clone()),
+                refrao: refrao.clone(),
+                motivo_instrumental: None,
+            }),
+            Desfecho::Instrumental { motivo } => Some(db::TranscricaoGuardada {
+                song_id: *id,
+                letra: None,
+                refrao: None,
+                motivo_instrumental: Some(motivo.clone()),
+            }),
+            Desfecho::Adiada { .. } | Desfecho::Erro { .. } => None,
+        };
+        if let Some(g) = guardar {
+            db::guardar_transcricao(conn, &g)?;
+        }
         propostas.push(proposta_da_transcricao(&cand, desfecho));
         on_progress(feitas + 1, total, &nome, 100);
     }
@@ -2652,6 +2686,51 @@ pub const AVISO_INSTRUMENTAL_NAO_TRANSCREVE: &str =
 /// O que sai no lugar é o ECO do que está no arquivo. Não pode ser vazio: o
 /// `apply` grava `ap.title` como veio, e uma proposta de título vazio apagaria
 /// a etiqueta de alguém.
+fn desfecho_guardado(g: db::TranscricaoGuardada) -> crate::transcricao::Desfecho {
+    use crate::transcricao::{Desfecho, Duracao};
+    match (g.letra, g.motivo_instrumental) {
+        (Some(letra), _) => Desfecho::Transcrita {
+            letra,
+            refrao: g.refrao,
+            // a proposta não usa a duração; a medição desta fila também não
+            // conta quem não foi ouvido agora
+            duracao: Duracao::DESCONHECIDA,
+        },
+        (None, motivo) => Desfecho::Instrumental {
+            motivo: motivo.unwrap_or_default(),
+        },
+    }
+}
+
+/// V15.3 — as transcrições guardadas que ainda esperam a pessoa. Some (e sai
+/// do banco) a de música que já não está na biblioteca, que ganhou letra ou que
+/// foi marcada instrumental: aí não há mais nada a conferir.
+fn transcricoes_ainda_validas(conn: &Connection) -> Result<Vec<db::TranscricaoGuardada>> {
+    let mut validas = Vec::new();
+    let mut vencidas = Vec::new();
+    for g in db::transcricoes_guardadas(conn)? {
+        match db::get_song(conn, g.song_id)? {
+            Some(s) if !s.has_lyrics && !s.instrumental => validas.push(g),
+            _ => vencidas.push(g.song_id),
+        }
+    }
+    db::descartar_transcricoes(conn, &vencidas)?;
+    Ok(validas)
+}
+
+/// V15.3 — as propostas das transcrições guardadas, montadas com o que a
+/// música é AGORA (o eco do `apply` confere contra isso).
+pub fn propostas_guardadas(conn: &Connection) -> Result<Vec<EnrichProposal>> {
+    let mut propostas = Vec::new();
+    for g in transcricoes_ainda_validas(conn)? {
+        if let Some(song) = db::get_song(conn, g.song_id)? {
+            let cand = montar_candidata(song, None, None);
+            propostas.push(proposta_da_transcricao(&cand, desfecho_guardado(g)));
+        }
+    }
+    Ok(propostas)
+}
+
 fn proposta_da_transcricao(cand: &Candidata, desfecho: crate::transcricao::Desfecho) -> EnrichProposal {
     use crate::transcricao::Desfecho;
     let mut p = proposta_baixa(cand, None);

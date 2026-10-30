@@ -69,6 +69,8 @@ pub fn run() {
             commands::transcricao_pendentes,
             commands::transcricao_pendentes_da_musica,
             commands::transcrever_musicas,
+            commands::transcricoes_guardadas,
+            commands::descartar_transcricoes,
             commands::acessorios_estado,
             commands::acessorio_baixar,
             commands::acessorio_cancelar,

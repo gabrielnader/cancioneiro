@@ -19,7 +19,7 @@ import {
   textoSemPropostas,
   type DownloadPendente,
 } from "../lib/curadoria";
-import type { Song } from "../lib/types";
+import { FONTE_TRANSCRICAO, type Song } from "../lib/types";
 import { useLibraryStore } from "./libraryStore";
 import { usePlayerStore } from "./playerStore";
 import { usePlaylistStore } from "./playlistStore";
@@ -178,6 +178,15 @@ interface EnrichState {
   /** V15 — "Manter como está": a linha sai das pendentes, sem gravar nada. */
   manter: (linha: number) => void;
   /**
+   * V15.3 — quantas letras a etapa 5 já escreveu e esperam conferência no
+   * banco do app (de uma fila cancelada, ou de antes de reiniciar). 0 = nenhuma.
+   */
+  letrasGuardadas: number;
+  /** V15.3 — pergunta ao backend quantas letras guardadas esperam. */
+  contarLetrasGuardadas: () => Promise<void>;
+  /** V15.3 — abre a revisão com as letras guardadas. Só com nada rodando. */
+  conferirLetrasGuardadas: () => Promise<void>;
+  /**
    * V15 — grava as linhas escolhidas. É O caminho de gravação da revisão: o
    * automático (o que só preenche) e o clique em "Usar o novo" passam por
    * aqui, com as mesmas regras (ver `lib/aplicacao.ts`).
@@ -322,8 +331,49 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
   mantidas: [],
   autoAplicadas: 0,
 
-  manter: (linha) =>
-    set((s) => (s.mantidas.includes(linha) ? s : { mantidas: [...s.mantidas, linha] })),
+  manter: (linha) => {
+    const p = get().proposals[linha];
+    set((s) => (s.mantidas.includes(linha) ? s : { mantidas: [...s.mantidas, linha] }));
+    // V15.3 — a letra escrita pelo computador que a pessoa recusou deixa de
+    // esperar: sem isto ela voltaria a cada abertura do app
+    if (p && p.fonte === FONTE_TRANSCRICAO && p.error === null) {
+      void getBackend()
+        .descartarTranscricoes([p.song_id])
+        .catch(() => {});
+    }
+  },
+
+  letrasGuardadas: 0,
+
+  contarLetrasGuardadas: async () => {
+    try {
+      const ps = await getBackend().transcricoesGuardadas();
+      set({ letrasGuardadas: ps.length });
+    } catch {
+      // sem resposta: o cartão só não mostra o aviso
+    }
+  },
+
+  conferirLetrasGuardadas: async () => {
+    if (get().status !== "idle" || get().scanInFlight) return;
+    const propostas = await getBackend().transcricoesGuardadas();
+    if (get().status !== "idle" || propostas.length === 0) {
+      set({ letrasGuardadas: propostas.length });
+      return;
+    }
+    set({
+      status: "review",
+      overlayOpen: true,
+      proposals: propostas,
+      letrasGuardadas: 0,
+      applyErrors: {},
+      aplicadas: [],
+      gravadas: {},
+      avisosDaGravacao: {},
+      mantidas: [],
+      autoAplicadas: 0,
+    });
+  },
 
   aplicarLinhas: async (linhas, { consentiu = () => false, abrir = true } = {}) => {
     const s = get();
@@ -600,7 +650,16 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
         status: "review",
         // ACRESCENTA: a varredura pode ter deixado propostas que a pessoa
         // ainda não aplicou, e jogá-las fora seria perder trabalho dela
-        proposals: [...s.proposals, ...propostas],
+        // V15.3 — a letra guardada que já está nesta revisão não entra duas vezes
+        proposals: [
+          ...s.proposals,
+          ...propostas.filter(
+            (p) =>
+              !s.proposals.some(
+                (q) => q.song_id === p.song_id && q.fonte === FONTE_TRANSCRICAO,
+              ),
+          ),
+        ],
         transcricaoProgress: null,
         scanId: "",
         // a fila foi consumida: a pergunta do fim não se repete
@@ -732,6 +791,8 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
       mantidas: [],
       autoAplicadas: 0,
     });
+    // V15.3 — o que a fila já escreveu ficou guardado: o cartão passa a dizer
+    void get().contarLetrasGuardadas();
     // Cancelar de verdade: a guarda de corrida acima só descarta o RESULTADO;
     // sem isto a varredura seguia consultando o LRCLIB até o fim (M4) — e a
     // etapa 5 seguiria queimando CPU por horas, que é o MESMO comando de

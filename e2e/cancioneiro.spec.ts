@@ -1947,6 +1947,42 @@ test.describe("V10 — a etapa que resolve (F18 fase 3)", () => {
     expect(errors).toEqual([]);
   });
 
+  // V15.3 — relato de campo: 332 de 5.433 letras escritas, e o computador
+  // precisava reiniciar. Tudo morava só na memória. Agora cada letra fica
+  // guardada (no banco do app, nunca no MP3) e espera a pessoa conferir.
+  test("a letra escrita sobrevive a reabrir o app e espera a pessoa conferir", async ({
+    page,
+  }) => {
+    const errors = trackErrors(page);
+    await resetApp(page);
+    await addMockFolder(page);
+    await comTranscricao(page);
+
+    await page.getByRole("button", { name: "Organizar minhas músicas" }).click();
+    await page.getByTestId("curadoria").getByRole("button", { name: "Começar agora" }).click();
+    await irAteASugestao(page, "Letra escrita pela máquina ouvindo o áudio — confira antes de aplicar.");
+
+    // "reiniciar o computador" sem ter conferido nada
+    await page.reload();
+    await page.getByRole("button", { name: "Organizar minhas músicas" }).click();
+    const guardadas = page.getByTestId("letras-guardadas");
+    await expect(guardadas.getByText("2 letras já foram escritas e esperam você conferir.")).toBeVisible();
+    await guardadas.getByRole("button", { name: "Conferir as letras" }).click();
+    const conferir = await irAteASugestao(
+      page,
+      "Letra escrita pela máquina ouvindo o áudio — confira antes de aplicar.",
+    );
+
+    // recusada, ela deixa de esperar — também depois de reabrir
+    await conferir.getByRole("button", { name: "Manter como está" }).click();
+    await page.reload();
+    await page.getByRole("button", { name: "Organizar minhas músicas" }).click();
+    await expect(
+      page.getByTestId("letras-guardadas").getByText("1 letra já foi escrita e espera você conferir."),
+    ).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
   // =========================================================================
   // V10.9 — e a TERCEIRA porta: a etapa 5 na ficha de UMA música
   // =========================================================================
