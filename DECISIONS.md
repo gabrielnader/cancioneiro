@@ -2822,3 +2822,16 @@ perguntar.
   para `lib/aplicacao.ts`: automático e clique usam o mesmo código.
 - **Avisos no centro, acima do player.** No canto, com o player mais alto, o
   aviso cobria o "Salvar no arquivo" dos detalhes (achado do E2E).
+
+## V15.1 — o quadro de texto sem o byte de codificação
+
+Medido num arquivo real com o diagnóstico: TYER e TENC começavam direto pelo
+texto ("1982", "r1.4"), sem o byte que declara a codificação. O lofty 0.22 só
+tolera cabeçalho de quadro quebrado; texto assim derruba a leitura do arquivo
+INTEIRO, em qualquer modo. Efeito duplo: não gravava, e o indexador não via
+nem título nem artista — mostrava o nome do arquivo, e a curadoria oferecia
+"preencher" um título que existia. Conserto (`conserto_id3`): só quando a
+leitura já falhou, numa cópia em memória, acrescenta o byte de Latin-1 — em
+que todo byte é caractere, então o texto fica igual. Mesma escolha do idioma
+`und`: consertar o quadro alheio, nunca descartá-lo. Vale para leitura e
+gravação; o desfecho da gravação conta o que foi feito.

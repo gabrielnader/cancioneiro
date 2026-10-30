@@ -1672,3 +1672,108 @@ fn o_conserto_absorve_a_sobra_e_o_audio_e_o_unico_intocado() {
         fim
     );
 }
+
+// ---------------------------------------------------------------------------
+// V15.1 — o quadro de texto SEM o byte de codificação
+//
+// Relato de campo, medido com o `tools/diagnosticar_mp3.py` num arquivo real
+// ("instrumental - Deckard's Dream.mp3"): TYER e TENC sem o primeiro byte, o
+// que declara a codificação do texto. O "2" do ano e o "r" do "r1.4" eram
+// lidos como codificação (50 e 114), e o lofty 0.22 derruba a leitura do
+// arquivo INTEIRO por isso, em qualquer modo. Sem ler, o app não via nem o
+// título nem o artista verdadeiros (mostrava o nome do arquivo), e não gravava.
+// ---------------------------------------------------------------------------
+
+fn syncsafe(n: usize) -> [u8; 4] {
+    [((n >> 21) & 0x7F) as u8, ((n >> 14) & 0x7F) as u8, ((n >> 7) & 0x7F) as u8, (n & 0x7F) as u8]
+}
+
+/// Um quadro ID3v2.3 (tamanho em 4 bytes comuns).
+fn quadro_v23(id: &[u8; 4], corpo: &[u8]) -> Vec<u8> {
+    let mut q = id.to_vec();
+    q.extend_from_slice(&(corpo.len() as u32).to_be_bytes());
+    q.extend_from_slice(&[0, 0]);
+    q.extend_from_slice(corpo);
+    q
+}
+
+/// O arquivo do campo: título e artista certos, e dois quadros sem o byte de
+/// codificação — com o áudio de uma fixture real depois.
+fn mp3_com_codificacao_ausente(path: &Path) -> Vec<u8> {
+    let tmp = path.with_extension("fonte");
+    copy_fixture("com_letra.mp3", &tmp);
+    let audio = audio_bytes(&tmp);
+    fs::remove_file(&tmp).unwrap();
+    let mut corpo = Vec::new();
+    corpo.extend(quadro_v23(b"TIT2", b"\x00Deckard's Dream"));
+    corpo.extend(quadro_v23(b"TPE1", b"\x00Vangelis"));
+    corpo.extend(quadro_v23(b"TYER", b"1982")); // sem o byte de codificação
+    corpo.extend(quadro_v23(b"TENC", b"r1.4")); // idem
+    corpo.extend(std::iter::repeat(0u8).take(64)); // preenchimento, como no campo
+    let mut arquivo = b"ID3\x03\x00\x00".to_vec();
+    arquivo.extend_from_slice(&syncsafe(corpo.len()));
+    arquivo.extend(corpo);
+    arquivo.extend_from_slice(&audio);
+    fs::write(path, &arquivo).unwrap();
+    audio
+}
+
+fn indexar_so(path: &Path) -> (tempfile::TempDir, Connection, db::Song) {
+    let dir = tempfile::tempdir().unwrap();
+    let destino = dir.path().join(path.file_name().unwrap());
+    fs::copy(path, &destino).unwrap();
+    let conn = db::open_in_memory().unwrap();
+    let folder_id = db::add_folder(&conn, dir.path().to_str().unwrap()).unwrap();
+    indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
+    let song = db::list_songs(&conn).unwrap().into_iter().next().unwrap();
+    (dir, conn, song)
+}
+
+#[test]
+fn o_indexer_le_titulo_e_artista_de_quem_tem_quadro_sem_codificacao() {
+    let base = tempfile::tempdir().unwrap();
+    let path = base.path().join("instrumental - Deckard's Dream.mp3");
+    mp3_com_codificacao_ausente(&path);
+    let (_dir, _conn, song) = indexar_so(&path);
+    // antes: o nome do arquivo e artista vazio — e a curadoria propunha
+    // "preencher" o que nunca esteve vazio
+    assert_eq!(song.title, "Deckard's Dream");
+    assert_eq!(song.artist.as_deref(), Some("Vangelis"));
+}
+
+#[test]
+fn gravar_conserta_o_quadro_sem_codificacao_sem_perder_o_texto_dele() {
+    let base = tempfile::tempdir().unwrap();
+    let path = base.path().join("instrumental - Deckard's Dream.mp3");
+    mp3_com_codificacao_ausente(&path);
+    let (dir, conn, song) = indexar_so(&path);
+    let path = PathBuf::from(&song.file_path);
+    let audio_antes = audio_bytes(&path);
+
+    let gravacao = writer::write_tags(&conn, song.id, "Deckard's Dream", Some("Vangelis"), None, Some("trilha"), None)
+        .expect("um quadro sem codificação não pode impedir a gravação");
+
+    // o desfecho DIZ o que foi feito
+    assert_eq!(gravacao.aviso, Some(writer::AVISO_CODIFICACAO_CONSERTADA));
+    // o texto dos dois quadros sobreviveu, byte por byte
+    let tag = id3_tag(&path);
+    use lofty::tag::Accessor;
+    assert_eq!(tag.year(), Some(1982), "o ano não pode ser descartado");
+    let tenc = tag
+        .get_text(&lofty::id3::v2::FrameId::Valid(std::borrow::Cow::Borrowed("TENC")))
+        .expect("o TENC não pode ser descartado");
+    assert_eq!(tenc, "r1.4");
+    // a gravação pedida aconteceu, e o áudio não foi tocado
+    assert_eq!(gravacao.song.temas.as_deref(), Some("trilha"));
+    assert_eq!(audio_bytes(&path), audio_antes, "o áudio não pode ser tocado");
+    let nomes: Vec<_> = fs::read_dir(dir.path()).unwrap().collect();
+    assert_eq!(nomes.len(), 1, "nada é criado na pasta do acervo");
+}
+
+#[test]
+fn arquivo_saudavel_grava_sem_aviso_nenhum() {
+    let (_dir, conn, _f) = setup();
+    let song = song_by_suffix(&conn, "com_letra.mp3");
+    let g = writer::write_tags(&conn, song.id, "Outro Nome", None, None, None, None).unwrap();
+    assert_eq!(g.aviso, None);
+}

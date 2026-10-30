@@ -104,7 +104,7 @@ fn read_tags(path: &Path) -> TagData {
         fallback: true,
     };
 
-    let tagged = match lofty::read_from_path(path) {
+    let tagged = match ler_etiquetas(path) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("[indexer] falha ao ler tags de {path:?}: {e}");
@@ -309,6 +309,31 @@ fn file_mtime_epoch(md: &std::fs::Metadata) -> i64 {
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
+}
+
+/// Lê as etiquetas — e, quando a leitura cai por TEXTO ilegível, tenta de novo
+/// sobre uma cópia consertada na memória (V15.1, ver `conserto_id3`).
+///
+/// Sem isto, um quadro técnico estragado (o ano, o programa que gravou) fazia o
+/// app ignorar TODAS as etiquetas do arquivo: mostrava o nome do arquivo no
+/// lugar do título, "(vazio)" no artista, e a curadoria oferecia "preencher" o
+/// que nunca esteve vazio. A leitura não escreve nada: o conserto só vai para o
+/// arquivo quando a pessoa grava.
+fn ler_etiquetas(path: &Path) -> lofty::error::Result<lofty::file::TaggedFile> {
+    match lofty::read_from_path(path) {
+        Err(e) if crate::conserto_id3::e_erro_de_texto(&e) => {
+            let bytes = std::fs::read(path)?;
+            match crate::conserto_id3::consertar_codificacao_ausente(&bytes) {
+                Some((consertado, _)) => {
+                    lofty::probe::Probe::new(std::io::Cursor::new(consertado))
+                        .guess_file_type()?
+                        .read()
+                }
+                None => Err(e),
+            }
+        }
+        lido => lido,
+    }
 }
 
 fn is_mp3(path: &Path) -> bool {

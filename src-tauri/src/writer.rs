@@ -504,6 +504,13 @@ pub const AVISO_ETIQUETA_NORMALIZADA: &str =
     "para conseguir gravar, o programa corrigiu uma medida errada por dentro da etiqueta deste \
      MP3 — a música em si não foi alterada, e o programa conferiu isso depois de gravar";
 
+/// V15.1 — o desfecho quando a gravação só foi possível depois de consertar um
+/// quadro de texto sem o byte de codificação (ver `conserto_id3`). Mesma régua
+/// do aviso acima: diz o que foi feito e responde ao medo de quem lê.
+pub const AVISO_CODIFICACAO_CONSERTADA: &str =
+    "para conseguir gravar, o programa consertou a forma como uma etiqueta técnica deste MP3 \
+     (como o ano) estava escrita — o texto dela foi mantido, e a música em si não foi alterada";
+
 /// Marcas de OUTRA etiqueta dentro da sobra. Achar qualquer uma delas cancela o
 /// conserto.
 ///
@@ -904,8 +911,25 @@ pub fn write_tags_com_origem(
     // sendo: os três modos leem este acervo igual — ver o bloco do
     // `consertar_idiomas_invalidos`. Modo mais tolerante não conserta nada
     // aqui e DESCARTA quadros, que é o que não podemos fazer.
-    let mpeg = MpegFile::read_from(&mut file, ParseOptions::new())
-        .map_err(|e| erro_de_gravacao(&song.file_path, frase_de_lofty(&e)))?;
+    let (mpeg, codificacao_consertada) = match MpegFile::read_from(&mut file, ParseOptions::new()) {
+        Ok(m) => (m, false),
+        // V15.1 — quadro de texto sem o byte de codificação: a etiqueta é lida
+        // de uma cópia consertada na MEMÓRIA (ver `conserto_id3`). O conserto
+        // chega ao arquivo junto com a gravação que a pessoa pediu, que regrava
+        // a etiqueta inteira de qualquer jeito — e o desfecho conta isso.
+        Err(e) if crate::conserto_id3::e_erro_de_texto(&e) => {
+            let bytes = std::fs::read(path)
+                .map_err(|io| erro_de_gravacao(&song.file_path, frase_de_io(&io)))?;
+            let Some((consertado, _)) = crate::conserto_id3::consertar_codificacao_ausente(&bytes)
+            else {
+                return Err(erro_de_gravacao(&song.file_path, frase_de_lofty(&e)));
+            };
+            let m = MpegFile::read_from(&mut std::io::Cursor::new(consertado), ParseOptions::new())
+                .map_err(|e| erro_de_gravacao(&song.file_path, frase_de_lofty(&e)))?;
+            (m, true)
+        }
+        Err(e) => return Err(erro_de_gravacao(&song.file_path, frase_de_lofty(&e))),
+    };
     drop(file);
     let mut tag: Id3v2Tag = mpeg.id3v2().cloned().unwrap_or_default();
 
@@ -998,7 +1022,8 @@ pub fn write_tags_com_origem(
     // V10.8 — e quando ele recusa o arquivo com `UnknownFormat`, o
     // `salvar_etiqueta` tenta uma segunda vez, normalizando o campo de tamanho
     // da etiqueta. O `aviso` é o desfecho a contar quando isso aconteceu.
-    let aviso = salvar_etiqueta(&tag, path, &song.file_path)?;
+    let aviso = salvar_etiqueta(&tag, path, &song.file_path)?
+        .or(codificacao_consertada.then_some(AVISO_CODIFICACAO_CONSERTADA));
 
     // Re-stata mtime/size e upserta — banco/FTS em sincronia na hora, e o
     // próximo rescan não precisa reler o arquivo.

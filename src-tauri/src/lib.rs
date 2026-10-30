@@ -1,6 +1,7 @@
 pub mod acessorios;
 pub mod casamento_estrito;
 pub mod commands;
+pub mod conserto_id3;
 pub mod db;
 pub mod enrich;
 pub mod error;
