@@ -1,0 +1,124 @@
+name: acessorio-transcritor-metal
+
+# V15.4 — o `whisper-cli` do Mac com Apple Silicon (M1 em diante), USANDO a
+# placa de vídeo (Metal) e o Accelerate.
+#
+# O universal (`whisper-cli-macos-universal`) sai com os dois desligados: um
+# binário só para Intel e ARM não compila o Metal. Relato de campo: a fila de
+# 5.433 músicas num M2 estimava 117 horas. Este arquivo é ACRESCENTADO ao
+# lançamento `acessorios-v1` com nome próprio, e o catálogo do app o oferece
+# sob `macos-arm64`, que vem antes de `macos` na ordem desta máquina.
+#
+# Fluxo SEPARADO de propósito: o `acessorio-transcritor.yml` reconstrói também
+# o do Windows, que não é reprodutível, e rodá-lo troca a soma que o app
+# espera (já aconteceu). Aqui nada além deste arquivo é tocado — e o upload
+# RECUSA substituir um arquivo que já está publicado: trocar o binário depois
+# de publicado quebraria a soma de quem já baixou.
+
+on:
+  workflow_dispatch:
+    inputs:
+      whisper:
+        description: "Tag do whisper.cpp a construir"
+        required: true
+        default: "v1.7.4"
+  push:
+    paths:
+      - ".github/workflows/acessorio-transcritor-metal.yml"
+
+permissions:
+  contents: write
+
+env:
+  TAG: acessorios-v1
+  NOME: whisper-cli-macos-arm64-metal
+  WHISPER: ${{ github.event.inputs.whisper || 'v1.7.4' }}
+
+jobs:
+  construir:
+    runs-on: macos-latest
+    steps:
+      - name: Já publicado? Então não há nada a fazer
+        id: existe
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+               -q '.assets[].name' | grep -qx "$NOME"; then
+            echo "o $NOME já está no $TAG — não é substituído"
+            echo "publicado=sim" >> "$GITHUB_OUTPUT"
+          else
+            echo "publicado=nao" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Buscar o whisper.cpp
+        if: steps.existe.outputs.publicado == 'nao'
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "$WHISPER" \
+            https://github.com/ggml-org/whisper.cpp whisper
+
+      - name: Construir (arm64, Metal embutido, Accelerate)
+        if: steps.existe.outputs.publicado == 'nao'
+        run: |
+          set -euo pipefail
+          cd whisper
+          # GGML_METAL_EMBED_LIBRARY: os shaders vão DENTRO do executável —
+          # sem ele o binário procura um `.metal` ao lado e o acessório deixaria
+          # de ser UM arquivo conferível por UM SHA-256.
+          # GGML_NATIVE=OFF: o runner não é o M1 mais antigo que vai rodar isto.
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_OSX_ARCHITECTURES=arm64 \
+            -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DGGML_ACCELERATE=ON -DGGML_NATIVE=OFF \
+            -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF \
+            -DWHISPER_BUILD_EXAMPLES=ON
+          cmake --build build --config Release -j 4
+          alvo=$(find build -type f -name whisper-cli -not -path '*/CMakeFiles/*' | sort | head -1)
+          [ -n "$alvo" ] || { echo "::error::não achei o whisper-cli"; exit 1; }
+          cp "$alvo" "../$NOME"
+          chmod +x "../$NOME"
+          lipo -archs "../$NOME"
+          # nada de biblioteca dinâmica além das do sistema
+          otool -L "../$NOME"
+          if otool -L "../$NOME" | tail -n +2 | grep -v -e '/System/' -e '/usr/lib/'; then
+            echo "::error::o binário depende de biblioteca fora do sistema"; exit 1
+          fi
+
+      - name: Provar que usa a placa de vídeo, e medir contra a CPU
+        if: steps.existe.outputs.publicado == 'nao'
+        run: |
+          set -euo pipefail
+          curl -fsSL -o medium.bin \
+            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin"
+          amostra=whisper/samples/jfk.wav
+          inicio=$(date +%s)
+          ./$NOME --model medium.bin --file "$amostra" --language en --no-timestamps \
+            > gpu.txt 2> gpu.err
+          gpu=$(( $(date +%s) - inicio ))
+          inicio=$(date +%s)
+          ./$NOME --model medium.bin --file "$amostra" --language en --no-timestamps -ng \
+            > cpu.txt 2> cpu.err
+          cpu=$(( $(date +%s) - inicio ))
+          cat gpu.txt
+          grep -i "metal" gpu.err | head -5
+          grep -qi "ggml_metal_init" gpu.err || {
+            echo "::error::o Metal não foi iniciado"; exit 1; }
+          grep -qi "ask not" gpu.txt || {
+            echo "::error::a transcrição de prova saiu errada"; exit 1; }
+          {
+            echo "### $NOME"
+            echo "- 11 s de áudio, modelo medium: placa de vídeo ${gpu}s, só CPU ${cpu}s"
+            echo "- sha256: \`$(shasum -a 256 "$NOME" | cut -d' ' -f1)\`"
+            echo "- tamanho: $(stat -f%z "$NOME") bytes"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Publicar (sem substituir nada)
+        if: steps.existe.outputs.publicado == 'nao'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" "$NOME"
