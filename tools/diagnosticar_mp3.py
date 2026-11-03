@@ -307,6 +307,10 @@ def quadros_que_o_programa_nao_le(dados: bytes) -> list[str]:
     return achados
 
 
+# `--bytes`: mostra o conteúdo cru dos quadros pequenos (a capa fica de fora),
+# para medir o que nenhuma regra daqui reconhece
+MOSTRAR_BYTES = False
+
 QUADROS_DE_DATA = ("TDEN", "TDOR", "TDRC", "TDRL", "TDTG", "TYER", "TDA", "TYE")
 
 
@@ -398,6 +402,8 @@ def estrutura_da_etiqueta(dados: bytes) -> list[str]:
             if problema:
                 linhas.append(f">>> {nome}: data {texto!r} {problema}")
         quadros.append(rotulo)
+        if MOSTRAR_BYTES and nome not in ("APIC", "PIC") and tam <= 512:
+            linhas.append(f"  {nome} bytes: {corpo.hex(' ')}")
         vistos[nome] = vistos.get(nome, 0) + 1
         pos += cab + tam
     linhas.append("quadros: " + " ".join(quadros))
@@ -479,7 +485,9 @@ def main(argv: list[str]) -> int:
     # V15.5 — `--so-problemas`: varre uma pasta inteira (milhares de arquivos)
     # e mostra só os que acusam algo — ninguém precisa listar os que falham
     so_problemas = "--so-problemas" in argv
-    argv = [a for a in argv if a != "--so-problemas"]
+    global MOSTRAR_BYTES
+    MOSTRAR_BYTES = "--bytes" in argv
+    argv = [a for a in argv if a not in ("--so-problemas", "--bytes")]
     alvos: list[Path] = []
     for arg in argv[1:]:
         p = Path(arg).expanduser()
