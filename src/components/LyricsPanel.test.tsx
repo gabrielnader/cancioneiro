@@ -109,6 +109,20 @@ describe("LyricsPanel (F3)", () => {
       render(<LyricsPanel />);
     }
 
+    // V15.10 — a pasta por extenso, e clicável: filtra a lista por ela
+    it("mostra a pasta e, ao clicar, mostra as músicas dela", async () => {
+      useLibraryStore.setState({
+        folders: [{ id: 1, path: "/acervo", last_scanned_at: null }],
+        folderFilter: null,
+      });
+      renderCom(comCaminho("/acervo/Afro/afro - oxossi/aruana.mp3"));
+      const pasta = await screen.findByTestId("panel-folder");
+      expect(pasta).toHaveTextContent("Afro › afro - oxossi");
+      fireEvent.click(pasta);
+      expect(useLibraryStore.getState().folderFilter).toBe("/acervo/Afro/afro - oxossi");
+      useLibraryStore.setState({ folders: [], folderFilter: null });
+    });
+
     it("mostra o nome do arquivo (sem a pasta) logo abaixo de título e artista", async () => {
       renderCom(comCaminho("/acervo/capoeira/barco - Marinheiro só (Capoeira).mp3"));
       const nome = await screen.findByTestId("panel-filename");

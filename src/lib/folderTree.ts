@@ -95,6 +95,32 @@ export function songFileName(song: Song): string | null {
   return name;
 }
 
+/**
+ * V15.10 — a pasta onde a música está, para mostrar junto dela. Pedido do dono
+ * do produto: "muitas pessoas se organizam a partir de pastas".
+ *
+ * `partes` é o caminho A PARTIR da pasta registrada (sem ela: repetir
+ * "Musicas" em toda linha seria ruído) — vazio quando a música está direto na
+ * pasta registrada. `caminho` é a pasta inteira, o mesmo prefixo que o filtro
+ * da lateral usa. `null` quando a música não está em nenhuma pasta registrada.
+ */
+export function pastaDaMusica(
+  song: Song,
+  folders: readonly Folder[],
+): { partes: string[]; caminho: string } | null {
+  const raiz = folders.find((f) => isUnderFolder(song.file_path, f.path));
+  if (!raiz) return null;
+  const sep = sepOf(song.file_path);
+  const resto = song.file_path.slice(raiz.path.length).split(/[\\/]/).filter(Boolean);
+  const partes = resto.slice(0, -1); // sem o nome do arquivo
+  return { partes, caminho: [raiz.path.replace(/[\\/]+$/, ""), ...partes].join(sep) };
+}
+
+/** V15.10 — as partes de uma pasta como a pessoa lê: "Afro › afro - oxossi". */
+export function textoDaPasta(partes: readonly string[]): string {
+  return partes.map((p) => p.normalize("NFC")).join(" › ");
+}
+
 /** Monta a árvore: uma raiz por pasta registrada, subpastas com contadores. */
 export function buildFolderTree(songs: Song[], folders: Folder[]): FolderNode[] {
   return folders.map((folder) => {

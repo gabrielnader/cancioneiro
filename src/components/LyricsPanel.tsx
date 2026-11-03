@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { getBackend } from "../lib/api";
-import { songFileName } from "../lib/folderTree";
+import { folderName, pastaDaMusica, songFileName, textoDaPasta } from "../lib/folderTree";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlaylistStore } from "../stores/playlistStore";
 import { FONT_SIZES_PX, useUiStore } from "../stores/uiStore";
@@ -13,6 +13,8 @@ export function LyricsPanel() {
   const selectedSongId = useLibraryStore((s) => s.selectedSongId);
   const results = useLibraryStore((s) => s.results);
   const playlistItems = usePlaylistStore((s) => s.items);
+  const folders = useLibraryStore((s) => s.folders);
+  const setFolderFilter = useLibraryStore((s) => s.setFolderFilter);
   const fontLevel = useUiStore((s) => s.fontLevel);
   const cycleFontLevel = useUiStore((s) => s.cycleFontLevel);
 
@@ -84,6 +86,30 @@ export function LyricsPanel() {
                 selecionável para copiar. Some quando o título já É o nome do
                 arquivo (música sem tags), para não repetir o mesmo texto.
               */}
+              {/*
+                V15.10 — a pasta, por extenso, e clicável: mostra as outras
+                músicas dela (o mesmo filtro da árvore da lateral). Quem se
+                organiza por pasta chega à "vizinhança" da música sem procurar.
+              */}
+              {selected && pastaDaMusica(selected, folders) && (() => {
+                const pasta = pastaDaMusica(selected, folders)!;
+                const texto = pasta.partes.length > 0 ? textoDaPasta(pasta.partes) : folderName(pasta.caminho).normalize("NFC");
+                return (
+                  <button
+                    type="button"
+                    data-testid="panel-folder"
+                    onClick={() => setFolderFilter(pasta.caminho)}
+                    title="Ver as músicas desta pasta"
+                    className="mt-1 flex max-w-full items-start gap-1 rounded text-left text-[13px] leading-5 text-brand underline-offset-2 hover:underline"
+                  >
+                    <svg aria-hidden="true" className="mt-[3px] shrink-0" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /></svg>
+                    <span className="break-words">
+                      <span className="sr-only">Pasta: </span>
+                      {texto}
+                    </span>
+                  </button>
+                );
+              })()}
               {nomeArquivo && (
                 <p
                   data-testid="panel-filename"

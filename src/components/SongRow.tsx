@@ -1,8 +1,9 @@
 import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { songFileName } from "../lib/folderTree";
+import { pastaDaMusica, songFileName, textoDaPasta } from "../lib/folderTree";
 import { parseSnippet } from "../lib/highlight";
 import type { Song } from "../lib/types";
+import { useLibraryStore } from "../stores/libraryStore";
 import { usePlayerStore } from "../stores/playerStore";
 import { usePlaylistStore } from "../stores/playlistStore";
 import { TemaChips } from "./TemaChips";
@@ -35,6 +36,12 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
   // V6 — o nome do arquivo é como as coordenadoras já se organizam; entra como
   // segunda linha (soma, não troca): não disputa espaço com badge/temas/"+".
   const nomeArquivo = songFileName(song);
+  // V15.10 — e a PASTA, na frente do arquivo, na mesma linha: "muitas pessoas
+  // se organizam a partir de pastas". O caminho começa DEPOIS da pasta
+  // registrada (repetir "Musicas" em toda linha seria ruído)
+  const folders = useLibraryStore((s) => s.folders);
+  const pasta = pastaDaMusica(song, folders);
+  const textoPasta = pasta && pasta.partes.length > 0 ? textoDaPasta(pasta.partes) : null;
 
   const titleColor = !song.available
     ? "text-disabled"
@@ -141,15 +148,22 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
             {song.artist}
           </p>
         )}
-        {nomeArquivo && (
+        {(nomeArquivo || textoPasta) && (
           <p
             data-testid="song-filename"
-            title={nomeArquivo}
+            title={[textoPasta, nomeArquivo].filter(Boolean).join(" · ")}
             // `ink-quaternary` e não `ink-tertiary`: o texto precisa passar em
             // AA (4.5:1) nos TRÊS fundos da linha — branco, selecionado e
             // hover — e nos três equivalentes do tema escuro (ver index.css).
             className="truncate text-[14px] leading-5 text-ink-quaternary"
           >
+            {textoPasta && (
+              <span data-testid="song-folder">
+                <svg aria-hidden="true" className="mr-1 inline-block align-[-2px]" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinejoin="round"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z" /></svg>
+                {textoPasta}
+                {nomeArquivo && " · "}
+              </span>
+            )}
             {nomeArquivo}
           </p>
         )}

@@ -4,7 +4,9 @@ import {
   fileName,
   filterResultsByFolder,
   isUnderFolder,
+  pastaDaMusica,
   songFileName,
+  textoDaPasta,
 } from "./folderTree";
 import type { Folder, SearchResult, Song } from "./types";
 
@@ -245,5 +247,38 @@ describe("filterResultsByFolder", () => {
   it("com filtro devolve só as músicas da subárvore (prefixo exato de pasta)", () => {
     const filtered = filterResultsByFolder(results, "/acervo/1");
     expect(filtered.map((r) => r.song.id)).toEqual([1]);
+  });
+});
+
+
+// V15.10 — a pasta junto da música ("muitas pessoas se organizam por pastas")
+describe("pastaDaMusica", () => {
+  const raiz = [folder(1, "/Users/g/Musicas")];
+
+  it("o caminho A PARTIR da pasta registrada, sem repeti-la", () => {
+    const p = pastaDaMusica(song(1, "/Users/g/Musicas/Afro/afro - oxossi/aruana.mp3"), raiz);
+    expect(p?.partes).toEqual(["Afro", "afro - oxossi"]);
+    expect(p?.caminho).toBe("/Users/g/Musicas/Afro/afro - oxossi");
+    expect(textoDaPasta(p!.partes)).toBe("Afro › afro - oxossi");
+  });
+
+  it("direto na pasta registrada: nenhuma parte, e o caminho é a própria raiz", () => {
+    const p = pastaDaMusica(song(1, "/Users/g/Musicas/a.mp3"), raiz);
+    expect(p?.partes).toEqual([]);
+    expect(p?.caminho).toBe("/Users/g/Musicas");
+  });
+
+  it("no Windows, com barra invertida", () => {
+    const p = pastaDaMusica(song(1, "C:\\Musicas\\Hinos\\a.mp3"), [folder(1, "C:\\Musicas")]);
+    expect(p?.partes).toEqual(["Hinos"]);
+    expect(p?.caminho).toBe("C:\\Musicas\\Hinos");
+  });
+
+  it("fora das pastas registradas: null", () => {
+    expect(pastaDaMusica(song(1, "/outro/a.mp3"), raiz)).toBeNull();
+  });
+
+  it("o acento decomposto do macOS sai composto na tela", () => {
+    expect(textoDaPasta(["Xama\u0302nica"])).toBe("Xamânica");
   });
 });

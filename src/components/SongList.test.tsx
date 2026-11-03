@@ -238,6 +238,31 @@ describe("SongList (F1 UI / F2 / F3)", () => {
       return { song: { ...song(id, title), file_path: filePath }, snippet: null };
     }
 
+    // V15.10 — a pasta na frente do arquivo, a partir da pasta registrada
+    it("linha mostra a pasta (sem a pasta registrada) antes do nome do arquivo", () => {
+      useLibraryStore.setState({
+        folders: [{ id: 1, path: "/acervo", last_scanned_at: null }],
+        results: [comArquivo(10, "Marinheiro só", "/acervo/Capoeira/Barco/barco - Marinheiro só.mp3")],
+      });
+      render(<SongList />);
+      const row = screen.getByText("Marinheiro só").closest('[role="option"]')!;
+      expect(row.querySelector('[data-testid="song-folder"]')).toHaveTextContent("Capoeira › Barco ·");
+      expect(row.querySelector('[data-testid="song-filename"]')).toHaveTextContent("barco - Marinheiro só.mp3");
+      expect(row.querySelector('[data-testid="song-filename"]')!.textContent).not.toContain("acervo");
+      useLibraryStore.setState({ folders: [] });
+    });
+
+    it("direto na pasta registrada: nenhuma pasta na linha", () => {
+      useLibraryStore.setState({
+        folders: [{ id: 1, path: "/acervo", last_scanned_at: null }],
+        results: [comArquivo(10, "Marinheiro só", "/acervo/barco.mp3")],
+      });
+      render(<SongList />);
+      const row = screen.getByText("Marinheiro só").closest('[role="option"]')!;
+      expect(row.querySelector('[data-testid="song-folder"]')).toBeNull();
+      useLibraryStore.setState({ folders: [] });
+    });
+
     it("linha mostra o nome do arquivo além do título e do artista", () => {
       useLibraryStore.setState({
         results: [
