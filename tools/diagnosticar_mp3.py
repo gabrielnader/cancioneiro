@@ -305,6 +305,78 @@ def quadros_que_o_programa_nao_le(dados: bytes) -> list[str]:
     return achados
 
 
+def estrutura_da_etiqueta(dados: bytes) -> list[str]:
+    """V15.5 — como a etiqueta ID3v2 está montada, quadro a quadro.
+
+    Relato de campo: "as etiquetas deste MP3 estão num formato que o programa
+    não conseguiu regravar" (erro `Id3v2` do lofty) em dezenas de arquivos, e
+    nenhuma das medições acima cobria esse caso. Isto não julga: descreve a
+    versão, as sinalizações e cada quadro, e marca o que foge do padrão, para
+    a causa ser medida e não adivinhada.
+    """
+    if len(dados) < 10 or dados[:3] != b"ID3":
+        return []
+    versao, revisao, flags = dados[3], dados[4], dados[5]
+    linhas = [f"versão ID3v2.{versao}.{revisao}, sinalizações {flags:08b}"]
+    if versao == 2:
+        linhas.append(">>> versão 2.2 (antiga, quadros de 3 letras)")
+    if flags & 0x80:
+        linhas.append(">>> etiqueta inteira 'dessincronizada' (unsynchronisation)")
+    if flags & 0x40:
+        linhas.append(">>> tem cabeçalho estendido")
+    if flags & 0x0F:
+        linhas.append(">>> sinalizações que não existem no padrão")
+    fim = min(tamanho_do_id3(dados), len(dados))
+    largura = 3 if versao == 2 else 4
+    cab = 6 if versao == 2 else 10
+    pos = 10
+    if flags & 0x40 and versao in (3, 4):
+        b = dados[10:14]
+        tam = ((b[0] << 21) | (b[1] << 14) | (b[2] << 7) | b[3]) if versao == 4 else int.from_bytes(b, "big") + 4
+        pos = 10 + tam
+    quadros: list[str] = []
+    vistos: dict[str, int] = {}
+    while pos + cab <= fim:
+        ident = dados[pos : pos + largura]
+        if ident[0] == 0:
+            break
+        nome = ident.decode("latin-1")
+        if not all(48 <= b <= 57 or 65 <= b <= 90 for b in ident):
+            linhas.append(f">>> identificador de quadro inválido {nome!r} no byte {pos}")
+            break
+        if versao == 2:
+            tam = int.from_bytes(dados[pos + 3 : pos + 6], "big")
+            fl = 0
+        else:
+            b = dados[pos + 4 : pos + 8]
+            if versao == 4:
+                if any(x & 0x80 for x in b):
+                    linhas.append(f">>> {nome}: tamanho que não é 'syncsafe' (comum em v2.4 mal gravado)")
+                tam = (b[0] << 21) | (b[1] << 14) | (b[2] << 7) | b[3]
+            else:
+                tam = int.from_bytes(b, "big")
+            fl = int.from_bytes(dados[pos + 8 : pos + 10], "big")
+        if pos + cab + tam > fim:
+            linhas.append(f">>> {nome}: declara {tam} bytes, mais do que cabe na etiqueta")
+        corpo = dados[pos + cab : pos + cab + tam]
+        rotulo = f"{nome}({tam})"
+        if fl:
+            rotulo += f"[flags {fl:016b}]"
+        if nome in ("COMM", "USLT") and len(corpo) >= 4:
+            rotulo += f"[idioma {corpo[1:4]!r}]"
+        if nome in ("APIC", "PIC") and corpo:
+            tipo = corpo[1:20].split(b"\x00")[0]
+            rotulo += f"[{tipo!r}]"
+        quadros.append(rotulo)
+        vistos[nome] = vistos.get(nome, 0) + 1
+        pos += cab + tam
+    linhas.append("quadros: " + " ".join(quadros))
+    repetidos = [f"{n}×{c}" for n, c in vistos.items() if c > 1]
+    if repetidos:
+        linhas.append("repetidos: " + " ".join(repetidos))
+    return linhas
+
+
 def diagnosticar(caminho: Path) -> None:
     print(f"\n=== {caminho.name}")
     try:
@@ -343,6 +415,9 @@ def diagnosticar(caminho: Path) -> None:
         descreve_a_sobra(dados, inicio, sync)
     else:
         print(f"  quadro MPEG começa em {sync:,}, como esperado")
+
+    for linha in estrutura_da_etiqueta(dados):
+        print(f"  {linha}")
 
     # V15 — a leitura com as regras do app vem PRIMEIRO: é ela que diz qual
     # quadro faz o app recusar "o texto de uma etiqueta deste MP3"

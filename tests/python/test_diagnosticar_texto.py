@@ -84,3 +84,15 @@ def test_versao_4_usa_tamanho_syncsafe_e_continua_achando():
 
 def test_sem_id3_nao_acusa_nada():
     assert diag.quadros_que_o_programa_nao_le(b"\xff\xfb" + b"\x00" * 600) == []
+
+
+def test_estrutura_descreve_versao_e_quadros():
+    dados = _etiqueta([_quadro("TIT2", b"\x00Asa", 3), _quadro("COMM", b"\x00por\x00oi", 3)])
+    linhas = diag.estrutura_da_etiqueta(dados)
+    assert linhas[0].startswith("versão ID3v2.3.0")
+    assert "TIT2(4)" in linhas[-1] and "COMM(7)[idioma b'por']" in linhas[-1]
+
+
+def test_estrutura_aponta_identificador_invalido():
+    dados = _etiqueta([_quadro("TIT2", b"\x00Asa", 3), b"Ti t\x00\x00\x00\x01\x00\x00x"])
+    assert any("identificador de quadro inválido" in l for l in diag.estrutura_da_etiqueta(dados))
