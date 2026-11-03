@@ -754,7 +754,7 @@ fn gravar_normalizando_a_etiqueta(
         return Err(erro_de_gravacao(caminho, ERRO_ESTRUTURA_DO_MP3));
     }
     let sobra = &original[fim..primeiro_quadro];
-    if MARCAS_DE_OUTRA_ETIQUETA.iter().any(|m| contem(sobra, m)) {
+    if MARCAS_DE_OUTRA_ETIQUETA.iter().any(|m| contem(sobra, m)) && !e_etiqueta_vazia_grudada(sobra) {
         // a sobra é (ou carrega) outra etiqueta: absorvê-la apagaria dado de
         // alguém na regravação. Recusar é ruim; apagar é inviolável.
         return Err(erro_de_gravacao(caminho, ERRO_ESTRUTURA_DO_MP3));
@@ -780,6 +780,26 @@ fn gravar_normalizando_a_etiqueta(
 
     conferir_o_audio_ou_restaurar(path, &original, resumo_do_audio, caminho)?;
     Ok(Some(AVISO_ETIQUETA_NORMALIZADA))
+}
+
+/// V15.7 — a sobra é uma SEGUNDA etiqueta ID3v2 grudada na primeira, e vazia:
+/// só o cabeçalho de 10 bytes, e zeros até o fim dela e até o áudio. Medido no
+/// campo ("Jesus foi ao céu preparar": 2.038 bytes declarados, 99% zeros) —
+/// algum programa escreveu uma etiqueta nova sem apagar o espaço da antiga.
+///
+/// Absorvê-la não apaga NADA, porque não há quadro nenhum nela. A segunda
+/// etiqueta com conteúdo continua recusada: juntar as duas exigiria escolher
+/// entre os quadros delas, e escolher às cegas é apagar.
+fn e_etiqueta_vazia_grudada(sobra: &[u8]) -> bool {
+    if sobra.len() < 10 || &sobra[..3] != b"ID3" || !(2..=4).contains(&sobra[3]) {
+        return false;
+    }
+    let b = &sobra[6..10];
+    if b.iter().any(|x| x & 0x80 != 0) {
+        return false;
+    }
+    // depois do cabeçalho, tudo zero: dentro da etiqueta e depois dela
+    sobra[10..].iter().all(|&x| x == 0)
 }
 
 /// `bytes` contém a sequência `marca`?

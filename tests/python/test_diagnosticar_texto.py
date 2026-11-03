@@ -129,3 +129,17 @@ def test_tdat_com_mes_impossivel_aparece():
     assert any(">>> TDAT" in l for l in diag.estrutura_da_etiqueta(dados))
     dados = _etiqueta([_quadro("TDAT", b"\x001910", 3)])
     assert not any(">>>" in l for l in diag.estrutura_da_etiqueta(dados))
+
+
+def test_segunda_etiqueta_vazia_e_com_conteudo(tmp_path, capsys):
+    audio = b"\xff\xfb\x90\x00" + b"\x00" * 2000
+    vazia = tmp_path / "vazia.mp3"
+    vazia.write_bytes(_etiqueta([_quadro("TIT2", b"\x00A", 3)]) + b"ID3\x03\x00\x00\x00\x00\x0f\x76" + b"\x00" * 2455 + audio)
+    cheia = tmp_path / "cheia.mp3"
+    seg = _quadro("TIT2", b"\x03Ilha", 4)
+    cheia.write_bytes(_etiqueta([_quadro("PRIV", b"x\x00y", 3)]) + b"ID3\x04\x00\x00\x00\x00\x08\x00" + seg + b"\x00" * 1000 + audio)
+    diag.main(["x", str(vazia), str(cheia)])
+    saida = capsys.readouterr().out
+    assert "segunda etiqueta grudada, VAZIA" in saida
+    assert "segunda etiqueta grudada, COM conteúdo" in saida and "TIT2" in saida
+    assert "áudio: MPEG 1, camada III" in saida

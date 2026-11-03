@@ -94,6 +94,44 @@ def acha_sync_mpeg(dados: bytes, inicio: int) -> int | None:
     return None
 
 
+def descreve_quadro_mpeg(h: bytes) -> str:
+    """V15.7 — o cabeçalho do primeiro quadro de áudio, em palavras."""
+    if len(h) < 4:
+        return "?"
+    versao = {0: "MPEG 2.5", 2: "MPEG 2", 3: "MPEG 1"}.get((h[1] >> 3) & 3, "versão reservada")
+    camada = {1: "camada III", 2: "camada II", 3: "camada I"}.get((h[1] >> 1) & 3, "camada reservada")
+    taxa = (h[2] >> 4) & 0xF
+    amostra = (h[2] >> 2) & 3
+    extra = []
+    if taxa == 0:
+        extra.append(">>> taxa 'livre' (free format)")
+    if taxa == 15:
+        extra.append(">>> índice de taxa inválido")
+    if amostra == 3:
+        extra.append(">>> amostragem reservada")
+    return f"{versao}, {camada}, índice de taxa {taxa}, amostragem {amostra}" + (" " + " ".join(extra) if extra else "")
+
+
+def etiquetas_do_fim(caminho: Path, tamanho: int) -> list[str]:
+    """V15.7 — o que há no FIM do arquivo: ID3v1, APE, Lyrics3."""
+    try:
+        with caminho.open("rb") as f:
+            f.seek(max(0, tamanho - 64 * 1024))
+            fim = f.read()
+    except OSError:
+        return []
+    achados = []
+    if fim[-128:-125] == b"TAG":
+        achados.append("ID3v1 no fim (normal)")
+    if b"APETAGEX" in fim:
+        achados.append(">>> etiqueta APE no fim")
+    if b"LYRICS200" in fim or b"LYRICSEND" in fim:
+        achados.append(">>> etiqueta Lyrics3 no fim")
+    if b"ID3" in fim[-10:] or b"3DI" in fim[-138:]:
+        achados.append(">>> etiqueta ID3v2 no FIM do arquivo")
+    return [f"fim do arquivo: {', '.join(achados)}"] if achados else ["fim do arquivo: nenhuma etiqueta"]
+
+
 # Marcas que explicam uma sobra entre o fim da etiqueta e o começo do áudio.
 # Cada uma tem consequência DIFERENTE para a gravação, e é por isso que vale
 # nomeá-las em vez de dizer só "tem lixo aqui".
@@ -460,8 +498,20 @@ def diagnosticar(caminho: Path) -> None:
     if sync != inicio:
         print(f"  quadro MPEG começa em {sync:,} (e não em {inicio:,}) — {sync - inicio} bytes de sobra")
         descreve_a_sobra(dados, inicio, sync)
+        sobra = dados[inicio:sync]
+        if sobra[:3] == b"ID3":
+            # V15.7 — a segunda etiqueta grudada: vazia o app absorve; com
+            # conteúdo ele recusa (juntar exigiria escolher entre os quadros)
+            if all(b == 0 for b in sobra[10:]):
+                print("  >>> segunda etiqueta grudada, VAZIA (o app absorve sem perder nada)")
+            else:
+                quadros = [l for l in estrutura_da_etiqueta(sobra + b"\x00" * 10) if l.startswith("quadros:")]
+                print(f"  >>> segunda etiqueta grudada, COM conteúdo — {quadros[0] if quadros else '?'}")
     else:
         print(f"  quadro MPEG começa em {sync:,}, como esperado")
+    print(f"  áudio: {descreve_quadro_mpeg(dados[sync:sync + 4])}")
+    for linha in etiquetas_do_fim(caminho, tamanho_real):
+        print(f"  {linha}")
 
     for linha in estrutura_da_etiqueta(dados):
         print(f"  {linha}")
@@ -481,7 +531,13 @@ def diagnosticar(caminho: Path) -> None:
 
 def tem_problema(saida: str) -> bool:
     """A saída de um arquivo acusou algo? (para o modo `--so-problemas`)"""
-    return ">>>" in saida or "PROBLEMA" in saida or "NÃO" in saida or "\n    - " in saida
+    return (
+        ">>>" in saida
+        or "PROBLEMA" in saida
+        or "NÃO" in saida
+        or "\n    - " in saida
+        or "sem explicação benigna" in saida
+    )
 
 
 def main(argv: list[str]) -> int:

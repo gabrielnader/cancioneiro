@@ -2870,3 +2870,9 @@ gravação; o desfecho da gravação conta o que foi feito.
 ## V15.7 — dia/mês (TDAT) e hora (TIME) impossíveis da v2.3
 - Medido no campo com `--bytes` ("Eu tomo Daime"): TDAT "1019". O padrão é DDMM; o Sound Forge gravou MMDD (mês 19). O lofty junta TYER+TDAT sem conferir limite e recusa a data só na GRAVAÇÃO — por isso a mensagem era "não conseguiu regravar".
 - Mesma regra do lofty (`construct_tdrc_from_v3`): só 4 caracteres que viram dois números são usados. Esses, com dia > 31, mês > 12, hora > 23 ou minuto > 59, viram TXXX com o mesmo texto. Fora dessa forma o lofty mantém o quadro, e nada é mexido.
+
+## V15.8 — ano de um dígito, ano em branco, e a segunda etiqueta vazia
+- Bytes do campo (`--bytes`) desmentiram uma suposição da V15.1: o TYER do "Deckard's Dream" é só "2", não "1982". Devolver o byte de codificação não bastava — o lofty recusa ano de um dígito. Agora a data é conferida também DEPOIS desse conserto, e vira TXXX:TYER.
+- Ano feito só de espaços ("    ", " "): o lofty não apara e recusa. O conserto pulava (tratava como vazio); agora só o vazio de verdade passa.
+- Segunda etiqueta ID3v2 grudada na primeira e VAZIA (só cabeçalho e zeros): absorvida, porque não há quadro para perder. Com conteúdo ("Ilha de Amor", título só na segunda) continua recusada — juntar exige escolher entre quadros.
+- Diagnóstico: separa a segunda etiqueta vazia da cheia, descreve o primeiro quadro de áudio e as etiquetas do fim do arquivo.

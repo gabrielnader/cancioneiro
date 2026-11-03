@@ -108,7 +108,13 @@ pub fn consertar_codificacao_ausente(arquivo: &[u8]) -> Option<(Vec<u8>, Vec<Str
             // Latin-1: todo byte é um caractere, nada se perde
             let mut novo = vec![0];
             novo.extend_from_slice(dados);
-            Some((id.try_into().ok()?, novo))
+            // V15.7 — e o texto devolvido ainda pode ser uma data que o lofty
+            // recusa (medido: o TYER do "Deckard's Dream" é só "2")
+            if QUADROS_DE_DATA.contains(&id) && data_que_o_lofty_recusa(&novo) {
+                Some((*b"TXXX", data_como_anotacao(id, &novo)?))
+            } else {
+                Some((id.try_into().ok()?, novo))
+            }
         } else if dados[0] == 3 && e_latin1_rotulado_como_utf8(&dados[1..]) {
             // V15.5 — declara UTF-8 e é Latin-1: só o rótulo troca
             let mut novo = dados.to_vec();
@@ -221,10 +227,12 @@ fn data_que_o_lofty_recusa(dados: &[u8]) -> bool {
     let Some(texto) = texto_do_quadro(dados) else {
         return false; // o texto em si é o problema; não é caso de data
     };
-    if texto.trim().is_empty() {
+    // V15.7 — só o texto VAZIO passa: o lofty não apara, e um ano feito só de
+    // espaços ("    ", medido em dois arquivos) é recusado como os outros
+    if texto.is_empty() {
         return false;
     }
-    match texto.trim().parse::<lofty::tag::items::Timestamp>() {
+    match texto.parse::<lofty::tag::items::Timestamp>() {
         Err(_) => true,
         Ok(t) => {
             let fora = |v: Option<u8>, limite: u8| v.is_some_and(|v| v > limite);
@@ -438,6 +446,18 @@ mod tests {
         assert_eq!(consertar_codificacao_ausente(&com(b"\x001910")), None);
         // fora da forma de 4 números o lofty mantém o quadro: nada a consertar
         assert_eq!(consertar_codificacao_ausente(&com(b"\x0010/19")), None);
+    }
+
+    #[test]
+    fn ano_so_de_espacos_e_ano_de_um_digito_viram_anotacao() {
+        for ano in [&b"\x00    "[..], b"\x00 "] {
+            let a = etiqueta(3, &[quadro(b"TYER", ano, false)], b"\xff\xfb");
+            assert_eq!(consertar_codificacao_ausente(&a).unwrap().1, vec!["TYER"], "{ano:?}");
+        }
+        // o "Deckard's Dream": sem o byte de codificação E com ano "2"
+        let a = etiqueta(3, &[quadro(b"TYER", b"2", false)], b"\xff\xfb");
+        let (novo, _) = consertar_codificacao_ausente(&a).unwrap();
+        assert!(novo.windows(7).any(|j| j == b"\x00TYER\x002"), "anotação com o mesmo texto");
     }
 
     #[test]

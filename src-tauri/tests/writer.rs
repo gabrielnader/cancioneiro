@@ -1957,3 +1957,118 @@ fn dia_e_mes_impossiveis_do_formato_antigo_gravam_e_viram_anotacao() {
     assert_eq!(texto_txxx(&path, "Engineer").as_deref(), Some("Microsoft sasa"));
     assert_eq!(audio_bytes(&path), audio_antes, "o áudio não pode ser tocado");
 }
+
+/// Quadro v2.3 com sinalizações dadas (o "Deckard's Dream" tem 0x46 0x01).
+fn quadro_v23_com_flags(id: &[u8; 4], corpo: &[u8], flags: [u8; 2]) -> Vec<u8> {
+    let mut q = id.to_vec();
+    q.extend_from_slice(&(corpo.len() as u32).to_be_bytes());
+    q.extend_from_slice(&flags);
+    q.extend_from_slice(corpo);
+    q
+}
+
+/// O "Deckard's Dream" de verdade, com os bytes medidos por `--bytes`: o TYER
+/// sem o byte de codificação é só "2" — um ano que o lofty recusa mesmo depois
+/// de devolvido o byte (a 0.13.1 supunha "1982", e o campo mostrou o contrário).
+/// E três quadros com sinalizações fora do padrão (0x46 0x01).
+#[test]
+fn deckards_dream_com_os_bytes_do_campo_le_e_grava() {
+    let base = tempfile::tempdir().unwrap();
+    let path = base.path().join("instrumental - Deckard's Dream.mp3");
+    let f = [0x46, 0x01];
+    mp3_com_quadros(
+        &path,
+        3,
+        &[
+            quadro_v23_com_flags(b"TYER", b"2", f),
+            quadro_v23_com_flags(b"TRCK", b"\x001", f),
+            quadro_v23_com_flags(b"TENC", b"r 1.4", f),
+            quadro_v23(b"TPE1", b"\x00Vangelis\x00"),
+            quadro_v23(b"TIT2", b"\x00Deckard's Dream\x00"),
+            quadro_v23(b"TALB", b"\x00Blade Runner\x00"),
+            quadro_v23(b"TPOS", b"\x002/2\x00"),
+        ],
+    );
+    let (_dir, conn, song) = indexar_so(&path);
+    assert_eq!(song.title, "Deckard's Dream", "a etiqueta foi lida");
+    assert_eq!(song.artist.as_deref(), Some("Vangelis"));
+    let path = PathBuf::from(&song.file_path);
+    let audio_antes = audio_bytes(&path);
+    let g = writer::write_tags(&conn, song.id, "Deckard's Dream", Some("Vangelis"), None, None, Some(true))
+        .expect("o arquivo do campo precisa gravar");
+    assert_eq!(g.aviso, Some(writer::AVISO_CODIFICACAO_CONSERTADA));
+    assert_eq!(texto_txxx(&path, "TYER").as_deref(), Some("2"), "nada apagado");
+    assert_eq!(audio_bytes(&path), audio_antes, "o áudio não pode ser tocado");
+}
+
+/// O ano feito só de espaços ("Forest Veil", "Correntes dos Pretos Velhos").
+#[test]
+fn ano_so_de_espacos_le_e_grava() {
+    let base = tempfile::tempdir().unwrap();
+    let path = base.path().join("Forest Veil.mp3");
+    mp3_com_quadros(
+        &path,
+        3,
+        &[quadro_v23(b"TYER", b"\x00    "), quadro_v23(b"TIT2", b"\x00Forest Veil"), quadro_v23(b"TPE1", b"\x00Lisa Gerrard")],
+    );
+    let (_dir, conn, song) = indexar_so(&path);
+    assert_eq!(song.artist.as_deref(), Some("Lisa Gerrard"), "a etiqueta foi lida");
+    writer::write_tags(&conn, song.id, "Forest Veil", Some("Lisa Gerrard"), Some("letra"), None, None)
+        .expect("um ano em branco não pode impedir a gravação");
+}
+
+/// "Jesus foi ao céu preparar": depois da etiqueta de verdade, uma SEGUNDA
+/// etiqueta v2.3 vazia (2.038 bytes declarados, só zeros) e mais zeros até o
+/// áudio — 2.465 bytes de sobra, acima do teto de 1.024 do lofty.
+#[test]
+fn segunda_etiqueta_vazia_grudada_e_absorvida_sem_perder_nada() {
+    let base = tempfile::tempdir().unwrap();
+    let path = base.path().join("Jesus foi ao ceu preparar.mp3");
+    let tmp = path.with_extension("fonte");
+    copy_fixture("com_letra.mp3", &tmp);
+    let audio = audio_bytes(&tmp);
+    fs::remove_file(&tmp).unwrap();
+    let corpo = [quadro_v23(b"TIT2", b"\x00In the Garden"), quadro_v23(b"TYER", b"\x002005")].concat();
+    let mut arquivo = b"ID3\x03\x00\x00".to_vec();
+    arquivo.extend_from_slice(&syncsafe(corpo.len()));
+    arquivo.extend(corpo);
+    arquivo.extend_from_slice(b"ID3\x03\x00\x00\x00\x00\x0f\x76"); // a segunda, vazia
+    arquivo.extend(std::iter::repeat(0u8).take(2465 - 10));
+    arquivo.extend_from_slice(&audio);
+    fs::write(&path, &arquivo).unwrap();
+
+    let (_dir, conn, song) = indexar_so(&path);
+    let path = PathBuf::from(&song.file_path);
+    let g = writer::write_tags(&conn, song.id, "In the Garden", None, None, None, Some(true))
+        .expect("uma etiqueta vazia grudada não pode impedir a gravação");
+    assert_eq!(g.aviso, Some(writer::AVISO_ETIQUETA_NORMALIZADA));
+    assert_eq!(audio_bytes(&path), audio, "o áudio não pode ser tocado");
+}
+
+/// E a segunda etiqueta COM conteúdo ("Ilha de Amor") continua recusada: juntar
+/// as duas exigiria escolher entre os quadros delas.
+#[test]
+fn segunda_etiqueta_com_conteudo_continua_recusada_sem_mexer_no_arquivo() {
+    let base = tempfile::tempdir().unwrap();
+    let path = base.path().join("Ilha de Amor.mp3");
+    let tmp = path.with_extension("fonte");
+    copy_fixture("com_letra.mp3", &tmp);
+    let audio = audio_bytes(&tmp);
+    fs::remove_file(&tmp).unwrap();
+    let corpo = quadro_v23(b"PRIV", b"PeakValue\x00\x21\x41\x00\x00");
+    let mut arquivo = b"ID3\x03\x00\x00".to_vec();
+    arquivo.extend_from_slice(&syncsafe(corpo.len()));
+    arquivo.extend(corpo);
+    let segunda = quadro_v24(b"TIT2", b"\x03Ilha de Amor");
+    arquivo.extend_from_slice(b"ID3\x04\x00\x00\x00\x00\x08\x00");
+    arquivo.extend(&segunda);
+    arquivo.extend(std::iter::repeat(0u8).take(1034 - 10 - segunda.len()));
+    arquivo.extend_from_slice(&audio);
+    fs::write(&path, &arquivo).unwrap();
+
+    let (_dir, conn, song) = indexar_so(&path);
+    let path = PathBuf::from(&song.file_path);
+    let antes = fs::read(&path).unwrap();
+    assert!(writer::write_tags(&conn, song.id, "Ilha de Amor", None, None, None, None).is_err());
+    assert_eq!(fs::read(&path).unwrap(), antes, "nada foi alterado");
+}
