@@ -96,3 +96,17 @@ def test_estrutura_descreve_versao_e_quadros():
 def test_estrutura_aponta_identificador_invalido():
     dados = _etiqueta([_quadro("TIT2", b"\x00Asa", 3), b"Ti t\x00\x00\x00\x01\x00\x00x"])
     assert any("identificador de quadro inválido" in l for l in diag.estrutura_da_etiqueta(dados))
+
+
+def test_datas_que_o_programa_recusa():
+    assert diag.data_que_o_programa_recusa("2008-01-01T00:00:00Z") is None
+    assert diag.data_que_o_programa_recusa("1978") is None
+    assert diag.data_que_o_programa_recusa("20080101") is None
+    assert "formato" in diag.data_que_o_programa_recusa("Tue, 01 Jan 2008")
+    assert "formato" in diag.data_que_o_programa_recusa("2008/01/01")
+    assert "impossível" in diag.data_que_o_programa_recusa("2008-13-01")
+
+
+def test_estrutura_aponta_a_data_fora_do_padrao():
+    dados = _etiqueta([_quadro("TDRL", b"\x00Tue, 01 Jan 2008", 3)])
+    assert any(">>> TDRL" in l for l in diag.estrutura_da_etiqueta(dados))

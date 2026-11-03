@@ -305,6 +305,28 @@ def quadros_que_o_programa_nao_le(dados: bytes) -> list[str]:
     return achados
 
 
+QUADROS_DE_DATA = ("TDEN", "TDOR", "TDRC", "TDRL", "TDTG", "TYER", "TDA", "TYE")
+
+
+def data_que_o_programa_recusa(texto: str) -> str | None:
+    """As regras de data do lofty 0.22: AAAA-MM-DDTHH:MM:SS, cada pedaço só com
+    dígitos (pode parar em qualquer ponto), e cada um dentro do limite. Fora
+    disso ele recusa o arquivo INTEIRO — ao ler, ou ao gravar."""
+    import re
+
+    t = texto.strip().strip("\x00")
+    if not t:
+        return None
+    m = re.fullmatch(r"(\d{4})(?:-?(\d{2})(?:-?(\d{2})(?:[T ](\d{2})(?::?(\d{2})(?::?(\d{2}))?)?)?)?)?.*", t)
+    if not m or not re.fullmatch(r"[\d\-T: Z.+]*", t):
+        return "fora do formato AAAA-MM-DD (o programa não lê o arquivo)"
+    limites = [None, 12, 31, 23, 59, 59]
+    for valor, limite in zip(m.groups(), limites):
+        if valor is not None and limite is not None and not (int(valor) <= limite):
+            return "com mês, dia ou hora impossível (o programa não grava)"
+    return None
+
+
 def estrutura_da_etiqueta(dados: bytes) -> list[str]:
     """V15.5 — como a etiqueta ID3v2 está montada, quadro a quadro.
 
@@ -367,6 +389,12 @@ def estrutura_da_etiqueta(dados: bytes) -> list[str]:
         if nome in ("APIC", "PIC") and corpo:
             tipo = corpo[1:20].split(b"\x00")[0]
             rotulo += f"[{tipo!r}]"
+        if nome in QUADROS_DE_DATA and corpo:
+            texto = _legivel(corpo[1:])
+            rotulo += f"[{texto!r}]"
+            problema = data_que_o_programa_recusa(texto)
+            if problema:
+                linhas.append(f">>> {nome}: data {texto!r} {problema}")
         quadros.append(rotulo)
         vistos[nome] = vistos.get(nome, 0) + 1
         pos += cab + tam
@@ -439,6 +467,16 @@ def main(argv: list[str]) -> int:
     alvos: list[Path] = []
     for arg in argv[1:]:
         p = Path(arg).expanduser()
+        if not p.exists():
+            # o macOS guarda "ã" decomposto (NFD); o que foi colado pode vir
+            # composto (NFC) — tenta as duas formas antes de dizer "não achei"
+            import unicodedata
+
+            for forma in ("NFD", "NFC"):
+                q = Path(unicodedata.normalize(forma, str(p)))
+                if q.exists():
+                    p = q
+                    break
         if p.is_dir():
             alvos.extend(sorted(q for q in p.rglob("*") if q.suffix.lower() == ".mp3"))
         elif p.exists():
