@@ -2852,3 +2852,8 @@ gravação; o desfecho da gravação conta o que foi feito.
 - Os dois `whisper-cli` do Mac publicados até aqui exigiam o macOS 26 (mínimo herdado do runner). Os novos fixam o macOS 12, e o fluxo falha se pedirem mais. Nomes novos: nada publicado foi substituído.
 - A medição de tempo do Metal tem chave própria (`:metal`): somá-la aos dias medidos sem aceleração faria a estimativa prometer horas a mais.
 - O CI só prova que funciona (runner virtual, sem placa de vídeo); quanto acelera se mede no Mac de verdade.
+
+## V15.5 — gravação em lote que conta, e instrumentais de uma vez
+- Relato: "Usar o novo em 4.176" deixou a tela parada por minutos, parecendo travada. O lote vai em pedaços de 50 e a pergunta mostra "Gravando… N de M"; um pedaço que falha vira falha por música, sem levar os que gravaram.
+- A pergunta dizia sempre "troca o nome e quem canta" — e o lote era de letras. Agora conta letra e nome separadamente.
+- "Marcar todas as N como instrumentais": pergunta própria, que diz que se desfaz na ficha. Continua fora do "usar em todas" (#71).

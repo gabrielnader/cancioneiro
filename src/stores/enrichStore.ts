@@ -173,6 +173,8 @@ interface EnrichState {
    * fechar a tela de conferir não pode trazer de volta o que já foi recusado.
    */
   mantidas: number[];
+  /** V15.5 — o progresso de uma gravação em lote; null = nada gravando. */
+  gravando: { feitas: number; total: number } | null;
   /** V15 — quantas músicas foram completadas sozinhas nesta revisão. */
   autoAplicadas: number;
   /** V15 — "Manter como está": a linha sai das pendentes, sem gravar nada. */
@@ -251,6 +253,10 @@ interface EnrichState {
     abrir?: boolean,
   ) => void;
 }
+
+/** V15.5 — quantas músicas vão em cada pedido de gravação em lote. */
+const TAMANHO_DO_PEDACO = 50;
+const ERRO_DO_PEDACO = "não foi possível gravar agora — tente de novo";
 
 /**
  * V15 — as decisões que ainda esperam a pessoa, por posição: tudo que não deu
@@ -344,6 +350,7 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
   },
 
   letrasGuardadas: 0,
+  gravando: null,
 
   contarLetrasGuardadas: async () => {
     try {
@@ -410,8 +417,25 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
       useLibraryStore.getState().allSongs.map((m) => [m.id, m.has_lyrics]),
     );
     try {
-      // o lote nunca aborta: um resultado por música, gravadas E falhas
-      const results = await getBackend().enrichApply(aplicacoes);
+      // o lote nunca aborta: um resultado por música, gravadas E falhas.
+      // V15.5 — em pedaços, para a tela contar "Gravando… N de M": 4.176
+      // músicas num pedido só deixavam a tela parada por minutos, parecendo
+      // travada (relato de campo)
+      const results: EnrichApplyResult[] = [];
+      set({ gravando: { feitas: 0, total: aplicacoes.length } });
+      for (let i = 0; i < aplicacoes.length; i += TAMANHO_DO_PEDACO) {
+        const pedaco = aplicacoes.slice(i, i + TAMANHO_DO_PEDACO);
+        try {
+          results.push(...(await getBackend().enrichApply(pedaco)));
+        } catch {
+          // um pedaço que falhou inteiro não leva junto os que já gravaram:
+          // cada música dele vira uma falha com o motivo, e o lote segue
+          results.push(
+            ...pedaco.map((a) => ({ song_id: a.song_id, song: null, error: ERRO_DO_PEDACO, aviso: null })),
+          );
+        }
+        set({ gravando: { feitas: results.length, total: aplicacoes.length } });
+      }
       const gravadas = results.filter((r) => r.song !== null);
       const falhas = results.filter((r) => r.song === null);
       // pós-save igual ao EditSongForm: library + playlists + player
@@ -449,6 +473,8 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
       // defensivo: invoke rejeitado (erro de infraestrutura, não por música)
       useToastStore.getState().push("Não foi possível aplicar as alterações.", "error");
       return { gravadas: 0, falhas: aplicacoes.length };
+    } finally {
+      set({ gravando: null });
     }
   },
 

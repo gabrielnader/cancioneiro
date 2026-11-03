@@ -409,7 +409,10 @@ function Conferir() {
 
   /** "Decidir depois", nesta visita. Ao reabrir, elas voltam para a fila. */
   const [adiadas, setAdiadas] = useState<Set<number>>(new Set());
-  const [confirmandoTodas, setConfirmandoTodas] = useState(false);
+  /** V15.5 — qual pergunta de lote está na tela, se alguma. */
+  const [confirmando, setConfirmando] = useState<null | "todas" | "instrumentais">(null);
+  const confirmandoTodas = confirmando !== null;
+  const gravando = useEnrichStore((s) => s.gravando);
   const [busy, setBusy] = useState(false);
   /** A letra que o arquivo tem hoje, para a comparação lado a lado. */
   const [letraDeHoje, setLetraDeHoje] = useState<string | null | undefined>(undefined);
@@ -464,6 +467,14 @@ function Conferir() {
     return !q.marcar_instrumental && !substituiriaLetra(q, a, applyErrors[q.song_id] ?? null);
   });
   const ficamFora = fila.length - emMassa.length;
+  /** V15.5 — quantas das que o lote alcança recebem LETRA (e não só nome). */
+  const emMassaComLetra = emMassa.filter((i) => proposals[i].lyrics !== null).length;
+  /**
+   * V15.5 — as marcas de instrumental, também de uma vez. Relato de campo:
+   * quase 500 para marcar uma por uma. Continuam FORA do "usar em todas" (#71)
+   * e ganham pergunta própria, que diz o que é e como se desfaz.
+   */
+  const instrumentais = fila.filter((i) => proposals[i].marcar_instrumental);
 
   function sair(paraOuvir: boolean) {
     // com decisões adiadas a revisão continua viva: elas esperam em Organizar
@@ -498,10 +509,10 @@ function Conferir() {
   async function usarEmTodas() {
     setBusy(true);
     try {
-      await aplicarLinhas(emMassa);
+      await aplicarLinhas(confirmando === "instrumentais" ? instrumentais : emMassa);
     } finally {
       setBusy(false);
-      setConfirmandoTodas(false);
+      setConfirmando(null);
     }
   }
 
@@ -678,28 +689,63 @@ function Conferir() {
             </>
           ) : confirmandoTodas ? (
             <section className="mx-auto mt-6 flex max-w-2xl flex-col gap-4 rounded-2xl border-2 border-warning bg-warning-soft p-6">
-              <h2 className="text-[22px] font-bold">
-                Usar o novo em {emMassa.length === 1 ? "1 sugestão" : `${emMassa.length} sugestões`}?
-              </h2>
-              <p className="text-[17px] leading-relaxed text-ink-secondary">
-                Isso troca o nome e quem canta nessas músicas pelo que o Cancioneiro
-                sugeriu, sem você ver uma por uma.
-              </p>
-              {ficamFora > 0 && (
-                <p className="text-[17px] leading-relaxed text-ink-secondary">
-                  {ficamFora === 1
-                    ? "1 sugestão que trocaria uma letra ou marcaria como instrumental continua esperando você."
-                    : `${ficamFora} sugestões que trocariam uma letra ou marcariam como instrumental continuam esperando você, uma por uma.`}
-                </p>
+              {confirmando === "instrumentais" ? (
+                <>
+                  <h2 className="text-[22px] font-bold">
+                    {instrumentais.length === 1
+                      ? "Marcar 1 música como instrumental?"
+                      : `Marcar ${instrumentais.length} músicas como instrumentais?`}
+                  </h2>
+                  <p className="text-[17px] leading-relaxed text-ink-secondary">
+                    O computador ouviu essas músicas inteiras e não achou voz. Marcadas, elas
+                    saem da lista de músicas sem letra.
+                  </p>
+                  <p className="text-[17px] leading-relaxed text-ink-secondary">
+                    Se alguma tiver voz, é só desmarcar na ficha dela. Nada é apagado.
+                  </p>
+                </>
+              ) : (
+                <>
+                  <h2 className="text-[22px] font-bold">
+                    Usar o novo em {emMassa.length === 1 ? "1 sugestão" : `${emMassa.length} sugestões`}?
+                  </h2>
+                  <p className="text-[17px] leading-relaxed text-ink-secondary">
+                    {textoDoUsarEmTodas(emMassaComLetra, emMassa.length - emMassaComLetra)}
+                  </p>
+                  {ficamFora > 0 && (
+                    <p className="text-[17px] leading-relaxed text-ink-secondary">
+                      {ficamFora === 1
+                        ? "1 sugestão que trocaria uma letra ou marcaria como instrumental continua esperando você."
+                        : `${ficamFora} sugestões que trocariam uma letra ou marcariam como instrumental continuam esperando você.`}
+                    </p>
+                  )}
+                </>
               )}
-              <div className="flex flex-wrap gap-3">
-                <button type="button" disabled={busy} onClick={() => void usarEmTodas()} className={PRINCIPAL}>
-                  Sim, usar em todas
-                </button>
-                <button type="button" disabled={busy} onClick={() => setConfirmandoTodas(false)} className={SECUNDARIO}>
-                  Não, quero ver uma por uma
-                </button>
-              </div>
+              {gravando ? (
+                // V15.5 — milhares de músicas levam minutos: a tela conta, para
+                // não parecer travada (relato de campo)
+                <div role="status" className="flex flex-col gap-2">
+                  <p className="text-[17px] font-semibold">
+                    Gravando… {gravando.feitas.toLocaleString("pt-BR")} de{" "}
+                    {gravando.total.toLocaleString("pt-BR")}
+                  </p>
+                  <div className="h-2 overflow-hidden rounded-full bg-border">
+                    <div
+                      className="h-full rounded-full bg-brand transition-[width]"
+                      style={{ width: `${Math.round((gravando.feitas / Math.max(gravando.total, 1)) * 100)}%` }}
+                    />
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-3">
+                  <button type="button" disabled={busy} onClick={() => void usarEmTodas()} className={PRINCIPAL}>
+                    {confirmando === "instrumentais" ? "Sim, marcar todas" : "Sim, usar em todas"}
+                  </button>
+                  <button type="button" disabled={busy} onClick={() => setConfirmando(null)} className={SECUNDARIO}>
+                    Não, quero ver uma por uma
+                  </button>
+                </div>
+              )}
             </section>
           ) : (
             <Fim
@@ -757,12 +803,22 @@ function Conferir() {
           >
             Decidir depois
           </button>
+          {instrumentais.length > 1 && (
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => setConfirmando("instrumentais")}
+              className="ml-auto min-h-12 rounded-xl px-3 text-[16px] font-semibold text-brand underline underline-offset-4 hover:bg-brand-soft max-lg:ml-0"
+            >
+              Marcar todas as {instrumentais.length} como instrumentais
+            </button>
+          )}
           {emMassa.length > 1 && (
             <button
               type="button"
               disabled={busy}
-              onClick={() => setConfirmandoTodas(true)}
-              className="ml-auto min-h-12 rounded-xl px-3 text-[16px] font-semibold text-brand underline underline-offset-4 hover:bg-brand-soft max-lg:ml-0"
+              onClick={() => setConfirmando("todas")}
+              className={`${instrumentais.length > 1 ? "" : "ml-auto "}min-h-12 rounded-xl px-3 text-[16px] font-semibold text-brand underline underline-offset-4 hover:bg-brand-soft max-lg:ml-0`}
             >
               Usar o novo em todas as {emMassa.length}
             </button>
@@ -771,6 +827,19 @@ function Conferir() {
       )}
     </div>
   );
+}
+
+/**
+ * V15.5 — o que o "usar em todas" grava, dito como é. Dizia sempre "troca o
+ * nome e quem canta", e o lote de campo era de 4.176 LETRAS escritas pelo
+ * computador: a pessoa aprovou sem ler o que estava aprovando.
+ */
+export function textoDoUsarEmTodas(comLetra: number, soNome: number): string {
+  const partes: string[] = [];
+  if (comLetra > 0) partes.push(comLetra === 1 ? "1 música recebe letra" : `${comLetra} músicas recebem letra`);
+  if (soNome > 0)
+    partes.push(soNome === 1 ? "1 recebe nome ou quem canta" : `${soNome} recebem nome ou quem canta`);
+  return `${partes.join(" e ")}, como o Cancioneiro sugeriu, sem você ver uma por uma.`;
 }
 
 /** O fim da conferência: o que aconteceu, e para onde ir. */

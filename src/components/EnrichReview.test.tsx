@@ -33,7 +33,7 @@ import {
   corDoFundo,
   corDoTexto,
 } from "../test/contrast";
-import { EnrichReview } from "./EnrichReview";
+import { EnrichReview, textoDoUsarEmTodas } from "./EnrichReview";
 
 function song(id: number, title: string): Song {
   return {
@@ -1125,6 +1125,44 @@ describe("Conferir (V15) — uma sugestão por vez", () => {
     await clicar("Não, quero ver uma por uma");
     expect(enrichApply).not.toHaveBeenCalled();
     expect(screen.getByRole("heading", { name: "Asa Branca — Quem Escreveu" })).toBeInTheDocument();
+  });
+
+  // V15.5 — relato de campo: quase 500 instrumentais para marcar uma por uma
+  it("as instrumentais vão de uma vez, com pergunta própria, e só elas", async () => {
+    const enrichApply = gravador();
+    renderReview([
+      proposal({ song_id: 1, lyrics: null, marcar_instrumental: true }),
+      proposal({ song_id: 2, lyrics: null, marcar_instrumental: true }),
+      proposal({ song_id: 3, has_lyrics: true, lyrics: "nova", confidence: "alta" }),
+    ]);
+    await clicar("Marcar todas as 2 como instrumentais");
+    expect(enrichApply).not.toHaveBeenCalled();
+    expect(screen.getByText(/é só desmarcar na ficha dela/)).toBeInTheDocument();
+    await clicar("Sim, marcar todas");
+    const enviadas = enrichApply.mock.calls[0][0];
+    expect(enviadas.map((a) => a.song_id)).toEqual([1, 2]);
+    expect(enviadas.every((a) => a.marcar_instrumental === true)).toBe(true);
+    // a troca de letra continua esperando, uma por uma
+    expect(decisoesPendentes(useEnrichStore.getState())).toEqual([2]);
+  });
+
+  it("o lote vai em pedaços, e a tela não fica parada (V15.5)", async () => {
+    const enrichApply = gravador();
+    renderReview(Array.from({ length: 120 }, (_, i) => nomeEscrito(i + 1, `Música ${i + 1}`)));
+    await clicar("Usar o novo em todas as 120");
+    await clicar("Sim, usar em todas");
+    expect(enrichApply.mock.calls.map((c) => c[0].length)).toEqual([50, 50, 20]);
+    expect(useEnrichStore.getState().gravando).toBeNull();
+    expect(useEnrichStore.getState().aplicadas).toHaveLength(120);
+  });
+
+  it("a pergunta do lote diz o que ele grava: letra, nome, ou os dois", () => {
+    expect(textoDoUsarEmTodas(4176, 0)).toBe(
+      "4176 músicas recebem letra, como o Cancioneiro sugeriu, sem você ver uma por uma.",
+    );
+    expect(textoDoUsarEmTodas(1, 2)).toBe(
+      "1 música recebe letra e 2 recebem nome ou quem canta, como o Cancioneiro sugeriu, sem você ver uma por uma.",
+    );
   });
 
   it("gravação que falha fica na tela com o motivo, e a sugestão continua na fila (A5)", async () => {
