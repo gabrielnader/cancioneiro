@@ -147,10 +147,29 @@ pub const CATALOGO: &[Acessorio] = &[
         // começar. Runner que não existe não é plataforma a mais, é impasse;
         // e um arquivo a menos é um hash a menos e uma plataforma a menos
         // para explicar na tela.
+        //
+        // V15.4 — trocado pelo `macos12`: o anterior exigia o macOS 26 (o
+        // mínimo herdado do runner, porque ninguém o fixava), e quem tem
+        // sistema mais antigo não conseguia transcrever. Quem já tinha baixado
+        // o anterior baixa este uma vez (3 MB); o modelo não muda.
         plataforma: "macos",
-        arquivo: "whisper-cli-macos-universal",
-        sha256: "6bc9670accbb2d5c9c1f8799c03bf65ab37d63f288c467f01da35f8bfbe1272c",
-        tamanho_bytes: 2_830_456,
+        arquivo: "whisper-cli-macos12-universal",
+        sha256: "91eca868a45b29cda5588f792e0802911c94cd5384d7c624d2d25d2fca3f87ab",
+        tamanho_bytes: 2_870_904,
+        executavel: true,
+    },
+    // V15.4 — o do Apple Silicon (M1 em diante), com Metal e Accelerate. O
+    // universal acima sai com os dois DESLIGADOS (não compilam para Intel no
+    // mesmo arquivo), e a fila de um M2 estimava 117 horas. `macos-arm64` vem
+    // antes de `macos` na ordem desta máquina, então é este que um Mac M
+    // baixa; o universal continua servindo aos Macs Intel. Publicado pelo
+    // `acessorio-transcritor-metal.yml`, que não toca em mais nada.
+    Acessorio {
+        nome: WHISPER_CLI,
+        plataforma: "macos-arm64",
+        arquivo: TRANSCRITOR_COM_METAL,
+        sha256: "96c61166621439106f5a8e91e9f4ee281c4ffb2a4e3edea38321da54a2cd073a",
+        tamanho_bytes: 1_868_696,
         executavel: true,
     },
     // ███ V10.5 — UM MODELO SÓ: O `ggml-medium.bin`. A MEDIÇÃO DECIDIU ███████
@@ -218,6 +237,9 @@ pub const FPCALC: &str = "fpcalc";
 
 /// Nome do PROGRAMA da etapa 5 (whisper.cpp).
 pub const WHISPER_CLI: &str = "whisper-cli";
+
+/// V15.4 — o `whisper-cli` do Apple Silicon com a placa de vídeo (Metal).
+pub const TRANSCRITOR_COM_METAL: &str = "whisper-cli-macos12-arm64-metal";
 
 /// Nome do MODELO da etapa 5 (`ggml-medium.bin`) — dado, não programa. É uma
 /// entrada separada do `whisper-cli` de propósito: 2 MB e 1,5 GB têm conversas
@@ -1073,12 +1095,16 @@ mod tests {
         // V10 — o whisper.cpp é construído por nós, e sai UNIVERSAL: o runner
         // Intel do CI é inatendível, então o binário cobre os dois
         // processadores num arquivo só
-        assert!(arquivos.contains(&"whisper-cli-macos-universal"));
+        assert!(arquivos.contains(&"whisper-cli-macos12-universal"));
+        // V15.4 — o anterior exigia o macOS 26: não é mais oferecido
+        assert!(!arquivos.contains(&"whisper-cli-macos-universal"));
         assert!(
             !arquivos.contains(&"whisper-cli-macos-x86_64"),
             "o arquivo por processador não existe mais — o app procuraria \
              um nome que o fluxo nunca publica"
         );
+        // V15.4 — e o do Apple Silicon, com a placa de vídeo
+        assert!(arquivos.contains(&"whisper-cli-macos12-arm64-metal"));
         assert!(arquivos.contains(&"whisper-cli-linux-x86_64"));
         assert!(arquivos.contains(&"whisper-cli-windows-x86_64.exe"));
         // V10.2 — o `medium` foi publicado no MESMO lançamento pelo fluxo
@@ -1210,6 +1236,27 @@ mod tests {
         assert_eq!(modo & 0o111, 0, "dado não recebe bit de execução");
         // e continua PRONTO: o que decide é a soma, não a permissão
         assert_eq!(estado(&a, dir.path()), Estado::Pronto);
+    }
+
+    /// V15.4 — Mac M ganha o transcritor com a placa de vídeo, e o Mac Intel
+    /// continua com o universal: os dois existem, cada um no seu degrau.
+    #[test]
+    fn o_mac_m_tem_transcritor_proprio_e_o_intel_continua_com_o_universal() {
+        let do_mac = |plataforma: &str| {
+            CATALOGO
+                .iter()
+                .find(|a| a.nome == WHISPER_CLI && a.plataforma == plataforma)
+                .map(|a| a.arquivo)
+        };
+        assert_eq!(do_mac("macos-arm64"), Some(TRANSCRITOR_COM_METAL));
+        assert_eq!(do_mac("macos"), Some("whisper-cli-macos12-universal"));
+        assert_eq!(do_mac("macos-x86_64"), None, "o Intel cai no universal");
+    }
+
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    #[test]
+    fn neste_mac_m_o_transcritor_e_o_com_metal() {
+        assert_eq!(desta_maquina(WHISPER_CLI).unwrap().arquivo, TRANSCRITOR_COM_METAL);
     }
 
     /// A máquina escolhe o arquivo mais específico que existir, e o genérico

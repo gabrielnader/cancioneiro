@@ -306,7 +306,14 @@ impl Modelo {
     /// escrita numa chave de banco — a prova não viaja junto quando o que a
     /// produziu muda.
     pub fn chave_de_medicao(&self) -> String {
-        format!("{}:{}", crate::db::MEDICAO_TRANSCRICAO, self.arquivo())
+        // V15.4 — o transcritor com a placa de vídeo do Mac é OUTRA máquina,
+        // para fins de medição: somar os dias medidos sem aceleração ao que
+        // ele mede faria a estimativa prometer horas que ele não leva
+        let motor = match crate::acessorios::desta_maquina(crate::acessorios::WHISPER_CLI) {
+            Some(a) if a.arquivo == crate::acessorios::TRANSCRITOR_COM_METAL => ":metal",
+            _ => "",
+        };
+        format!("{}:{}{motor}", crate::db::MEDICAO_TRANSCRICAO, self.arquivo())
     }
 }
 

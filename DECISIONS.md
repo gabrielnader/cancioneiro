@@ -2846,3 +2846,9 @@ gravação; o desfecho da gravação conta o que foi feito.
 - Cada letra (ou marca de instrumental) vai para `transcricoes_guardadas`, no banco do APP, no instante em que termina. O MP3 continua só recebendo depois de a pessoa conferir.
 - A fila seguinte devolve as guardadas sem ouvir de novo; o cartão "Escrever a letra" mostra "N letras já foram escritas" com "Conferir as letras".
 - Saem quando a música ganha letra ou a marca, ou com "Manter como está".
+
+## V15.4 — transcritor do Mac com placa de vídeo, e que roda no macOS 12
+- Mac M1+ ganha `whisper-cli-macos12-arm64-metal` (Metal + Accelerate) sob `macos-arm64`; o Intel fica com o universal. A fila de um M2 estimava 117 h no universal sem aceleração.
+- Os dois `whisper-cli` do Mac publicados até aqui exigiam o macOS 26 (mínimo herdado do runner). Os novos fixam o macOS 12, e o fluxo falha se pedirem mais. Nomes novos: nada publicado foi substituído.
+- A medição de tempo do Metal tem chave própria (`:metal`): somá-la aos dias medidos sem aceleração faria a estimativa prometer horas a mais.
+- O CI só prova que funciona (runner virtual, sem placa de vídeo); quanto acelera se mede no Mac de verdade.
