@@ -2866,3 +2866,7 @@ gravação; o desfecho da gravação conta o que foi feito.
 ## V15.6 — o ano antigo (TYER) e o botão "Verificar atualizações"
 - Varredura do acervo inteiro com o diagnóstico (`--so-problemas`): 105 de 7.893 acusaram algo. O maior grupo que de fato barra a gravação era o TYER fora do padrão ("1978/79", "c. 1978", "197") — o lofty o converte em data ao ler. Entrou no mesmo conserto (vira TXXX:TYER, mesmo texto).
 - "Verificar atualizações" em Configurações: ao contrário do startup, RESPONDE (procurando, baixando, pronta, em dia, sem conexão), vale com o "ao abrir" desligado (o clique é a autorização) e continua nunca reiniciando sozinho.
+
+## V15.7 — dia/mês (TDAT) e hora (TIME) impossíveis da v2.3
+- Medido no campo com `--bytes` ("Eu tomo Daime"): TDAT "1019". O padrão é DDMM; o Sound Forge gravou MMDD (mês 19). O lofty junta TYER+TDAT sem conferir limite e recusa a data só na GRAVAÇÃO — por isso a mensagem era "não conseguiu regravar".
+- Mesma regra do lofty (`construct_tdrc_from_v3`): só 4 caracteres que viram dois números são usados. Esses, com dia > 31, mês > 12, hora > 23 ou minuto > 59, viram TXXX com o mesmo texto. Fora dessa forma o lofty mantém o quadro, e nada é mexido.

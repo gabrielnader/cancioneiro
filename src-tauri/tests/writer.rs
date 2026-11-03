@@ -1926,3 +1926,34 @@ fn ano_antigo_fora_do_padrao_le_e_grava_e_o_texto_vira_anotacao() {
     assert_eq!(g.aviso, Some(writer::AVISO_CODIFICACAO_CONSERTADA));
     assert_eq!(texto_txxx(&path, "TYER").as_deref(), Some("1978/79"), "nada apagado");
 }
+
+/// "Eu tomo Daime": TDAT "1019" — o padrão é DDMM, então mês 19 (o Sound Forge
+/// gravou MMDD). O lofty junta TYER + TDAT numa data 2016-19-10 e recusa
+/// gravá-la. Bytes EXATOS do arquivo de campo, medidos com `--bytes`.
+#[test]
+fn dia_e_mes_impossiveis_do_formato_antigo_gravam_e_viram_anotacao() {
+    let base = tempfile::tempdir().unwrap();
+    let path = base.path().join("Eu tomo Daime.mp3");
+    mp3_com_quadros(
+        &path,
+        3,
+        &[
+            quadro_v23(b"TYER", b"\x002016\x00"),
+            quadro_v23(b"TDAT", b"\x001019\x00"),
+            quadro_v23(b"TXXX", b"\x00Engineer\x00Microsoft sasa\x00"),
+            quadro_v23(b"TCON", b"\x00Blues\x00"),
+            quadro_v23(b"GEOB", b"\x00\x00\x00SfMarkers\x00\x0c\x00\x00\x00d\x00\x00\x00\x00\x00\x00\x00"),
+        ],
+    );
+    let (_dir, conn, song) = indexar_so(&path);
+    let path = PathBuf::from(&song.file_path);
+    let audio_antes = audio_bytes(&path);
+    let g = writer::write_tags(&conn, song.id, "Eu tomo Daime", None, Some("letra"), None, None)
+        .expect("um dia/mês impossível não pode impedir a gravação");
+    assert_eq!(g.aviso, Some(writer::AVISO_CODIFICACAO_CONSERTADA));
+    assert_eq!(texto_txxx(&path, "TDAT").as_deref(), Some("1019"), "nada apagado");
+    use lofty::tag::Accessor;
+    assert_eq!(id3_tag(&path).year(), Some(2016), "o ano continua sendo o ano");
+    assert_eq!(texto_txxx(&path, "Engineer").as_deref(), Some("Microsoft sasa"));
+    assert_eq!(audio_bytes(&path), audio_antes, "o áudio não pode ser tocado");
+}

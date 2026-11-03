@@ -401,6 +401,12 @@ def estrutura_da_etiqueta(dados: bytes) -> list[str]:
             problema = data_que_o_programa_recusa(texto)
             if problema:
                 linhas.append(f">>> {nome}: data {texto!r} {problema}")
+        if versao == 3 and nome in ("TDAT", "TIME") and corpo:
+            t = _legivel(corpo[1:]).strip("\x00")
+            if len(t) == 4 and t.isdigit():
+                a, b = int(t[:2]), int(t[2:])
+                if (nome == "TDAT" and (a > 31 or b > 12)) or (nome == "TIME" and (a > 23 or b > 59)):
+                    linhas.append(f">>> {nome}: {t!r} é dia/mês ou hora impossível (o programa não grava)")
         quadros.append(rotulo)
         if MOSTRAR_BYTES and nome not in ("APIC", "PIC") and tam <= 512:
             linhas.append(f"  {nome} bytes: {corpo.hex(' ')}")

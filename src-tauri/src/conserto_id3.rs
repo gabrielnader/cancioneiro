@@ -114,6 +114,10 @@ pub fn consertar_codificacao_ausente(arquivo: &[u8]) -> Option<(Vec<u8>, Vec<Str
             let mut novo = dados.to_vec();
             novo[0] = 0;
             Some((id.try_into().ok()?, novo))
+        } else if versao == 3 && (id == b"TDAT" || id == b"TIME") && dia_ou_hora_impossivel(id, dados) {
+            // V15.7 — o dia/mês (ou hora) da v2.3 que o lofty junta ao ano
+            // numa data que ele mesmo recusa gravar: vira anotação, mesmo texto
+            Some((*b"TXXX", data_como_anotacao(id, dados)?))
         } else if QUADROS_DE_DATA.contains(&id) && data_que_o_lofty_recusa(dados) {
             // V15.5 — data que o lofty não lê (ou não grava): vira anotação
             // TXXX com o nome do quadro como descrição e o MESMO texto
@@ -226,6 +230,28 @@ fn data_que_o_lofty_recusa(dados: &[u8]) -> bool {
             let fora = |v: Option<u8>, limite: u8| v.is_some_and(|v| v > limite);
             fora(t.month, 12) || fora(t.day, 31) || fora(t.hour, 23) || fora(t.minute, 59) || fora(t.second, 59)
         }
+    }
+}
+
+/// V15.7 — TDAT (DDMM) e TIME (HHMM) da v2.3, com a regra do lofty
+/// (`construct_tdrc_from_v3`): exatamente 4 caracteres que viram dois números
+/// são USADOS, sem conferir limite — e a data montada com mês 19 é recusada só
+/// na gravação. Medido no campo: TDAT "1019", gravado como MMDD (Sound Forge).
+/// Fora dessa forma o lofty mantém o quadro como está, e não há o que consertar.
+fn dia_ou_hora_impossivel(id: &[u8], dados: &[u8]) -> bool {
+    let Some(texto) = texto_do_quadro(dados) else {
+        return false;
+    };
+    if texto.len() != 4 || !texto.is_ascii() {
+        return false;
+    }
+    let (Ok(a), Ok(b)) = (texto[..2].parse::<u8>(), texto[2..].parse::<u8>()) else {
+        return false;
+    };
+    if id == b"TDAT" {
+        a > 31 || b > 12 // dia, mês
+    } else {
+        a > 23 || b > 59 // hora, minuto
     }
 }
 
@@ -400,6 +426,18 @@ mod tests {
         // descrição "TDRL" em UTF-16 com BOM, terminador duplo, e o texto igual
         let esperado = b"\x01\xff\xfeT\x00D\x00R\x00L\x00\x00\x00\xff\xfeT\x00u\x00e\x00";
         assert!(novo.windows(esperado.len()).any(|j| j == esperado));
+    }
+
+    #[test]
+    fn dia_e_mes_do_formato_antigo_so_mudam_quando_impossiveis() {
+        let com = |tdat: &[u8]| {
+            etiqueta(3, &[quadro(b"TYER", b"\x002016", false), quadro(b"TDAT", tdat, false)], b"\xff\xfb")
+        };
+        // 1019 = mês 19: vira anotação; 1910 = 19 de outubro: fica
+        assert_eq!(consertar_codificacao_ausente(&com(b"\x001019\x00")).unwrap().1, vec!["TDAT"]);
+        assert_eq!(consertar_codificacao_ausente(&com(b"\x001910")), None);
+        // fora da forma de 4 números o lofty mantém o quadro: nada a consertar
+        assert_eq!(consertar_codificacao_ausente(&com(b"\x0010/19")), None);
     }
 
     #[test]

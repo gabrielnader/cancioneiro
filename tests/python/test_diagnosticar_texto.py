@@ -122,3 +122,10 @@ def test_so_problemas_mostra_so_quem_acusa(tmp_path, capsys):
     saida = capsys.readouterr().out
     assert "ruim.mp3" in saida and "bom.mp3" not in saida
     assert "1 de 2 arquivo(s)" in saida
+
+
+def test_tdat_com_mes_impossivel_aparece():
+    dados = _etiqueta([_quadro("TYER", b"\x002016", 3), _quadro("TDAT", b"\x001019\x00", 3)])
+    assert any(">>> TDAT" in l for l in diag.estrutura_da_etiqueta(dados))
+    dados = _etiqueta([_quadro("TDAT", b"\x001910", 3)])
+    assert not any(">>>" in l for l in diag.estrutura_da_etiqueta(dados))
