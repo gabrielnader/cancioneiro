@@ -118,7 +118,8 @@ jobs:
               echo "::error::$arq pede macOS $minimo, e não $MACOS_MINIMO"; exit 1; }
           done
           otool -L "$NOME"
-          if otool -L "$NOME" | tail -n +2 | grep -v -e '/System/' -e '/usr/lib/'; then
+          # só as linhas de dependência (com tab); as de cabeçalho dizem o arquivo
+          if otool -L "$NOME" | grep $'^\t' | grep -v -e '/System/' -e '/usr/lib/'; then
             echo "::error::o binário depende de biblioteca fora do sistema"; exit 1
           fi
 
