@@ -2065,17 +2065,142 @@ fn segunda_etiqueta_com_conteudo_sem_conflito_grava_e_o_titulo_fica() {
     assert_eq!(audio_bytes(&path), audio, "o áudio não pode ser tocado");
 }
 
-/// O mesmo quadro nas duas, com conteúdos diferentes: absorver gravaria só um.
+/// "Consagração do Aposento": quem canta é "Pedro Saint Germain" numa
+/// etiqueta e "Z Ricardo" na outra. O lofty mostra o da segunda; o da primeira
+/// não pode sumir — vai para uma anotação, com o texto inteiro.
 #[test]
-fn segunda_etiqueta_em_conflito_continua_recusada_sem_mexer_no_arquivo() {
+fn segunda_etiqueta_em_conflito_de_texto_grava_e_guarda_o_valor_escondido() {
+    let base = tempfile::tempdir().unwrap();
+    let path = base.path().join("Consagracao.mp3");
+    mp3_com_segunda_etiqueta(
+        &path,
+        [quadro_v23(b"TIT2", b"\x00Consagra\xe7\xe3o do Aposento"), quadro_v23(b"TPE1", b"\x00Pedro Saint Germain")].concat(),
+        [quadro_v24(b"TIT2", b"\x00Consagra\xe7\xe3o do Aposento"), quadro_v24(b"TPE1", b"\x00Z Ricardo")].concat(),
+    );
+    let (_dir, conn, song) = indexar_so(&path);
+    assert_eq!(song.artist.as_deref(), Some("Z Ricardo"), "o lofty mostra o da segunda");
+    let path = PathBuf::from(&song.file_path);
+    writer::write_tags(&conn, song.id, &song.title, song.artist.as_deref(), Some("letra"), None, None)
+        .expect("um conflito de texto não pode impedir a gravação");
+    assert_eq!(
+        texto_txxx(&path, "TPE1 (etiqueta antiga)").as_deref(),
+        Some("Pedro Saint Germain"),
+        "o valor escondido não pode ser apagado"
+    );
+    use lofty::tag::Accessor;
+    assert_eq!(id3_tag(&path).title().as_deref(), Some("Consagração do Aposento"));
+    assert!(texto_txxx(&path, "TIT2 (etiqueta antiga)").is_none(), "título igual não vira anotação");
+}
+
+/// "Santo Protetor": o MESMO título numa em Latin-1 e na outra em UTF-8 com
+/// terminador; e PRIVs de donos diferentes. Nada disso é conflito.
+#[test]
+fn mesmo_titulo_em_codificacoes_diferentes_nao_e_conflito() {
+    let base = tempfile::tempdir().unwrap();
+    let path = base.path().join("Santo Protetor.mp3");
+    mp3_com_segunda_etiqueta(
+        &path,
+        [quadro_v23(b"TIT2", b"\x00Santo Protetor"), quadro_v23(b"PRIV", b"PeakValue\x00\x01\x02")].concat(),
+        [quadro_v24(b"TIT2", b"\x03Santo Protetor\x00"), quadro_v24(b"PRIV", b"WM/MediaClassPrimaryID\x00\x09")].concat(),
+    );
+    let (_dir, conn, song) = indexar_so(&path);
+    let path = PathBuf::from(&song.file_path);
+    writer::write_tags(&conn, song.id, &song.title, None, Some("letra"), None, None)
+        .expect("o mesmo título não é conflito");
+    assert!(texto_txxx(&path, "TIT2 (etiqueta antiga)").is_none());
+    let bytes = fs::read(&path).unwrap();
+    for dono in [&b"PeakValue"[..], b"WM/MediaClassPrimaryID"] {
+        assert!(bytes.windows(dono.len()).any(|j| j == dono), "os dois PRIV ficam");
+    }
+}
+
+/// O mesmo PRIV (mesmo dono) com dados diferentes: o lofty guarda os DOIS na
+/// junção, então nada se perde — grava, e os dois continuam lá.
+#[test]
+fn priv_do_mesmo_dono_com_dados_diferentes_ficam_os_dois() {
+    let base = tempfile::tempdir().unwrap();
+    let path = base.path().join("priv.mp3");
+    mp3_com_segunda_etiqueta(
+        &path,
+        quadro_v23(b"PRIV", b"PeakValue\x00\x01\x02"),
+        quadro_v24(b"PRIV", b"PeakValue\x00\x07\x07"),
+    );
+    let (_dir, conn, song) = indexar_so(&path);
+    let path = PathBuf::from(&song.file_path);
+    writer::write_tags(&conn, song.id, &song.title, None, None, None, None).expect("nada se perde");
+    let bytes = fs::read(&path).unwrap();
+    assert!(bytes.windows(12).any(|j| j == b"PeakValue\x00\x01\x02"));
+    assert!(bytes.windows(12).any(|j| j == b"PeakValue\x00\x07\x07"));
+}
+
+/// Duas capas diferentes: a junção guarda as DUAS, então nada se perde.
+#[test]
+fn duas_capas_diferentes_ficam_as_duas() {
+    let base = tempfile::tempdir().unwrap();
+    let path = base.path().join("capas.mp3");
+    mp3_com_segunda_etiqueta(
+        &path,
+        quadro_v23(b"APIC", b"\x00image/jpeg\x00\x03\x00\xff\xd8\x01"),
+        quadro_v24(b"APIC", b"\x00image/jpeg\x00\x03\x00\xff\xd8\x02"),
+    );
+    let (_dir, conn, song) = indexar_so(&path);
+    let path = PathBuf::from(&song.file_path);
+    writer::write_tags(&conn, song.id, &song.title, None, None, None, None).expect("nada se perde");
+    let bytes = fs::read(&path).unwrap();
+    assert!(bytes.windows(3).any(|j| j == b"\xff\xd8\x01") && bytes.windows(3).any(|j| j == b"\xff\xd8\x02"));
+}
+
+/// A letra escondida também vira anotação, inteira.
+#[test]
+fn letra_escondida_pela_outra_etiqueta_vira_anotacao() {
+    let base = tempfile::tempdir().unwrap();
+    let path = base.path().join("letras.mp3");
+    mp3_com_segunda_etiqueta(
+        &path,
+        quadro_v23(b"USLT", b"\x00por\x00a letra antiga"),
+        quadro_v24(b"USLT", b"\x00por\x00a letra nova"),
+    );
+    let (_dir, conn, song) = indexar_so(&path);
+    let path = PathBuf::from(&song.file_path);
+    writer::write_tags(&conn, song.id, &song.title, None, None, None, None).expect("grava");
+    assert_eq!(texto_txxx(&path, "USLT (etiqueta antiga)").as_deref(), Some("a letra antiga"));
+}
+
+/// A avaliação (POPM) do mesmo e-mail com notas diferentes: não é texto e a
+/// junção guarda só uma. Recusado, sem tocar no arquivo.
+#[test]
+fn conflito_que_nao_e_texto_continua_recusado_sem_mexer_no_arquivo() {
     let base = tempfile::tempdir().unwrap();
     let path = base.path().join("conflito.mp3");
-    mp3_com_segunda_etiqueta(&path, quadro_v23(b"TIT2", b"\x00Um Nome"), quadro_v24(b"TIT2", b"\x03Outro Nome"));
+    mp3_com_segunda_etiqueta(
+        &path,
+        quadro_v23(b"POPM", b"Windows Media Player 9 Series\x00\x01"),
+        quadro_v24(b"POPM", b"Windows Media Player 9 Series\x00\xff"),
+    );
     let (_dir, conn, song) = indexar_so(&path);
     let path = PathBuf::from(&song.file_path);
     let antes = fs::read(&path).unwrap();
     assert!(writer::write_tags(&conn, song.id, &song.title, None, None, None, None).is_err());
     assert_eq!(fs::read(&path).unwrap(), antes, "nada foi alterado");
+}
+
+/// "Um Só Amor": nenhuma etiqueta, e 1.044 bytes de zeros antes do áudio. Os
+/// zeros viram uma etiqueta vazia do mesmo tamanho; o áudio fica igual.
+#[test]
+fn zeros_antes_do_audio_sem_etiqueta_viram_etiqueta_e_grava() {
+    let base = tempfile::tempdir().unwrap();
+    let path = base.path().join("religiao - Um So Amor.mp3");
+    let tmp = path.with_extension("fonte");
+    copy_fixture("com_letra.mp3", &tmp);
+    let audio = audio_bytes(&tmp);
+    fs::remove_file(&tmp).unwrap();
+    fs::write(&path, [vec![0u8; 1044], audio.clone()].concat()).unwrap();
+    let (_dir, conn, song) = indexar_so(&path);
+    let path = PathBuf::from(&song.file_path);
+    let g = writer::write_tags(&conn, song.id, "Um Só Amor", None, Some("letra"), None, None)
+        .expect("zeros antes do áudio não podem impedir a gravação");
+    assert_eq!(g.aviso, Some(writer::AVISO_ETIQUETA_NORMALIZADA));
+    assert_eq!(audio_bytes(&path), audio, "o áudio não pode ser tocado");
 }
 
 /// Primeira etiqueta v2.3 com `primeiro`, segunda v2.4 grudada com `segundo`, e

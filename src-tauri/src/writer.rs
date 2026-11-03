@@ -742,24 +742,33 @@ fn gravar_normalizando_a_etiqueta(
     // O arquivo é a anomalia da sobra? A recusa original é o desfecho de tudo
     // que não for exatamente ela — inclusive do `.mp3` que nunca foi MPEG, que
     // é a outra causa conhecida de `UnknownFormat` e não tem conserto nenhum.
-    let Some(fim) = fim_declarado_do_id3v2(&original) else {
-        return Err(erro_de_gravacao(caminho, ERRO_ESTRUTURA_DO_MP3));
-    };
+    // V15.9 — SEM etiqueta nenhuma e só zeros antes do áudio (medido: 1.044
+    // bytes em "Um Só Amor"): os zeros viram uma etiqueta vazia do mesmo
+    // tamanho. Mudam 10 bytes de zero; o áudio é conferido como sempre.
+    let sem_etiqueta = fim_declarado_do_id3v2(&original).is_none();
+    let fim = if sem_etiqueta { 0 } else { fim_declarado_do_id3v2(&original).unwrap() };
     let Some(primeiro_quadro) = primeiro_quadro_mpeg(&original, fim) else {
         return Err(erro_de_gravacao(caminho, ERRO_ESTRUTURA_DO_MP3));
     };
+    if sem_etiqueta && (primeiro_quadro < 10 || !original[..primeiro_quadro].iter().all(|&b| b == 0)) {
+        return Err(erro_de_gravacao(caminho, ERRO_ESTRUTURA_DO_MP3));
+    }
     if primeiro_quadro <= fim {
         // não há sobra: a recusa vem de outra coisa, e mexer no tamanho
         // declarado só encolheria a etiqueta por cima do áudio
         return Err(erro_de_gravacao(caminho, ERRO_ESTRUTURA_DO_MP3));
     }
     let sobra = &original[fim..primeiro_quadro];
-    if MARCAS_DE_OUTRA_ETIQUETA.iter().any(|m| contem(sobra, m))
-        && !e_etiqueta_grudada_sem_conflito(&original[..fim], sobra)
-    {
-        // a sobra é (ou carrega) outra etiqueta: absorvê-la apagaria dado de
-        // alguém na regravação. Recusar é ruim; apagar é inviolável.
-        return Err(erro_de_gravacao(caminho, ERRO_ESTRUTURA_DO_MP3));
+    let mut tag = tag.clone();
+    if MARCAS_DE_OUTRA_ETIQUETA.iter().any(|m| contem(sobra, m)) {
+        // a sobra é (ou carrega) outra etiqueta: absorvê-la só pode acontecer
+        // se nada dela se perder. Recusar é ruim; apagar é inviolável.
+        let Some(guardar) = o_que_a_etiqueta_grudada_perderia(&original, fim, primeiro_quadro) else {
+            return Err(erro_de_gravacao(caminho, ERRO_ESTRUTURA_DO_MP3));
+        };
+        for (descricao, texto) in guardar {
+            tag.insert_user_text(descricao, texto);
+        }
     }
     let Some(novo_tamanho) = tamanho_synchsafe(primeiro_quadro) else {
         return Err(erro_de_gravacao(caminho, ERRO_ESTRUTURA_DO_MP3));
@@ -768,6 +777,9 @@ fn gravar_normalizando_a_etiqueta(
     let resumo_do_audio = resumo(&original[primeiro_quadro..]);
 
     let mut normalizado = original.clone();
+    if sem_etiqueta {
+        normalizado[..6].copy_from_slice(b"ID3\x04\x00\x00");
+    }
     normalizado[6..10].copy_from_slice(&novo_tamanho);
     std::fs::write(path, &normalizado)
         .map_err(|e| erro_de_gravacao(caminho, frase_de_io(&e)))?;
@@ -784,45 +796,97 @@ fn gravar_normalizando_a_etiqueta(
     Ok(Some(AVISO_ETIQUETA_NORMALIZADA))
 }
 
-/// V15.7/V15.8 — a sobra é uma SEGUNDA etiqueta ID3v2 grudada na primeira, e
-/// absorvê-la não apaga nada.
+/// V15.7–V15.9 — a sobra é uma SEGUNDA etiqueta ID3v2 grudada na primeira.
+/// Devolve o que guardar como anotação para que absorvê-la não apague nada,
+/// ou `None` quando não há como garantir isso (e a recusa vale).
 ///
-/// Medido no campo: "Jesus foi ao céu preparar" (a segunda vazia, só zeros) e
-/// "Ilha de Amor" (o título SÓ na segunda). Algum programa escreveu uma
-/// etiqueta nova na frente sem apagar a antiga.
+/// Medido no campo, em 13 arquivos: algum programa escreveu uma etiqueta nova
+/// na frente sem apagar a antiga. O lofty LÊ as duas juntas — os quadros da
+/// segunda entram na mesma etiqueta, e um quadro repetido fica com o valor da
+/// SEGUNDA (é o que o app mostra). Gravar, então, escreveria a junção; o que
+/// se perderia é só o que a junção já esconde.
 ///
-/// **Por que absorver a segunda com conteúdo não apaga nada:** o lofty já a
-/// LÊ junto com a primeira — quando uma etiqueta vem colada na outra, os
-/// quadros dela entram na mesma etiqueta (o "Ilha de Amor" aparece no app com
-/// o título certo). A etiqueta que o app grava, então, já contém tudo.
+/// A conta é feita com o PRÓPRIO lofty: cada etiqueta é lida sozinha, e cada
+/// quadro dela precisa estar na junção — "o mesmo quadro" pela regra dele
+/// (TXXX pela descrição, PRIV pelo dono…) e com o mesmo conteúdo. O título
+/// igual gravado em Latin-1 numa e UTF-8 na outra é o mesmo ("Santo Protetor").
 ///
-/// **Quando não é seguro, e continua recusado:** um mesmo quadro nas duas, com
-/// conteúdos diferentes. Na leitura o da segunda substitui o da primeira, e
-/// absorver gravaria só um deles — escolher às cegas é apagar. E nada depois
-/// da segunda etiqueta pode ser outra coisa que zeros.
-fn e_etiqueta_grudada_sem_conflito(primeira: &[u8], sobra: &[u8]) -> bool {
-    if sobra.len() < 10 || &sobra[..3] != b"ID3" || !(2..=4).contains(&sobra[3]) {
-        return false;
+/// O que a junção esconde e é TEXTO ("Pedro Saint Germain" contra "Z Ricardo",
+/// em "Consagração do Aposento"; e também comentário, letra e data) vai para
+/// uma anotação TXXX "TPE1 (etiqueta antiga)", com o texto inteiro. Medido: a
+/// junção guarda os DOIS quando não são "o mesmo quadro" (duas capas, dois PRIV
+/// do mesmo dono com dados diferentes) — aí não há o que guardar. Qualquer outra
+/// coisa escondida (uma avaliação POPM do mesmo e-mail) faz recusar.
+fn o_que_a_etiqueta_grudada_perderia(
+    original: &[u8],
+    fim: usize,
+    primeiro_quadro: usize,
+) -> Option<Vec<(String, String)>> {
+    let sobra = &original[fim..primeiro_quadro];
+    if fim == 0 || sobra.len() < 10 || &sobra[..3] != b"ID3" || !(3..=4).contains(&sobra[3]) {
+        return None;
     }
     let b = &sobra[6..10];
     if b.iter().any(|x| x & 0x80 != 0) {
-        return false;
+        return None;
     }
     let fim_da_segunda =
         10 + (((b[0] as usize) << 21) | ((b[1] as usize) << 14) | ((b[2] as usize) << 7) | b[3] as usize);
+    // depois da segunda etiqueta, só zeros até o áudio
     if fim_da_segunda > sobra.len() || !sobra[fim_da_segunda..].iter().all(|&x| x == 0) {
-        return false;
+        return None;
     }
-    let (Some(da_primeira), Some(da_segunda)) = (
-        crate::conserto_id3::quadros_da_etiqueta(primeira),
-        crate::conserto_id3::quadros_da_etiqueta(&sobra[..fim_da_segunda]),
-    ) else {
-        return false;
+    let audio = &original[primeiro_quadro..];
+    let juncao = etiqueta_lida(original)?;
+    let primeira = etiqueta_lida(&[&original[..fim], audio].concat())?;
+    let segunda = etiqueta_lida(&[&sobra[..fim_da_segunda], audio].concat())?;
+
+    let mut guardar = Vec::new();
+    for quadro in primeira.into_iter().chain(segunda.into_iter()) {
+        let presente = (&juncao).into_iter().any(|j| j == &quadro && mesmo_conteudo(j, &quadro));
+        if presente {
+            continue;
+        }
+        match &quadro {
+            Frame::Text(t) => guardar.push((format!("{} (etiqueta antiga)", quadro.id_str()), t.value.clone())),
+            Frame::UserText(t) => guardar.push((format!("{} (etiqueta antiga)", t.description), t.content.clone())),
+            // comentário, letra e data também são texto: guardados inteiros
+            Frame::Comment(t) => guardar.push(("COMM (etiqueta antiga)".into(), t.content.clone())),
+            Frame::UnsynchronizedText(t) => guardar.push(("USLT (etiqueta antiga)".into(), t.content.clone())),
+            Frame::Timestamp(t) => {
+                guardar.push((format!("{} (etiqueta antiga)", quadro.id_str()), t.timestamp.to_string()))
+            }
+            _ => return None, // escondido e não é texto: não há onde guardar sem perder
+        }
+    }
+    Some(guardar)
+}
+
+/// A etiqueta ID3v2 que o lofty lê destes bytes (com os consertos de leitura
+/// do app, se precisar). `None` quando nem assim.
+fn etiqueta_lida(bytes: &[u8]) -> Option<Id3v2Tag> {
+    let ler = |b: &[u8]| MpegFile::read_from(&mut std::io::Cursor::new(b.to_vec()), ParseOptions::new());
+    let m = match ler(bytes) {
+        Ok(m) => m,
+        Err(_) => ler(&crate::conserto_id3::copia_legivel(bytes)?.0).ok()?,
     };
-    // cada quadro da segunda ou é novo, ou é idêntico a um da primeira
-    da_segunda.iter().all(|(id, corpo)| {
-        !da_primeira.iter().any(|(id1, _)| id1 == id) || da_primeira.iter().any(|q| q.0 == *id && q.1 == *corpo)
-    })
+    Some(m.id3v2().cloned().unwrap_or_default())
+}
+
+/// O CONTEÚDO de dois quadros que o lofty considera "o mesmo quadro" é igual?
+/// Texto compara o texto (não a codificação nem o terminador nulo); o resto
+/// compara tudo, e qualquer diferença conta.
+fn mesmo_conteudo(a: &Frame, b: &Frame) -> bool {
+    let limpo = |s: &str| s.trim_end_matches('\0').to_string();
+    match (a, b) {
+        (Frame::Text(x), Frame::Text(y)) => limpo(&x.value) == limpo(&y.value),
+        (Frame::UserText(x), Frame::UserText(y)) => limpo(&x.content) == limpo(&y.content),
+        (Frame::Comment(x), Frame::Comment(y)) => limpo(&x.content) == limpo(&y.content),
+        (Frame::UnsynchronizedText(x), Frame::UnsynchronizedText(y)) => limpo(&x.content) == limpo(&y.content),
+        (Frame::Timestamp(x), Frame::Timestamp(y)) => x.timestamp == y.timestamp,
+        (Frame::Private(x), Frame::Private(y)) => x.private_data == y.private_data,
+        _ => format!("{a:?}") == format!("{b:?}"),
+    }
 }
 
 /// `bytes` contém a sequência `marca`?
