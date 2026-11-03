@@ -101,17 +101,35 @@ pub fn consertar_codificacao_ausente(arquivo: &[u8]) -> Option<(Vec<u8>, Vec<Str
         // quadro: o primeiro byte não é o da codificação, e não se adivinha
         let especial = if versao == 4 { flags_do_quadro[1] & 0x0F != 0 } else { flags_do_quadro[1] & 0xC0 != 0 };
         let de_texto = id[0] == b'T';
-        if de_texto && !especial && !dados.is_empty() && dados[0] > 3 {
-            let novo_tam = tam + 1;
-            corpo.extend_from_slice(id);
+        // o quadro consertado: (identificador, conteúdo novo)
+        let conserto: Option<([u8; 4], Vec<u8>)> = if !de_texto || especial || dados.is_empty() {
+            None
+        } else if dados[0] > 3 {
+            // Latin-1: todo byte é um caractere, nada se perde
+            let mut novo = vec![0];
+            novo.extend_from_slice(dados);
+            Some((id.try_into().ok()?, novo))
+        } else if dados[0] == 3 && e_latin1_rotulado_como_utf8(&dados[1..]) {
+            // V15.5 — declara UTF-8 e é Latin-1: só o rótulo troca
+            let mut novo = dados.to_vec();
+            novo[0] = 0;
+            Some((id.try_into().ok()?, novo))
+        } else if QUADROS_DE_DATA.contains(&id) && data_que_o_lofty_recusa(dados) {
+            // V15.5 — data que o lofty não lê (ou não grava): vira anotação
+            // TXXX com o nome do quadro como descrição e o MESMO texto
+            Some((*b"TXXX", data_como_anotacao(id, dados)?))
+        } else {
+            None
+        };
+        if let Some((novo_id, novo)) = conserto {
+            corpo.extend_from_slice(&novo_id);
             if versao == 4 {
-                corpo.extend_from_slice(&escrever_syncsafe(novo_tam)?);
+                corpo.extend_from_slice(&escrever_syncsafe(novo.len())?);
             } else {
-                corpo.extend_from_slice(&(u32::try_from(novo_tam).ok()?).to_be_bytes());
+                corpo.extend_from_slice(&(u32::try_from(novo.len()).ok()?).to_be_bytes());
             }
             corpo.extend_from_slice(&flags_do_quadro);
-            corpo.push(0); // Latin-1: todo byte é um caractere, nada se perde
-            corpo.extend_from_slice(dados);
+            corpo.extend_from_slice(&novo);
             consertados.push(String::from_utf8_lossy(id).into_owned());
         } else {
             corpo.extend_from_slice(&arquivo[pos..fim_do_quadro]);
@@ -132,12 +150,132 @@ pub fn consertar_codificacao_ausente(arquivo: &[u8]) -> Option<(Vec<u8>, Vec<Str
     Some((novo, consertados))
 }
 
-/// O erro do lofty é do TEXTO de um quadro — a família que este conserto cobre?
+/// Os quadros que o lofty lê como DATA (e recusa quando a data não é dele).
+const QUADROS_DE_DATA: [&[u8]; 5] = [b"TDEN", b"TDOR", b"TDRC", b"TDRL", b"TDTG"];
+
+/// V15.5 — declara UTF-8, não é UTF-8, e não tem NENHUM caractere UTF-8 de
+/// vários bytes: é Latin-1 com o rótulo errado (medido: "Lavf54.20.4" seguido
+/// de um byte solto, gravado pelo ffmpeg). Trocar só o rótulo devolve o texto
+/// que o programa escreveu.
+///
+/// Se houver um "ç" em UTF-8 válido junto do byte estragado, o texto É UTF-8
+/// com defeito, e trocar o rótulo transformaria o "ç" em lixo: não se adivinha.
+fn e_latin1_rotulado_como_utf8(texto: &[u8]) -> bool {
+    if std::str::from_utf8(texto).is_ok() {
+        return false;
+    }
+    let mut i = 0;
+    while i < texto.len() {
+        if texto[i] >= 0x80 {
+            for largura in 2..=4 {
+                if let Some(pedaco) = texto.get(i..i + largura) {
+                    if std::str::from_utf8(pedaco).is_ok() {
+                        return false; // há UTF-8 de verdade aqui
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    true
+}
+
+/// O texto de um quadro, decodificado pela codificação que ele declara.
+fn texto_do_quadro(dados: &[u8]) -> Option<String> {
+    let (cod, bruto) = dados.split_first()?;
+    let texto = match cod {
+        0 => bruto.iter().map(|&b| b as char).collect(),
+        3 => String::from_utf8(bruto.to_vec()).ok()?,
+        1 | 2 => {
+            let mut unidades: Vec<u16> = bruto
+                .chunks_exact(2)
+                .map(|p| if *cod == 2 { u16::from_be_bytes([p[0], p[1]]) } else { u16::from_le_bytes([p[0], p[1]]) })
+                .collect();
+            if *cod == 1 {
+                match unidades.first() {
+                    Some(0xFEFF) => drop(unidades.remove(0)),
+                    Some(0xFFFE) => {
+                        unidades = unidades.iter().map(|u| u.swap_bytes()).skip(1).collect();
+                    }
+                    _ => return None,
+                }
+            }
+            String::from_utf16(&unidades).ok()?
+        }
+        _ => return None,
+    };
+    Some(texto.trim_end_matches('\0').to_string())
+}
+
+/// V15.5 — a data que o lofty 0.22 recusa: a que ele não consegue ler
+/// ("Tue, 01 Jan 2008", "2008/01/01" — derruba a LEITURA do arquivo inteiro) e
+/// a que ele lê mas não grava (mês 13, dia 32 — derruba a GRAVAÇÃO). Medido no
+/// próprio lofty, e não suposto: ver os testes.
+fn data_que_o_lofty_recusa(dados: &[u8]) -> bool {
+    let Some(texto) = texto_do_quadro(dados) else {
+        return false; // o texto em si é o problema; não é caso de data
+    };
+    if texto.trim().is_empty() {
+        return false;
+    }
+    match texto.trim().parse::<lofty::tag::items::Timestamp>() {
+        Err(_) => true,
+        Ok(t) => {
+            let fora = |v: Option<u8>, limite: u8| v.is_some_and(|v| v > limite);
+            fora(t.month, 12) || fora(t.day, 31) || fora(t.hour, 23) || fora(t.minute, 59) || fora(t.second, 59)
+        }
+    }
+}
+
+/// O conteúdo de um TXXX com o identificador do quadro de data como descrição,
+/// na MESMA codificação do quadro original, e o texto byte a byte igual.
+fn data_como_anotacao(id: &[u8], dados: &[u8]) -> Option<Vec<u8>> {
+    let (cod, texto) = dados.split_first()?;
+    let mut novo = vec![*cod];
+    match cod {
+        0 | 3 => {
+            novo.extend_from_slice(id);
+            novo.push(0);
+        }
+        1 => {
+            novo.extend_from_slice(&[0xFF, 0xFE]);
+            id.iter().for_each(|&b| novo.extend_from_slice(&[b, 0]));
+            novo.extend_from_slice(&[0, 0]);
+        }
+        2 => {
+            id.iter().for_each(|&b| novo.extend_from_slice(&[0, b]));
+            novo.extend_from_slice(&[0, 0]);
+        }
+        _ => return None,
+    }
+    novo.extend_from_slice(texto);
+    Some(novo)
+}
+
+/// V15.5 — a etiqueta JÁ LIDA tem uma data que o lofty leu mas vai recusar
+/// ao gravar (mês 13, dia 32)? A leitura passa, e a falha só viria no fim da
+/// gravação: é o mesmo defeito medido, por isso aciona o mesmo conserto.
+pub fn tem_data_que_nao_grava(tag: &lofty::id3::v2::Id3v2Tag) -> bool {
+    let fora = |v: Option<u8>, limite: u8| v.is_some_and(|v| v > limite);
+    tag.into_iter().any(|quadro| match quadro {
+        lofty::id3::v2::Frame::Timestamp(f) => {
+            let t = &f.timestamp;
+            fora(t.month, 12) || fora(t.day, 31) || fora(t.hour, 23) || fora(t.minute, 59) || fora(t.second, 59)
+        }
+        _ => false,
+    })
+}
+
+/// O erro do lofty é de uma família que este conserto cobre? O TEXTO de um
+/// quadro (V15.1) ou uma DATA que ele não aceita (V15.5).
 pub fn e_erro_de_texto(e: &lofty::error::LoftyError) -> bool {
     use lofty::error::ErrorKind;
     matches!(
         e.kind(),
-        ErrorKind::TextDecode(_) | ErrorKind::StringFromUtf8(_) | ErrorKind::StrFromUtf8(_)
+        ErrorKind::TextDecode(_)
+            | ErrorKind::StringFromUtf8(_)
+            | ErrorKind::StrFromUtf8(_)
+            | ErrorKind::BadTimestamp(_)
     )
 }
 
@@ -205,6 +343,61 @@ mod tests {
         q[9] = 0x80; // v2.3: comprimido
         let a = etiqueta(3, &[q], b"\xff\xfb");
         assert_eq!(consertar_codificacao_ausente(&a), None);
+    }
+
+    // --- V15.5 — os dois casos novos do campo --------------------------------
+
+    #[test]
+    fn utf8_que_e_latin1_ganha_o_rotulo_certo_e_os_bytes_ficam() {
+        // "Lavf54.20.4" + um byte solto (0xF9): declara UTF-8 e não é
+        let a = etiqueta(4, &[quadro(b"TSSE", b"\x03Lavf54.20.4\xf9", true)], b"\xff\xfb");
+        let (novo, ids) = consertar_codificacao_ausente(&a).unwrap();
+        assert_eq!(ids, vec!["TSSE"]);
+        assert!(novo.windows(13).any(|j| j == b"\x00Lavf54.20.4\xf9"), "Latin-1, bytes iguais");
+        assert_eq!(novo.len(), a.len(), "só o byte do rótulo trocou");
+    }
+
+    #[test]
+    fn utf8_de_verdade_com_um_byte_estragado_nao_e_adivinhado() {
+        // tem "ç" em UTF-8 válido: trocar o rótulo transformaria o "ç" em lixo
+        let a = etiqueta(4, &[quadro(b"TIT2", b"\x03Can\xc3\xa7\xe3o\xff", true)], b"\xff\xfb");
+        assert_eq!(consertar_codificacao_ausente(&a), None);
+    }
+
+    #[test]
+    fn data_fora_do_padrao_vira_anotacao_com_o_mesmo_texto() {
+        let a = etiqueta(
+            3,
+            &[quadro(b"TIT2", b"\x00O Peregrino", false), quadro(b"TDRL", b"\x00Tue, 01 Jan 2008", false)],
+            b"\xff\xfb",
+        );
+        let (novo, ids) = consertar_codificacao_ausente(&a).unwrap();
+        assert_eq!(ids, vec!["TDRL"]);
+        assert!(!novo.windows(4).any(|j| j == b"TDRL\x00\x00"), "o quadro de data saiu");
+        // virou TXXX, com o nome do quadro antigo como descrição e o texto igual
+        assert!(novo.windows(22).any(|j| j == b"\x00TDRL\x00Tue, 01 Jan 2008"));
+    }
+
+    #[test]
+    fn data_impossivel_tambem_vira_anotacao_e_data_boa_fica() {
+        let a = etiqueta(
+            3,
+            &[quadro(b"TDRL", b"\x002008-13-01", false), quadro(b"TDRC", b"\x002008-01-01T10:00", false)],
+            b"\xff\xfb",
+        );
+        let (novo, ids) = consertar_codificacao_ausente(&a).unwrap();
+        assert_eq!(ids, vec!["TDRL"]);
+        assert!(novo.windows(4).any(|j| j == b"TDRC"), "a data boa continua no lugar");
+    }
+
+    #[test]
+    fn data_em_utf16_vira_anotacao_em_utf16() {
+        let texto: Vec<u8> = b"\x01\xff\xfeT\x00u\x00e\x00".to_vec(); // "Tue"
+        let a = etiqueta(3, &[quadro(b"TDRL", &texto, false)], b"\xff\xfb");
+        let (novo, _) = consertar_codificacao_ausente(&a).unwrap();
+        // descrição "TDRL" em UTF-16 com BOM, terminador duplo, e o texto igual
+        let esperado = b"\x01\xff\xfeT\x00D\x00R\x00L\x00\x00\x00\xff\xfeT\x00u\x00e\x00";
+        assert!(novo.windows(esperado.len()).any(|j| j == esperado));
     }
 
     #[test]

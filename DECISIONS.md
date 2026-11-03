@@ -2857,3 +2857,8 @@ gravação; o desfecho da gravação conta o que foi feito.
 - Relato: "Usar o novo em 4.176" deixou a tela parada por minutos, parecendo travada. O lote vai em pedaços de 50 e a pergunta mostra "Gravando… N de M"; um pedaço que falha vira falha por música, sem levar os que gravaram.
 - A pergunta dizia sempre "troca o nome e quem canta" — e o lote era de letras. Agora conta letra e nome separadamente.
 - "Marcar todas as N como instrumentais": pergunta própria, que diz que se desfaz na ficha. Continua fora do "usar em todas" (#71).
+
+## V15.5b — mais dois defeitos de etiqueta medidos no acervo
+- "UTF-8" que é Latin-1 (o TSSE do ffmpeg em "Flor de Ogum"): só o rótulo troca, os bytes ficam. Se houver UTF-8 de verdade junto do byte estragado, não se adivinha — trocar o rótulo estragaria o "ç".
+- Data fora do padrão do lofty ("Tue, 01 Jan 2008", "2008/01/01" derrubam a LEITURA; mês 13 derruba a GRAVAÇÃO): o quadro vira TXXX com o nome dele como descrição e o mesmo texto. O modo tolerante do lofty descartaria o quadro, e descartar é apagar.
+- Mesmo gatilho de sempre: só quando a leitura (ou a gravação certa de falhar) já recusou o arquivo.

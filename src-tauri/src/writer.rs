@@ -912,6 +912,18 @@ pub fn write_tags_com_origem(
     // `consertar_idiomas_invalidos`. Modo mais tolerante não conserta nada
     // aqui e DESCARTA quadros, que é o que não podemos fazer.
     let (mpeg, codificacao_consertada) = match MpegFile::read_from(&mut file, ParseOptions::new()) {
+        // V15.5 — leu, mas tem data que o lofty vai recusar ao GRAVAR (mês
+        // 13): o mesmo conserto da leitura, antes de mexer em qualquer coisa
+        Ok(m) if m.id3v2().is_some_and(crate::conserto_id3::tem_data_que_nao_grava) => {
+            let bytes = std::fs::read(path)
+                .map_err(|io| erro_de_gravacao(&song.file_path, frase_de_io(&io)))?;
+            let consertado = crate::conserto_id3::consertar_codificacao_ausente(&bytes)
+                .ok_or_else(|| erro_de_gravacao(&song.file_path, ERRO_ETIQUETAS_FORA_DO_PADRAO))?
+                .0;
+            let m = MpegFile::read_from(&mut std::io::Cursor::new(consertado), ParseOptions::new())
+                .map_err(|e| erro_de_gravacao(&song.file_path, frase_de_lofty(&e)))?;
+            (m, true)
+        }
         Ok(m) => (m, false),
         // V15.1 — quadro de texto sem o byte de codificação: a etiqueta é lida
         // de uma cópia consertada na MEMÓRIA (ver `conserto_id3`). O conserto

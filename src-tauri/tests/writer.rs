@@ -1787,11 +1787,14 @@ fn quem_nao_pode_ser_lido_e_relido_na_proxima_varredura() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("ilegivel.mp3");
     mp3_com_codificacao_ausente(&path);
-    // um defeito que nem o conserto cobre: UTF-8 declarado, bytes que não são
+    // um defeito que nem o conserto cobre: UTF-8 de verdade (um "ç") com um
+    // byte estragado — trocar o rótulo para Latin-1 estragaria o "ç" (V15.5)
     let mut bytes = fs::read(&path).unwrap();
     let i = bytes.windows(4).position(|j| j == b"TIT2").unwrap();
     bytes[i + 10] = 3; // declara UTF-8...
-    bytes[i + 11] = 0xff; // ...e o primeiro caractere não é UTF-8
+    bytes[i + 11] = 0xff; // ...o primeiro caractere não é UTF-8...
+    bytes[i + 12] = 0xc3; // ...e logo depois há um "ç" em UTF-8 válido
+    bytes[i + 13] = 0xa7;
     fs::write(&path, &bytes).unwrap();
 
     let conn = db::open_in_memory().unwrap();
@@ -1801,4 +1804,105 @@ fn quem_nao_pode_ser_lido_e_relido_na_proxima_varredura() {
     let segunda = indexer::scan_folder(&conn, folder_id, |_, _| {}).unwrap();
     assert_eq!(segunda.skipped, 0, "quem não foi lido não pode ser pulado");
     assert_eq!(segunda.indexed, 1);
+}
+
+// ===========================================================================
+// V15.5 — mais dois defeitos de etiqueta medidos no acervo real
+// ===========================================================================
+
+/// Um MP3 com os quadros dados (versão 3 ou 4) e o áudio de uma fixture.
+fn mp3_com_quadros(path: &Path, versao: u8, quadros: &[Vec<u8>]) -> Vec<u8> {
+    let tmp = path.with_extension("fonte");
+    copy_fixture("com_letra.mp3", &tmp);
+    let audio = audio_bytes(&tmp);
+    fs::remove_file(&tmp).unwrap();
+    let corpo: Vec<u8> = quadros.concat();
+    let mut arquivo = vec![b'I', b'D', b'3', versao, 0, 0];
+    arquivo.extend_from_slice(&syncsafe(corpo.len()));
+    arquivo.extend(corpo);
+    arquivo.extend_from_slice(&audio);
+    fs::write(path, &arquivo).unwrap();
+    audio
+}
+
+fn quadro_v24(id: &[u8; 4], corpo: &[u8]) -> Vec<u8> {
+    let mut q = id.to_vec();
+    q.extend_from_slice(&syncsafe(corpo.len()));
+    q.extend_from_slice(&[0, 0]);
+    q.extend_from_slice(corpo);
+    q
+}
+
+fn texto_txxx(path: &Path, descricao: &str) -> Option<String> {
+    id3_tag(path).get_user_text(descricao).map(str::to_string)
+}
+
+/// "Flor de Ogum": o ffmpeg gravou o TSSE em Latin-1 e o declarou UTF-8.
+#[test]
+fn utf8_que_e_latin1_le_e_grava_sem_perder_o_texto() {
+    let base = tempfile::tempdir().unwrap();
+    let path = base.path().join("Flor de Ogum.mp3.mp3");
+    mp3_com_quadros(
+        &path,
+        4,
+        &[quadro_v24(b"TIT2", b"\x03Flor de Ogum"), quadro_v24(b"TSSE", b"\x03Lavf54.20.4\xf9")],
+    );
+    let (_dir, conn, song) = indexar_so(&path);
+    assert_eq!(song.title, "Flor de Ogum", "a etiqueta foi lida");
+    let path = PathBuf::from(&song.file_path);
+    let audio_antes = audio_bytes(&path);
+
+    let g = writer::write_tags(&conn, song.id, "Flor de Ogum", None, Some("uma letra"), None, None)
+        .expect("um rótulo de texto errado não pode impedir a gravação");
+    assert_eq!(g.aviso, Some(writer::AVISO_CODIFICACAO_CONSERTADA));
+    let tsse = id3_tag(&path)
+        .get_text(&lofty::id3::v2::FrameId::Valid(std::borrow::Cow::Borrowed("TSSE")))
+        .map(str::to_string);
+    assert_eq!(tsse.as_deref(), Some("Lavf54.20.4ù"), "o texto ficou, lido como Latin-1");
+    assert_eq!(audio_bytes(&path), audio_antes, "o áudio não pode ser tocado");
+}
+
+/// "O Peregrino - 1978": data de lançamento fora do padrão, como gravam os
+/// podcasts. Derrubava a leitura do arquivo inteiro.
+#[test]
+fn data_fora_do_padrao_le_e_grava_e_o_texto_vira_anotacao() {
+    let base = tempfile::tempdir().unwrap();
+    let path = base.path().join("O Peregrino - 1978.mp3");
+    mp3_com_quadros(
+        &path,
+        3,
+        &[
+            quadro_v23(b"TIT2", b"\x00O Peregrino"),
+            quadro_v23(b"TPE1", b"\x00Alguem"),
+            quadro_v23(b"TDRL", b"\x00Tue, 01 Jan 2008"),
+        ],
+    );
+    let (_dir, conn, song) = indexar_so(&path);
+    assert_eq!(song.artist.as_deref(), Some("Alguem"), "a etiqueta foi lida");
+    let path = PathBuf::from(&song.file_path);
+    let audio_antes = audio_bytes(&path);
+
+    let g = writer::write_tags(&conn, song.id, "O Peregrino", Some("Alguem"), Some("letra"), None, None)
+        .expect("uma data fora do padrão não pode impedir a gravação");
+    assert_eq!(g.aviso, Some(writer::AVISO_CODIFICACAO_CONSERTADA));
+    assert_eq!(texto_txxx(&path, "TDRL").as_deref(), Some("Tue, 01 Jan 2008"), "nada apagado");
+    assert_eq!(audio_bytes(&path), audio_antes, "o áudio não pode ser tocado");
+}
+
+/// A data que o lofty LÊ mas não GRAVA (mês 13): a falha só viria no fim.
+#[test]
+fn data_impossivel_grava_e_o_texto_vira_anotacao() {
+    let base = tempfile::tempdir().unwrap();
+    let path = base.path().join("data impossivel.mp3");
+    mp3_com_quadros(
+        &path,
+        3,
+        &[quadro_v23(b"TIT2", b"\x00Nome"), quadro_v23(b"TDRL", b"\x002008-13-01")],
+    );
+    let (_dir, conn, song) = indexar_so(&path);
+    let path = PathBuf::from(&song.file_path);
+    let g = writer::write_tags(&conn, song.id, "Nome", None, Some("letra"), None, None)
+        .expect("uma data impossível não pode impedir a gravação");
+    assert_eq!(g.aviso, Some(writer::AVISO_CODIFICACAO_CONSERTADA));
+    assert_eq!(texto_txxx(&path, "TDRL").as_deref(), Some("2008-13-01"));
 }
