@@ -408,14 +408,19 @@ def estrutura_da_etiqueta(dados: bytes) -> list[str]:
 def diagnosticar(caminho: Path) -> None:
     print(f"\n=== {caminho.name}")
     try:
+        tamanho_real = caminho.stat().st_size
         with caminho.open("rb") as f:  # leitura, e só
-            dados = f.read()
+            # V15.5 — só a etiqueta e um pedaço do áudio: é o que se mede, e
+            # varrer milhares de arquivos inteiros levaria muito tempo
+            cabeca = f.read(10)
+            f.seek(0)
+            dados = f.read(tamanho_do_id3(cabeca) + 1024 * 1024)
     except OSError as e:
         print(f"  NÃO DEU PARA ABRIR: {e}")
         return
 
-    print(f"  tamanho: {len(dados):,} bytes")
-    if len(dados) < 512:
+    print(f"  tamanho: {tamanho_real:,} bytes")
+    if tamanho_real < 512:
         print("  PROBLEMA: arquivo minúsculo — download interrompido?")
         return
 
@@ -428,7 +433,7 @@ def diagnosticar(caminho: Path) -> None:
 
     inicio = tamanho_do_id3(dados)
     print(f"  ID3v2 no começo: {inicio:,} bytes" if inicio else "  sem ID3v2 no começo")
-    if inicio > len(dados):
+    if inicio > tamanho_real:
         print("  >>> PROBLEMA: o ID3 diz ser MAIOR que o arquivo inteiro.")
         print("      É a assinatura de download interrompido no meio da etiqueta.")
         return
@@ -460,10 +465,19 @@ def diagnosticar(caminho: Path) -> None:
         print("   a causa não está nas coisas que este script sabe medir)")
 
 
+def tem_problema(saida: str) -> bool:
+    """A saída de um arquivo acusou algo? (para o modo `--so-problemas`)"""
+    return ">>>" in saida or "PROBLEMA" in saida or "NÃO" in saida or "\n    - " in saida
+
+
 def main(argv: list[str]) -> int:
     if len(argv) < 2:
         print(__doc__)
         return 2
+    # V15.5 — `--so-problemas`: varre uma pasta inteira (milhares de arquivos)
+    # e mostra só os que acusam algo — ninguém precisa listar os que falham
+    so_problemas = "--so-problemas" in argv
+    argv = [a for a in argv if a != "--so-problemas"]
     alvos: list[Path] = []
     for arg in argv[1:]:
         p = Path(arg).expanduser()
@@ -487,8 +501,24 @@ def main(argv: list[str]) -> int:
         print("nenhum .mp3 encontrado")
         return 1
     print(f"{len(alvos)} arquivo(s) — NADA é modificado, só lido")
-    for a in alvos:
-        diagnosticar(a)
+    if not so_problemas:
+        for a in alvos:
+            diagnosticar(a)
+        return 0
+    import contextlib
+    import io
+
+    achados = 0
+    for n, a in enumerate(alvos, 1):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            diagnosticar(a)
+        if tem_problema(buf.getvalue()):
+            achados += 1
+            print(buf.getvalue(), end="")
+        if n % 500 == 0:
+            print(f"... {n} de {len(alvos)} lidos", file=sys.stderr)
+    print(f"\n{achados} de {len(alvos)} arquivo(s) com algo fora do padrão")
     return 0
 
 

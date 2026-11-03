@@ -110,3 +110,15 @@ def test_datas_que_o_programa_recusa():
 def test_estrutura_aponta_a_data_fora_do_padrao():
     dados = _etiqueta([_quadro("TDRL", b"\x00Tue, 01 Jan 2008", 3)])
     assert any(">>> TDRL" in l for l in diag.estrutura_da_etiqueta(dados))
+
+
+def test_so_problemas_mostra_so_quem_acusa(tmp_path, capsys):
+    bom = tmp_path / "bom.mp3"
+    ruim = tmp_path / "ruim.mp3"
+    audio = b"\xff\xfb\x90\x00" + b"\x00" * 2000
+    bom.write_bytes(_etiqueta([_quadro("TIT2", b"\x00Asa", 3)]) + audio)
+    ruim.write_bytes(_etiqueta([_quadro("TDRL", b"\x00Tue, 01 Jan 2008", 3)]) + audio)
+    diag.main(["x", str(tmp_path), "--so-problemas"])
+    saida = capsys.readouterr().out
+    assert "ruim.mp3" in saida and "bom.mp3" not in saida
+    assert "1 de 2 arquivo(s)" in saida
