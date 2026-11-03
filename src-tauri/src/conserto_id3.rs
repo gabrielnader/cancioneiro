@@ -302,6 +302,77 @@ pub fn tem_data_que_nao_grava(tag: &lofty::id3::v2::Id3v2Tag) -> bool {
     })
 }
 
+/// V15.8 — uma CÓPIA do arquivo em que a etiqueta APE do fim não é mais
+/// reconhecida (a marca `APETAGEX` vira zeros, só na cópia). Medido com o
+/// verificador: três arquivos com APE de tamanho impossível, que o lofty recusa
+/// INTEIROS (`SizeMismatch`) — o app nem lia o título deles.
+///
+/// Serve só para LER: a gravação do app reescreve a etiqueta ID3v2 do COMEÇO
+/// do arquivo e não toca no fim, então a APE (quebrada ou não) continua no
+/// disco exatamente como estava. Nada é apagado.
+pub fn sem_ape_no_fim(arquivo: &[u8]) -> Option<Vec<u8>> {
+    // o rodapé APE fica no fim, antes da ID3v1 e da Lyrics3: olha a cauda
+    let inicio = arquivo.len().saturating_sub(256 * 1024);
+    let cauda = &arquivo[inicio..];
+    let posicoes: Vec<usize> = cauda
+        .windows(8)
+        .enumerate()
+        .filter(|(_, j)| *j == b"APETAGEX")
+        .map(|(i, _)| inicio + i)
+        .collect();
+    if posicoes.is_empty() {
+        return None;
+    }
+    let mut copia = arquivo.to_vec();
+    for p in posicoes {
+        copia[p..p + 8].fill(0);
+    }
+    Some(copia)
+}
+
+/// V15.8 — a cópia LEGÍVEL de um arquivo que o lofty recusou: a APE do fim
+/// desconsiderada e/ou os quadros consertados. `quadros` diz se algum quadro
+/// da etiqueta foi consertado (é isso que a gravação precisa contar).
+pub fn copia_legivel(arquivo: &[u8]) -> Option<(Vec<u8>, bool)> {
+    let sem_ape = sem_ape_no_fim(arquivo);
+    let base = sem_ape.as_deref().unwrap_or(arquivo);
+    match consertar_codificacao_ausente(base) {
+        Some((consertado, _)) => Some((consertado, true)),
+        None => sem_ape.map(|b| (b, false)),
+    }
+}
+
+/// V15.8 — os quadros de uma etiqueta ID3v2.3/2.4 (identificador e conteúdo),
+/// na ordem. `None` quando ela usa algo que este código não percorre com
+/// segurança (v2.2, dessincronização) ou está quebrada.
+pub fn quadros_da_etiqueta(etiqueta: &[u8]) -> Option<Vec<([u8; 4], Vec<u8>)>> {
+    let fim = fim_da_etiqueta(etiqueta)?.min(etiqueta.len());
+    let versao = etiqueta[3];
+    if !(versao == 3 || versao == 4) || etiqueta[5] & 0xC0 != 0 {
+        return None; // v2.2, dessincronização ou cabeçalho estendido
+    }
+    let mut pos = 10;
+    let mut quadros = Vec::new();
+    while pos + 10 <= fim {
+        let id = &etiqueta[pos..pos + 4];
+        if id[0] == 0 {
+            break;
+        }
+        if !id.iter().all(|b| b.is_ascii_uppercase() || b.is_ascii_digit()) {
+            return None;
+        }
+        let tam = if versao == 4 {
+            ler_syncsafe(&etiqueta[pos + 4..pos + 8])
+        } else {
+            u32::from_be_bytes(etiqueta[pos + 4..pos + 8].try_into().ok()?) as usize
+        };
+        let corpo = etiqueta.get(pos + 10..pos + 10 + tam)?;
+        quadros.push((id.try_into().ok()?, corpo.to_vec()));
+        pos += 10 + tam;
+    }
+    Some(quadros)
+}
+
 /// O erro do lofty é de uma família que este conserto cobre? O TEXTO de um
 /// quadro (V15.1) ou uma DATA que ele não aceita (V15.5).
 pub fn e_erro_de_texto(e: &lofty::error::LoftyError) -> bool {
@@ -312,6 +383,17 @@ pub fn e_erro_de_texto(e: &lofty::error::LoftyError) -> bool {
             | ErrorKind::StringFromUtf8(_)
             | ErrorKind::StrFromUtf8(_)
             | ErrorKind::BadTimestamp(_)
+            // V15.8 — o tamanho impossível da APE do fim
+            | ErrorKind::SizeMismatch
+    ) || matches!(
+        // e os dois jeitos de o lofty TROPEÇAR nesse tamanho ao recuar no
+        // arquivo. Só age se houver de fato uma APE no fim (ou um quadro a
+        // consertar): sem isso, `copia_legivel` devolve None e a recusa vale
+        e.kind(),
+        ErrorKind::Io(io) if matches!(
+            io.kind(),
+            std::io::ErrorKind::InvalidInput | std::io::ErrorKind::UnexpectedEof
+        )
     )
 }
 

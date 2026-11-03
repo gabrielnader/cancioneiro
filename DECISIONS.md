@@ -2876,3 +2876,8 @@ gravação; o desfecho da gravação conta o que foi feito.
 - Ano feito só de espaços ("    ", " "): o lofty não apara e recusa. O conserto pulava (tratava como vazio); agora só o vazio de verdade passa.
 - Segunda etiqueta ID3v2 grudada na primeira e VAZIA (só cabeçalho e zeros): absorvida, porque não há quadro para perder. Com conteúdo ("Ilha de Amor", título só na segunda) continua recusada — juntar exige escolher entre quadros.
 - Diagnóstico: separa a segunda etiqueta vazia da cheia, descreve o primeiro quadro de áudio e as etiquetas do fim do arquivo.
+
+## V15.9 — APE quebrada no fim, e a segunda etiqueta com conteúdo
+- O verificador (`examples/verificar_acervo.rs`, o próprio código do app numa cópia temporária) trocou a imitação do Python pela medição: 30 de 7.893 falham, com o erro exato do lofty.
+- APE do fim com tamanho impossível (`SizeMismatch`, ou o lofty tropeçando ao recuar): o lofty recusava o arquivo inteiro. Para LER, a marca `APETAGEX` vira zeros numa cópia em memória; a gravação só reescreve a ID3v2 do começo, e a APE fica no disco como estava.
+- Segunda ID3v2 grudada com conteúdo: o lofty já a lê junto com a primeira (o "Ilha de Amor" aparece com o título certo), então absorvê-la não apaga nada — desde que nenhum quadro esteja nas duas com conteúdos diferentes. Em conflito, continua recusada sem tocar no arquivo.

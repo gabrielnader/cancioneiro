@@ -506,7 +506,10 @@ def diagnosticar(caminho: Path) -> None:
                 print("  >>> segunda etiqueta grudada, VAZIA (o app absorve sem perder nada)")
             else:
                 quadros = [l for l in estrutura_da_etiqueta(sobra + b"\x00" * 10) if l.startswith("quadros:")]
-                print(f"  >>> segunda etiqueta grudada, COM conteúdo — {quadros[0] if quadros else '?'}")
+                print(
+                    f"  >>> segunda etiqueta grudada, COM conteúdo — {quadros[0] if quadros else '?'}"
+                    " (o app absorve se nenhum quadro estiver nas duas com conteúdos diferentes)"
+                )
     else:
         print(f"  quadro MPEG começa em {sync:,}, como esperado")
     print(f"  áudio: {descreve_quadro_mpeg(dados[sync:sync + 4])}")

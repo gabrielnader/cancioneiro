@@ -2045,30 +2045,92 @@ fn segunda_etiqueta_vazia_grudada_e_absorvida_sem_perder_nada() {
     assert_eq!(audio_bytes(&path), audio, "o áudio não pode ser tocado");
 }
 
-/// E a segunda etiqueta COM conteúdo ("Ilha de Amor") continua recusada: juntar
-/// as duas exigiria escolher entre os quadros delas.
+/// "Ilha de Amor": o título SÓ na segunda etiqueta. O lofty já lê as duas
+/// juntas (o app mostra "Ilha de Amor"), então absorver a segunda não apaga
+/// nada — e o título continua lá depois de gravar.
 #[test]
-fn segunda_etiqueta_com_conteudo_continua_recusada_sem_mexer_no_arquivo() {
+fn segunda_etiqueta_com_conteudo_sem_conflito_grava_e_o_titulo_fica() {
     let base = tempfile::tempdir().unwrap();
-    let path = base.path().join("Ilha de Amor.mp3");
+    let path = base.path().join("Amor - Ilha de Amor.mp3");
+    let audio = mp3_com_segunda_etiqueta(&path, quadro_v23(b"PRIV", b"PeakValue\x00\x21\x41\x00\x00"), quadro_v24(b"TIT2", b"\x03Ilha de Amor"));
+    let (_dir, conn, song) = indexar_so(&path);
+    assert_eq!(song.title, "Ilha de Amor", "o título da segunda etiqueta já é lido");
+    let path = PathBuf::from(&song.file_path);
+    let g = writer::write_tags(&conn, song.id, &song.title, None, Some("letra"), None, None)
+        .expect("a segunda etiqueta sem conflito não pode impedir a gravação");
+    assert_eq!(g.aviso, Some(writer::AVISO_ETIQUETA_NORMALIZADA));
+    use lofty::tag::Accessor;
+    assert_eq!(id3_tag(&path).title().as_deref(), Some("Ilha de Amor"));
+    assert!(fs::read(&path).unwrap().windows(9).any(|j| j == b"PeakValue"), "o PRIV da primeira continua");
+    assert_eq!(audio_bytes(&path), audio, "o áudio não pode ser tocado");
+}
+
+/// O mesmo quadro nas duas, com conteúdos diferentes: absorver gravaria só um.
+#[test]
+fn segunda_etiqueta_em_conflito_continua_recusada_sem_mexer_no_arquivo() {
+    let base = tempfile::tempdir().unwrap();
+    let path = base.path().join("conflito.mp3");
+    mp3_com_segunda_etiqueta(&path, quadro_v23(b"TIT2", b"\x00Um Nome"), quadro_v24(b"TIT2", b"\x03Outro Nome"));
+    let (_dir, conn, song) = indexar_so(&path);
+    let path = PathBuf::from(&song.file_path);
+    let antes = fs::read(&path).unwrap();
+    assert!(writer::write_tags(&conn, song.id, &song.title, None, None, None, None).is_err());
+    assert_eq!(fs::read(&path).unwrap(), antes, "nada foi alterado");
+}
+
+/// Primeira etiqueta v2.3 com `primeiro`, segunda v2.4 grudada com `segundo`, e
+/// zeros até 1.034 bytes de sobra (acima do teto de 1.024 do lofty).
+fn mp3_com_segunda_etiqueta(path: &Path, primeiro: Vec<u8>, segundo: Vec<u8>) -> Vec<u8> {
     let tmp = path.with_extension("fonte");
     copy_fixture("com_letra.mp3", &tmp);
     let audio = audio_bytes(&tmp);
     fs::remove_file(&tmp).unwrap();
-    let corpo = quadro_v23(b"PRIV", b"PeakValue\x00\x21\x41\x00\x00");
     let mut arquivo = b"ID3\x03\x00\x00".to_vec();
-    arquivo.extend_from_slice(&syncsafe(corpo.len()));
-    arquivo.extend(corpo);
-    let segunda = quadro_v24(b"TIT2", b"\x03Ilha de Amor");
-    arquivo.extend_from_slice(b"ID3\x04\x00\x00\x00\x00\x08\x00");
-    arquivo.extend(&segunda);
-    arquivo.extend(std::iter::repeat(0u8).take(1034 - 10 - segunda.len()));
+    arquivo.extend_from_slice(&syncsafe(primeiro.len()));
+    arquivo.extend(primeiro);
+    arquivo.extend_from_slice(b"ID3\x04\x00\x00\x00\x00\x08\x00"); // declara 1.024 bytes
+    arquivo.extend(&segundo);
+    arquivo.extend(std::iter::repeat(0u8).take(1034 - 10 - segundo.len()));
     arquivo.extend_from_slice(&audio);
-    fs::write(&path, &arquivo).unwrap();
+    fs::write(path, &arquivo).unwrap();
+    audio
+}
+
+/// Um rodapé APE que declara um tamanho maior do que o arquivo inteiro: o
+/// lofty recusa com `SizeMismatch` ("invalid item size") — o erro medido pelo
+/// verificador em "aruanã", "Iemanjá" e "Xangô".
+fn ape_quebrada(tamanho_do_arquivo: usize) -> Vec<u8> {
+    let mut a = b"APETAGEX".to_vec();
+    a.extend_from_slice(&2000u32.to_le_bytes()); // versão
+    // um pouco MAIOR do que tudo o que vem antes: o lofty recua o tamanho
+    // declarado e cai antes do começo do arquivo
+    a.extend_from_slice(&(tamanho_do_arquivo as u32 + 4096).to_le_bytes());
+    a.extend_from_slice(&1u32.to_le_bytes()); // itens
+    a.extend_from_slice(&0u32.to_le_bytes()); // sinalizações (rodapé)
+    a.extend_from_slice(&[0u8; 8]);
+    a
+}
+
+#[test]
+fn ape_quebrada_no_fim_le_e_grava_e_fica_intacta() {
+    let base = tempfile::tempdir().unwrap();
+    let path = base.path().join("janaina - a dona do mar - aruanã.mp3");
+    mp3_com_quadros(&path, 3, &[quadro_v23(b"TIT2", b"\x00A Dona do Mar"), quadro_v23(b"TPE1", b"\x00Aruan\xe3")]);
+    let mut bytes = fs::read(&path).unwrap();
+    let ape = ape_quebrada(bytes.len());
+    bytes.extend(&ape);
+    let mut id3v1 = b"TAG".to_vec();
+    id3v1.extend(std::iter::repeat(0u8).take(125));
+    bytes.extend(&id3v1);
+    fs::write(&path, &bytes).unwrap();
 
     let (_dir, conn, song) = indexar_so(&path);
+    assert_eq!(song.title, "A Dona do Mar", "a etiqueta foi lida");
+    assert_eq!(song.artist.as_deref(), Some("Aruanã"));
     let path = PathBuf::from(&song.file_path);
-    let antes = fs::read(&path).unwrap();
-    assert!(writer::write_tags(&conn, song.id, "Ilha de Amor", None, None, None, None).is_err());
-    assert_eq!(fs::read(&path).unwrap(), antes, "nada foi alterado");
+    writer::write_tags(&conn, song.id, "A Dona do Mar", Some("Aruanã"), Some("letra"), None, None)
+        .expect("uma APE quebrada no fim não pode impedir a gravação");
+    let depois = fs::read(&path).unwrap();
+    let fim_original = [ape, id3v1].concat();
+    assert!(depois.ends_with(&fim_original), "a APE e a ID3v1 do fim ficam como estavam");
 }

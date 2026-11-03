@@ -754,7 +754,9 @@ fn gravar_normalizando_a_etiqueta(
         return Err(erro_de_gravacao(caminho, ERRO_ESTRUTURA_DO_MP3));
     }
     let sobra = &original[fim..primeiro_quadro];
-    if MARCAS_DE_OUTRA_ETIQUETA.iter().any(|m| contem(sobra, m)) && !e_etiqueta_vazia_grudada(sobra) {
+    if MARCAS_DE_OUTRA_ETIQUETA.iter().any(|m| contem(sobra, m))
+        && !e_etiqueta_grudada_sem_conflito(&original[..fim], sobra)
+    {
         // a sobra é (ou carrega) outra etiqueta: absorvê-la apagaria dado de
         // alguém na regravação. Recusar é ruim; apagar é inviolável.
         return Err(erro_de_gravacao(caminho, ERRO_ESTRUTURA_DO_MP3));
@@ -782,15 +784,23 @@ fn gravar_normalizando_a_etiqueta(
     Ok(Some(AVISO_ETIQUETA_NORMALIZADA))
 }
 
-/// V15.7 — a sobra é uma SEGUNDA etiqueta ID3v2 grudada na primeira, e vazia:
-/// só o cabeçalho de 10 bytes, e zeros até o fim dela e até o áudio. Medido no
-/// campo ("Jesus foi ao céu preparar": 2.038 bytes declarados, 99% zeros) —
-/// algum programa escreveu uma etiqueta nova sem apagar o espaço da antiga.
+/// V15.7/V15.8 — a sobra é uma SEGUNDA etiqueta ID3v2 grudada na primeira, e
+/// absorvê-la não apaga nada.
 ///
-/// Absorvê-la não apaga NADA, porque não há quadro nenhum nela. A segunda
-/// etiqueta com conteúdo continua recusada: juntar as duas exigiria escolher
-/// entre os quadros delas, e escolher às cegas é apagar.
-fn e_etiqueta_vazia_grudada(sobra: &[u8]) -> bool {
+/// Medido no campo: "Jesus foi ao céu preparar" (a segunda vazia, só zeros) e
+/// "Ilha de Amor" (o título SÓ na segunda). Algum programa escreveu uma
+/// etiqueta nova na frente sem apagar a antiga.
+///
+/// **Por que absorver a segunda com conteúdo não apaga nada:** o lofty já a
+/// LÊ junto com a primeira — quando uma etiqueta vem colada na outra, os
+/// quadros dela entram na mesma etiqueta (o "Ilha de Amor" aparece no app com
+/// o título certo). A etiqueta que o app grava, então, já contém tudo.
+///
+/// **Quando não é seguro, e continua recusado:** um mesmo quadro nas duas, com
+/// conteúdos diferentes. Na leitura o da segunda substitui o da primeira, e
+/// absorver gravaria só um deles — escolher às cegas é apagar. E nada depois
+/// da segunda etiqueta pode ser outra coisa que zeros.
+fn e_etiqueta_grudada_sem_conflito(primeira: &[u8], sobra: &[u8]) -> bool {
     if sobra.len() < 10 || &sobra[..3] != b"ID3" || !(2..=4).contains(&sobra[3]) {
         return false;
     }
@@ -798,8 +808,21 @@ fn e_etiqueta_vazia_grudada(sobra: &[u8]) -> bool {
     if b.iter().any(|x| x & 0x80 != 0) {
         return false;
     }
-    // depois do cabeçalho, tudo zero: dentro da etiqueta e depois dela
-    sobra[10..].iter().all(|&x| x == 0)
+    let fim_da_segunda =
+        10 + (((b[0] as usize) << 21) | ((b[1] as usize) << 14) | ((b[2] as usize) << 7) | b[3] as usize);
+    if fim_da_segunda > sobra.len() || !sobra[fim_da_segunda..].iter().all(|&x| x == 0) {
+        return false;
+    }
+    let (Some(da_primeira), Some(da_segunda)) = (
+        crate::conserto_id3::quadros_da_etiqueta(primeira),
+        crate::conserto_id3::quadros_da_etiqueta(&sobra[..fim_da_segunda]),
+    ) else {
+        return false;
+    };
+    // cada quadro da segunda ou é novo, ou é idêntico a um da primeira
+    da_segunda.iter().all(|(id, corpo)| {
+        !da_primeira.iter().any(|(id1, _)| id1 == id) || da_primeira.iter().any(|q| q.0 == *id && q.1 == *corpo)
+    })
 }
 
 /// `bytes` contém a sequência `marca`?
@@ -952,13 +975,14 @@ pub fn write_tags_com_origem(
         Err(e) if crate::conserto_id3::e_erro_de_texto(&e) => {
             let bytes = std::fs::read(path)
                 .map_err(|io| erro_de_gravacao(&song.file_path, frase_de_io(&io)))?;
-            let Some((consertado, _)) = crate::conserto_id3::consertar_codificacao_ausente(&bytes)
-            else {
+            let Some((consertado, quadros)) = crate::conserto_id3::copia_legivel(&bytes) else {
                 return Err(erro_de_gravacao(&song.file_path, frase_de_lofty(&e)));
             };
             let m = MpegFile::read_from(&mut std::io::Cursor::new(consertado), ParseOptions::new())
                 .map_err(|e| erro_de_gravacao(&song.file_path, frase_de_lofty(&e)))?;
-            (m, true)
+            // só a APE do fim desconsiderada não muda nada no arquivo: não há
+            // o que contar
+            (m, quadros)
         }
         Err(e) => return Err(erro_de_gravacao(&song.file_path, frase_de_lofty(&e))),
     };

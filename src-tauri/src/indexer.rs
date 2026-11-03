@@ -323,7 +323,7 @@ fn ler_etiquetas(path: &Path) -> lofty::error::Result<lofty::file::TaggedFile> {
     match lofty::read_from_path(path) {
         Err(e) if crate::conserto_id3::e_erro_de_texto(&e) => {
             let bytes = std::fs::read(path)?;
-            match crate::conserto_id3::consertar_codificacao_ausente(&bytes) {
+            match crate::conserto_id3::copia_legivel(&bytes) {
                 Some((consertado, _)) => {
                     lofty::probe::Probe::new(std::io::Cursor::new(consertado))
                         .guess_file_type()?
