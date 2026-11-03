@@ -184,11 +184,13 @@ def texto_das_etiquetas(caminho: Path) -> list[str]:
     """
     achados: list[str] = []
     try:
-        from mutagen.id3 import ID3  # type: ignore[import-not-found]
+        from mutagen.id3 import ID3, ID3NoHeaderError  # type: ignore[import-not-found]
     except ImportError:
         return ["(mutagen não instalado — `pip install mutagen` para esta parte)"]
     try:
         tag = ID3(caminho)
+    except ID3NoHeaderError:
+        return []  # arquivo ainda sem etiqueta: não é defeito, o app cria uma
     except Exception as e:  # noqa: BLE001 — qualquer falha aqui É o achado
         return [f"o ID3 não pôde ser lido pelo mutagen: {type(e).__name__}: {e}"]
     for quadro in tag.values():

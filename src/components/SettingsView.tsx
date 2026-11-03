@@ -29,7 +29,14 @@ import {
 } from "../lib/curadoria";
 import { buildFolderTree, isUnderFolder } from "../lib/folderTree";
 import type { ThemePref } from "../lib/theme";
-import { getAppVersion } from "../lib/updater";
+import {
+  getAppVersion,
+  tauriUpdaterDeps,
+  TEXTO_DA_VERIFICACAO,
+  useUpdateStore,
+  verificarAgora,
+  type DesfechoDaVerificacao,
+} from "../lib/updater";
 import { useDownloadStore } from "../stores/downloadStore";
 import { decisoesPendentes, useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
@@ -331,6 +338,7 @@ export function SettingsView() {
             {appVersion && (
               <p className="text-[15px] text-ink-tertiary">Versão instalada: {appVersion}</p>
             )}
+            {appVersion && <VerificarAtualizacoes />}
           </Cartao>
         </div>
       </div>
@@ -834,6 +842,53 @@ function CuradoriaSection() {
       >
         <Acessorios lista={acessorios} />
       </Cartao>
+    </div>
+  );
+}
+
+/**
+ * V15.6 — "Verificar atualizações": procura, baixa e oferece reiniciar, num
+ * clique. Pedido do dono do produto. Nunca reinicia sozinho: o "Reiniciar
+ * agora" é outro clique. Se houver letras sendo escritas, elas estão
+ * guardadas (V15.3) e a fila continua de onde parou.
+ */
+function VerificarAtualizacoes() {
+  const [estado, setEstado] = useState<
+    DesfechoDaVerificacao | "procurando" | "baixando" | null
+  >(null);
+  const reiniciando = useUpdateStore((s) => s.restarting);
+  const runRestart = useUpdateStore((s) => s.runRestart);
+  const ocupado = estado === "procurando" || estado === "baixando";
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          disabled={ocupado || reiniciando}
+          onClick={() => {
+            const { enabled: _ignorado, ...deps } = tauriUpdaterDeps(true);
+            void verificarAgora(deps, setEstado).then(setEstado);
+          }}
+          className={BOTAO_SECUNDARIO}
+        >
+          Verificar atualizações
+        </button>
+        {estado === "pronta" && (
+          <button
+            type="button"
+            disabled={reiniciando}
+            onClick={() => void runRestart()}
+            className={BOTAO_PRINCIPAL}
+          >
+            {reiniciando ? "Reiniciando…" : "Reiniciar agora"}
+          </button>
+        )}
+      </div>
+      {estado && (
+        <p role="status" className="text-[16px] text-ink-secondary">
+          {TEXTO_DA_VERIFICACAO[estado]}
+        </p>
+      )}
     </div>
   );
 }

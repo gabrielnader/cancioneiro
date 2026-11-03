@@ -4,6 +4,7 @@ import {
   runUpdateCheck,
   tauriUpdaterDeps,
   useUpdateStore,
+  verificarAgora,
   type PendingUpdate,
   type UpdaterDeps,
 } from "./updater";
@@ -306,5 +307,39 @@ describe("getAppVersion", () => {
     delete window.__TAURI_INTERNALS__;
     vi.doUnmock("@tauri-apps/api/app");
     vi.resetModules();
+  });
+});
+
+
+// V15.6 — o botão manual RESPONDE, ao contrário do startup silencioso
+describe("verificarAgora — o botão 'Verificar atualizações'", () => {
+  beforeEach(() => useUpdateStore.getState().dismiss());
+
+  it("sem versão nova: diz que já está na mais nova, e não mostra aviso", async () => {
+    expect(await verificarAgora(deps())).toBe("em-dia");
+    expect(useUpdateStore.getState().ready).toBe(false);
+  });
+
+  it("com versão nova: conta as etapas, baixa e deixa o 'Reiniciar agora' pronto", async () => {
+    const u = pendingUpdate();
+    const etapas: string[] = [];
+    const d = deps({ check: vi.fn(async () => u), onReady: (r) => useUpdateStore.getState().show(r) });
+    expect(await verificarAgora(d, (e) => etapas.push(e))).toBe("pronta");
+    expect(etapas).toEqual(["procurando", "baixando"]);
+    expect(u.download).toHaveBeenCalled();
+    expect(u.install).not.toHaveBeenCalled(); // nunca reinicia sozinho
+    expect(useUpdateStore.getState().ready).toBe(true);
+  });
+
+  it("sem internet, na checagem ou no download: diz, em vez de calar", async () => {
+    expect(await verificarAgora(deps({ check: vi.fn(async () => { throw new Error("dns"); }) }))).toBe("sem-conexao");
+    const u = pendingUpdate({ download: vi.fn(async () => { throw new Error("caiu"); }) });
+    expect(await verificarAgora(deps({ check: vi.fn(async () => u) }))).toBe("sem-conexao");
+  });
+
+  it("vale mesmo com 'verificar ao abrir' desligado: o clique é a autorização", async () => {
+    const check = vi.fn(async () => null);
+    await verificarAgora(deps({ enabled: false, check }));
+    expect(check).toHaveBeenCalled();
   });
 });

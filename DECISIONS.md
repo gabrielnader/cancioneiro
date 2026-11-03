@@ -2862,3 +2862,7 @@ gravação; o desfecho da gravação conta o que foi feito.
 - "UTF-8" que é Latin-1 (o TSSE do ffmpeg em "Flor de Ogum"): só o rótulo troca, os bytes ficam. Se houver UTF-8 de verdade junto do byte estragado, não se adivinha — trocar o rótulo estragaria o "ç".
 - Data fora do padrão do lofty ("Tue, 01 Jan 2008", "2008/01/01" derrubam a LEITURA; mês 13 derruba a GRAVAÇÃO): o quadro vira TXXX com o nome dele como descrição e o mesmo texto. O modo tolerante do lofty descartaria o quadro, e descartar é apagar.
 - Mesmo gatilho de sempre: só quando a leitura (ou a gravação certa de falhar) já recusou o arquivo.
+
+## V15.6 — o ano antigo (TYER) e o botão "Verificar atualizações"
+- Varredura do acervo inteiro com o diagnóstico (`--so-problemas`): 105 de 7.893 acusaram algo. O maior grupo que de fato barra a gravação era o TYER fora do padrão ("1978/79", "c. 1978", "197") — o lofty o converte em data ao ler. Entrou no mesmo conserto (vira TXXX:TYER, mesmo texto).
+- "Verificar atualizações" em Configurações: ao contrário do startup, RESPONDE (procurando, baixando, pronta, em dia, sem conexão), vale com o "ao abrir" desligado (o clique é a autorização) e continua nunca reiniciando sozinho.

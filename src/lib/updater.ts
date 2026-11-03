@@ -87,6 +87,63 @@ export async function runUpdateCheck(deps: UpdaterDeps): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
+// V15.6 — o botão "Verificar atualizações", em Configurações
+// ---------------------------------------------------------------------------
+
+/** O que o botão manual conta. */
+export type DesfechoDaVerificacao = "pronta" | "em-dia" | "sem-conexao";
+
+/**
+ * A checagem pedida pela pessoa. Ao contrário da do startup, ela RESPONDE:
+ * quem clicou num botão precisa saber o que aconteceu — inclusive "você já
+ * está na versão mais nova", que no startup seria ruído. E ela não depende da
+ * preferência "ao abrir": o clique é a autorização para ir à rede.
+ *
+ * Achando versão nova, baixa e mostra o MESMO aviso "Reiniciar agora" do
+ * startup — o app continua nunca reiniciando sozinho.
+ */
+export async function verificarAgora(
+  deps: Omit<UpdaterDeps, "enabled">,
+  etapa: (e: "procurando" | "baixando") => void = () => {},
+): Promise<DesfechoDaVerificacao> {
+  etapa("procurando");
+  let update: PendingUpdate | null;
+  try {
+    update = await deps.check();
+  } catch (e) {
+    silent("checagem manual falhou", e);
+    return "sem-conexao";
+  }
+  if (!update) return "em-dia";
+  etapa("baixando");
+  try {
+    await update.download();
+  } catch (e) {
+    silent("download manual falhou", e);
+    return "sem-conexao";
+  }
+  const pronta = update;
+  deps.onReady(async () => {
+    try {
+      await pronta.install();
+      await deps.relaunch();
+    } catch (e) {
+      silent("reinício falhou", e);
+    }
+  });
+  return "pronta";
+}
+
+/** As frases do botão manual, em pt-BR. */
+export const TEXTO_DA_VERIFICACAO: Record<DesfechoDaVerificacao | "procurando" | "baixando", string> = {
+  procurando: "Procurando uma versão nova…",
+  baixando: "Baixando a versão nova…",
+  pronta: "A versão nova está pronta. Reinicie para começar a usar.",
+  "em-dia": "Você já está na versão mais nova.",
+  "sem-conexao": "Não foi possível verificar agora. Confira a internet e tente de novo.",
+};
+
+// ---------------------------------------------------------------------------
 // Aviso discreto (não-modal)
 // ---------------------------------------------------------------------------
 

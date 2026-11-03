@@ -151,7 +151,9 @@ pub fn consertar_codificacao_ausente(arquivo: &[u8]) -> Option<(Vec<u8>, Vec<Str
 }
 
 /// Os quadros que o lofty lê como DATA (e recusa quando a data não é dele).
-const QUADROS_DE_DATA: [&[u8]; 5] = [b"TDEN", b"TDOR", b"TDRC", b"TDRL", b"TDTG"];
+/// V15.6 — o TYER (o ano da v2.3) também: o lofty o converte em data ao ler, e
+/// "1978/79" ou "c. 1978" derrubavam o arquivo inteiro (22 no acervo medido).
+const QUADROS_DE_DATA: [&[u8]; 6] = [b"TDEN", b"TDOR", b"TDRC", b"TDRL", b"TDTG", b"TYER"];
 
 /// V15.5 — declara UTF-8, não é UTF-8, e não tem NENHUM caractere UTF-8 de
 /// vários bytes: é Latin-1 com o rótulo errado (medido: "Lavf54.20.4" seguido

@@ -1906,3 +1906,23 @@ fn data_impossivel_grava_e_o_texto_vira_anotacao() {
     assert_eq!(g.aviso, Some(writer::AVISO_CODIFICACAO_CONSERTADA));
     assert_eq!(texto_txxx(&path, "TDRL").as_deref(), Some("2008-13-01"));
 }
+
+/// O ano no formato antigo (TYER, v2.3): o lofty o converte em data, e "1978/79"
+/// ou "c. 1978" derrubam a leitura do arquivo inteiro — 22 arquivos do acervo.
+#[test]
+fn ano_antigo_fora_do_padrao_le_e_grava_e_o_texto_vira_anotacao() {
+    let base = tempfile::tempdir().unwrap();
+    let path = base.path().join("ano antigo.mp3");
+    mp3_com_quadros(
+        &path,
+        3,
+        &[quadro_v23(b"TIT2", b"\x00Nome"), quadro_v23(b"TPE1", b"\x00Quem"), quadro_v23(b"TYER", b"\x001978/79")],
+    );
+    let (_dir, conn, song) = indexar_so(&path);
+    assert_eq!(song.artist.as_deref(), Some("Quem"), "a etiqueta foi lida");
+    let path = PathBuf::from(&song.file_path);
+    let g = writer::write_tags(&conn, song.id, "Nome", Some("Quem"), Some("letra"), None, None)
+        .expect("um ano fora do padrão não pode impedir a gravação");
+    assert_eq!(g.aviso, Some(writer::AVISO_CODIFICACAO_CONSERTADA));
+    assert_eq!(texto_txxx(&path, "TYER").as_deref(), Some("1978/79"), "nada apagado");
+}
