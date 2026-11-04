@@ -18,9 +18,16 @@ function trackErrors(page: Page): string[] {
   return errors;
 }
 
-async function resetApp(page: Page) {
+async function resetApp(page: Page, comTutorial = false) {
   await page.goto("/");
-  await page.evaluate(() => localStorage.clear());
+  await page.evaluate((comTutorial) => {
+    localStorage.clear();
+    // V16.6 — o primeiro uso guiado abre sozinho na biblioteca vazia; os
+    // outros fluxos começam como quem já o viu
+    if (!comTutorial) {
+      localStorage.setItem("cancioneiro-ui", JSON.stringify({ state: { tutorialVisto: true }, version: 0 }));
+    }
+  }, comTutorial);
   await page.reload();
 }
 
@@ -56,6 +63,32 @@ async function addMockFolder(page: Page) {
   await expect(page.getByText("3 músicas indexadas.")).toBeVisible();
   await expect(page.getByText("Coração Sertanejo")).toBeVisible();
 }
+
+test.describe("Primeiro uso guiado (V16.6)", () => {
+  test("abre sozinho, escolhe a pasta no passo 2 e some de vez no fim", async ({ page }) => {
+    const errors = trackErrors(page);
+    await resetApp(page, true);
+    const tutorial = page.getByRole("dialog", { name: "Bem-vindo ao Cancioneiro" });
+    await expect(tutorial).toBeVisible();
+    await page.getByRole("button", { name: "Próximo" }).click();
+    const passo2 = page.getByRole("dialog", { name: "A pasta das músicas" });
+    await passo2.getByRole("button", { name: "Adicionar pasta" }).click();
+    await expect(passo2.getByText(/Sua pasta já está no app/)).toBeVisible();
+    for (let i = 0; i < 3; i++) await page.getByRole("button", { name: "Próximo" }).click();
+    await page.getByRole("button", { name: "Começar a usar" }).click();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await expect(page.getByText("Coração Sertanejo")).toBeVisible();
+
+    // não volta ao reabrir; volta pelo botão de Configurações
+    await page.reload();
+    await expect(page.getByText("Coração Sertanejo")).toBeVisible();
+    await expect(page.getByRole("dialog")).toHaveCount(0);
+    await page.getByRole("button", { name: "Organizar minhas músicas" }).click();
+    await page.getByRole("button", { name: "Ver o tutorial de novo" }).click();
+    await expect(page.getByText("Passo 1 de 5")).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+});
 
 test.describe("Fluxo crítico: indexar → buscar → ver letra → tocar", () => {
   test("adicionar pasta indexa e lista as músicas — sem erros no console", async ({

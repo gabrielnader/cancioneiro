@@ -2928,3 +2928,9 @@ gravação; o desfecho da gravação conta o que foi feito.
 ## V16.5 — o M4A em HE-AAC também é consertado
 - Relato: "Consertar os 7 arquivos" deixou "Balançou o Roseiral" com "não foi possível ler o som". O diagnóstico mostrou um M4A de 1,7 MB — o áudio de 48 kbps baixado do YouTube, em HE-AAC, que o AAC do symphonia recusa ("aac too complex").
 - O AAC do conserto passou a ser lido pelo FDK AAC (o decodificador de referência, com HE-AAC e HE-AAC v2), pelo adaptador dele para o symphonia. Provado com um M4A HE-AAC de sinalização explícita (a dos arquivos do YouTube): falhava com a mesma frase do relato e agora vira MP3.
+
+## V16.6 — Primeiro uso guiado
+- Pedido do dono do produto: "simples e didático", e um botão em Configurações para ver de novo quando quiser.
+- Cinco passos, um por vez, com letra grande: boas-vindas; a pasta das músicas (o botão "Adicionar pasta" de verdade, dentro do passo, e a frase de que o app não muda nome, lugar nem apaga nada); buscar; tocar; organizar. Os desenhos são réplicas do campo de busca, do botão verde e do "Organizar minhas músicas" — mostrar em vez de descrever.
+- Abre sozinho só no PRIMEIRO USO DE VERDADE: nunca visto e biblioteca sem pasta. Quem já usa o app não é interrompido na atualização; para essas pessoas, o cartão "Como usar o Cancioneiro" em Configurações, com "Ver o tutorial de novo".
+- "Pular o tutorial", Esc e "Começar a usar" marcam como visto (guardado com as outras preferências).

@@ -37,6 +37,16 @@ interface UiState {
    * mesma chave das outras preferências.
    */
   openFolders: string[];
+  /**
+   * V16.6 — o tutorial do primeiro uso já foi visto (ou pulado). Guardado
+   * para não voltar a cada abertura; "Ver o tutorial de novo" em
+   * Configurações abre de novo sem mexer nisto.
+   */
+  tutorialVisto: boolean;
+  /** V16.6 — o tutorial está na tela agora (não é guardado). */
+  tutorialAberto: boolean;
+  abrirTutorial: () => void;
+  fecharTutorial: () => void;
   /** V14.1 — largura da barra lateral, em pixels. Ajustável porque nome de
       playlist é longo e a coluna fixa cortava quase todos. */
   larguraLateral: number;
@@ -90,6 +100,10 @@ export function createUiStore() {
         checkUpdatesOnStart: true,
         theme: "auto",
         openFolders: [],
+        tutorialVisto: false,
+        tutorialAberto: false,
+        abrirTutorial: () => set({ tutorialAberto: true }),
+        fecharTutorial: () => set({ tutorialAberto: false, tutorialVisto: true }),
         zoomLevel: 0 as NivelDeZoom,
         setZoomLevel: (nivel) => {
           set({ zoomLevel: nivel });
@@ -131,6 +145,7 @@ export function createUiStore() {
           checkUpdatesOnStart: s.checkUpdatesOnStart,
           theme: s.theme,
           openFolders: s.openFolders,
+          tutorialVisto: s.tutorialVisto,
         }),
         // V11 — reaplica o tema já resolvido assim que o `persist` termina de
         // ler o localStorage (troca de aba, ou qualquer hidratação tardia).

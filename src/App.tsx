@@ -5,6 +5,7 @@ import { LyricsPanel } from "./components/LyricsPanel";
 import { PlayerBar } from "./components/PlayerBar";
 import { PlaylistView } from "./components/PlaylistView";
 import { SettingsView } from "./components/SettingsView";
+import { Tutorial, deveAbrirSozinho } from "./components/Tutorial";
 import { Sidebar } from "./components/Sidebar";
 import { Toasts } from "./components/Toasts";
 import { TopBar } from "./components/TopBar";
@@ -96,6 +97,17 @@ function App() {
     void checkForUpdatesOnStartup();
   }, []);
 
+  // V16.6 — o primeiro uso guiado abre sozinho só no primeiro uso de verdade:
+  // nunca visto e biblioteca carregada sem pasta nenhuma
+  const libraryLoaded = useLibraryStore((s) => s.libraryLoaded);
+  const pastas = useLibraryStore((s) => s.folders.length);
+  useEffect(() => {
+    const ui = useUiStore.getState();
+    if (deveAbrirSozinho(ui.tutorialVisto, libraryLoaded, pastas) && !ui.tutorialAberto) {
+      ui.abrirTutorial();
+    }
+  }, [libraryLoaded, pastas]);
+
   // V16 — o recebimento do pacote nunca grava o arquivo que está no player
   useEffect(() => vigiarOQueEstaTocando(), []);
 
@@ -138,6 +150,7 @@ function App() {
       </div>
       <PlayerBar />
       <EnrichReview />
+      <Tutorial />
       <UpdateNotice />
       <Toasts />
     </div>

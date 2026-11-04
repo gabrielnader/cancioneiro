@@ -340,6 +340,22 @@ export function SettingsView() {
             )}
             {appVersion && <VerificarAtualizacoes />}
           </Cartao>
+          <Cartao
+            id="cartao-ajuda"
+            titulo="Como usar o Cancioneiro"
+            descricao="Os cinco passos do começo: a pasta das músicas, como achar, como tocar e como organizar."
+            icone={ICONES.musica}
+          >
+            <div>
+              <button
+                type="button"
+                onClick={() => useUiStore.getState().abrirTutorial()}
+                className={BOTAO_SECUNDARIO}
+              >
+                Ver o tutorial de novo
+              </button>
+            </div>
+          </Cartao>
           <QuemOrganiza />
         </div>
       </div>

@@ -5,8 +5,9 @@ Decidido pelo dono do produto em 04/11/2026. A ordem é a de execução.
 ## Na fila, em ordem
 
 1. ~~**Minhas anotações**~~ — feito na v0.13.14.
-2. **Primeiro uso guiado** — na primeira abertura, o app conduz: escolher a
-   pasta das músicas, onde buscar, como tocar.
+2. ~~**Primeiro uso guiado**~~ — feito na v0.13.18 (com "Ver o tutorial de
+   novo" em Configurações). Antes dele, fora da lista: "Consertar o arquivo"
+   (v0.13.16–17).
 3. **"Enviar um problema"** — monta um relatório (versão, erro, sistema; sem
    dado pessoal) para a pessoa mandar a quem organiza.
 4. **Cópia de segurança das playlists** — hoje elas moram só no banco do app.
