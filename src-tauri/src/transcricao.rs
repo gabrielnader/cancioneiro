@@ -2741,6 +2741,14 @@ mod tests {
     /// chave carrega o ARQUIVO — não o nome do acessório: se um dia o mesmo
     /// nome apontar para outro arquivo, a medição do arquivo antigo não pode
     /// ser lida como se fosse dele (DECISIONS #72).
+    /// V16 — o botão "É instrumental" do fim da conferência aparece pela
+    /// frase (`sugereInstrumental`, em curadoria.ts). Mudar a frase sem mudar
+    /// lá faria o botão sumir calado.
+    #[test]
+    fn a_frase_de_adiar_continua_sugerindo_marcar_instrumental() {
+        assert!(motivo_de_adiar("x").contains("marque como instrumental"));
+    }
+
     #[test]
     fn cada_modelo_tem_a_propria_chave_de_medicao() {
         let chaves: Vec<String> = MODELOS.iter().map(|m| m.chave_de_medicao()).collect();

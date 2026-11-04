@@ -1702,3 +1702,16 @@ export function textoAplicado({
       : `${partes.slice(0, -1).join(", ")} e ${partes[partes.length - 1]}`;
   return `${frase}.${fecho}`;
 }
+
+/**
+ * V16 — a música que a etapa 5 ADIOU por transcrição curta, cuja própria
+ * mensagem já diz "se ela não tem voz, marque como instrumental". É nela que o
+ * fim da conferência oferece o botão "É instrumental", em vez de mandar a
+ * pessoa abrir a ficha de cada uma (relato de campo: três de uma vez).
+ *
+ * A frase vem pronta do backend (`motivo_de_adiar`, em transcricao.rs): o
+ * teste do botão a cita, então mudar uma muda a outra.
+ */
+export function sugereInstrumental(erro: string | null): boolean {
+  return erro !== null && erro.includes("marque como instrumental");
+}

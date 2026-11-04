@@ -184,6 +184,11 @@ interface EnrichState {
    * banco do app (de uma fila cancelada, ou de antes de reiniciar). 0 = nenhuma.
    */
   letrasGuardadas: number;
+  /**
+   * V16 — "É instrumental", direto no fim da conferência: grava a marca e
+   * devolve null, ou a frase da falha. Só MARCA (desmarcar é do editor).
+   */
+  marcarComoInstrumental: (p: EnrichProposal) => Promise<string | null>;
   /** V15.3 — pergunta ao backend quantas letras guardadas esperam. */
   contarLetrasGuardadas: () => Promise<void>;
   /** V15.3 — abre a revisão com as letras guardadas. Só com nada rodando. */
@@ -351,6 +356,31 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
 
   letrasGuardadas: 0,
   gravando: null,
+
+  marcarComoInstrumental: async (p) => {
+    try {
+      const [r] = await getBackend().enrichApply([
+        {
+          song_id: p.song_id,
+          title: p.current_title,
+          artist: p.current_artist,
+          lyrics: null,
+          add_temas: null,
+          current_title: p.current_title,
+          current_artist: p.current_artist,
+          fonte: null,
+          marcar_instrumental: true,
+        },
+      ]);
+      if (!r || r.song === null) return r?.error ?? "não foi possível gravar";
+      useLibraryStore.getState().updateSong(r.song);
+      usePlaylistStore.getState().updateSongInItems(r.song);
+      usePlayerStore.getState().updateSongRefs(r.song);
+      return null;
+    } catch (e) {
+      return String(e).replace(/^Error:\s*/, "");
+    }
+  },
 
   contarLetrasGuardadas: async () => {
     try {

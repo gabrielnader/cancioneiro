@@ -13,6 +13,7 @@ import {
   AVISO_NOME_ESCRITO,
   EXPLICACAO_DA_CONFIANCA_DO_SOM,
   ROTULO_COMECAR_TRANSCRICAO,
+  sugereInstrumental,
   agruparPorRisco,
   avisoLetraExistente,
   avisoSemPerguntarAoSom,
@@ -842,6 +843,38 @@ export function textoDoUsarEmTodas(comLetra: number, soNome: number): string {
   return `${partes.join(" e ")}, como o Cancioneiro sugeriu, sem você ver uma por uma.`;
 }
 
+/**
+ * V16 — "É instrumental" para a música que a etapa 5 adiou. A pessoa decide
+ * ouvindo; o clique grava a marca na hora e a linha diz que gravou (ou por que
+ * não gravou) — sem abrir a ficha de cada uma.
+ */
+function EInstrumental({ proposta }: { proposta: EnrichProposal }) {
+  const marcar = useEnrichStore((s) => s.marcarComoInstrumental);
+  const [estado, setEstado] = useState<string>("livre");
+  if (estado === "marcada") {
+    return <span className="ml-2 font-semibold text-brand">Marcada como instrumental ✓</span>;
+  }
+  return (
+    <span className="ml-2 inline-flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        disabled={estado === "gravando"}
+        onClick={async () => {
+          setEstado("gravando");
+          const erro = await marcar(proposta);
+          setEstado(erro === null ? "marcada" : erro);
+        }}
+        className="rounded-lg border-2 border-border-strong px-2 py-0.5 text-[15px] font-semibold text-ink hover:bg-surface-hover"
+      >
+        É instrumental
+      </button>
+      {estado !== "livre" && estado !== "gravando" && (
+        <span role="alert" className="text-danger">Não deu para marcar: {estado}</span>
+      )}
+    </span>
+  );
+}
+
 /** O fim da conferência: o que aconteceu, e para onde ir. */
 function Fim({
   semNada,
@@ -938,6 +971,7 @@ function Fim({
                 <span className="text-ink">{nomeCompleto(q.current_title, q.current_artist)}</span>
                 {" — "}
                 {q.error}
+                {sugereInstrumental(q.error) && <EInstrumental proposta={q} />}
               </li>
             ))}
           </ul>

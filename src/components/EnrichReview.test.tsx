@@ -1118,6 +1118,29 @@ describe("Conferir (V15) — uma sugestão por vez", () => {
     expect(decisoesPendentes(useEnrichStore.getState())).toEqual([2, 3]);
   });
 
+  // V16 — "É instrumental" direto no fim, só onde a própria frase sugere
+  it("no fim, a música adiada por transcrição curta ganha o botão 'É instrumental'", async () => {
+    const enrichApply = gravador();
+    renderReview([
+      proposal({
+        song_id: 7,
+        current_title: "Cantos da Floresta",
+        lyrics: null,
+        error:
+          "a transcrição saiu curta (126 caracteres), e não foi possível confirmar que o áudio deste arquivo foi ouvido até o fim. Nada foi gravado, e a música continua na fila. Se ela não tem voz, marque como instrumental no editor",
+      }),
+      proposal({ song_id: 8, current_title: "Sementes", lyrics: null, error: "não foi possível ouvir o áudio deste arquivo" }),
+    ]);
+    // só a adiada tem o botão
+    expect(screen.getAllByRole("button", { name: "É instrumental" })).toHaveLength(1);
+    await clicar("É instrumental");
+    const [a] = enrichApply.mock.calls[0][0];
+    expect(a.song_id).toBe(7);
+    expect(a.marcar_instrumental).toBe(true);
+    expect(a.lyrics).toBeNull();
+    expect(screen.getByText("Marcada como instrumental ✓")).toBeInTheDocument();
+  });
+
   it("'Não, quero ver uma por uma' volta sem gravar nada", async () => {
     const enrichApply = gravador();
     renderReview([nomeEscrito(1, "Asa Branca"), nomeEscrito(2, "Carinhoso")]);
