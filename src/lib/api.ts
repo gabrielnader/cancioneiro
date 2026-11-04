@@ -292,6 +292,14 @@ export interface EnrichProgress {
  * Aplicação aceita pelo usuário (F13). `null` em artist/lyrics/add_temas =
  * "não mexer" — o lote nunca apaga dados existentes.
  */
+/** V16 — o que o recebimento do pacote de letras do grupo fez. */
+export interface ResumoDoRecebimento {
+  reconhecidas: number;
+  preenchidas: number;
+  com_letra_nova: number;
+  falhas: number;
+}
+
 export interface EnrichApply {
   song_id: number;
   title: string;
@@ -597,6 +605,21 @@ export interface Backend {
   transcricoesGuardadas(): Promise<EnrichProposal[]>;
   /** V15.3 — "Manter como está": a letra guardada deixa de esperar. */
   descartarTranscricoes(songIds: number[]): Promise<void>;
+  /**
+   * V16 — o pacote de letras do grupo, recebido POR TRÁS ao abrir: só
+   * preenche o que está vazio, nunca grava a música que está tocando. `null`
+   * quando não há pacote (nem publicado, nem guardado).
+   */
+  receberPacoteDoGrupo(): Promise<ResumoDoRecebimento | null>;
+  /** V16 — "Publicar as letras para o grupo" (só no app de quem organiza). */
+  publicarPacoteDoGrupo(): Promise<{ musicas: number; bytes: number }>;
+  /** V16 — a chave do GitHub de quem organiza; vazia = esquecer. */
+  guardarChaveDoGrupo(chave: string): Promise<void>;
+  temChaveDoGrupo(): Promise<boolean>;
+  /** V16 — o arquivo que está tocando, que o recebimento nunca grava. */
+  definirTocando(caminho: string | null): Promise<void>;
+  /** Assina `pacote:progresso` (montar ou receber o pacote). */
+  onPacoteProgresso(cb: (p: { done: number; total: number }) => void): Promise<() => void>;
   /** Assina `transcricao:progresso` — mesmo contrato dos outros progressos. */
   onTranscricaoProgresso(
     cb: (p: TranscricaoProgresso) => void,
@@ -804,6 +827,30 @@ function tauriBackend(): Backend {
         songIds,
         scanId,
       });
+    },
+    async receberPacoteDoGrupo() {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<ResumoDoRecebimento | null>("receber_pacote_do_grupo");
+    },
+    async publicarPacoteDoGrupo() {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<{ musicas: number; bytes: number }>("publicar_pacote_do_grupo");
+    },
+    async guardarChaveDoGrupo(chave) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("guardar_chave_do_grupo", { chave });
+    },
+    async temChaveDoGrupo() {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<boolean>("tem_chave_do_grupo");
+    },
+    async definirTocando(caminho) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("definir_tocando", { caminho });
+    },
+    async onPacoteProgresso(cb) {
+      const { listen } = await import("@tauri-apps/api/event");
+      return listen<{ done: number; total: number }>("pacote:progresso", (e) => cb(e.payload));
     },
     async transcricoesGuardadas() {
       const { invoke } = await import("@tauri-apps/api/core");

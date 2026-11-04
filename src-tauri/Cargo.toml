@@ -1,6 +1,6 @@
 [package]
 name = "cancioneiro"
-version = "0.13.12"
+version = "0.13.13"
 description = "Cancioneiro — player offline com busca por letra"
 authors = ["Avantsoft"]
 edition = "2021"
@@ -33,6 +33,9 @@ ureq = { version = "2", features = ["tls"] }
 # escrever a nossa daria uma linha de defesa auditada por uma pessoa só. A
 # crate já estava na árvore como dependência transitiva do Tauri.
 sha2 = "0.10"
+# V16 — o pacote de letras do grupo viaja compactado (gzip): ~8 mil letras
+# cabem em poucos MB. Já estava na árvore como dependência transitiva.
+flate2 = "1"
 # V10 — a etapa 5 DECODIFICA o MP3 aqui dentro e entrega ao whisper-cli um WAV
 # 16 kHz mono, que é o único formato que ele lê com certeza em todas as
 # plataformas (ele só decodifica outros quando compilado com ffmpeg, o que é

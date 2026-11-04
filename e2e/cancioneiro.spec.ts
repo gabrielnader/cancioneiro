@@ -1983,6 +1983,25 @@ test.describe("V10 — a etapa que resolve (F18 fase 3)", () => {
     expect(errors).toEqual([]);
   });
 
+  // V16 — a área de quem organiza: recolhida, com chave, e o publicar
+  test("quem organiza guarda a chave e publica as letras para o grupo", async ({ page }) => {
+    const errors = trackErrors(page);
+    await resetApp(page);
+    await addMockFolder(page);
+    await page.getByRole("button", { name: "Organizar minhas músicas" }).click();
+    const area = page.getByTestId("quem-organiza");
+    // recolhida: o botão de publicar não fica na frente de quem só recebe
+    await expect(area.getByRole("button", { name: "Publicar as letras para o grupo" })).toBeHidden();
+    await area.getByText("Para quem organiza as letras do grupo").click();
+    await area.getByLabel("Chave do GitHub").fill("chave-de-teste");
+    await area.getByRole("button", { name: "Guardar a chave" }).click();
+    await area.getByRole("button", { name: "Publicar as letras para o grupo" }).click();
+    await expect(area.getByText(/^Publicado: \d+ músicas/)).toBeVisible();
+    await area.getByRole("button", { name: "Esquecer a chave" }).click();
+    await expect(area.getByLabel("Chave do GitHub")).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
   // =========================================================================
   // V10.9 — e a TERCEIRA porta: a etapa 5 na ficha de UMA música
   // =========================================================================

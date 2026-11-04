@@ -166,6 +166,17 @@ CREATE TABLE IF NOT EXISTS medicoes_de_banda (
 -- no arquivo sem a pessoa conferir). Sai daqui quando a música ganha letra ou
 -- marca de instrumental, ou quando a pessoa escolhe "Manter como está".
 -- Entra pelo `CREATE TABLE IF NOT EXISTS`, como a tabela acima.
+-- V16 — a DIGITAL do áudio de cada música (1 MB do miolo, SHA-256), que é
+-- como o pacote de letras do grupo reconhece a mesma gravação em outro
+-- computador. Guardada para não reler 1 MB de cada música a cada abertura:
+-- vale enquanto a data e o tamanho do arquivo forem os mesmos. Reconstruível.
+CREATE TABLE IF NOT EXISTS digitais_do_audio (
+    song_id INTEGER PRIMARY KEY,
+    mtime INTEGER NOT NULL,
+    tamanho INTEGER NOT NULL,
+    digital TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS transcricoes_guardadas (
     song_id INTEGER PRIMARY KEY,
     -- uma das duas: a letra escrita, ou o motivo de parecer instrumental

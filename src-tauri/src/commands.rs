@@ -2336,3 +2336,224 @@ mod tests {
         assert_eq!(ap.current_artist, None);
     }
 }
+
+// ---------------------------------------------------------------------------
+// V16 — o pacote de letras do grupo (ver `pacote.rs`)
+//
+// Ponto de rede ENUMERADO, como os outros: só os endereços do GitHub deste
+// repositório, e só (a) ao abrir, quando "Verificar atualizações ao abrir"
+// está ligado — a mesma autorização de rede da atualização —, e (b) no clique
+// "Publicar" de quem organiza.
+// ---------------------------------------------------------------------------
+
+const REPO_DO_GRUPO: &str = "gabrielnader/cancioneiro";
+const TAG_DO_GRUPO: &str = "letras-do-grupo";
+const ARQUIVO_DO_GRUPO: &str = "letras-do-grupo.json.gz";
+
+fn pasta_do_app(app: &AppHandle) -> Result<PathBuf> {
+    app.path()
+        .app_data_dir()
+        .map_err(|_| AppError("não foi possível achar a pasta do aplicativo".into()))
+}
+
+fn agente_do_grupo() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(15))
+        .timeout_read(std::time::Duration::from_secs(120))
+        .user_agent("Cancioneiro")
+        .build()
+}
+
+/// O que a tela de quem organiza vê depois de publicar.
+#[derive(Debug, Clone, Serialize)]
+pub struct ResumoDaPublicacao {
+    pub musicas: usize,
+    pub bytes: usize,
+}
+
+/// O progresso de montar ou receber o pacote (o mesmo formato dos outros).
+#[derive(Debug, Clone, Serialize)]
+pub struct ProgressoDoPacote {
+    pub done: usize,
+    pub total: usize,
+}
+
+/// Recebe o pacote, por trás: confere se há versão nova (uma consulta
+/// pequena), baixa só quando mudou, e preenche esta biblioteca com ele —
+/// inclusive com o pacote já baixado antes, para as músicas que chegaram
+/// depois. Sem pacote publicado, ou sem internet e sem cópia guardada:
+/// `None`, em silêncio.
+#[tauri::command(async)]
+pub fn receber_pacote_do_grupo(
+    app: AppHandle,
+    state: State<'_, Db>,
+) -> Result<Option<crate::pacote::ResumoDoRecebimento>> {
+    let pasta = pasta_do_app(&app)?;
+    let guardado = pasta.join(ARQUIVO_DO_GRUPO);
+    let versao_guardada = pasta.join("letras-do-grupo.versao");
+    let agente = agente_do_grupo();
+
+    // a versão publicada (sem internet: segue com o que estiver guardado)
+    let publicado: Option<(String, String)> = agente
+        .get(&format!("https://api.github.com/repos/{REPO_DO_GRUPO}/releases/tags/{TAG_DO_GRUPO}"))
+        .call()
+        .ok()
+        .and_then(|r| r.into_string().ok())
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| {
+            v["assets"].as_array()?.iter().find(|a| a["name"] == ARQUIVO_DO_GRUPO).map(|a| {
+                (
+                    a["updated_at"].as_str().unwrap_or("").to_string(),
+                    a["browser_download_url"].as_str().unwrap_or("").to_string(),
+                )
+            })
+        });
+    if let Some((versao, url)) = publicado {
+        let ja_tem = std::fs::read_to_string(&versao_guardada).ok().as_deref() == Some(versao.as_str());
+        if !ja_tem && url.starts_with("https://github.com/") {
+            if let Ok(r) = agente.get(&url).call() {
+                let mut bytes = Vec::new();
+                let leitor = r.into_reader();
+                if std::io::Read::read_to_end(&mut std::io::Read::take(leitor, 64 * 1024 * 1024), &mut bytes).is_ok()
+                    && crate::pacote::abrir(&bytes).is_some()
+                {
+                    // grava ao lado e troca de nome: um pacote pela metade
+                    // nunca fica no lugar do bom
+                    let tmp = pasta.join("letras-do-grupo.baixando");
+                    if std::fs::write(&tmp, &bytes).is_ok() && std::fs::rename(&tmp, &guardado).is_ok() {
+                        let _ = std::fs::write(&versao_guardada, &versao);
+                    }
+                }
+            }
+        }
+    }
+
+    let Some(pacote) = std::fs::read(&guardado).ok().and_then(|b| crate::pacote::abrir(&b)) else {
+        return Ok(None);
+    };
+    let conn = state.scan_conn()?;
+    let resumo = crate::pacote::aplicar(&conn, &pacote, |done, total| {
+        let _ = app.emit("pacote:progresso", ProgressoDoPacote { done, total });
+    })?;
+    Ok(Some(resumo))
+}
+
+/// O player avisa o que está tocando: o recebimento nunca grava essa música.
+#[tauri::command]
+pub fn definir_tocando(caminho: Option<String>) {
+    crate::pacote::definir_tocando(caminho);
+}
+
+/// A chave do GitHub de quem organiza: só no computador dela, na pasta do
+/// app, legível só pelo usuário. Vazia = esquecer a chave.
+#[tauri::command]
+pub fn guardar_chave_do_grupo(app: AppHandle, chave: String) -> Result<()> {
+    let caminho = pasta_do_app(&app)?.join("chave-do-grupo");
+    let chave = chave.trim();
+    if chave.is_empty() {
+        let _ = std::fs::remove_file(&caminho);
+        return Ok(());
+    }
+    std::fs::write(&caminho, chave).map_err(|_| AppError("não foi possível guardar a chave".into()))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&caminho, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn tem_chave_do_grupo(app: AppHandle) -> Result<bool> {
+    Ok(pasta_do_app(&app)?.join("chave-do-grupo").is_file())
+}
+
+fn json_de(r: ureq::Response) -> Result<serde_json::Value> {
+    r.into_string()
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .ok_or_else(|| AppError("o GitHub respondeu algo inesperado".into()))
+}
+
+/// A frase em pt-BR para cada recusa do GitHub ao publicar.
+fn erro_ao_publicar(e: ureq::Error) -> AppError {
+    AppError(
+        match e {
+            ureq::Error::Status(401, _) => {
+                "a chave do GitHub não foi aceita — confira se ela foi copiada inteira e se não venceu"
+            }
+            ureq::Error::Status(403 | 404, _) => {
+                "a chave do GitHub não tem permissão para publicar neste repositório"
+            }
+            ureq::Error::Status(s, _) if (500..=599).contains(&s) => "o GitHub está fora do ar agora — tente daqui a pouco",
+            ureq::Error::Status(_, _) => "o GitHub recusou a publicação",
+            _ => "sem conexão com a internet",
+        }
+        .into(),
+    )
+}
+
+/// "Publicar as letras para o grupo": monta o pacote desta biblioteca e o
+/// coloca no pré-lançamento `letras-do-grupo`, no lugar do anterior. Um
+/// pré-lançamento, para nunca virar a "versão mais recente" que o atualizador
+/// do app consulta.
+#[tauri::command(async)]
+pub fn publicar_pacote_do_grupo(app: AppHandle, state: State<'_, Db>) -> Result<ResumoDaPublicacao> {
+    let chave = std::fs::read_to_string(pasta_do_app(&app)?.join("chave-do-grupo"))
+        .map_err(|_| AppError("falta a chave do GitHub — cole-a acima e tente de novo".into()))?;
+    let chave = chave.trim();
+    let bytes = {
+        let conn = state.scan_conn()?;
+        crate::pacote::montar(&conn, |done, total| {
+            let _ = app.emit("pacote:progresso", ProgressoDoPacote { done, total });
+        })?
+    };
+    let musicas = crate::pacote::abrir(&bytes).map(|p| p.musicas.len()).unwrap_or(0);
+    let agente = agente_do_grupo();
+    let auth = format!("Bearer {chave}");
+    let api = format!("https://api.github.com/repos/{REPO_DO_GRUPO}/releases");
+
+    // o lançamento (criado na primeira publicação)
+    let lancamento: serde_json::Value = match agente.get(&format!("{api}/tags/{TAG_DO_GRUPO}")).set("Authorization", &auth).call() {
+        Ok(r) => json_de(r)?,
+        Err(ureq::Error::Status(404, _)) => agente
+            .post(&api)
+            .set("Authorization", &auth)
+            .set("Content-Type", "application/json")
+            .send_string(
+                &serde_json::json!({
+                    "tag_name": TAG_DO_GRUPO,
+                    "name": "Letras do grupo",
+                    "prerelease": true,
+                    "body": "Pacote de letras publicado pelo Cancioneiro de quem organiza o grupo. Os aplicativos o recebem sozinhos."
+                })
+                .to_string(),
+            )
+            .map_err(erro_ao_publicar)
+            .and_then(json_de)?,
+        Err(e) => return Err(erro_ao_publicar(e)),
+    };
+    let id = lancamento["id"].as_u64().ok_or_else(|| AppError("o GitHub respondeu algo inesperado".into()))?;
+
+    // o pacote anterior sai, o novo entra
+    if let Some(antigo) = lancamento["assets"]
+        .as_array()
+        .and_then(|a| a.iter().find(|x| x["name"] == ARQUIVO_DO_GRUPO))
+        .and_then(|x| x["id"].as_u64())
+    {
+        agente
+            .delete(&format!("{api}/assets/{antigo}"))
+            .set("Authorization", &auth)
+            .call()
+            .map_err(erro_ao_publicar)?;
+    }
+    agente
+        .post(&format!(
+            "https://uploads.github.com/repos/{REPO_DO_GRUPO}/releases/{id}/assets?name={ARQUIVO_DO_GRUPO}"
+        ))
+        .set("Authorization", &auth)
+        .set("Content-Type", "application/gzip")
+        .send_bytes(&bytes)
+        .map_err(erro_ao_publicar)?;
+    Ok(ResumoDaPublicacao { musicas, bytes: bytes.len() })
+}

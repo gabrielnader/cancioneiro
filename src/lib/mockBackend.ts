@@ -222,6 +222,8 @@ interface DbState {
   medicaoDaTranscricao?: { audio: number; relogio: number } | null;
   /** V15.3 — músicas cuja letra a etapa 5 já escreveu e espera conferência. */
   transcricoesGuardadas?: number[];
+  /** V16 — há chave do GitHub guardada (o valor nunca fica aqui). */
+  chaveDoGrupo?: boolean;
   /** O que o som responde, por arquivo. Permanente, como o próprio áudio. */
   somDiz: Record<string, SomDiz>;
   /**
@@ -2673,6 +2675,26 @@ export function createMockBackend(): MockBackend {
         razao_medida: audioMedido > 0 ? relogioMedido / audioMedido : null,
         razao_desta_maquina: razaoDestaMaquina(),
       };
+    },
+
+    // V16 — no modo de navegador não há GitHub nem arquivos: o pacote não
+    // existe, e publicar só conta o que entraria
+    async receberPacoteDoGrupo() {
+      return null;
+    },
+    async publicarPacoteDoGrupo() {
+      return { musicas: state.songs.filter((s) => s.has_lyrics).length, bytes: 1234 };
+    },
+    async guardarChaveDoGrupo(chave: string) {
+      state.chaveDoGrupo = chave.trim() !== "";
+      save();
+    },
+    async temChaveDoGrupo() {
+      return state.chaveDoGrupo === true;
+    },
+    async definirTocando() {},
+    async onPacoteProgresso() {
+      return () => {};
     },
 
     async transcricoesGuardadas(): Promise<EnrichProposal[]> {

@@ -340,6 +340,7 @@ export function SettingsView() {
             )}
             {appVersion && <VerificarAtualizacoes />}
           </Cartao>
+          <QuemOrganiza />
         </div>
       </div>
 
@@ -843,6 +844,139 @@ function CuradoriaSection() {
         <Acessorios lista={acessorios} />
       </Cartao>
     </div>
+  );
+}
+
+/**
+ * V16 — a área de QUEM ORGANIZA: publicar as letras desta biblioteca para o
+ * grupo. Recolhida e no fim de propósito: as outras pessoas não precisam dela
+ * (elas recebem sozinhas), e uma chave e um botão de publicar na frente delas
+ * seriam só dúvida.
+ */
+function QuemOrganiza() {
+  const [temChave, setTemChave] = useState<boolean | null>(null);
+  const [chave, setChave] = useState("");
+  const [estado, setEstado] = useState<
+    | { tipo: "livre" }
+    | { tipo: "publicando"; done: number; total: number }
+    | { tipo: "publicado"; musicas: number; bytes: number }
+    | { tipo: "erro"; texto: string }
+  >({ tipo: "livre" });
+
+  useEffect(() => {
+    try {
+      void getBackend()
+        .temChaveDoGrupo()
+        .then(setTemChave)
+        .catch(() => setTemChave(false));
+    } catch {
+      // backend sem o comando (fakes de teste): a área diz "sem chave"
+      setTemChave(false);
+    }
+  }, []);
+
+  async function guardar(valor: string) {
+    await getBackend().guardarChaveDoGrupo(valor);
+    setChave("");
+    setTemChave(valor.trim() !== "");
+  }
+
+  async function publicar() {
+    setEstado({ tipo: "publicando", done: 0, total: 0 });
+    const parar = await getBackend()
+      .onPacoteProgresso((p) => setEstado({ tipo: "publicando", done: p.done, total: p.total }))
+      .catch(() => () => {});
+    try {
+      const r = await getBackend().publicarPacoteDoGrupo();
+      setEstado({ tipo: "publicado", ...r });
+    } catch (e) {
+      setEstado({ tipo: "erro", texto: String(e).replace(/^Error:\s*/, "") });
+    } finally {
+      parar();
+    }
+  }
+
+  return (
+    <details data-testid="quem-organiza" className="rounded-2xl border border-border bg-surface px-5 py-4">
+      <summary className="cursor-pointer text-[17px] font-semibold text-ink">
+        Para quem organiza as letras do grupo
+      </summary>
+      <div className="mt-3 flex flex-col gap-3 text-[16px] leading-relaxed text-ink-secondary">
+        <p>
+          Publique as letras desta biblioteca para que o Cancioneiro de cada pessoa do grupo as
+          receba sozinho ao abrir. Nos computadores delas, só é preenchido o que está vazio: nada
+          que alguém escreveu é trocado.
+        </p>
+        {temChave === false && (
+          <>
+            <label className="flex flex-col gap-1">
+              <span className="font-semibold text-ink">Chave do GitHub</span>
+              <input
+                type="password"
+                value={chave}
+                onChange={(e) => setChave(e.target.value)}
+                className="min-h-12 rounded-xl border-2 border-border-strong bg-surface px-3 text-[16px] text-ink"
+                autoComplete="off"
+              />
+            </label>
+            <div>
+              <button
+                type="button"
+                disabled={chave.trim() === ""}
+                onClick={() => void guardar(chave)}
+                className={BOTAO_SECUNDARIO}
+              >
+                Guardar a chave
+              </button>
+            </div>
+            <p className="text-[15px] text-ink-tertiary">
+              A chave fica só neste computador. É ela que permite publicar no lugar de onde os
+              outros aplicativos baixam as letras.
+            </p>
+          </>
+        )}
+        {temChave && (
+          <>
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                disabled={estado.tipo === "publicando"}
+                onClick={() => void publicar()}
+                className={BOTAO_PRINCIPAL}
+              >
+                Publicar as letras para o grupo
+              </button>
+              <button
+                type="button"
+                disabled={estado.tipo === "publicando"}
+                onClick={() => void guardar("")}
+                className="min-h-12 rounded-xl px-3 text-[15px] font-semibold text-ink-tertiary underline underline-offset-4"
+              >
+                Esquecer a chave
+              </button>
+            </div>
+            {estado.tipo === "publicando" && (
+              <p role="status">
+                {estado.total > 0
+                  ? `Preparando as letras… ${estado.done.toLocaleString("pt-BR")} de ${estado.total.toLocaleString("pt-BR")}`
+                  : "Preparando as letras…"}
+              </p>
+            )}
+            {estado.tipo === "publicado" && (
+              <p role="status" className="font-semibold text-brand">
+                Publicado: {estado.musicas.toLocaleString("pt-BR")} músicas. O Cancioneiro de cada
+                pessoa recebe na próxima vez que for aberto.
+              </p>
+            )}
+            {estado.tipo === "erro" && (
+              <p role="alert" className="text-danger">
+                Não deu para publicar: {estado.texto}
+              </p>
+            )}
+          </>
+        )}
+      </div>
+    </details>
   );
 }
 

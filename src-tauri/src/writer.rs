@@ -606,7 +606,7 @@ const MASCARA_DO_CABECALHO: u32 = 0xFFFE_0C00;
 /// calculado, com a mesma versão, camada e taxa de amostragem. É a mesma
 /// conferência do `cmp_header` do lofty, e é o que torna o resultado utilizável
 /// para decidir onde o áudio começa.
-fn primeiro_quadro_mpeg(bytes: &[u8], inicio: usize) -> Option<usize> {
+pub(crate) fn primeiro_quadro_mpeg(bytes: &[u8], inicio: usize) -> Option<usize> {
     let mut i = inicio;
     while i + 4 <= bytes.len() {
         let cabecalho: [u8; 4] = bytes[i..i + 4].try_into().unwrap();
@@ -639,7 +639,7 @@ fn primeiro_quadro_mpeg(bytes: &[u8], inicio: usize) -> Option<usize> {
 /// errar essa conta aqui é a única forma de o conserto mirar no lugar errado.
 /// Nenhum dos arquivos do relato tem rodapé, e recusar custa uma gravação que já
 /// estava recusada de qualquer jeito.
-fn fim_declarado_do_id3v2(bytes: &[u8]) -> Option<usize> {
+pub(crate) fn fim_declarado_do_id3v2(bytes: &[u8]) -> Option<usize> {
     if bytes.len() < 10 || &bytes[..3] != b"ID3" {
         return None;
     }

@@ -2896,3 +2896,11 @@ gravação; o desfecho da gravação conta o que foi feito.
 - A etiqueta colada agora é absorvida em TODA gravação, pelo caminho da V15.10: o que a junção esconde vira anotação, o que não dá para guardar faz recusar.
 - "É instrumental" no fim da conferência, só nas músicas que a etapa 5 adiou com a frase que já sugeria isso (travada por teste no Rust).
 - Detector de voz medido no acervo (5 músicas, regulagem de fábrica): instrumentais 31 s → 2 s e sem texto inventado, mas o canto se perdeu ("Balanço do mar II" sem nada, outras com metade). Não entra assim; mede-se uma regulagem mais sensível.
+
+## V16.1 — o pacote de letras do grupo
+- Por quê: a curadoria de um acervo levou ~4 dias no computador de quem organiza, e a maior parte do grupo tem as mesmas músicas. Quem organiza publica UMA vez; o app de cada pessoa recebe.
+- Decisões do dono do produto: recebimento AUTOMÁTICO, por trás, sem cartão nem botão ("um passo a mais é um passo que os usuários podem não dar") — a única gravação do app sem clique, e por isso a mais estreita: SÓ PREENCHE O QUE ESTÁ VAZIO (letra inexistente, quem canta vazio ou "Unknown", nome que ainda é o do arquivo, temas que faltam, instrumental em música sem letra). Nada escrito é trocado, nem por correção de quem organiza.
+- A ida à internet ao abrir usa a MESMA autorização da atualização ("Verificar atualizações ao abrir"); desligada, nada sai. Uma consulta pequena à API do GitHub; o pacote (gzip, poucos MB) só é baixado quando mudou, e a cópia guardada é reaplicada a cada abertura para as músicas que chegaram depois.
+- Reconhecimento pela cópia do áudio: SHA-256 de 1 MB a partir do primeiro quadro MPEG, sem as etiquetas do começo e sem os últimos 64 KB (ID3v1/APE/Lyrics3). Guardada por música (data + tamanho). O reconhecimento pelo som fica para depois, se a cobertura medida no computador de alguém do grupo for baixa.
+- Gravação pelo `enrich::apply` (confere se a música mudou, recusa trocar letra existente); o arquivo que está no PLAYER nunca é gravado (fica para a próxima abertura) — pelo caminho, que é o que o player lê.
+- Publicar: só no app de quem organiza, com uma chave do GitHub guardada só naquele computador (arquivo 0600 na pasta do app), num PRÉ-lançamento `letras-do-grupo` — que nunca vira a "versão mais recente" do atualizador. A área fica recolhida no fim de Configurações.

@@ -9,6 +9,7 @@ pub mod fingerprint;
 pub mod indexer;
 pub mod lyrics_fetch;
 pub mod lyrics_ovh;
+pub mod pacote;
 pub mod processo;
 pub mod search;
 pub mod transcricao;
@@ -71,6 +72,11 @@ pub fn run() {
             commands::transcrever_musicas,
             commands::transcricoes_guardadas,
             commands::descartar_transcricoes,
+            commands::receber_pacote_do_grupo,
+            commands::publicar_pacote_do_grupo,
+            commands::guardar_chave_do_grupo,
+            commands::tem_chave_do_grupo,
+            commands::definir_tocando,
             commands::acessorios_estado,
             commands::acessorio_baixar,
             commands::acessorio_cancelar,

@@ -12,6 +12,7 @@ import { useKeyboardShortcuts } from "./hooks/useKeyboardShortcuts";
 import { getBackend } from "./lib/api";
 import { watchSystemTheme } from "./lib/theme";
 import { checkForUpdatesOnStartup, useUpdateStore } from "./lib/updater";
+import { receberPacoteAoAbrir, vigiarOQueEstaTocando } from "./lib/pacoteDoGrupo";
 import { useLibraryStore } from "./stores/libraryStore";
 import { usePlaylistStore } from "./stores/playlistStore";
 import { useUiStore } from "./stores/uiStore";
@@ -85,12 +86,18 @@ function App() {
         setScanning(null);
         unlisten();
       }
+      // V16 — DEPOIS do rescan: as músicas que acabaram de chegar também são
+      // reconhecidas. Por trás, e em silêncio quando não há o que fazer.
+      await receberPacoteAoAbrir();
     })();
 
     // V7/F16 — a checagem de atualização roda à parte, sem `await` de ninguém:
     // não segura a abertura da janela, o scan nem a busca. Falha em silêncio.
     void checkForUpdatesOnStartup();
   }, []);
+
+  // V16 — o recebimento do pacote nunca grava o arquivo que está no player
+  useEffect(() => vigiarOQueEstaTocando(), []);
 
   // V15 — em tela estreita os detalhes abrem POR CIMA da lista. Abrir o app
   // assim seria esconder a busca logo na chegada: começam fechados, e o botão
