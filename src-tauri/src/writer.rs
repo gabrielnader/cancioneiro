@@ -702,6 +702,17 @@ fn salvar_etiqueta(
     path: &Path,
     caminho: &str,
 ) -> Result<Option<&'static str>> {
+    // V16 — uma SEGUNDA etiqueta colada na primeira é absorvida em TODA
+    // gravação, e não só quando o lofty recusa o arquivo. Medido no campo
+    // ("Song 11 — Unknown"): o lofty grava só a primeira, mas relê as duas
+    // juntas, e um quadro da segunda ESCONDE o que acabou de ser gravado — a
+    // letra vazia em português dela escondia a letra nova, que "gravava" e
+    // não aparecia. O conserto é o mesmo da V15.8: nada que a junção esconde se
+    // perde (vira anotação), e o que não dá para guardar faz recusar.
+    let original = std::fs::read(path).map_err(|e| erro_de_gravacao(caminho, frase_de_io(&e)))?;
+    if tem_etiqueta_colada(&original) {
+        return gravar_normalizando_a_etiqueta(tag, path, caminho);
+    }
     match tag.save_to_path(path, WriteOptions::default()) {
         Ok(()) => Ok(None),
         Err(e) if matches!(e.kind(), ErrorKind::UnknownFormat) => {
@@ -887,6 +898,14 @@ fn mesmo_conteudo(a: &Frame, b: &Frame) -> bool {
         (Frame::Private(x), Frame::Private(y)) => x.private_data == y.private_data,
         _ => format!("{a:?}") == format!("{b:?}"),
     }
+}
+
+/// V16 — logo depois do fim declarado da etiqueta começa OUTRA etiqueta ID3v2?
+/// É a forma exata em que o lofty lê as duas como uma só (ver acima).
+fn tem_etiqueta_colada(bytes: &[u8]) -> bool {
+    fim_declarado_do_id3v2(bytes)
+        .and_then(|fim| bytes.get(fim..fim + 3))
+        .is_some_and(|m| m == b"ID3")
 }
 
 /// `bytes` contém a sequência `marca`?

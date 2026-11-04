@@ -256,7 +256,7 @@ dependencies = [
 
 [[package]]
 name = "cancioneiro"
-version = "0.13.11"
+version = "0.13.12"
 dependencies = [
  "lofty",
  "rusqlite",

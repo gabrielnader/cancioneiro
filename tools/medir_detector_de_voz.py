@@ -43,11 +43,21 @@ def baixar(nome: str) -> Path:
     return destino
 
 
-def transcrever(programa: Path, wav: Path, detector: Path | None) -> tuple[float, str]:
+# V16 — a 1ª medição (regulagem de fábrica, limiar 0,5) acertou as
+# instrumentais e PERDEU canto: "Balanço do mar II" ficou sem nada. O detector
+# foi feito para fala; aqui se mede se ele fica útil mais sensível.
+REGULAGENS = [
+    ("sem detector", None),
+    ("sensível (0,3)", ["--vad-threshold", "0.3", "--vad-speech-pad-ms", "500"]),
+    ("muito sensível (0,15)", ["--vad-threshold", "0.15", "--vad-speech-pad-ms", "500"]),
+]
+
+
+def transcrever(programa: Path, wav: Path, detector: Path | None, extra: list[str] | None) -> tuple[float, str]:
     args = [str(programa), "--model", str(MODELO), "--file", str(wav), "--language", "pt",
             "--no-timestamps", "--max-context", "0"]
-    if detector:
-        args += ["--vad", "--vad-model", str(detector)]
+    if extra is not None:
+        args += ["--vad", "--vad-model", str(detector), *extra]
     inicio = time.monotonic()
     r = subprocess.run(args, capture_output=True, text=True)
     return time.monotonic() - inicio, " ".join(r.stdout.split())
@@ -62,7 +72,7 @@ def main(arquivos: list[str]) -> int:
         return 1
     PASTA.mkdir(exist_ok=True)
     programa, detector = baixar(PROGRAMA), baixar(DETECTOR)
-    total_sem = total_com = 0.0
+    totais = [0.0] * len(REGULAGENS)
     with tempfile.TemporaryDirectory() as tmp:
         for i, mp3 in enumerate(arquivos, 1):
             caminho = Path(mp3).expanduser()
@@ -70,16 +80,15 @@ def main(arquivos: list[str]) -> int:
             # a mesma conversão do app: 16 kHz, mono, 16 bits
             subprocess.run(["afconvert", "-f", "WAVE", "-d", "LEI16@16000", "-c", "1", str(caminho), str(wav)],
                            check=True, capture_output=True)
-            t_sem, texto_sem = transcrever(programa, wav, None)
-            t_com, texto_com = transcrever(programa, wav, detector)
-            total_sem += t_sem
-            total_com += t_com
             print(f"\n=== [{i}/{len(arquivos)}] {caminho.name}")
-            print(f"  sem detector: {t_sem:6.0f} s, {len(texto_sem):5} letras — {texto_sem[:90]!r}")
-            print(f"  com detector: {t_com:6.0f} s, {len(texto_com):5} letras — {texto_com[:90]!r}")
+            for n, (nome, extra) in enumerate(REGULAGENS):
+                t, texto = transcrever(programa, wav, detector, extra)
+                totais[n] += t
+                print(f"  {nome:22} {t:5.0f} s, {len(texto):5} letras — {texto[:70]!r}")
             wav.unlink(missing_ok=True)
-    if total_com:
-        print(f"\nTOTAL: sem {total_sem:.0f} s, com {total_com:.0f} s — {total_sem / total_com:.1f}x mais rápido")
+    print("\nTOTAL:")
+    for (nome, _), t in zip(REGULAGENS, totais):
+        print(f"  {nome:22} {t:5.0f} s" + (f" — {totais[0] / t:.1f}x mais rápido" if t and nome != REGULAGENS[0][0] else ""))
     return 0
 
 

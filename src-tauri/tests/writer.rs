@@ -2259,3 +2259,39 @@ fn ape_quebrada_no_fim_le_e_grava_e_fica_intacta() {
     let fim_original = [ape, id3v1].concat();
     assert!(depois.ends_with(&fim_original), "a APE e a ID3v1 do fim ficam como estavam");
 }
+
+
+/// "Song 11 — Unknown": a segunda etiqueta, COLADA na primeira e sem sobra
+/// nenhuma (o lofty grava sem reclamar), tem uma letra vazia em português. O
+/// lofty grava só a primeira mas relê as duas juntas, e a letra vazia da segunda
+/// ESCONDIA a letra nova: gravava, e a música continuava "sem letra".
+#[test]
+fn etiqueta_colada_nao_esconde_o_que_acabou_de_ser_gravado() {
+    let base = tempfile::tempdir().unwrap();
+    let path = base.path().join("Song 11.mp3");
+    let tmp = path.with_extension("fonte");
+    copy_fixture("com_letra.mp3", &tmp);
+    let audio = audio_bytes(&tmp);
+    fs::remove_file(&tmp).unwrap();
+    let primeiro = quadro_v23(b"TIT2", b"\x00Titulo Real");
+    let segundo = [quadro_v24(b"TIT2", b"\x03Song 11"), quadro_v24(b"USLT", b"\x03por\x00")].concat();
+    let mut a = b"ID3\x03\x00\x00".to_vec();
+    a.extend_from_slice(&syncsafe(primeiro.len()));
+    a.extend(primeiro);
+    a.extend_from_slice(b"ID3\x04\x00\x00");
+    a.extend_from_slice(&syncsafe(segundo.len()));
+    a.extend(&segundo);
+    a.extend_from_slice(&audio);
+    fs::write(&path, &a).unwrap();
+
+    let (_d, conn, song) = indexar_so(&path);
+    let path = PathBuf::from(&song.file_path);
+    writer::write_tags(&conn, song.id, "Nome Editado", None, Some("a letra nova"), None, None)
+        .expect("grava");
+    let depois = db::get_song(&conn, song.id).unwrap().unwrap();
+    assert!(depois.has_lyrics, "a letra gravada aparece");
+    assert_eq!(depois.title, "Nome Editado", "a edição do nome aparece");
+    // o título escondido da primeira não se perde
+    assert_eq!(texto_txxx(&path, "TIT2 (etiqueta antiga)").as_deref(), Some("Titulo Real"));
+    assert_eq!(audio_bytes(&path), audio, "o áudio não pode ser tocado");
+}

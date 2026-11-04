@@ -2890,3 +2890,9 @@ gravação; o desfecho da gravação conta o que foi feito.
 ## V15.11 — a pasta da música, na lista e nos detalhes
 - Pedido do dono do produto: "muitas pessoas se organizam a partir de pastas". A DECISIONS #43 tirava a pasta da linha porque ela já estava na árvore lateral — mas a árvore mostra ONDE ESTÁ cada pasta, não em QUAL pasta está cada música, e numa busca as músicas vêm de pastas misturadas.
 - Lista: a pasta vai na FRENTE do nome do arquivo, na mesma linha (a altura da linha não muda), a partir da pasta registrada — repetir "Musicas" em toda linha seria ruído. Detalhes: a pasta por extenso e clicável, que mostra as músicas dela com o mesmo filtro da lateral.
+
+## V16 — a etiqueta colada não esconde mais o que foi gravado; "É instrumental" no fim
+- Relato ("Song 11 — Unknown"): "Usar o novo" gravava a letra e o aviso de letra esperando voltava. A segunda ID3v2 COLADA na primeira (sem sobra; o lofty grava sem reclamar) tinha uma letra vazia em português: o lofty grava só a primeira e relê as duas juntas, e a vazia escondia a nova. O mesmo esconderia um título editado.
+- A etiqueta colada agora é absorvida em TODA gravação, pelo caminho da V15.10: o que a junção esconde vira anotação, o que não dá para guardar faz recusar.
+- "É instrumental" no fim da conferência, só nas músicas que a etapa 5 adiou com a frase que já sugeria isso (travada por teste no Rust).
+- Detector de voz medido no acervo (5 músicas, regulagem de fábrica): instrumentais 31 s → 2 s e sem texto inventado, mas o canto se perdeu ("Balanço do mar II" sem nada, outras com metade). Não entra assim; mede-se uma regulagem mais sensível.
