@@ -245,3 +245,19 @@ fn apagar_as_copias_tira_o_voltar() {
     assert_eq!(conversao::copias_guardadas(&conn).unwrap(), (0, 0));
     assert!(conversao::voltar_ao_original(&conn, &s).is_err());
 }
+
+/// V16.5 — "Balançou o Roseiral": M4A em HE-AAC (o áudio de 48 kbps baixado do
+/// YouTube). O AAC do symphonia recusava ("aac too complex") e o conserto dizia
+/// "não foi possível ler o som". O FDK AAC lê.
+#[test]
+fn m4a_em_he_aac_tambem_e_consertado() {
+    let (l, dir) = lugar();
+    let path = dir.join("Balançou o Roseiral.mp3");
+    fs::copy(Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/dados/heaac_com_nome_de_mp3.mp3"), &path).unwrap();
+    let conn = biblioteca(&dir);
+    let s = consertar(&conn, &l, &musica(&conn, "Roseiral.mp3"));
+    assert_eq!(conversao::conteudo_do_arquivo(&path), Conteudo::Mp3);
+    assert_eq!(s.title, "Balançou o Roseiral");
+    let d = s.duration_seconds.expect("duração");
+    assert!((d - 3).abs() <= 1, "duração {d}");
+}

@@ -2924,3 +2924,7 @@ gravação; o desfecho da gravação conta o que foi feito.
 - O que estava escrito no arquivo (LIST/INFO e bloco "id3 " do WAV; etiqueta do M4A) vira a etiqueta ID3 do MP3 novo.
 - O original vai para `arquivos-originais/` na pasta do app ANTES da troca, conferido byte por byte; a troca é conferida relendo; falha depois de gravar põe o original de volta. A música que está no player não é trocada, e arquivo que mudou entre preparar e trocar também não.
 - "Voltar ao som original" nos detalhes da música, avisando que o que foi gravado depois do conserto se perde. Em Configurações: quantos arquivos precisam de conserto (com "Consertar os N arquivos") e quanto os originais ocupam (com "Apagar os originais guardados").
+
+## V16.5 — o M4A em HE-AAC também é consertado
+- Relato: "Consertar os 7 arquivos" deixou "Balançou o Roseiral" com "não foi possível ler o som". O diagnóstico mostrou um M4A de 1,7 MB — o áudio de 48 kbps baixado do YouTube, em HE-AAC, que o AAC do symphonia recusa ("aac too complex").
+- O AAC do conserto passou a ser lido pelo FDK AAC (o decodificador de referência, com HE-AAC e HE-AAC v2), pelo adaptador dele para o symphonia. Provado com um M4A HE-AAC de sinalização explícita (a dos arquivos do YouTube): falhava com a mesma frase do relato e agora vira MP3.

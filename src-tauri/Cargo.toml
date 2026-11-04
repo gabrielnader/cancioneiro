@@ -1,6 +1,6 @@
 [package]
 name = "cancioneiro"
-version = "0.13.16"
+version = "0.13.17"
 description = "Cancioneiro — player offline com busca por letra"
 authors = ["Avantsoft"]
 edition = "2021"
@@ -48,14 +48,18 @@ flate2 = "1"
 # metadados. Licença MPL-2.0 (copyleft por ARQUIVO — não contamina o
 # aplicativo; obriga a publicar modificações nos arquivos dela, e não fazemos
 # nenhuma).
-symphonia = { version = "0.6", default-features = false, features = ["mp3", "id3v2", "wav", "pcm", "isomp4", "aac", "alac", "adpcm"] }
+symphonia = { version = "0.6", default-features = false, features = ["mp3", "id3v2", "wav", "pcm", "isomp4", "alac", "adpcm"] }
 # V16.4 — "Consertar o arquivo": o WAV/M4A com nome de .mp3 recodificado em
 # MP3. O LAME (C, compilado junto pelo `mp3lame-sys`) é LGPL: o app é
 # distribuído de graça a um grupo fechado, e quem quiser trocar a biblioteca
 # tem o código-fonte inteiro neste repositório. As features `wav`, `pcm`,
-# `adpcm`, `isomp4`, `aac` e `alac` do symphonia acima são a LEITURA desses
-# arquivos — só para o conserto.
+# `adpcm`, `isomp4` e `alac` do symphonia acima são a LEITURA desses arquivos
+# — só para o conserto. O AAC é lido pelo FDK AAC (abaixo), e não pelo do
+# symphonia, que recusa o HE-AAC dos áudios baixados do YouTube (V16.5).
 mp3lame-encoder = "0.3"
+# FDK AAC (C++, compilado junto pelo `fdk-aac-sys`): licença própria da
+# Fraunhofer, que permite redistribuir; usado só para LER o M4A no conserto.
+symphonia-adapter-fdk-aac = "0.2"
 
 [dev-dependencies]
 tempfile = "3"

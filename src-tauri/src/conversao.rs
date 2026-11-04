@@ -244,6 +244,21 @@ fn etiqueta_do_original(original: &[u8], conteudo: Conteudo, temporarios: &Path)
     Some(Id3v2Tag::from(junta))
 }
 
+/// Os decodificadores do conserto: os do symphonia, com o AAC trocado pelo FDK
+/// AAC. O AAC do symphonia recusa o HE-AAC ("aac too complex"), que é o áudio
+/// de 48 kbps baixado do YouTube — "Balançou o Roseiral" (V16.5).
+fn codecs_do_conserto() -> &'static symphonia::core::codecs::registry::CodecRegistry {
+    static REGISTRO: std::sync::OnceLock<symphonia::core::codecs::registry::CodecRegistry> =
+        std::sync::OnceLock::new();
+    REGISTRO.get_or_init(|| {
+        let mut r = symphonia::core::codecs::registry::CodecRegistry::new();
+        symphonia::default::register_enabled_codecs(&mut r);
+        // depois dos outros, no mesmo nível: substitui quem já cuidava do AAC
+        r.register_audio_decoder::<symphonia_adapter_fdk_aac::AacDecoder>();
+        r
+    })
+}
+
 /// Decodifica o WAV/M4A e codifica em MP3 CBR (duração exata para qualquer
 /// player, sem depender de cabeçalho VBR). Devolve o MP3 e os segundos lidos.
 fn recodificar(original: &[u8], conteudo: Conteudo) -> Result<(Vec<u8>, f64)> {
@@ -269,7 +284,7 @@ fn recodificar(original: &[u8], conteudo: Conteudo) -> Result<(Vec<u8>, f64)> {
         .ok_or_else(erro)?;
     let id_da_faixa = faixa.id;
     let parametros = faixa.codec_params.as_ref().and_then(|p| p.audio()).ok_or_else(erro)?.clone();
-    let mut decodificador = symphonia::default::get_codecs()
+    let mut decodificador = codecs_do_conserto()
         .make_audio_decoder(&parametros, &AudioDecoderOptions::default())
         .map_err(|_| erro())?;
 
