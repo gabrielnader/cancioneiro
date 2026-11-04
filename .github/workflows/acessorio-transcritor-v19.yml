@@ -82,7 +82,7 @@ jobs:
           cd whisper
           extra=""
           if [[ "$RUNNER_OS" == "macOS" ]]; then extra="-DCMAKE_OSX_DEPLOYMENT_TARGET=$MACOS_MINIMO"; fi
-          eval cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
             $extra ${{ matrix.opcoes }} \
             -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF -DWHISPER_BUILD_EXAMPLES=ON
           cmake --build build --config Release -j 4
