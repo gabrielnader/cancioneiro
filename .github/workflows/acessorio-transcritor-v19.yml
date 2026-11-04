@@ -1,0 +1,154 @@
+name: acessorio-transcritor-v19
+
+# V16 — o whisper.cpp v1.9.5, para as quatro plataformas, e o modelo do
+# DETECTOR DE VOZ (Silero VAD) que ele traz desde a v1.7.6.
+#
+# Nomes NOVOS (`-v195`), publicados ao lado dos que o app usa hoje: nada que
+# já foi publicado é substituído (o upload recusa um nome que já existe), e o
+# app só passa a baixar estes quando o catálogo dele mudar. Fluxo separado do
+# `acessorio-transcritor.yml` pelo mesmo motivo do `-metal`: aquele reconstrói
+# o Windows, que não é reprodutível, e trocaria a soma que o app espera.
+#
+# Mesmas regras de sempre: um arquivo por plataforma (estático), macOS 12 como
+# mínimo conferido, e a prova de que transcreve — e, aqui, de que o detector
+# de voz sobe.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - ".github/workflows/acessorio-transcritor-v19.yml"
+
+permissions:
+  contents: write
+
+env:
+  TAG: acessorios-v1
+  WHISPER: v1.9.5
+  MACOS_MINIMO: "12.0"
+  VAD: ggml-silero-v6.2.0.bin
+
+jobs:
+  construir:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - so: macos-latest
+            nome: whisper-cli-v195-macos12-arm64-metal
+            opcoes: >-
+              -DCMAKE_OSX_ARCHITECTURES=arm64
+              -DGGML_METAL=ON -DGGML_METAL_EMBED_LIBRARY=ON
+              -DGGML_ACCELERATE=ON -DGGML_NATIVE=OFF
+          - so: macos-latest
+            nome: whisper-cli-v195-macos12-universal
+            opcoes: >-
+              "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64"
+              -DGGML_METAL=OFF -DGGML_ACCELERATE=OFF -DGGML_NATIVE=OFF
+          - so: ubuntu-24.04
+            nome: whisper-cli-v195-linux-x86_64
+            opcoes: "-DGGML_NATIVE=OFF"
+          - so: windows-latest
+            nome: whisper-cli-v195-windows-x86_64.exe
+            opcoes: "-DGGML_NATIVE=OFF"
+    runs-on: ${{ matrix.so }}
+    env:
+      NOME: ${{ matrix.nome }}
+    steps:
+      - name: Já publicado? Então não há nada a fazer
+        id: existe
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets \
+               -q '.assets[].name' | grep -qx "$NOME"; then
+            echo "publicado=sim" >> "$GITHUB_OUTPUT"
+          else
+            echo "publicado=nao" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Buscar o whisper.cpp
+        if: steps.existe.outputs.publicado == 'nao'
+        shell: bash
+        run: git clone --depth 1 --branch "$WHISPER" https://github.com/ggml-org/whisper.cpp whisper
+
+      - name: Construir
+        if: steps.existe.outputs.publicado == 'nao'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd whisper
+          extra=""
+          if [[ "$RUNNER_OS" == "macOS" ]]; then extra="-DCMAKE_OSX_DEPLOYMENT_TARGET=$MACOS_MINIMO"; fi
+          eval cmake -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=OFF \
+            $extra ${{ matrix.opcoes }} \
+            -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_SERVER=OFF -DWHISPER_BUILD_EXAMPLES=ON
+          cmake --build build --config Release -j 4
+          encontrado=""
+          for padrao in whisper-cli whisper-cli.exe; do
+            achado=$(find build -type f -name "$padrao" -not -path '*/CMakeFiles/*' | sort | head -1)
+            if [ -n "$achado" ]; then encontrado="$achado"; break; fi
+          done
+          [ -n "$encontrado" ] || { echo "::error::não achei o whisper-cli"; exit 1; }
+          cp "$encontrado" "../$NOME"
+          chmod +x "../$NOME" || true
+
+      - name: Conferir o macOS mínimo e as bibliotecas
+        if: steps.existe.outputs.publicado == 'nao' && runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for arq in $(lipo -archs "$NOME"); do
+            minimo=$(vtool -arch "$arq" -show-build "$NOME" | awk '/minos/ {print $2}')
+            echo "$arq: macOS mínimo $minimo"
+            [ "$minimo" = "$MACOS_MINIMO" ] || { echo "::error::$arq pede macOS $minimo"; exit 1; }
+          done
+          if otool -L "$NOME" | grep $'^\t' | grep -v -e '/System/' -e '/usr/lib/'; then
+            echo "::error::biblioteca fora do sistema"; exit 1
+          fi
+
+      - name: Provar que transcreve, e que o detector de voz sobe
+        if: steps.existe.outputs.publicado == 'nao'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL -o tiny.bin "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin"
+          curl -fsSL -o vad.bin "https://huggingface.co/ggml-org/whisper-vad/resolve/main/$VAD"
+          ./$NOME --model tiny.bin --file whisper/samples/jfk.wav --language en --no-timestamps \
+            --vad --vad-model vad.bin > saida.txt 2> saida.err || { cat saida.err; exit 1; }
+          cat saida.txt
+          grep -qi "ask not" saida.txt || { echo "::error::a transcrição de prova saiu errada"; cat saida.err; exit 1; }
+          grep -qi "vad" saida.err || { echo "::error::o detector de voz não subiu"; cat saida.err; exit 1; }
+          {
+            echo "### $NOME"
+            echo "- sha256: \`$(sha256sum "$NOME" 2>/dev/null | cut -d' ' -f1 || shasum -a 256 "$NOME" | cut -d' ' -f1)\`"
+            echo "- tamanho: $(wc -c < "$NOME" | tr -d ' ') bytes"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Publicar (sem substituir nada)
+        if: steps.existe.outputs.publicado == 'nao'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" "$NOME"
+
+  modelo-do-detector:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Rehospedar o modelo do detector de voz (se ainda não estiver lá)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json assets -q '.assets[].name' | grep -qx "$VAD"; then
+            echo "já publicado"; exit 0
+          fi
+          curl -fsSL -o "$VAD" "https://huggingface.co/ggml-org/whisper-vad/resolve/main/$VAD"
+          {
+            echo "### $VAD"
+            echo "- sha256: \`$(sha256sum "$VAD" | cut -d' ' -f1)\`"
+            echo "- tamanho: $(wc -c < "$VAD") bytes"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" "$VAD"
