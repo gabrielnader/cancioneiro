@@ -2557,3 +2557,10 @@ pub fn publicar_pacote_do_grupo(app: AppHandle, state: State<'_, Db>) -> Result<
         .map_err(erro_ao_publicar)?;
     Ok(ResumoDaPublicacao { musicas, bytes: bytes.len() })
 }
+
+/// V16.2 — "Minhas anotações" de uma música (vazio apaga).
+#[tauri::command(async)]
+pub fn salvar_anotacoes(state: State<'_, Db>, song_id: i64, texto: String) -> Result<Song> {
+    let conn = state.lock()?;
+    Ok(crate::writer::gravar_anotacoes(&conn, song_id, &texto)?.song)
+}

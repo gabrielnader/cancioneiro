@@ -2295,3 +2295,35 @@ fn etiqueta_colada_nao_esconde_o_que_acabou_de_ser_gravado() {
     assert_eq!(texto_txxx(&path, "TIT2 (etiqueta antiga)").as_deref(), Some("Titulo Real"));
     assert_eq!(audio_bytes(&path), audio, "o áudio não pode ser tocado");
 }
+
+// ===========================================================================
+// V16.2 — "Minhas anotações"
+// ===========================================================================
+
+/// A anotação é gravada no arquivo, entra na busca e SOBREVIVE às outras
+/// gravações (nome, letra) — que não sabem nada dela e não podem apagá-la.
+#[test]
+fn a_anotacao_fica_no_arquivo_entra_na_busca_e_sobrevive_as_outras_gravacoes() {
+    let (_dir, conn, _f) = setup();
+    let song = song_by_suffix(&conn, "com_letra.mp3");
+    let g = writer::gravar_anotacoes(&conn, song.id, "  tocar no encerramento, tom de Ré  ").unwrap();
+    assert_eq!(g.song.anotacoes.as_deref(), Some("tocar no encerramento, tom de Ré"));
+    assert_eq!(
+        id3_tag(Path::new(&song.file_path)).get_user_text("ANOTACOES"),
+        Some("tocar no encerramento, tom de Ré")
+    );
+    let achados = search::search(&conn, "encerramento", 20).unwrap();
+    assert!(achados.iter().any(|r| r.song.id == song.id), "a anotação é buscável");
+
+    // outra gravação, de nome e letra: a anotação continua
+    writer::write_tags(&conn, song.id, "Outro Nome", None, Some("outra letra"), None, None).unwrap();
+    let depois = db::get_song(&conn, song.id).unwrap().unwrap();
+    assert_eq!(depois.anotacoes.as_deref(), Some("tocar no encerramento, tom de Ré"));
+
+    // gravar só a anotação não mexe no resto
+    writer::gravar_anotacoes(&conn, song.id, "").unwrap();
+    let depois = db::get_song(&conn, song.id).unwrap().unwrap();
+    assert_eq!(depois.anotacoes, None, "vazio apaga a anotação");
+    assert_eq!(depois.title, "Outro Nome");
+    assert_eq!(db::get_lyrics(&conn, song.id).unwrap().as_deref(), Some("outra letra"));
+}

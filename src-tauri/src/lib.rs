@@ -77,6 +77,7 @@ pub fn run() {
             commands::guardar_chave_do_grupo,
             commands::tem_chave_do_grupo,
             commands::definir_tocando,
+            commands::salvar_anotacoes,
             commands::acessorios_estado,
             commands::acessorio_baixar,
             commands::acessorio_cancelar,

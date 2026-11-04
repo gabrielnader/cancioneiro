@@ -35,6 +35,9 @@ pub struct Song {
     /// o arquivo. Instrumental COM letra registrada é caso previsto pelo PRD
     /// (raro, mas possível) — as duas coisas convivem.
     pub instrumental: bool,
+    /// V16.2 — "Minhas anotações" (TXXX:ANOTACOES): o que a PESSOA escreveu
+    /// sobre a música. Entra na busca; o pacote do grupo nunca a toca.
+    pub anotacoes: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -98,6 +101,9 @@ CREATE TABLE IF NOT EXISTS songs (
     -- Derivada do file_path e populada pelo indexer; a Song NÃO expõe o campo
     -- (a UI já deriva o nome do file_path — decisões #43 e #46).
     arquivo TEXT,
+    -- V16.2 — "Minhas anotações" (TXXX:ANOTACOES). NA songs_fts, como os
+    -- temas: é texto que a pessoa escreveu justamente para achar a música.
+    anotacoes TEXT,
     file_mtime INTEGER NOT NULL,
     file_size INTEGER NOT NULL,
     available INTEGER NOT NULL DEFAULT 1,
@@ -195,26 +201,26 @@ CREATE TABLE IF NOT EXISTS transcricoes_guardadas (
 /// silêncio. `fts_column_order_pins_lyrics_at_index_2` é o alarme.
 const FTS_SCHEMA: &str = r#"
 CREATE VIRTUAL TABLE IF NOT EXISTS songs_fts USING fts5(
-    title, artist, lyrics, temas, pastas, arquivo,
+    title, artist, lyrics, temas, pastas, arquivo, anotacoes,
     content='songs', content_rowid='id',
     tokenize='unicode61 remove_diacritics 2'
 );
 
 CREATE TRIGGER IF NOT EXISTS songs_ai AFTER INSERT ON songs BEGIN
-    INSERT INTO songs_fts(rowid, title, artist, lyrics, temas, pastas, arquivo)
-    VALUES (new.id, new.title, new.artist, new.lyrics, new.temas, new.pastas, new.arquivo);
+    INSERT INTO songs_fts(rowid, title, artist, lyrics, temas, pastas, arquivo, anotacoes)
+    VALUES (new.id, new.title, new.artist, new.lyrics, new.temas, new.pastas, new.arquivo, new.anotacoes);
 END;
 
 CREATE TRIGGER IF NOT EXISTS songs_ad AFTER DELETE ON songs BEGIN
-    INSERT INTO songs_fts(songs_fts, rowid, title, artist, lyrics, temas, pastas, arquivo)
-    VALUES ('delete', old.id, old.title, old.artist, old.lyrics, old.temas, old.pastas, old.arquivo);
+    INSERT INTO songs_fts(songs_fts, rowid, title, artist, lyrics, temas, pastas, arquivo, anotacoes)
+    VALUES ('delete', old.id, old.title, old.artist, old.lyrics, old.temas, old.pastas, old.arquivo, old.anotacoes);
 END;
 
 CREATE TRIGGER IF NOT EXISTS songs_au AFTER UPDATE ON songs BEGIN
-    INSERT INTO songs_fts(songs_fts, rowid, title, artist, lyrics, temas, pastas, arquivo)
-    VALUES ('delete', old.id, old.title, old.artist, old.lyrics, old.temas, old.pastas, old.arquivo);
-    INSERT INTO songs_fts(rowid, title, artist, lyrics, temas, pastas, arquivo)
-    VALUES (new.id, new.title, new.artist, new.lyrics, new.temas, new.pastas, new.arquivo);
+    INSERT INTO songs_fts(songs_fts, rowid, title, artist, lyrics, temas, pastas, arquivo, anotacoes)
+    VALUES ('delete', old.id, old.title, old.artist, old.lyrics, old.temas, old.pastas, old.arquivo, old.anotacoes);
+    INSERT INTO songs_fts(rowid, title, artist, lyrics, temas, pastas, arquivo, anotacoes)
+    VALUES (new.id, new.title, new.artist, new.lyrics, new.temas, new.pastas, new.arquivo, new.anotacoes);
 END;
 "#;
 
@@ -272,7 +278,11 @@ pub(crate) fn fold_pt(s: &str) -> String {
 /// guardavam a leitura falha — nome do arquivo no título, artista vazio — e
 /// nunca seriam relidos, porque não mudaram no disco. A releitura é o caminho
 /// que toda migração já faz (`file_mtime = -1`), e não um segundo mecanismo.
-const SCHEMA_VERSION: i64 = 7;
+///
+/// V8 (V16.2) — a coluna `anotacoes` ("Minhas anotações"), também na FTS. Sem
+/// releitura do acervo: ninguém tem anotação ainda, e reler 8 mil músicas por
+/// uma coluna vazia custaria minutos de "Indexando…" a cada pessoa.
+const SCHEMA_VERSION: i64 = 8;
 
 pub fn init_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch("PRAGMA foreign_keys = ON;")?;
@@ -369,6 +379,9 @@ fn migrate_if_needed(conn: &Connection) -> Result<()> {
         // aceito pelo SQLite e nasce desmarcado para todas as linhas antigas.
         alters.push_str("ALTER TABLE songs ADD COLUMN instrumental INTEGER NOT NULL DEFAULT 0;\n");
     }
+    if !has_column("anotacoes")? {
+        alters.push_str("ALTER TABLE songs ADD COLUMN anotacoes TEXT;\n"); // V8
+    }
     if !has_column("arquivo")? {
         // V6 — nome do arquivo buscável. Nasce NULL de propósito: o valor é
         // derivado do file_path, mas quem deriva é o indexer (uma única
@@ -385,18 +398,22 @@ fn migrate_if_needed(conn: &Connection) -> Result<()> {
          DROP TRIGGER IF EXISTS songs_ai;
          DROP TRIGGER IF EXISTS songs_ad;
          DROP TRIGGER IF EXISTS songs_au;
-         DROP TABLE IF EXISTS songs_fts;
-         -- força releitura dos arquivos no próximo rescan (popula
-         -- temas/pastas/letra_origem/instrumental, que só existem nas tags
-         -- do MP3, e `arquivo`, que o indexer deriva do caminho)
-         UPDATE songs SET file_mtime = -1;"
+         DROP TABLE IF EXISTS songs_fts;"
     ))?;
+    // força releitura dos arquivos no próximo rescan (popula
+    // temas/pastas/letra_origem/instrumental, que só existem nas tags do MP3,
+    // e `arquivo`, que o indexer deriva do caminho). V8 — só para quem vem de
+    // antes da V7: a coluna `anotacoes` nasce vazia para todo mundo, e reler
+    // o acervo por ela seria trabalho sem nada a ler.
+    if version < 7 {
+        tx.execute("UPDATE songs SET file_mtime = -1", [])?;
+    }
     // Recria songs_fts/triggers com as colunas novas e repovoa o índice com
     // o conteúdo atual — ainda dentro da transação.
     tx.execute_batch(FTS_SCHEMA)?;
     tx.execute(
-        "INSERT INTO songs_fts(rowid, title, artist, lyrics, temas, pastas, arquivo)
-         SELECT id, title, artist, lyrics, temas, pastas, arquivo FROM songs",
+        "INSERT INTO songs_fts(rowid, title, artist, lyrics, temas, pastas, arquivo, anotacoes)
+         SELECT id, title, artist, lyrics, temas, pastas, arquivo, anotacoes FROM songs",
         [],
     )?;
     tx.pragma_update(None, "user_version", SCHEMA_VERSION)?;
@@ -477,7 +494,7 @@ pub fn list_folders(conn: &Connection) -> Result<Vec<Folder>> {
 // ---------------------------------------------------------------------------
 
 pub(crate) const SONG_COLS: &str =
-    "id, file_path, folder_id, title, artist, album, duration_seconds, has_lyrics, available, temas, letra_origem, instrumental";
+    "id, file_path, folder_id, title, artist, album, duration_seconds, has_lyrics, available, temas, letra_origem, instrumental, anotacoes";
 
 /// Quantas colunas o SONG_COLS projeta — quem acrescenta colunas na mesma
 /// query (o snippet da busca) parte deste índice em vez de um número fixo.
@@ -499,6 +516,7 @@ pub(crate) fn song_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<Song> {
         temas: r.get(9)?,
         letra_origem: r.get(10)?,
         instrumental: r.get::<_, i64>(11)? != 0,
+        anotacoes: r.get(12)?,
     })
 }
 
@@ -877,6 +895,7 @@ pub fn get_playlist_items(conn: &Connection, playlist_id: i64) -> Result<Vec<Pla
                 temas: r.get(12)?,
                 letra_origem: r.get(13)?,
                 instrumental: r.get::<_, i64>(14)? != 0,
+                anotacoes: r.get(15)?,
             },
         })
     })?;
@@ -1470,6 +1489,36 @@ mod tests {
         assert_eq!(get_playlist_items(&conn, 1).unwrap().len(), 1, "playlists ficam");
     }
 
+    /// V8 (V16.2) — a coluna das anotações chega SEM reler o acervo: ninguém
+    /// tem anotação ainda, e 8 mil releituras por uma coluna vazia custariam
+    /// minutos de "Indexando…" a cada pessoa. E ela já entra na busca.
+    #[test]
+    fn v7_database_gains_anotacoes_without_rereading_the_library() {
+        let conn = v5_database();
+        init_schema(&conn).unwrap();
+        // como um banco da v0.13.x: sem a coluna, sem ela na FTS, versão 7
+        conn.execute_batch(
+            "DROP TRIGGER songs_ai; DROP TRIGGER songs_ad; DROP TRIGGER songs_au;
+             DROP TABLE songs_fts;
+             ALTER TABLE songs DROP COLUMN anotacoes;
+             UPDATE songs SET file_mtime = 123;",
+        )
+        .unwrap();
+        conn.pragma_update(None, "user_version", 7).unwrap();
+
+        init_schema(&conn).unwrap();
+
+        assert!(column_exists(&conn, "anotacoes"));
+        let mtime: i64 = conn.query_row("SELECT file_mtime FROM songs WHERE id = 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(mtime, 123, "o acervo NÃO é relido");
+        conn.execute("UPDATE songs SET anotacoes = 'cantar no batizado' WHERE id = 1", []).unwrap();
+        let achou: i64 = conn
+            .query_row("SELECT count(*) FROM songs_fts WHERE songs_fts MATCH 'batizado'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(achou, 1, "a anotação entra na busca");
+        assert_eq!(get_playlist_items(&conn, 1).unwrap().len(), 1, "playlists ficam");
+    }
+
     #[test]
     fn v5_database_migrates_to_v6_keeping_data_and_forcing_rescan() {
         // V8: a coluna `arquivo` (nome do arquivo sem extensão, buscável)
@@ -1564,7 +1613,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             cols,
-            vec!["title", "artist", "lyrics", "temas", "pastas", "arquivo"]
+            vec!["title", "artist", "lyrics", "temas", "pastas", "arquivo", "anotacoes"]
         );
         assert_eq!(cols[2], "lyrics", "índice do snippet em search.rs");
     }

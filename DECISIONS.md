@@ -2904,3 +2904,9 @@ gravação; o desfecho da gravação conta o que foi feito.
 - Reconhecimento pela cópia do áudio: SHA-256 de 1 MB a partir do primeiro quadro MPEG, sem as etiquetas do começo e sem os últimos 64 KB (ID3v1/APE/Lyrics3). Guardada por música (data + tamanho). O reconhecimento pelo som fica para depois, se a cobertura medida no computador de alguém do grupo for baixa.
 - Gravação pelo `enrich::apply` (confere se a música mudou, recusa trocar letra existente); o arquivo que está no PLAYER nunca é gravado (fica para a próxima abertura) — pelo caminho, que é o que o player lê.
 - Publicar: só no app de quem organiza, com uma chave do GitHub guardada só naquele computador (arquivo 0600 na pasta do app), num PRÉ-lançamento `letras-do-grupo` — que nunca vira a "versão mais recente" do atualizador. A área fica recolhida no fim de Configurações.
+
+## V16.2 — "Minhas anotações"
+- Um campo da PESSOA por música (o tom, quando cantar, quem puxa), em TXXX:ANOTACOES — no próprio MP3, como o resto, para viajar com o arquivo. Fica acima da letra nos detalhes, porque é o que se procura antes de cantar.
+- Entra na busca (coluna nova no FIM da FTS, como manda o contrato da ordem; a letra continua na posição 2). O pacote do grupo nunca a lê nem a toca, e as outras gravações (nome, letra, temas) a preservam — provado por teste.
+- A gravação passa pelo MESMO caminho das outras: a leitura com os consertos, a proteção da etiqueta colada e a conferência do áudio foram separadas numa função (`gravar_etiqueta_com`) que recebe só a alteração.
+- Banco V8 sem releitura do acervo: ninguém tem anotação ainda, e reler 8 mil músicas por uma coluna vazia custaria minutos de "Indexando…" a cada pessoa.

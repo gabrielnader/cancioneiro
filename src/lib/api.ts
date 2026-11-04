@@ -616,6 +616,8 @@ export interface Backend {
   /** V16 — a chave do GitHub de quem organiza; vazia = esquecer. */
   guardarChaveDoGrupo(chave: string): Promise<void>;
   temChaveDoGrupo(): Promise<boolean>;
+  /** V16.2 — grava "Minhas anotações" (vazio apaga) e devolve a música. */
+  salvarAnotacoes(songId: number, texto: string): Promise<Song>;
   /** V16 — o arquivo que está tocando, que o recebimento nunca grava. */
   definirTocando(caminho: string | null): Promise<void>;
   /** Assina `pacote:progresso` (montar ou receber o pacote). */
@@ -843,6 +845,10 @@ function tauriBackend(): Backend {
     async temChaveDoGrupo() {
       const { invoke } = await import("@tauri-apps/api/core");
       return invoke<boolean>("tem_chave_do_grupo");
+    },
+    async salvarAnotacoes(songId, texto) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<Song>("salvar_anotacoes", { songId, texto });
     },
     async definirTocando(caminho) {
       const { invoke } = await import("@tauri-apps/api/core");

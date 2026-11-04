@@ -4,7 +4,7 @@ import { folderName, pastaDaMusica, songFileName, textoDaPasta } from "../lib/fo
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlaylistStore } from "../stores/playlistStore";
 import { FONT_SIZES_PX, useUiStore } from "../stores/uiStore";
-import { ORIGEM_TRANSCRICAO } from "../lib/types";
+import { ORIGEM_TRANSCRICAO, type Song } from "../lib/types";
 import { EditSongForm } from "./EditSongForm";
 import { TemaChips } from "./TemaChips";
 
@@ -186,6 +186,7 @@ export function LyricsPanel() {
             />
           ) : (
             <div className="flex-1 overflow-y-auto p-4">
+              {selected.available && <MinhasAnotacoes key={selected.id} song={selected} />}
               {selected.has_lyrics && lyrics ? (
                 <>
                   {/*
@@ -238,5 +239,109 @@ export function LyricsPanel() {
         </>
       )}
     </aside>
+  );
+}
+
+/**
+ * V16.2 — "Minhas anotações": o que a PESSOA escreveu sobre a música (o tom,
+ * quando cantar, quem puxa). Fica acima da letra, porque é o que se procura
+ * antes de cantar; entra na busca; e o pacote de letras do grupo nunca a toca.
+ * Gravada no próprio MP3 (TXXX:ANOTACOES), como o resto: viaja com o arquivo.
+ */
+function MinhasAnotacoes({ song }: { song: Song }) {
+  const [editando, setEditando] = useState(false);
+  const [texto, setTexto] = useState(song.anotacoes ?? "");
+  const [gravando, setGravando] = useState(false);
+  const [erro, setErro] = useState<string | null>(null);
+
+  async function salvar() {
+    setGravando(true);
+    setErro(null);
+    try {
+      const atualizada = await getBackend().salvarAnotacoes(song.id, texto);
+      useLibraryStore.getState().updateSong(atualizada);
+      usePlaylistStore.getState().updateSongInItems(atualizada);
+      setEditando(false);
+    } catch (e) {
+      setErro(String(e).replace(/^Error:\s*/, ""));
+    } finally {
+      setGravando(false);
+    }
+  }
+
+  if (editando) {
+    return (
+      <div className="mb-4 flex flex-col gap-2" data-testid="anotacoes-editor">
+        <label className="flex flex-col gap-1">
+          <span className="text-[14px] font-semibold text-ink-secondary">Minhas anotações</span>
+          <textarea
+            value={texto}
+            onChange={(e) => setTexto(e.target.value)}
+            rows={3}
+            autoFocus
+            className="rounded-lg border-2 border-border-strong bg-surface p-2 text-[16px] text-ink"
+          />
+        </label>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            disabled={gravando}
+            onClick={() => void salvar()}
+            className="rounded-lg bg-brand-fill px-3 py-1.5 text-[15px] font-semibold text-white hover:bg-brand-fill-hover disabled:opacity-60"
+          >
+            {gravando ? "Salvando…" : "Salvar"}
+          </button>
+          <button
+            type="button"
+            disabled={gravando}
+            onClick={() => {
+              setTexto(song.anotacoes ?? "");
+              setErro(null);
+              setEditando(false);
+            }}
+            className="rounded-lg px-3 py-1.5 text-[15px] font-semibold text-ink-secondary hover:bg-surface-hover"
+          >
+            Cancelar
+          </button>
+        </div>
+        {erro && (
+          <p role="alert" className="text-[14px] text-danger">
+            Não deu para salvar: {erro}
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  if (!song.anotacoes) {
+    return (
+      <button
+        type="button"
+        onClick={() => setEditando(true)}
+        className="mb-3 rounded px-1 text-[14px] font-medium text-brand hover:bg-brand-soft"
+      >
+        + Escrever uma anotação
+      </button>
+    );
+  }
+
+  return (
+    <div data-testid="anotacoes" className="mb-4 rounded-lg bg-surface-hover px-3 py-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[14px] font-semibold text-ink-secondary">Minhas anotações</span>
+        <button
+          type="button"
+          onClick={() => {
+            setTexto(song.anotacoes ?? "");
+            setEditando(true);
+          }}
+          aria-label="Editar a anotação"
+          className="rounded px-2 text-[14px] font-medium text-brand hover:bg-brand-soft"
+        >
+          Editar
+        </button>
+      </div>
+      <p className="mt-1 whitespace-pre-wrap text-[16px] text-ink">{song.anotacoes}</p>
+    </div>
   );
 }

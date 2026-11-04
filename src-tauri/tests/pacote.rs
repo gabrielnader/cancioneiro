@@ -125,6 +125,7 @@ fn o_pacote_nunca_troca_o_que_a_pessoa_escreveu() {
     // ela já tinha escrito nome, quem canta e letra na cópia dela
     let a = musica(&c_dela, "copia a.mp3");
     writer::write_tags(&c_dela, a.id, "Asa Branca (versão dela)", Some("Ela Mesma"), Some("a letra que ela escreveu"), Some("forró"), None).unwrap();
+    writer::gravar_anotacoes(&c_dela, a.id, "minha anotação").unwrap();
     let audio_antes = audio_de(&a.file_path);
 
     let p = pacote::abrir(&pacote::montar(&c_meu, |_, _| {}).unwrap()).unwrap();
@@ -137,6 +138,7 @@ fn o_pacote_nunca_troca_o_que_a_pessoa_escreveu() {
     // tema só se SOMA
     let temas = a.temas.unwrap_or_default();
     assert!(temas.contains("forró") && temas.contains("sertão"), "{temas}");
+    assert_eq!(a.anotacoes.as_deref(), Some("minha anotação"), "as anotações dela ficam");
     assert_eq!(audio_de(&a.file_path), audio_antes, "o áudio não é tocado");
 }
 

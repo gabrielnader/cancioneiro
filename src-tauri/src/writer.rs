@@ -1023,6 +1023,120 @@ pub fn write_tags_com_origem(
         return Err(AppError("título vazio".into()));
     }
 
+    gravar_etiqueta_com(conn, song, |tag| {
+
+        // TIT2
+        tag.set_title(title.to_string());
+
+        // TPE1 — None/vazio remove o frame
+        match non_empty(artist) {
+            Some(a) => tag.set_artist(a.to_string()),
+            None => tag.remove_artist(),
+        }
+
+        // USLT — substitui, nunca duplica (delall + add, como o mutagen);
+        // None/vazio remove. A letra é gravada exatamente como veio (sem trim),
+        // preservando \n e acentos.
+        //
+        // A letra que JÁ está no arquivo é lida antes da troca para decidir o
+        // destino da marca TXXX:LETRA_ORIGEM (V5/F14) — o mesmo critério de
+        // "tem letra" do indexer (texto em branco conta como ausente).
+        let letra_anterior: Option<String> = tag
+            .unsync_text()
+            .next()
+            .map(|f| f.content.clone())
+            .filter(|l| !l.trim().is_empty());
+        let letra_nova = lyrics.filter(|l| !l.trim().is_empty());
+        drop(tag.remove(&FrameId::Valid(Cow::Borrowed("USLT"))));
+        if let Some(l) = letra_nova {
+            tag.insert(Frame::UnsynchronizedText(UnsynchronizedTextFrame::new(
+                TextEncoding::UTF8,
+                USLT_LANG,
+                String::new(),
+                l.to_string(),
+            )));
+        }
+
+        // TXXX:LETRA_ORIGEM (V5/F14, achado do QA A3) — a marca descreve a letra
+        // ATUAL. Trocar ou apagar a letra invalida a marca: sem isso, uma letra
+        // digitada à mão por cima de uma transcrição continuaria se declarando
+        // "transcrição automática" (e o selo do player mentiria). Gravação que
+        // NÃO mexe na letra — só título/artista/temas, ou o repasse da mesma
+        // letra que o apply do lote faz (enrich::apply_one) — preserva a marca.
+        // Todos os demais frames estrangeiros (capa, outros TXXX) continuam
+        // intocados, como sempre.
+        //
+        // V8/F18: a letra MUDOU é o momento em que a marca precisa ser refeita.
+        // Sem declaração ela some (regra acima); com declaração ela passa a ser o
+        // que o funil informou — "" para letra oficial sem marca, o nome da fonte para
+        // a base comunitária. O frame antigo cai antes em qualquer caso, para
+        // substituir em vez de duplicar.
+        if letra_nova != letra_anterior.as_deref() {
+            drop(tag.remove_user_text(LETRA_ORIGEM_DESC));
+            if let Some(origem) = letra_origem.filter(|o| !o.is_empty() && letra_nova.is_some()) {
+                tag.insert_user_text(LETRA_ORIGEM_DESC.to_string(), origem.to_string());
+            }
+        }
+
+        // TXXX:INSTRUMENTAL (V8/F17) — a marca descreve a MÚSICA (não tem voz),
+        // não a letra, e por isso NÃO segue a regra da DECISIONS #54 logo acima:
+        // trocar ou apagar a letra invalida a procedência da letra, mas não diz
+        // nada sobre haver ou não canto no áudio. O PRD prevê explicitamente a
+        // instrumental com letra registrada, e desmarcar de lado — como efeito
+        // colateral de salvar um texto — desfaria em silêncio a escolha de quem
+        // ouviu a música. Só o `Some(...)` explícito mexe aqui.
+        match instrumental {
+            Some(true) => {
+                drop(tag.remove_user_text(INSTRUMENTAL_DESC));
+                tag.insert_user_text(INSTRUMENTAL_DESC.to_string(), "1".to_string());
+            }
+            Some(false) => drop(tag.remove_user_text(INSTRUMENTAL_DESC)),
+            None => {} // não mexe: preserva o que estiver no arquivo
+        }
+
+        // TXXX:TEMAS — normalizados; None/vazio (ou só separadores) remove
+        drop(tag.remove_user_text(TEMAS_DESC));
+        if let Some(t) = temas {
+            let normalizados = normalize_temas(t);
+            if !normalizados.is_empty() {
+                tag.insert_user_text(TEMAS_DESC.to_string(), normalizados.join("; "));
+            }
+        }
+        Ok(())
+    })
+}
+
+/// V16.2 — "Minhas anotações": o que a PESSOA escreveu sobre a música, em
+/// TXXX:ANOTACOES. Vazio remove. Só este quadro muda: nome, letra, temas e o
+/// resto da etiqueta ficam como estavam — é o mesmo caminho de gravação, com
+/// uma alteração só.
+pub fn gravar_anotacoes(conn: &Connection, song_id: i64, texto: &str) -> Result<Gravacao> {
+    let song = db::get_song(conn, song_id)?
+        .ok_or_else(|| AppError(format!("música não encontrada: {song_id}")))?;
+    let texto = texto.trim().to_string();
+    gravar_etiqueta_com(conn, song, |tag| {
+        drop(tag.remove_user_text(ANOTACOES_DESC));
+        if !texto.is_empty() {
+            tag.insert_user_text(ANOTACOES_DESC.to_string(), texto);
+        }
+        Ok(())
+    })
+}
+
+/// O quadro das anotações da pessoa (TXXX:ANOTACOES).
+pub const ANOTACOES_DESC: &str = "ANOTACOES";
+
+/// A gravação de etiqueta, de ponta a ponta, com `mexer` fazendo SÓ as
+/// alterações pedidas: a leitura com todos os consertos (V10.1, V15.x), a
+/// gravação com as proteções (a sobra, a etiqueta colada, a conferência do
+/// áudio) e a releitura para o banco. V16.2 — separada para as anotações
+/// passarem pelo MESMO caminho, e não por um segundo que envelheceria.
+fn gravar_etiqueta_com(
+    conn: &Connection,
+    song: Song,
+    mexer: impl FnOnce(&mut Id3v2Tag) -> Result<()>,
+) -> Result<Gravacao> {
+    let song_id = song.id;
     let path = Path::new(&song.file_path);
     if !path.is_file() {
         // mensagem exata que o frontend usa para arquivo sumido
@@ -1077,83 +1191,7 @@ pub fn write_tags_com_origem(
     // curadoria para sempre. Consertar (e não descartar) preserva o conteúdo.
     consertar_idiomas_invalidos(&mut tag, &song.file_path)?;
 
-    // TIT2
-    tag.set_title(title.to_string());
-
-    // TPE1 — None/vazio remove o frame
-    match non_empty(artist) {
-        Some(a) => tag.set_artist(a.to_string()),
-        None => tag.remove_artist(),
-    }
-
-    // USLT — substitui, nunca duplica (delall + add, como o mutagen);
-    // None/vazio remove. A letra é gravada exatamente como veio (sem trim),
-    // preservando \n e acentos.
-    //
-    // A letra que JÁ está no arquivo é lida antes da troca para decidir o
-    // destino da marca TXXX:LETRA_ORIGEM (V5/F14) — o mesmo critério de
-    // "tem letra" do indexer (texto em branco conta como ausente).
-    let letra_anterior: Option<String> = tag
-        .unsync_text()
-        .next()
-        .map(|f| f.content.clone())
-        .filter(|l| !l.trim().is_empty());
-    let letra_nova = lyrics.filter(|l| !l.trim().is_empty());
-    drop(tag.remove(&FrameId::Valid(Cow::Borrowed("USLT"))));
-    if let Some(l) = letra_nova {
-        tag.insert(Frame::UnsynchronizedText(UnsynchronizedTextFrame::new(
-            TextEncoding::UTF8,
-            USLT_LANG,
-            String::new(),
-            l.to_string(),
-        )));
-    }
-
-    // TXXX:LETRA_ORIGEM (V5/F14, achado do QA A3) — a marca descreve a letra
-    // ATUAL. Trocar ou apagar a letra invalida a marca: sem isso, uma letra
-    // digitada à mão por cima de uma transcrição continuaria se declarando
-    // "transcrição automática" (e o selo do player mentiria). Gravação que
-    // NÃO mexe na letra — só título/artista/temas, ou o repasse da mesma
-    // letra que o apply do lote faz (enrich::apply_one) — preserva a marca.
-    // Todos os demais frames estrangeiros (capa, outros TXXX) continuam
-    // intocados, como sempre.
-    //
-    // V8/F18: a letra MUDOU é o momento em que a marca precisa ser refeita.
-    // Sem declaração ela some (regra acima); com declaração ela passa a ser o
-    // que o funil informou — "" para letra oficial sem marca, o nome da fonte para
-    // a base comunitária. O frame antigo cai antes em qualquer caso, para
-    // substituir em vez de duplicar.
-    if letra_nova != letra_anterior.as_deref() {
-        drop(tag.remove_user_text(LETRA_ORIGEM_DESC));
-        if let Some(origem) = letra_origem.filter(|o| !o.is_empty() && letra_nova.is_some()) {
-            tag.insert_user_text(LETRA_ORIGEM_DESC.to_string(), origem.to_string());
-        }
-    }
-
-    // TXXX:INSTRUMENTAL (V8/F17) — a marca descreve a MÚSICA (não tem voz),
-    // não a letra, e por isso NÃO segue a regra da DECISIONS #54 logo acima:
-    // trocar ou apagar a letra invalida a procedência da letra, mas não diz
-    // nada sobre haver ou não canto no áudio. O PRD prevê explicitamente a
-    // instrumental com letra registrada, e desmarcar de lado — como efeito
-    // colateral de salvar um texto — desfaria em silêncio a escolha de quem
-    // ouviu a música. Só o `Some(...)` explícito mexe aqui.
-    match instrumental {
-        Some(true) => {
-            drop(tag.remove_user_text(INSTRUMENTAL_DESC));
-            tag.insert_user_text(INSTRUMENTAL_DESC.to_string(), "1".to_string());
-        }
-        Some(false) => drop(tag.remove_user_text(INSTRUMENTAL_DESC)),
-        None => {} // não mexe: preserva o que estiver no arquivo
-    }
-
-    // TXXX:TEMAS — normalizados; None/vazio (ou só separadores) remove
-    drop(tag.remove_user_text(TEMAS_DESC));
-    if let Some(t) = temas {
-        let normalizados = normalize_temas(t);
-        if !normalizados.is_empty() {
-            tag.insert_user_text(TEMAS_DESC.to_string(), normalizados.join("; "));
-        }
-    }
+    mexer(&mut tag)?;
 
     // save_to_path regrava SOMENTE o bloco ID3v2 (mesmo arquivo, mesmo nome);
     // ID3v2.4 é o default de escrita do lofty.

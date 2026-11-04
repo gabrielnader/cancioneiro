@@ -42,6 +42,8 @@ struct TagData {
     letra_origem: Option<String>,
     /// Música sem voz, do frame TXXX:INSTRUMENTAL — V8/F17.
     instrumental: bool,
+    /// "Minhas anotações", do frame TXXX:ANOTACOES — V16.2.
+    anotacoes: Option<String>,
     /// true se a leitura de tags falhou e usamos fallback
     fallback: bool,
 }
@@ -101,6 +103,7 @@ fn read_tags(path: &Path) -> TagData {
         temas: None,
         letra_origem: None,
         instrumental: false,
+        anotacoes: None,
         fallback: true,
     };
 
@@ -115,7 +118,7 @@ fn read_tags(path: &Path) -> TagData {
     let duration = tagged.properties().duration().as_secs() as i64;
     let tag = tagged.primary_tag().or_else(|| tagged.first_tag());
 
-    let (title, artist, album, lyrics, temas, letra_origem, instrumental) = match tag {
+    let (title, artist, album, lyrics, temas, letra_origem, instrumental, anotacoes) = match tag {
         Some(t) => {
             let title = t
                 .title()
@@ -142,9 +145,10 @@ fn read_tags(path: &Path) -> TagData {
             // V8/F17 — música sem voz. A marca NUNCA é deduzida de "não tem
             // letra": ela existe justamente para separar as duas coisas.
             let instrumental = read_instrumental(t);
-            (title, artist, album, lyrics, temas, letra_origem, instrumental)
+            let anotacoes = read_txxx(t, "ANOTACOES");
+            (title, artist, album, lyrics, temas, letra_origem, instrumental, anotacoes)
         }
-        None => (file_stem_title(path), None, None, None, None, None, false),
+        None => (file_stem_title(path), None, None, None, None, None, false, None),
     };
 
     TagData {
@@ -156,6 +160,7 @@ fn read_tags(path: &Path) -> TagData {
         temas,
         letra_origem,
         instrumental,
+        anotacoes,
         fallback: false,
     }
 }
@@ -232,8 +237,8 @@ fn upsert_song(
         "INSERT INTO songs
             (file_path, folder_id, title, artist, album, duration_seconds,
              has_lyrics, lyrics, temas, letra_origem, instrumental, pastas, arquivo,
-             file_mtime, file_size, available, indexed_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, 1, datetime('now'))
+             file_mtime, file_size, anotacoes, available, indexed_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, 1, datetime('now'))
          ON CONFLICT(file_path) DO UPDATE SET
             folder_id = excluded.folder_id,
             title = excluded.title,
@@ -245,6 +250,7 @@ fn upsert_song(
             temas = excluded.temas,
             letra_origem = excluded.letra_origem,
             instrumental = excluded.instrumental,
+            anotacoes = excluded.anotacoes,
             pastas = excluded.pastas,
             arquivo = excluded.arquivo,
             file_mtime = excluded.file_mtime,
@@ -266,7 +272,8 @@ fn upsert_song(
             pastas,
             arquivo,
             mtime,
-            size
+            size,
+            tags.anotacoes
         ],
     )?;
     Ok(())

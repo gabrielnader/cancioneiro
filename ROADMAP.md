@@ -4,8 +4,7 @@ Decidido pelo dono do produto em 04/11/2026. A ordem é a de execução.
 
 ## Na fila, em ordem
 
-1. **Minhas anotações** — um campo da pessoa, por música, que entra na busca e
-   que o pacote do grupo nunca toca.
+1. ~~**Minhas anotações**~~ — feito na v0.13.14.
 2. **Primeiro uso guiado** — na primeira abertura, o app conduz: escolher a
    pasta das músicas, onde buscar, como tocar.
 3. **"Enviar um problema"** — monta um relatório (versão, erro, sistema; sem

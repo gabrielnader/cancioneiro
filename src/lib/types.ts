@@ -1,4 +1,9 @@
 export interface Song {
+  /**
+   * V16.2 — "Minhas anotações" (TXXX:ANOTACOES): o que a pessoa escreveu
+   * sobre a música. Entra na busca; o pacote do grupo nunca a toca.
+   */
+  anotacoes?: string | null;
   id: number;
   file_path: string;
   folder_id: number;

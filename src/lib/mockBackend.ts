@@ -542,6 +542,7 @@ function toSong(record: SongRecord): Song {
     temas: record.temas ?? null,
     letra_origem: record.letra_origem ?? null,
     instrumental: record.instrumental === true,
+    anotacoes: record.anotacoes ?? null,
   };
 }
 
@@ -2077,7 +2078,7 @@ export function createMockBackend(): MockBackend {
 
   function songWords(song: SongRecord): string[] {
     return tokenize(
-      `${song.title} ${song.artist ?? ""} ${song.lyrics ?? ""} ${song.temas ?? ""} ${arquivoParaBusca(song)}`,
+      `${song.title} ${song.artist ?? ""} ${song.lyrics ?? ""} ${song.temas ?? ""} ${arquivoParaBusca(song)} ${song.anotacoes ?? ""}`,
     );
   }
 
@@ -2679,6 +2680,14 @@ export function createMockBackend(): MockBackend {
 
     // V16 — no modo de navegador não há GitHub nem arquivos: o pacote não
     // existe, e publicar só conta o que entraria
+    async salvarAnotacoes(songId: number, texto: string): Promise<Song> {
+      const song = state.songs.find((s) => s.id === songId);
+      if (!song) throw new Error(`música não encontrada: ${songId}`);
+      song.anotacoes = texto.trim() === "" ? null : texto.trim();
+      save();
+      return toSong(song);
+    },
+
     async receberPacoteDoGrupo() {
       return null;
     },

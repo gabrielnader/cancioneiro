@@ -107,6 +107,7 @@ function fakeBackend(overrides: Partial<Backend> = {}): Backend {
     guardarChaveDoGrupo: vi.fn(async () => {}),
     temChaveDoGrupo: vi.fn(async () => false),
     definirTocando: vi.fn(async () => {}),
+    salvarAnotacoes: vi.fn(async () => { throw new Error("não usado"); }),
     onPacoteProgresso: vi.fn(async () => () => {}),
     descartarTranscricoes: vi.fn(async () => {}),
     enrichSongScan: vi.fn(async () => null),

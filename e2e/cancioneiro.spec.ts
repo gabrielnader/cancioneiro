@@ -1983,6 +1983,31 @@ test.describe("V10 — a etapa que resolve (F18 fase 3)", () => {
     expect(errors).toEqual([]);
   });
 
+  // V16.2 — "Minhas anotações": escreve, acha pela busca, apaga
+  test("a anotação é escrita nos detalhes e acha a música pela busca", async ({ page }) => {
+    const errors = trackErrors(page);
+    await resetApp(page);
+    await addMockFolder(page);
+    await page.getByLabel("Músicas").getByText("Coração Sertanejo").click();
+    const painel = page.getByRole("complementary", { name: "Painel de letra" });
+    await painel.getByRole("button", { name: "+ Escrever uma anotação" }).click();
+    await painel.getByLabel("Minhas anotações").fill("puxar no tom de Ré, depois da chamada");
+    await painel.getByRole("button", { name: "Salvar" }).click();
+    await expect(painel.getByTestId("anotacoes")).toContainText("puxar no tom de Ré");
+
+    const busca = page.getByPlaceholder("Um pedaço da letra, o nome ou quem canta");
+    await busca.fill("chamada");
+    await expect(page.getByText(/^1 música\s+encontrada$/)).toBeVisible();
+
+    await busca.fill("");
+    await page.getByLabel("Músicas").getByText("Coração Sertanejo").click();
+    await painel.getByRole("button", { name: "Editar a anotação" }).click();
+    await painel.getByLabel("Minhas anotações").fill("");
+    await painel.getByRole("button", { name: "Salvar" }).click();
+    await expect(painel.getByRole("button", { name: "+ Escrever uma anotação" })).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
   // V16 — a área de quem organiza: recolhida, com chave, e o publicar
   test("quem organiza guarda a chave e publica as letras para o grupo", async ({ page }) => {
     const errors = trackErrors(page);
