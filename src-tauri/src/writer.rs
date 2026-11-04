@@ -429,6 +429,21 @@ fn frase_de_lofty(e: &LoftyError) -> &'static str {
 
 /// Monta a mensagem que a pessoa vê: o caminho do arquivo (de qual música se
 /// trata) e uma frase em pt-BR que diz o que aconteceu e o que fazer.
+/// V16.3 — a frase da recusa para o MP3 embrulhado num WAV.
+const FRASE_DO_WAV: &str = "este arquivo tem nome de MP3, mas por dentro é um WAV, \
+e o app só grava etiquetas em MP3 de verdade. Nada foi alterado no arquivo";
+
+/// V16.3 — o arquivo começa com "RIFF....WAVE"? É um WAV (às vezes com áudio
+/// MP3 dentro) com nome de .mp3: toca, mas a etiqueta gravada nele não volta na
+/// leitura. Só lê os 12 primeiros bytes.
+pub fn e_mp3_dentro_de_wav(path: &Path) -> bool {
+    use std::io::Read;
+    let mut cabeca = [0u8; 12];
+    std::fs::File::open(path)
+        .and_then(|mut f| f.read_exact(&mut cabeca))
+        .is_ok_and(|()| &cabeca[..4] == b"RIFF" && &cabeca[8..12] == b"WAVE")
+}
+
 fn erro_de_gravacao(caminho: &str, frase: &str) -> AppError {
     AppError(format!("não foi possível salvar em {caminho}: {frase}"))
 }
@@ -1141,6 +1156,13 @@ fn gravar_etiqueta_com(
     if !path.is_file() {
         // mensagem exata que o frontend usa para arquivo sumido
         return Err(AppError(format!("arquivo não encontrado: {}", song.file_path)));
+    }
+
+    // V16.3 — MP3 dentro de um WAV: o lofty gravaria num bloco do WAV que a
+    // leitura do app não enxerga ("deu certo" e a letra não aparece). Recusa
+    // ANTES de abrir para gravar, com o arquivo intocado.
+    if e_mp3_dentro_de_wav(path) {
+        return Err(erro_de_gravacao(&song.file_path, FRASE_DO_WAV));
     }
 
     // Lê a tag ID3v2 existente (preserva os demais frames); MP3 sem tag ganha

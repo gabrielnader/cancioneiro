@@ -218,6 +218,10 @@ pub const FONTE_LYRICS_OVH: &str = "lyrics.ovh";
 /// máquina, e a tela precisa dizer isso: ela vai para o MP3 com
 /// `TXXX:LETRA_ORIGEM = "transcricao"`, a marca que o curador aprendeu a ler
 /// como "isto pode estar errado".
+/// V16.3 — por que a música WAV com nome de MP3 não é transcrita.
+pub const AVISO_WAV_NAO_TRANSCREVE: &str = "este arquivo tem nome de MP3, mas por dentro é um WAV: \
+o app não consegue gravar a letra nele, então não vale gastar o computador escrevendo";
+
 pub const FONTE_TRANSCRICAO: &str = "transcrição do áudio";
 /// `fonte` — a música foi tentada e falhou; `error` traz a explicação em
 /// pt-BR e a linha não é aplicável.
@@ -2497,6 +2501,12 @@ where
             Desfecho::Erro {
                 mensagem: veredito.clone(),
             }
+        } else if crate::writer::e_mp3_dentro_de_wav(Path::new(&cand.song.file_path)) {
+            // V16.3 — a letra escrita não teria onde ser gravada: o app recusa
+            // gravar em WAV com nome de MP3. Não gasta a CPU; a linha diz por quê.
+            Desfecho::Erro {
+                mensagem: AVISO_WAV_NAO_TRANSCREVE.into(),
+            }
         } else if cand.song.instrumental {
             // Instrumental NÃO é transcrito, e a linha diz por quê: a marca é
             // escolha humana, e refazer horas de CPU contra ela seria
@@ -2710,7 +2720,16 @@ fn transcricoes_ainda_validas(conn: &Connection) -> Result<Vec<db::TranscricaoGu
     let mut vencidas = Vec::new();
     for g in db::transcricoes_guardadas(conn)? {
         match db::get_song(conn, g.song_id)? {
-            Some(s) if !s.has_lyrics && !s.instrumental => validas.push(g),
+            // V16.3 — WAV com nome de MP3: a gravação recusa, então a letra
+            // esperaria para sempre (era o "1 letra espera você conferir" que
+            // voltava depois de "Usar o novo")
+            Some(s)
+                if !s.has_lyrics
+                    && !s.instrumental
+                    && !crate::writer::e_mp3_dentro_de_wav(Path::new(&s.file_path)) =>
+            {
+                validas.push(g)
+            }
             _ => vencidas.push(g.song_id),
         }
     }

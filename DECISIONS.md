@@ -2910,3 +2910,9 @@ gravação; o desfecho da gravação conta o que foi feito.
 - Entra na busca (coluna nova no FIM da FTS, como manda o contrato da ordem; a letra continua na posição 2). O pacote do grupo nunca a lê nem a toca, e as outras gravações (nome, letra, temas) a preservam — provado por teste.
 - A gravação passa pelo MESMO caminho das outras: a leitura com os consertos, a proteção da etiqueta colada e a conferência do áudio foram separadas numa função (`gravar_etiqueta_com`) que recebe só a alteração.
 - Banco V8 sem releitura do acervo: ninguém tem anotação ainda, e reler 8 mil músicas por uma coluna vazia custaria minutos de "Indexando…" a cada pessoa.
+
+## V16.3 — MP3 dentro de WAV: recusa em vez de "deu certo"
+- Relato: "Song 11 — Unknown" continuava com "1 letra espera você conferir" depois de "Usar o novo", mesmo com a V16. O diagnóstico do arquivo real ("Cores - Manto azul") mostrou outra causa: é um WAV (com áudio MP3 dentro) com nome .mp3. A V16 tinha partido de uma etiqueta colada reproduzida por imitação, sem o arquivo.
+- O lofty gravava a etiqueta num bloco do WAV que a leitura do app não enxerga: a gravação "dava certo", o arquivo mudava, a música seguia sem letra e a letra voltava a esperar.
+- Agora: arquivo que começa com RIFF…WAVE é recusado ANTES de abrir para gravar, com a frase de por quê e o arquivo intocado (nome, letra, anotação, pacote do grupo — todos pelo mesmo caminho). A letra guardada para ele sai da espera, e a etapa 5 não gasta o computador com ele.
+- O arquivo do relato já ganhou um bloco extra do WAV na gravação antiga; o áudio não foi tocado, e o app não mexe nele de novo.

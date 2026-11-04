@@ -2327,3 +2327,75 @@ fn a_anotacao_fica_no_arquivo_entra_na_busca_e_sobrevive_as_outras_gravacoes() {
     assert_eq!(depois.title, "Outro Nome");
     assert_eq!(db::get_lyrics(&conn, song.id).unwrap().as_deref(), Some("outra letra"));
 }
+
+/// Um WAV de verdade (PCM 16 bits, 44,1 kHz, ~2 s de ruído) com nome .mp3 e
+/// uma LIST/INFO com nome e quem canta — como "Cores - Manto azul", que o app
+/// mostrava como "Song 11 — Unknown".
+fn wav_com_nome_de_mp3(path: &Path) {
+    let tmp = path.with_extension("fonte");
+    copy_fixture("com_letra.mp3", &tmp);
+    let pcm = audio_bytes(&tmp);
+    fs::remove_file(&tmp).unwrap();
+    let sub = |id: &[u8], v: &[u8]| {
+        let mut c = id.to_vec();
+        let mut v = v.to_vec();
+        v.push(0);
+        if v.len() % 2 == 1 { v.push(0); }
+        c.extend_from_slice(&(v.len() as u32).to_le_bytes());
+        c.extend(v);
+        c
+    };
+    let mut info = b"INFO".to_vec();
+    info.extend(sub(b"INAM", b"Song 11"));
+    info.extend(sub(b"IART", b"Unknown"));
+    let mut corpo = b"WAVE".to_vec();
+    corpo.extend_from_slice(b"fmt ");
+    corpo.extend_from_slice(&16u32.to_le_bytes());
+    corpo.extend_from_slice(&0x55u16.to_le_bytes()); // MPEG Layer 3
+    corpo.extend_from_slice(&2u16.to_le_bytes());
+    corpo.extend_from_slice(&44_100u32.to_le_bytes());
+    corpo.extend_from_slice(&176_400u32.to_le_bytes());
+    corpo.extend_from_slice(&4u16.to_le_bytes());
+    corpo.extend_from_slice(&16u16.to_le_bytes());
+    corpo.extend_from_slice(b"LIST");
+    corpo.extend_from_slice(&(info.len() as u32).to_le_bytes());
+    corpo.extend(info);
+    corpo.extend_from_slice(b"data");
+    corpo.extend_from_slice(&(pcm.len() as u32).to_le_bytes());
+    corpo.extend(pcm);
+    {
+        let quadros = [quadro_v24(b"TIT2", b"\x03Song 11"), quadro_v24(b"TPE1", b"\x03Unknown")].concat();
+        let mut id3 = b"ID3\x04\x00\x00".to_vec();
+        id3.extend_from_slice(&syncsafe(quadros.len()));
+        id3.extend(quadros);
+        if id3.len() % 2 == 1 { id3.push(0); }
+        corpo.extend_from_slice(b"id3 ");
+        corpo.extend_from_slice(&(id3.len() as u32).to_le_bytes());
+        corpo.extend(id3);
+    }
+    let mut a = b"RIFF".to_vec();
+    a.extend_from_slice(&(corpo.len() as u32).to_le_bytes());
+    a.extend(corpo);
+    fs::write(path, a).unwrap();
+}
+
+/// "Cores - Manto azul" (no app, "Song 11 — Unknown"): MP3 embrulhado num WAV,
+/// com nome .mp3. O lofty gravava a etiqueta num bloco do WAV que a leitura do
+/// app não enxerga: "Usar o novo" dizia que deu certo, o arquivo mudava, e a
+/// música continuava sem letra — e a letra escrita voltava a esperar. Agora a
+/// gravação recusa, com a frase de por quê, e o arquivo fica intocado.
+#[test]
+fn mp3_dentro_de_wav_recusa_e_nao_toca_no_arquivo() {
+    let base = tempfile::tempdir().unwrap();
+    let path = base.path().join("Cores - Manto azul.mp3");
+    wav_com_nome_de_mp3(&path);
+    let (_d, conn, song) = indexar_so(&path);
+    let antes = fs::read(&song.file_path).unwrap();
+    let r = writer::write_tags(&conn, song.id, &song.title, None, Some("a letra nova"), None, None);
+    let erro = r.err().expect("tem de recusar").to_string();
+    assert!(erro.contains("WAV"), "{erro}");
+    assert_eq!(fs::read(&song.file_path).unwrap(), antes, "nada pode mudar no arquivo");
+    assert!(writer::gravar_anotacoes(&conn, song.id, "tom de ré").is_err());
+    assert_eq!(fs::read(&song.file_path).unwrap(), antes);
+    assert!(writer::e_mp3_dentro_de_wav(Path::new(&song.file_path)));
+}

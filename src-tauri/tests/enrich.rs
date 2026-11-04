@@ -6020,3 +6020,38 @@ fn as_letras_guardadas_esperam_a_pessoa_e_somem_quando_resolvidas() {
     db::descartar_transcricoes(&conn, &[b.id]).unwrap();
     assert!(enrich::propostas_guardadas(&conn).unwrap().is_empty());
 }
+
+/// V16.3 — "Cores - Manto azul": WAV com nome de MP3. A gravação recusa, então
+/// a letra guardada para ela esperaria para sempre ("1 letra espera você
+/// conferir" voltava depois de "Usar o novo"). Sai da espera, e a etapa 5 nem
+/// gasta o computador com ela.
+#[test]
+fn wav_com_nome_de_mp3_nao_espera_nem_e_transcrito() {
+    let (_dir, conn, _f) = setup_with(&[("sem_letra.mp3", "w.mp3")]);
+    let w = song_by_suffix(&conn, "w.mp3");
+    transcrever(&conn, &[w.id], motor("uma letra", 100.0));
+    assert_eq!(enrich::propostas_guardadas(&conn).unwrap().len(), 1);
+
+    let mut wav = b"RIFF\x00\x00\x00\x00WAVEfmt ".to_vec();
+    wav.extend(vec![0u8; 2000]);
+    fs::write(&w.file_path, &wav).unwrap();
+    assert!(enrich::propostas_guardadas(&conn).unwrap().is_empty(), "não espera mais");
+
+    let chamadas = RefCell::new(0);
+    let r = enrich::transcricao_scan(
+        &conn,
+        transcricao::modelo_oferecido(),
+        &[w.id],
+        |_mp3: &Path, _c: &dyn Fn() -> bool, _p: &dyn Fn(u8)| {
+            *chamadas.borrow_mut() += 1;
+            Ok(Some(SaidaDoMotor { texto: "outra".into(), duracao: Duracao::completa(100.0) }))
+        },
+        SEM_PROGRESSO_5,
+        SEM_CANCELAMENTO,
+    )
+    .unwrap();
+    assert_eq!(*chamadas.borrow(), 0, "não gastou CPU");
+    assert_eq!(r.propostas[0].error.as_deref(), Some(enrich::AVISO_WAV_NAO_TRANSCREVE));
+    let msg = enrich::AVISO_WAV_NAO_TRANSCREVE;
+    assert!(!msg.contains("  ") && !msg.contains('\n'), "{msg:?}");
+}
