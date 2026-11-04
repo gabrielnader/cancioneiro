@@ -218,9 +218,10 @@ pub const FONTE_LYRICS_OVH: &str = "lyrics.ovh";
 /// máquina, e a tela precisa dizer isso: ela vai para o MP3 com
 /// `TXXX:LETRA_ORIGEM = "transcricao"`, a marca que o curador aprendeu a ler
 /// como "isto pode estar errado".
-/// V16.3 — por que a música WAV com nome de MP3 não é transcrita.
-pub const AVISO_WAV_NAO_TRANSCREVE: &str = "este arquivo tem nome de MP3, mas por dentro é um WAV: \
-o app não consegue gravar a letra nele, então não vale gastar o computador escrevendo";
+/// V16.3 — por que a música WAV/M4A com nome de MP3 não é transcrita.
+pub const AVISO_FORMATO_NAO_TRANSCREVE: &str = "este arquivo tem nome de MP3, mas por dentro é de outro \
+formato, e o app não consegue gravar a letra nele. Nos detalhes da música, \u{201c}Consertar o arquivo\u{201d} \
+resolve isso; depois, a letra pode ser escrita";
 
 pub const FONTE_TRANSCRICAO: &str = "transcrição do áudio";
 /// `fonte` — a música foi tentada e falhou; `error` traz a explicação em
@@ -2501,11 +2502,12 @@ where
             Desfecho::Erro {
                 mensagem: veredito.clone(),
             }
-        } else if crate::writer::e_mp3_dentro_de_wav(Path::new(&cand.song.file_path)) {
+        } else if crate::conversao::conteudo_do_arquivo(Path::new(&cand.song.file_path)).trocado() {
             // V16.3 — a letra escrita não teria onde ser gravada: o app recusa
-            // gravar em WAV com nome de MP3. Não gasta a CPU; a linha diz por quê.
+            // gravar em WAV/M4A com nome de MP3 até o arquivo ser consertado.
+            // Não gasta a CPU; a linha diz por quê.
             Desfecho::Erro {
-                mensagem: AVISO_WAV_NAO_TRANSCREVE.into(),
+                mensagem: AVISO_FORMATO_NAO_TRANSCREVE.into(),
             }
         } else if cand.song.instrumental {
             // Instrumental NÃO é transcrito, e a linha diz por quê: a marca é
@@ -2726,7 +2728,7 @@ fn transcricoes_ainda_validas(conn: &Connection) -> Result<Vec<db::TranscricaoGu
             Some(s)
                 if !s.has_lyrics
                     && !s.instrumental
-                    && !crate::writer::e_mp3_dentro_de_wav(Path::new(&s.file_path)) =>
+                    && !crate::conversao::conteudo_do_arquivo(Path::new(&s.file_path)).trocado() =>
             {
                 validas.push(g)
             }

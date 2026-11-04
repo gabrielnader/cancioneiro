@@ -6,6 +6,7 @@ import type {
   ScanResult,
   SearchResult,
   Song,
+  SituacaoDoArquivo,
 } from "./types";
 
 /**
@@ -620,6 +621,17 @@ export interface Backend {
   salvarAnotacoes(songId: number, texto: string): Promise<Song>;
   /** V16 — o arquivo que está tocando, que o recebimento nunca grava. */
   definirTocando(caminho: string | null): Promise<void>;
+  /** V16.4 — o que o arquivo é por dentro, e se há original guardado. */
+  situacaoDoArquivo(songId: number): Promise<SituacaoDoArquivo>;
+  /** V16.4 — "Consertar o arquivo" (aprovado pela pessoa); devolve a música. */
+  consertarArquivo(songId: number): Promise<Song>;
+  /** V16.4 — "Voltar ao som original". */
+  voltarAoSomOriginal(songId: number): Promise<Song>;
+  /** V16.4 — as músicas com nome de MP3 que por dentro são outra coisa. */
+  musicasParaConsertar(): Promise<number[]>;
+  /** V16.4 — os originais guardados na pasta do app. */
+  copiasGuardadas(): Promise<{ quantas: number; bytes: number }>;
+  apagarCopiasGuardadas(): Promise<void>;
   /** Assina `pacote:progresso` (montar ou receber o pacote). */
   onPacoteProgresso(cb: (p: { done: number; total: number }) => void): Promise<() => void>;
   /** Assina `transcricao:progresso` — mesmo contrato dos outros progressos. */
@@ -853,6 +865,30 @@ function tauriBackend(): Backend {
     async definirTocando(caminho) {
       const { invoke } = await import("@tauri-apps/api/core");
       await invoke("definir_tocando", { caminho });
+    },
+    async situacaoDoArquivo(songId) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<SituacaoDoArquivo>("situacao_do_arquivo", { songId });
+    },
+    async consertarArquivo(songId) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<Song>("consertar_arquivo", { songId });
+    },
+    async voltarAoSomOriginal(songId) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<Song>("voltar_ao_som_original", { songId });
+    },
+    async musicasParaConsertar() {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<number[]>("musicas_para_consertar");
+    },
+    async copiasGuardadas() {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return invoke<{ quantas: number; bytes: number }>("copias_guardadas");
+    },
+    async apagarCopiasGuardadas() {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("apagar_copias_guardadas");
     },
     async onPacoteProgresso(cb) {
       const { listen } = await import("@tauri-apps/api/event");

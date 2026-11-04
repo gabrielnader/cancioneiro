@@ -5,6 +5,7 @@ import { useLibraryStore } from "../stores/libraryStore";
 import { usePlaylistStore } from "../stores/playlistStore";
 import { FONT_SIZES_PX, useUiStore } from "../stores/uiStore";
 import { ORIGEM_TRANSCRICAO, type Song } from "../lib/types";
+import { ConsertarArquivo } from "./ConsertarArquivo";
 import { EditSongForm } from "./EditSongForm";
 import { TemaChips } from "./TemaChips";
 
@@ -186,6 +187,7 @@ export function LyricsPanel() {
             />
           ) : (
             <div className="flex-1 overflow-y-auto p-4">
+              {selected.available && <ConsertarArquivo key={`c${selected.id}`} song={selected} />}
               {selected.available && <MinhasAnotacoes key={selected.id} song={selected} />}
               {selected.has_lyrics && lyrics ? (
                 <>

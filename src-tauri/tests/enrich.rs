@@ -6051,7 +6051,7 @@ fn wav_com_nome_de_mp3_nao_espera_nem_e_transcrito() {
     )
     .unwrap();
     assert_eq!(*chamadas.borrow(), 0, "não gastou CPU");
-    assert_eq!(r.propostas[0].error.as_deref(), Some(enrich::AVISO_WAV_NAO_TRANSCREVE));
-    let msg = enrich::AVISO_WAV_NAO_TRANSCREVE;
+    assert_eq!(r.propostas[0].error.as_deref(), Some(enrich::AVISO_FORMATO_NAO_TRANSCREVE));
+    let msg = enrich::AVISO_FORMATO_NAO_TRANSCREVE;
     assert!(!msg.contains("  ") && !msg.contains('\n'), "{msg:?}");
 }

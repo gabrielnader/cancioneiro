@@ -429,19 +429,14 @@ fn frase_de_lofty(e: &LoftyError) -> &'static str {
 
 /// Monta a mensagem que a pessoa vê: o caminho do arquivo (de qual música se
 /// trata) e uma frase em pt-BR que diz o que aconteceu e o que fazer.
-/// V16.3 — a frase da recusa para o MP3 embrulhado num WAV.
-const FRASE_DO_WAV: &str = "este arquivo tem nome de MP3, mas por dentro é um WAV, \
-e o app só grava etiquetas em MP3 de verdade. Nada foi alterado no arquivo";
-
-/// V16.3 — o arquivo começa com "RIFF....WAVE"? É um WAV (às vezes com áudio
-/// MP3 dentro) com nome de .mp3: toca, mas a etiqueta gravada nele não volta na
-/// leitura. Só lê os 12 primeiros bytes.
-pub fn e_mp3_dentro_de_wav(path: &Path) -> bool {
-    use std::io::Read;
-    let mut cabeca = [0u8; 12];
-    std::fs::File::open(path)
-        .and_then(|mut f| f.read_exact(&mut cabeca))
-        .is_ok_and(|()| &cabeca[..4] == b"RIFF" && &cabeca[8..12] == b"WAVE")
+/// V16.3/V16.4 — a frase da recusa para o arquivo que tem nome de MP3 e por
+/// dentro é WAV ou M4A.
+pub fn frase_do_formato_trocado(c: crate::conversao::Conteudo) -> String {
+    format!(
+        "este arquivo tem nome de MP3, mas por dentro é um {}, e o app só grava em MP3 de verdade. \
+Nada foi alterado. Nos detalhes da música, \u{201c}Consertar o arquivo\u{201d} resolve isso",
+        c.nome()
+    )
 }
 
 fn erro_de_gravacao(caminho: &str, frase: &str) -> AppError {
@@ -1161,8 +1156,11 @@ fn gravar_etiqueta_com(
     // V16.3 — MP3 dentro de um WAV: o lofty gravaria num bloco do WAV que a
     // leitura do app não enxerga ("deu certo" e a letra não aparece). Recusa
     // ANTES de abrir para gravar, com o arquivo intocado.
-    if e_mp3_dentro_de_wav(path) {
-        return Err(erro_de_gravacao(&song.file_path, FRASE_DO_WAV));
+    // V16.4 — o mesmo para WAV de verdade e M4A com nome .mp3; a frase aponta
+    // o "Consertar o arquivo" dos detalhes da música.
+    let conteudo = crate::conversao::conteudo_do_arquivo(path);
+    if conteudo.trocado() {
+        return Err(erro_de_gravacao(&song.file_path, &frase_do_formato_trocado(conteudo)));
     }
 
     // Lê a tag ID3v2 existente (preserva os demais frames); MP3 sem tag ganha

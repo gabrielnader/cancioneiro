@@ -224,6 +224,8 @@ interface DbState {
   transcricoesGuardadas?: number[];
   /** V16 — há chave do GitHub guardada (o valor nunca fica aqui). */
   chaveDoGrupo?: boolean;
+  /** V16.4 — músicas "[wav]" já consertadas, com o original guardado. */
+  consertadas?: number[];
   /** O que o som responde, por arquivo. Permanente, como o próprio áudio. */
   somDiz: Record<string, SomDiz>;
   /**
@@ -2686,6 +2688,48 @@ export function createMockBackend(): MockBackend {
       song.anotacoes = texto.trim() === "" ? null : texto.trim();
       save();
       return toSong(song);
+    },
+
+    // V16.4 — no navegador, a música cujo arquivo tem "[wav]" no nome faz o
+    // papel do MP3 dentro de WAV; consertar só muda o estado guardado
+    async situacaoDoArquivo(songId: number) {
+      const song = state.songs.find((s) => s.id === songId);
+      if (!song) throw new Error(`música não encontrada: ${songId}`);
+      const consertada = (state.consertadas ?? []).includes(songId);
+      const trocado = song.file_path.includes("[wav]") && !consertada;
+      return {
+        conteudo: trocado ? ("mp3_em_wav" as const) : ("mp3" as const),
+        recodifica: false,
+        original_guardado: consertada,
+      };
+    },
+    async consertarArquivo(songId: number): Promise<Song> {
+      const song = state.songs.find((s) => s.id === songId);
+      if (!song) throw new Error(`música não encontrada: ${songId}`);
+      state.consertadas = [...(state.consertadas ?? []), songId];
+      save();
+      return toSong(song);
+    },
+    async voltarAoSomOriginal(songId: number): Promise<Song> {
+      const song = state.songs.find((s) => s.id === songId);
+      if (!song) throw new Error(`música não encontrada: ${songId}`);
+      state.consertadas = (state.consertadas ?? []).filter((id) => id !== songId);
+      save();
+      return toSong(song);
+    },
+    async musicasParaConsertar() {
+      const feitas = state.consertadas ?? [];
+      return state.songs
+        .filter((s) => s.file_path.includes("[wav]") && !feitas.includes(s.id))
+        .map((s) => s.id);
+    },
+    async copiasGuardadas() {
+      const n = (state.consertadas ?? []).length;
+      return { quantas: n, bytes: n * 2_400_000 };
+    },
+    async apagarCopiasGuardadas() {
+      state.consertadas = [];
+      save();
     },
 
     async receberPacoteDoGrupo() {

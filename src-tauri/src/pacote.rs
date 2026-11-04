@@ -56,7 +56,7 @@ pub fn definir_tocando(caminho: Option<String>) {
     }
 }
 
-fn esta_tocando(caminho: &str) -> bool {
+pub(crate) fn esta_tocando(caminho: &str) -> bool {
     TOCANDO.lock().map(|t| t.as_deref() == Some(caminho)).unwrap_or(true)
 }
 

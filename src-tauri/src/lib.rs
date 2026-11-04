@@ -2,6 +2,7 @@ pub mod acessorios;
 pub mod casamento_estrito;
 pub mod commands;
 pub mod conserto_id3;
+pub mod conversao;
 pub mod db;
 pub mod enrich;
 pub mod error;
@@ -78,6 +79,12 @@ pub fn run() {
             commands::tem_chave_do_grupo,
             commands::definir_tocando,
             commands::salvar_anotacoes,
+            commands::situacao_do_arquivo,
+            commands::consertar_arquivo,
+            commands::voltar_ao_som_original,
+            commands::musicas_para_consertar,
+            commands::copias_guardadas,
+            commands::apagar_copias_guardadas,
             commands::acessorios_estado,
             commands::acessorio_baixar,
             commands::acessorio_cancelar,

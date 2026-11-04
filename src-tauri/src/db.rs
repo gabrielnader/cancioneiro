@@ -183,6 +183,17 @@ CREATE TABLE IF NOT EXISTS digitais_do_audio (
     digital TEXT NOT NULL
 );
 
+-- V16.4 — o ORIGINAL de cada arquivo consertado ("Consertar o arquivo"),
+-- guardado na pasta do app para o "Voltar ao som original". `copia` é o
+-- caminho da cópia; `conteudo` o que ele era (wav/m4a).
+CREATE TABLE IF NOT EXISTS arquivos_originais (
+    song_id INTEGER PRIMARY KEY,
+    copia TEXT NOT NULL,
+    conteudo TEXT NOT NULL,
+    tamanho INTEGER NOT NULL,
+    guardado_em INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS transcricoes_guardadas (
     song_id INTEGER PRIMARY KEY,
     -- uma das duas: a letra escrita, ou o motivo de parecer instrumental

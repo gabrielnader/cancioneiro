@@ -2564,3 +2564,76 @@ pub fn salvar_anotacoes(state: State<'_, Db>, song_id: i64, texto: String) -> Re
     let conn = state.lock()?;
     Ok(crate::writer::gravar_anotacoes(&conn, song_id, &texto)?.song)
 }
+
+/// V16.4 — o que o arquivo é por dentro, e se há original guardado: decide o
+/// que os detalhes da música mostram ("Consertar o arquivo" / "Voltar ao som
+/// original").
+#[derive(serde::Serialize)]
+pub struct SituacaoDoArquivo {
+    pub conteudo: crate::conversao::Conteudo,
+    pub recodifica: bool,
+    pub original_guardado: bool,
+}
+
+#[tauri::command(async)]
+pub fn situacao_do_arquivo(state: State<'_, Db>, song_id: i64) -> Result<SituacaoDoArquivo> {
+    let conn = state.lock()?;
+    let song = crate::db::get_song(&conn, song_id)?
+        .ok_or_else(|| AppError(format!("música não encontrada: {song_id}")))?;
+    let conteudo = crate::conversao::conteudo_do_arquivo(Path::new(&song.file_path));
+    Ok(SituacaoDoArquivo {
+        conteudo,
+        recodifica: conteudo.recodifica(),
+        original_guardado: crate::conversao::copia_guardada(&conn, song_id)?.is_some(),
+    })
+}
+
+/// V16.4 — "Consertar o arquivo", com a aprovação da pessoa. A parte pesada
+/// (recodificar) roda SEM o banco preso; a troca, com ele.
+#[tauri::command(async)]
+pub fn consertar_arquivo(app: AppHandle, state: State<'_, Db>, song_id: i64) -> Result<Song> {
+    let pasta = pasta_do_app(&app)?;
+    let song = {
+        let conn = state.lock()?;
+        crate::db::get_song(&conn, song_id)?
+            .ok_or_else(|| AppError(format!("música não encontrada: {song_id}")))?
+    };
+    let preparado =
+        crate::conversao::preparar(Path::new(&song.file_path), &pasta.join("temporarios"))?;
+    let conn = state.lock()?;
+    crate::conversao::trocar(&conn, &song, &preparado, &pasta.join("arquivos-originais"))
+}
+
+#[tauri::command(async)]
+pub fn voltar_ao_som_original(state: State<'_, Db>, song_id: i64) -> Result<Song> {
+    let conn = state.lock()?;
+    let song = crate::db::get_song(&conn, song_id)?
+        .ok_or_else(|| AppError(format!("música não encontrada: {song_id}")))?;
+    crate::conversao::voltar_ao_original(&conn, &song)
+}
+
+/// V16.4 — as músicas com nome de MP3 que por dentro são outra coisa.
+#[tauri::command(async)]
+pub fn musicas_para_consertar(state: State<'_, Db>) -> Result<Vec<i64>> {
+    let conn = state.lock()?;
+    Ok(crate::conversao::musicas_para_consertar(&conn)?.into_iter().map(|(id, _)| id).collect())
+}
+
+#[derive(serde::Serialize)]
+pub struct CopiasGuardadas {
+    pub quantas: usize,
+    pub bytes: u64,
+}
+
+#[tauri::command(async)]
+pub fn copias_guardadas(state: State<'_, Db>) -> Result<CopiasGuardadas> {
+    let conn = state.lock()?;
+    let (quantas, bytes) = crate::conversao::copias_guardadas(&conn)?;
+    Ok(CopiasGuardadas { quantas, bytes })
+}
+
+#[tauri::command(async)]
+pub fn apagar_copias_guardadas(state: State<'_, Db>) -> Result<()> {
+    let conn = state.lock()?;
+    crate::conversao::apagar_copias(&conn)
+}

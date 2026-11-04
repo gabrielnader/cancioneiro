@@ -835,6 +835,8 @@ function CuradoriaSection() {
         )}
       </Cartao>
 
+      <ArquivosParaConsertar />
+
       <Cartao
         id="cartao-programas"
         titulo="Programas extras"
@@ -844,6 +846,147 @@ function CuradoriaSection() {
         <Acessorios lista={acessorios} />
       </Cartao>
     </div>
+  );
+}
+
+/** V16.4 — "1 música tem…" / "3 músicas têm…". */
+export function textoDosArquivosParaConsertar(n: number): string {
+  return n === 1
+    ? "1 música tem nome de MP3, mas por dentro é de outro formato (WAV ou M4A). O app não consegue gravar nome, letra nem anotação nela."
+    : `${n} músicas têm nome de MP3, mas por dentro são de outro formato (WAV ou M4A). O app não consegue gravar nome, letra nem anotação nelas.`;
+}
+
+function megas(bytes: number): string {
+  return `${Math.max(1, Math.round(bytes / 1_000_000)).toLocaleString("pt-BR")} MB`;
+}
+
+/**
+ * V16.4 — os arquivos com nome de MP3 que por dentro são WAV ou M4A, e os
+ * originais guardados dos que já foram consertados. Só aparece quando há algo.
+ */
+function ArquivosParaConsertar() {
+  const allSongs = useLibraryStore((s) => s.allSongs);
+  const [ids, setIds] = useState<number[] | null>(null);
+  const [copias, setCopias] = useState<{ quantas: number; bytes: number } | null>(null);
+  const [confirmando, setConfirmando] = useState<"todas" | "apagar" | null>(null);
+  const [progresso, setProgresso] = useState<{ feitas: number; total: number } | null>(null);
+  const [falhas, setFalhas] = useState<string[]>([]);
+
+  const contar = useCallback(async () => {
+    try {
+      const b = getBackend();
+      const [lista, guardadas] = await Promise.all([b.musicasParaConsertar(), b.copiasGuardadas()]);
+      setIds(lista);
+      setCopias(guardadas);
+    } catch {
+      // sem resposta: o cartão só não aparece
+    }
+  }, []);
+
+  useEffect(() => {
+    void contar();
+  }, [contar]);
+
+  async function consertarTodas() {
+    if (!ids) return;
+    setConfirmando(null);
+    setFalhas([]);
+    const erros: string[] = [];
+    for (let i = 0; i < ids.length; i++) {
+      setProgresso({ feitas: i, total: ids.length });
+      try {
+        const song = await getBackend().consertarArquivo(ids[i]);
+        useLibraryStore.getState().updateSong(song);
+      } catch (e) {
+        const nome = allSongs.find((s) => s.id === ids[i])?.title ?? `música ${ids[i]}`;
+        erros.push(`${nome}: ${String(e).replace(/^Error:\s*/, "")}`);
+      }
+    }
+    setProgresso(null);
+    setFalhas(erros);
+    await contar();
+  }
+
+  async function apagar() {
+    setConfirmando(null);
+    try {
+      await getBackend().apagarCopiasGuardadas();
+    } finally {
+      await contar();
+    }
+  }
+
+  const n = ids?.length ?? 0;
+  const guardadas = copias?.quantas ?? 0;
+  if (n === 0 && guardadas === 0 && falhas.length === 0) return null;
+  const nomes = (ids ?? []).map((id) => allSongs.find((s) => s.id === id)?.title).filter(Boolean);
+
+  return (
+    <Cartao
+      id="cartao-consertar"
+      titulo="Arquivos que não aceitam gravação"
+      descricao="Consertar transforma o arquivo num MP3 de verdade, com o mesmo nome. O original fica guardado na pasta do app, e dá para voltar atrás nos detalhes de cada música."
+      icone={ICONES.lapis}
+    >
+      {n > 0 && (
+        <div className="flex flex-col gap-3">
+          <p className="text-[16px] leading-relaxed text-ink-secondary">{textoDosArquivosParaConsertar(n)}</p>
+          {nomes.length > 0 && (
+            <ul className="list-disc pl-6 text-[16px] text-ink-secondary" data-testid="lista-para-consertar">
+              {nomes.slice(0, 8).map((t, i) => (
+                <li key={i}>{t}</li>
+              ))}
+              {nomes.length > 8 && <li>e mais {nomes.length - 8}</li>}
+            </ul>
+          )}
+          {progresso ? (
+            <p className="text-[16px] text-ink" role="status">
+              Consertando {progresso.feitas + 1} de {progresso.total}…
+            </p>
+          ) : (
+            <div>
+              <button type="button" onClick={() => setConfirmando("todas")} className={BOTAO_PRINCIPAL}>
+                {n === 1 ? "Consertar o arquivo" : `Consertar os ${n} arquivos`}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+      {falhas.length > 0 && (
+        <div role="alert" className="text-[15px] text-danger">
+          {falhas.length === 1 ? "1 arquivo não foi consertado:" : `${falhas.length} arquivos não foram consertados:`}
+          <ul className="list-disc pl-6">
+            {falhas.map((f, i) => (
+              <li key={i}>{f}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {guardadas > 0 && !progresso && (
+        <div className="flex flex-wrap items-center gap-3">
+          <p className="text-[16px] text-ink-secondary">
+            {guardadas === 1 ? "1 original guardado" : `${guardadas} originais guardados`} ({megas(copias?.bytes ?? 0)}).
+          </p>
+          <button type="button" onClick={() => setConfirmando("apagar")} className={BOTAO_SECUNDARIO}>
+            Apagar os originais guardados
+          </button>
+        </div>
+      )}
+      <ConfirmDialog
+        open={confirmando === "todas"}
+        title={`Consertar ${n === 1 ? "este arquivo" : `estes ${n} arquivos`}? O original de cada um fica guardado na pasta do app.`}
+        confirmLabel="Consertar"
+        onCancel={() => setConfirmando(null)}
+        onConfirm={() => void consertarTodas()}
+      />
+      <ConfirmDialog
+        open={confirmando === "apagar"}
+        title="Apagar os originais guardados? Depois disso, não dá mais para voltar ao som original dessas músicas."
+        confirmLabel="Apagar"
+        onCancel={() => setConfirmando(null)}
+        onConfirm={() => void apagar()}
+      />
+    </Cartao>
   );
 }
 

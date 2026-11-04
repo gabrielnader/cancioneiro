@@ -2397,5 +2397,5 @@ fn mp3_dentro_de_wav_recusa_e_nao_toca_no_arquivo() {
     assert_eq!(fs::read(&song.file_path).unwrap(), antes, "nada pode mudar no arquivo");
     assert!(writer::gravar_anotacoes(&conn, song.id, "tom de ré").is_err());
     assert_eq!(fs::read(&song.file_path).unwrap(), antes);
-    assert!(writer::e_mp3_dentro_de_wav(Path::new(&song.file_path)));
+    assert!(erro.contains("Consertar o arquivo"), "{erro}");
 }

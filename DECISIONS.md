@@ -2916,3 +2916,11 @@ gravação; o desfecho da gravação conta o que foi feito.
 - O lofty gravava a etiqueta num bloco do WAV que a leitura do app não enxerga: a gravação "dava certo", o arquivo mudava, a música seguia sem letra e a letra voltava a esperar.
 - Agora: arquivo que começa com RIFF…WAVE é recusado ANTES de abrir para gravar, com a frase de por quê e o arquivo intocado (nome, letra, anotação, pacote do grupo — todos pelo mesmo caminho). A letra guardada para ele sai da espera, e a etapa 5 não gasta o computador com ele.
 - O arquivo do relato já ganhou um bloco extra do WAV na gravação antiga; o áudio não foi tocado, e o app não mexe nele de novo.
+
+## V16.4 — "Consertar o arquivo"
+- Pedido do dono do produto: já que o .mp3 que por dentro é outra coisa não aceita gravação, consertar dentro do app, com aprovação explícita e o original guardado para voltar atrás — inclusive mudando o som. É a única gravação do app que mexe no áudio, e só com o clique da pessoa.
+- A exceção liberada (criar arquivo novo, renomear, mover o original) não chegou a ser usada: a biblioteca só indexa .mp3, então todo arquivo consertado já se chama .mp3 e fica com o MESMO nome, no mesmo lugar.
+- MP3 dentro de WAV: o som sai da caixa byte por byte (conferido: o que vem depois da etiqueta é idêntico ao bloco "data"). WAV de verdade e M4A: recodificados em MP3 CBR 256 kbps (160 mono) pelo LAME, com a duração conferida contra a do original. CBR porque a duração fica exata em qualquer player, sem cabeçalho VBR.
+- O que estava escrito no arquivo (LIST/INFO e bloco "id3 " do WAV; etiqueta do M4A) vira a etiqueta ID3 do MP3 novo.
+- O original vai para `arquivos-originais/` na pasta do app ANTES da troca, conferido byte por byte; a troca é conferida relendo; falha depois de gravar põe o original de volta. A música que está no player não é trocada, e arquivo que mudou entre preparar e trocar também não.
+- "Voltar ao som original" nos detalhes da música, avisando que o que foi gravado depois do conserto se perde. Em Configurações: quantos arquivos precisam de conserto (com "Consertar os N arquivos") e quanto os originais ocupam (com "Apagar os originais guardados").

@@ -123,3 +123,14 @@ export interface ScanProgress {
   done: number;
   total: number;
 }
+
+/** V16.4 — o que o arquivo .mp3 é por dentro. */
+export type ConteudoDoArquivo = "mp3" | "mp3_em_wav" | "wav" | "mp4";
+
+export interface SituacaoDoArquivo {
+  conteudo: ConteudoDoArquivo;
+  /** o conserto muda o som (WAV de verdade, M4A)? */
+  recodifica: boolean;
+  /** há original guardado ("Voltar ao som original")? */
+  original_guardado: boolean;
+}
