@@ -78,6 +78,7 @@
   --color-warning-soft: #fef3c7;
   --color-warning-soft-alt: #fef9c3; /* selo de confiança MÉDIA */
   --color-warning-accent: #fde68a; /* hover dos botões do banner de pasta sumida */
+  --color-destaque: #f59e0b; /* V16.7 — o contorno e o balão do "Como faço?" */
 
   /* Sucesso (verde). */
   --color-success: #166534;
@@ -131,6 +132,7 @@
     --color-warning-soft: #3a2a0e;
     --color-warning-soft-alt: #332b0a;
     --color-warning-accent: #3a260d;
+    --color-destaque: #fbbf24;
 
     --color-success: #4ade80;
     --color-success-soft: #0f2a1b;
@@ -167,6 +169,7 @@
   --color-warning-soft: #fef3c7;
   --color-warning-soft-alt: #fef9c3;
   --color-warning-accent: #fde68a;
+  --color-destaque: #f59e0b;
 
   --color-success: #166534;
   --color-success-soft: #dcfce7;
@@ -222,6 +225,7 @@
   --color-warning-soft: #3a2a0e;
   --color-warning-soft-alt: #332b0a;
   --color-warning-accent: #3a260d;
+  --color-destaque: #fbbf24;
 
   --color-success: #4ade80;
   --color-success-soft: #0f2a1b;

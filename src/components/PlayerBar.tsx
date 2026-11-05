@@ -53,7 +53,7 @@ export function PlayerBar() {
     "flex h-12 w-12 shrink-0 items-center justify-center rounded-full border-2 border-border-strong bg-surface text-ink hover:bg-surface-hover disabled:opacity-40";
 
   return (
-    <footer className="flex shrink-0 flex-wrap items-center gap-x-6 gap-y-2 border-t border-border bg-surface px-6 py-3 text-ink max-lg:gap-x-4 max-lg:px-4 max-lg:py-2 baixa:py-1.5">
+    <footer data-guia="player" className="flex shrink-0 flex-wrap items-center gap-x-6 gap-y-2 border-t border-border bg-surface px-6 py-3 text-ink max-lg:gap-x-4 max-lg:px-4 max-lg:py-2 baixa:py-1.5">
       <audio
         ref={audioRef}
         onTimeUpdate={(e) => setCurrentTime(e.currentTarget.currentTime)}

@@ -64,20 +64,33 @@ async function addMockFolder(page: Page) {
   await expect(page.getByText("Coração Sertanejo")).toBeVisible();
 }
 
-test.describe("Primeiro uso guiado (V16.6)", () => {
-  test("abre sozinho, escolhe a pasta no passo 2 e some de vez no fim", async ({ page }) => {
+test.describe("Primeiro uso guiado e “Como faço?” (V16.6/V16.7)", () => {
+  /** O balão do guia, pelo texto que ele mostra agora. */
+  const balao = (page: Page, texto: RegExp) => page.locator("section[role=dialog]").filter({ hasText: texto });
+
+  test("o tutorial do começo termina guiando na tela de verdade", async ({ page }) => {
     const errors = trackErrors(page);
     await resetApp(page, true);
-    const tutorial = page.getByRole("dialog", { name: "Bem-vindo ao Cancioneiro" });
-    await expect(tutorial).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Bem-vindo ao Cancioneiro" })).toBeVisible();
     await page.getByRole("button", { name: "Próximo" }).click();
     const passo2 = page.getByRole("dialog", { name: "A pasta das músicas" });
     await passo2.getByRole("button", { name: "Adicionar pasta" }).click();
     await expect(passo2.getByText(/Sua pasta já está no app/)).toBeVisible();
-    for (let i = 0; i < 3; i++) await page.getByRole("button", { name: "Próximo" }).click();
-    await page.getByRole("button", { name: "Começar a usar" }).click();
-    await expect(page.getByRole("dialog")).toHaveCount(0);
-    await expect(page.getByText("Coração Sertanejo")).toBeVisible();
+    await page.getByRole("button", { name: "Próximo" }).click();
+    await page.getByRole("button", { name: "Me mostre na tela" }).click();
+
+    // achar: escrever na busca faz o guia andar sozinho
+    await expect(balao(page, /escreva um pedaço da letra/)).toBeVisible();
+    await expect(page.getByTestId("guia-luz")).toBeVisible();
+    await page.getByLabel("Procurar uma música").fill("coração");
+    await balao(page, /músicas encontradas/).getByRole("button", { name: "Entendi" }).click();
+    // tocar: o clique no botão verde de verdade faz o guia andar
+    await expect(balao(page, /botão verde/)).toBeVisible();
+    await page.getByRole("button", { name: /^Tocar / }).first().click();
+    await balao(page, /Aqui embaixo/).getByRole("button", { name: "Entendi" }).click();
+    await balao(page, /Esqueceu como faz/).getByRole("button", { name: "Entendi" }).click();
+    await page.getByRole("dialog").filter({ hasText: "Pronto!" }).getByRole("button", { name: "Fechar" }).click();
+    await expect(page.getByTestId("guia-luz")).toHaveCount(0);
 
     // não volta ao reabrir; volta pelo botão de Configurações
     await page.reload();
@@ -85,9 +98,68 @@ test.describe("Primeiro uso guiado (V16.6)", () => {
     await expect(page.getByRole("dialog")).toHaveCount(0);
     await page.getByRole("button", { name: "Organizar minhas músicas" }).click();
     await page.getByRole("button", { name: "Ver o tutorial de novo" }).click();
-    await expect(page.getByText("Passo 1 de 5")).toBeVisible();
+    await expect(page.getByText("Passo 1 de 3")).toBeVisible();
     expect(errors).toEqual([]);
   });
+
+  test("“Como faço?”: criar uma lista, pôr música nela e escrever uma anotação", async ({ page }) => {
+    const errors = trackErrors(page);
+    await resetApp(page);
+    await addMockFolder(page);
+    const comoFaco = async (pergunta: string) => {
+      await page.getByRole("button", { name: "Como faço?" }).click();
+      await page.getByRole("button", { name: pergunta }).click();
+    };
+    const pronto = () => page.getByRole("dialog").filter({ hasText: "Pronto!" });
+
+    await comoFaco("Como eu crio uma lista de músicas?");
+    await expect(balao(page, /Nova lista/)).toBeVisible();
+    await page.getByRole("button", { name: "Nova lista" }).click();
+    await expect(balao(page, /Escreva o nome da lista/)).toBeVisible();
+    await page.getByPlaceholder("Nome da playlist").fill("Sessão de sábado");
+    await page.getByRole("button", { name: "Criar" }).click();
+    await expect(pronto()).toBeVisible();
+    await pronto().getByRole("button", { name: "Fechar" }).click();
+
+    await comoFaco("Como eu ponho uma música numa lista?");
+    await page.getByTestId("por-na-lista").first().click();
+    await expect(balao(page, /em qual lista/)).toBeVisible();
+    await page.locator("[data-guia=menu-de-listas]").getByRole("button", { name: "Sessão de sábado" }).click();
+    await expect(pronto()).toBeVisible();
+    await pronto().getByRole("button", { name: "Fechar" }).click();
+
+    await comoFaco("Como eu escrevo uma anotação?");
+    await expect(balao(page, /Clique no nome de uma música/)).toBeVisible();
+    await page.getByText("Coração Sertanejo").click();
+    await page.getByRole("button", { name: "+ Escrever uma anotação" }).click();
+    await page.getByTestId("anotacoes-editor").locator("textarea").fill("tom de ré");
+    await page.getByRole("button", { name: "Salvar" }).click();
+    await expect(pronto()).toBeVisible();
+    await pronto().getByRole("button", { name: "Fechar" }).click();
+    await expect(page.getByTestId("anotacoes")).toContainText("tom de ré");
+
+    // "Parar a ajuda" sai no meio
+    await comoFaco("Como eu deixo a letra maior?");
+    await page.getByRole("button", { name: "Parar a ajuda" }).click();
+    await expect(page.getByTestId("guia-luz")).toHaveCount(0);
+    expect(errors).toEqual([]);
+  });
+});
+
+test("“Como faço?” em janela estreita: o guia abre a gaveta das listas primeiro", async ({ page }) => {
+  await page.setViewportSize({ width: 800, height: 700 });
+  await resetApp(page);
+  await addMockFolder(page);
+  await page.getByRole("button", { name: "Como faço?" }).click();
+  await page.getByRole("button", { name: "Como eu crio uma lista de músicas?" }).click();
+  const balao = page.locator("section[role=dialog]");
+  await expect(balao).toContainText("abrir as suas listas");
+  await page.getByRole("button", { name: "Listas e pastas" }).click();
+  await expect(balao).toContainText("Nova lista");
+  await page.getByRole("button", { name: "Nova lista" }).click();
+  await page.getByPlaceholder("Nome da playlist").fill("Ensaio");
+  await page.getByRole("button", { name: "Criar" }).click();
+  await expect(page.getByRole("dialog").filter({ hasText: "Pronto!" })).toBeVisible();
 });
 
 test.describe("Fluxo crítico: indexar → buscar → ver letra → tocar", () => {

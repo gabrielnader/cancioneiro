@@ -6,7 +6,8 @@ Decidido pelo dono do produto em 04/11/2026. A ordem é a de execução.
 
 1. ~~**Minhas anotações**~~ — feito na v0.13.14.
 2. ~~**Primeiro uso guiado**~~ — feito na v0.13.18 (com "Ver o tutorial de
-   novo" em Configurações). Antes dele, fora da lista: "Consertar o arquivo"
+   novo" em Configurações) e refeito na v0.13.19 com o "Como faço?", que
+   mostra o caminho na tela de verdade. Antes dele, fora da lista: "Consertar o arquivo"
    (v0.13.16–17).
 3. **"Enviar um problema"** — monta um relatório (versão, erro, sistema; sem
    dado pessoal) para a pessoa mandar a quem organiza.

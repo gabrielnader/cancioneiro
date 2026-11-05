@@ -73,6 +73,7 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
     <div
       role="option"
       aria-selected={selected}
+      data-guia="linha"
       tabIndex={-1}
       draggable
       onDragStart={(e) => {
@@ -98,6 +99,7 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
       <button
         type="button"
         aria-label={isPlaying ? `Pausar ${song.title}` : `Tocar ${song.title}`}
+        data-guia="tocar"
         disabled={!song.available}
         onClick={(e) => {
           e.stopPropagation();
@@ -205,6 +207,7 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
             ref={plusRef}
             type="button"
             data-testid="por-na-lista"
+            data-guia="por-na-lista"
             aria-expanded={menuPos !== null}
             className="flex min-h-11 shrink-0 items-center gap-1 rounded-xl border-2 border-border-strong bg-surface px-3 text-[15px] font-semibold text-ink hover:bg-surface-hover"
             onClick={(e) => {
@@ -232,6 +235,7 @@ export function SongRow({ song, snippet, selected, onSelect, onPlay }: SongRowPr
               }}
             />
             <div
+              data-guia="menu-de-listas"
               className="fixed z-50 w-64 overflow-y-auto rounded-xl border border-border bg-surface py-1 shadow-lg"
               style={{
                 top: menuPos.top,

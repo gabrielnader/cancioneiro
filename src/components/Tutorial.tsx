@@ -1,17 +1,16 @@
 import { useEffect, useState } from "react";
+import { useGuiaStore } from "../lib/guias";
 import { useLibraryStore } from "../stores/libraryStore";
 import { useUiStore } from "../stores/uiStore";
 import { AddFolderButton } from "./AddFolderButton";
 
 /**
- * V16.6 — "Primeiro uso guiado". Cinco passos curtos, um por vez, com letra
- * grande e as mesmas palavras que a pessoa vai ver na tela. Abre sozinho na
- * primeira abertura (biblioteca sem pasta) e, depois, pelo botão "Ver o
- * tutorial de novo" de Configurações.
- *
- * Os desenhos são RÉPLICAS dos elementos de verdade (o campo de busca, o botão
- * verde de tocar, o botão de organizar) — mostrar a coisa é mais claro do que
- * descrevê-la para quem não tem a quem perguntar.
+ * V16.6/V16.7 — "Primeiro uso guiado". Três passos curtos na janela (boas-vindas,
+ * a pasta das músicas com o botão de verdade, e o convite) e depois o guia NA
+ * TELA DE VERDADE: achar uma música, tocar, e onde fica o "Como faço?" para
+ * quando a pessoa esquecer. Abre sozinho na primeira abertura (biblioteca sem
+ * pasta) e, depois, pelo "Ver o tutorial de novo" de Configurações ou pelo
+ * "Como faço?".
  */
 
 /** Abre sozinho? Só no primeiro uso de verdade: nunca visto e sem pasta. */
@@ -19,43 +18,7 @@ export function deveAbrirSozinho(tutorialVisto: boolean, libraryLoaded: boolean,
   return !tutorialVisto && libraryLoaded && pastas === 0;
 }
 
-export const PASSOS = [
-  "Bem-vindo",
-  "A pasta das músicas",
-  "Para achar uma música",
-  "Para tocar",
-  "Para organizar",
-] as const;
-
-function CampoDeBusca() {
-  return (
-    <div aria-hidden="true" className="rounded-xl border-2 border-border-strong bg-surface px-4 py-3">
-      <div className="text-[14px] font-semibold text-ink-secondary">Procurar uma música</div>
-      <div className="text-[18px] text-ink-tertiary">Um pedaço da letra, o nome ou quem canta</div>
-    </div>
-  );
-}
-
-function BotaoTocar() {
-  return (
-    <div aria-hidden="true" className="flex items-center gap-3 rounded-xl border-2 border-border bg-surface px-4 py-3">
-      <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-brand-fill text-white">
-        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
-          <path d="M8 5.5v13a1 1 0 0 0 1.5.9l10-6.5a1 1 0 0 0 0-1.7l-10-6.5A1 1 0 0 0 8 5.5Z" />
-        </svg>
-      </span>
-      <span className="text-[18px] text-ink">Asa Branca</span>
-    </div>
-  );
-}
-
-function BotaoOrganizar() {
-  return (
-    <div aria-hidden="true" className="inline-block rounded-xl border-2 border-brand px-4 py-2 text-[17px] font-semibold text-brand">
-      Organizar minhas músicas
-    </div>
-  );
-}
+export const PASSOS = ["Bem-vindo", "A pasta das músicas", "Agora, na tela de verdade"] as const;
 
 function Pasta() {
   const pastas = useLibraryStore((s) => s.folders.length);
@@ -82,7 +45,7 @@ function Conteudo({ passo }: { passo: number }) {
           <p className={texto}>
             Aqui você ouve suas músicas, lê as letras e organiza tudo. Funciona sem internet.
           </p>
-          <p className={texto}>São só cinco passos rápidos.</p>
+          <p className={texto}>Vou te mostrar o básico. É rápido.</p>
         </>
       );
     case 1:
@@ -95,34 +58,17 @@ function Conteudo({ passo }: { passo: number }) {
           <Pasta />
         </>
       );
-    case 2:
-      return (
-        <>
-          <CampoDeBusca />
-          <p className={texto}>
-            No alto da tela, escreva um pedaço da letra, o nome da música ou quem canta. Uma palavra já basta.
-          </p>
-        </>
-      );
-    case 3:
-      return (
-        <>
-          <BotaoTocar />
-          <p className={texto}>
-            Clique no botão verde ao lado da música. A letra aparece nos detalhes, à direita. Embaixo ficam
-            pausar, a próxima música e o volume.
-          </p>
-        </>
-      );
     default:
       return (
         <>
-          <BotaoOrganizar />
           <p className={texto}>
-            No alto da tela, este botão leva para a organização: o app completa nome, cantor e letra das músicas,
-            e você confere tudo antes de qualquer coisa ser gravada.
+            Agora eu te mostro na tela de verdade como achar e tocar uma música. É só seguir o que aparecer no
+            balão amarelo.
           </p>
-          <p className={texto}>Para ver este tutorial de novo, é só ir lá também.</p>
+          <p className={texto}>
+            E se um dia esquecer, o botão <strong className="text-ink">“Como faço?”</strong>, no alto da tela,
+            mostra de novo.
+          </p>
         </>
       );
   }
@@ -182,7 +128,7 @@ export function Tutorial() {
             <span key={i} className={`h-2.5 w-2.5 rounded-full ${i === passo ? "bg-brand-fill" : "bg-border-strong"}`} />
           ))}
         </div>
-        <div className="flex justify-between gap-3">
+        <div className="flex flex-wrap justify-between gap-3">
           {passo > 0 ? (
             <button
               type="button"
@@ -194,14 +140,29 @@ export function Tutorial() {
           ) : (
             <span />
           )}
-          <button
-            type="button"
-            autoFocus
-            onClick={() => (ultimo ? fechar() : setPasso(passo + 1))}
-            className="min-h-12 rounded-xl bg-brand-fill px-6 text-[17px] font-semibold text-white hover:bg-brand-fill-hover"
-          >
-            {ultimo ? "Começar a usar" : "Próximo"}
-          </button>
+          <div className="flex flex-wrap justify-end gap-3">
+            {ultimo && (
+              <button
+                type="button"
+                onClick={fechar}
+                className="min-h-12 rounded-xl px-4 text-[17px] font-semibold text-ink-secondary hover:bg-surface-hover"
+              >
+                Agora não
+              </button>
+            )}
+            <button
+              type="button"
+              autoFocus
+              onClick={() => {
+                if (!ultimo) return setPasso(passo + 1);
+                fechar();
+                useGuiaStore.getState().iniciar("primeiros-passos");
+              }}
+              className="min-h-12 rounded-xl bg-brand-fill px-6 text-[17px] font-semibold text-white hover:bg-brand-fill-hover"
+            >
+              {ultimo ? "Me mostre na tela" : "Próximo"}
+            </button>
+          </div>
         </div>
       </section>
     </div>

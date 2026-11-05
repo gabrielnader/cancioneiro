@@ -1,3 +1,4 @@
+import { ComoFaco } from "./ComoFaco";
 import { useEffect, useState } from "react";
 import { versaoDoApp } from "../lib/versao";
 import { ROTULOS_DE_ZOOM, type NivelDeZoom } from "../lib/zoom";
@@ -59,10 +60,14 @@ export function TopBar() {
         <button
           type="button"
           onClick={() => setGavetaAberta(true)}
+          data-guia="listas-e-pastas"
+          aria-label="Listas e pastas"
           className="hidden min-h-12 shrink-0 items-center gap-2 rounded-xl border-2 border-border-strong px-3 text-[16px] font-semibold text-ink hover:bg-surface-hover max-lg:flex"
         >
           <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round"><path d="M4 6h16M4 12h16M4 18h10" /></svg>
-          Listas e pastas
+          {/* V16.7 — em janela estreita, a palavra curta: o "Como faço?" precisa caber */}
+          <span className="max-lg:hidden">Listas e pastas</span>
+          <span className="lg:hidden">Listas</span>
         </button>
       )}
 
@@ -77,11 +82,16 @@ export function TopBar() {
         )}
       </p>
 
+      {/* V16.7 — sempre visível, nas duas telas: é onde a pessoa que esqueceu
+          como faz alguma coisa volta para perguntar */}
+      <ComoFaco />
+
       <div className="flex shrink-0 items-center gap-2">
         <span className="text-[15px] text-ink-secondary max-xl:hidden">Tamanho da letra</span>
         <div
           role="group"
           aria-label="Tamanho da letra"
+          data-guia="tamanho-da-letra"
           className="flex overflow-hidden rounded-xl border-2 border-border-strong"
         >
           {([0, 1, 2] as NivelDeZoom[]).map((nivel) => (
@@ -109,13 +119,16 @@ export function TopBar() {
           <button
             type="button"
             data-testid="toggle-detalhes"
+            aria-label={lyricsPanelVisible ? "Ocultar detalhes" : "Mostrar detalhes"}
+            data-guia="mostrar-detalhes"
             onClick={toggleLyricsPanel}
             aria-pressed={lyricsPanelVisible}
             className="min-h-12 shrink-0 rounded-xl border-2 border-border-strong px-3 text-[16px] font-semibold text-ink hover:bg-surface-hover"
           >
             {/* o painel virou ficha completa (título, artista, temas, letra,
                 edição) — a copy fala em "detalhes" (V5 Q4) */}
-            {lyricsPanelVisible ? "Ocultar detalhes" : "Mostrar detalhes"}
+            <span className="max-lg:hidden">{lyricsPanelVisible ? "Ocultar detalhes" : "Mostrar detalhes"}</span>
+            <span className="lg:hidden">Detalhes</span>
           </button>
           <button
             type="button"
@@ -124,6 +137,7 @@ export function TopBar() {
               setGavetaAberta(false);
               setView("settings");
             }}
+            data-guia="organizar"
             className="flex min-h-12 shrink-0 items-center gap-2 rounded-xl border-2 border-brand px-4 text-[16px] font-semibold text-brand hover:bg-brand-soft"
           >
             <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>

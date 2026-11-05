@@ -725,6 +725,7 @@ function CuradoriaSection() {
                 })
               }
               className={BOTAO_PRINCIPAL}
+              data-guia="completar"
             >
               {ROTULO_DO_DISPARO}
             </button>

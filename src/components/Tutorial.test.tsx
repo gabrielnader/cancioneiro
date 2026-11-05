@@ -3,8 +3,9 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { PASSOS, Tutorial, deveAbrirSozinho } from "./Tutorial";
 import { useLibraryStore } from "../stores/libraryStore";
 import { useUiStore } from "../stores/uiStore";
+import { useGuiaStore } from "../lib/guias";
 
-describe("Primeiro uso guiado (V16.6)", () => {
+describe("Primeiro uso guiado (V16.6/V16.7)", () => {
   beforeEach(() => {
     useUiStore.setState({ tutorialAberto: true, tutorialVisto: false });
     useLibraryStore.setState({ folders: [] });
@@ -17,25 +18,36 @@ describe("Primeiro uso guiado (V16.6)", () => {
     expect(deveAbrirSozinho(false, false, 0)).toBe(false); // biblioteca ainda carregando
   });
 
-  it("anda pelos cinco passos e termina marcando como visto", () => {
+  it("anda pelos três passos e termina chamando o guia na tela", () => {
     render(<Tutorial />);
     expect(screen.getByRole("dialog", { name: "Bem-vindo ao Cancioneiro" })).toBeInTheDocument();
-    expect(screen.getByText("Passo 1 de 5")).toBeInTheDocument();
+    expect(screen.getByText("Passo 1 de 3")).toBeInTheDocument();
     for (let i = 1; i < PASSOS.length; i++) {
       fireEvent.click(screen.getByRole("button", { name: "Próximo" }));
       expect(screen.getByRole("heading", { name: PASSOS[i] })).toBeInTheDocument();
     }
     expect(screen.queryByRole("button", { name: "Pular o tutorial" })).not.toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "Começar a usar" }));
+    fireEvent.click(screen.getByRole("button", { name: "Me mostre na tela" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(useUiStore.getState().tutorialVisto).toBe(true);
+    expect(useGuiaStore.getState().ativo).toBe("primeiros-passos");
+    useGuiaStore.getState().parar();
+  });
+
+  it("“Agora não” fecha sem chamar o guia", () => {
+    render(<Tutorial />);
+    fireEvent.click(screen.getByRole("button", { name: "Próximo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Próximo" }));
+    fireEvent.click(screen.getByRole("button", { name: "Agora não" }));
+    expect(useUiStore.getState().tutorialVisto).toBe(true);
+    expect(useGuiaStore.getState().ativo).toBeNull();
   });
 
   it("Voltar volta um passo", () => {
     render(<Tutorial />);
     fireEvent.click(screen.getByRole("button", { name: "Próximo" }));
     fireEvent.click(screen.getByRole("button", { name: "Voltar" }));
-    expect(screen.getByText("Passo 1 de 5")).toBeInTheDocument();
+    expect(screen.getByText("Passo 1 de 3")).toBeInTheDocument();
   });
 
   it("o passo da pasta oferece escolher a pasta, ou confirma a que já existe", () => {
@@ -73,6 +85,6 @@ describe("Primeiro uso guiado (V16.6)", () => {
     rerender(<Tutorial />);
     useUiStore.getState().abrirTutorial();
     rerender(<Tutorial />);
-    expect(screen.getByText("Passo 1 de 5")).toBeInTheDocument();
+    expect(screen.getByText("Passo 1 de 3")).toBeInTheDocument();
   });
 });

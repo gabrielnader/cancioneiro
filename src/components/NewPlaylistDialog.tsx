@@ -43,7 +43,7 @@ export function NewPlaylistDialog({ open, onClose }: NewPlaylistDialogProps) {
       aria-modal="true"
       aria-label="Nova playlist"
     >
-      <div className="w-[420px] max-w-[calc(100vw-2rem)] rounded-lg bg-surface p-5 shadow-xl">
+      <div data-guia="dialogo-nova-lista" className="w-[420px] max-w-[calc(100vw-2rem)] rounded-lg bg-surface p-5 shadow-xl">
         <h2 className="text-[18px] font-semibold text-ink">Nova playlist</h2>
         <input
           type="text"

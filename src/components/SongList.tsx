@@ -76,6 +76,7 @@ export function SongList() {
     <div
       ref={parentRef}
       role="listbox"
+      data-guia="lista-de-musicas"
       aria-label="Músicas"
       className="flex-1 overflow-y-auto"
     >

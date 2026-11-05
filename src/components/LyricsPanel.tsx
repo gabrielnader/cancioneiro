@@ -62,6 +62,7 @@ export function LyricsPanel() {
       // direita: lado a lado, 380px de painel deixavam a lista sem largura
       className="flex h-full w-[380px] shrink-0 flex-col border-l border-border bg-surface max-lg:absolute max-lg:inset-y-0 max-lg:right-0 max-lg:z-30 max-lg:max-w-[calc(100%-2rem)] max-lg:shadow-2xl"
       aria-label="Painel de letra"
+      data-guia="detalhes"
     >
       {selected === null ? (
         <div className="flex flex-1 items-center justify-center p-6">
@@ -149,6 +150,7 @@ export function LyricsPanel() {
                 <button
                   type="button"
                   onClick={() => setEditing(true)}
+                  data-guia="editar"
                   // aguarda a letra carregar para o formulário não abrir vazio
                   disabled={
                     !selected.available || (selected.has_lyrics && lyrics === null)
@@ -175,6 +177,7 @@ export function LyricsPanel() {
             </div>
           </div>
           {editing ? (
+            <div data-guia="formulario-de-edicao" className="flex min-h-0 flex-1 flex-col">
             <EditSongForm
               key={selected.id}
               song={selected}
@@ -185,6 +188,7 @@ export function LyricsPanel() {
                 setLyricsRefresh((n) => n + 1);
               }}
             />
+            </div>
           ) : (
             <div className="flex-1 overflow-y-auto p-4">
               {selected.available && <ConsertarArquivo key={`c${selected.id}`} song={selected} />}
@@ -273,7 +277,7 @@ function MinhasAnotacoes({ song }: { song: Song }) {
 
   if (editando) {
     return (
-      <div className="mb-4 flex flex-col gap-2" data-testid="anotacoes-editor">
+      <div className="mb-4 flex flex-col gap-2" data-testid="anotacoes-editor" data-guia="editor-de-anotacao">
         <label className="flex flex-col gap-1">
           <span className="text-[14px] font-semibold text-ink-secondary">Minhas anotações</span>
           <textarea
@@ -320,6 +324,7 @@ function MinhasAnotacoes({ song }: { song: Song }) {
       <button
         type="button"
         onClick={() => setEditando(true)}
+        data-guia="escrever-anotacao"
         className="mb-3 rounded px-1 text-[14px] font-medium text-brand hover:bg-brand-soft"
       >
         + Escrever uma anotação
@@ -338,6 +343,7 @@ function MinhasAnotacoes({ song }: { song: Song }) {
             setEditando(true);
           }}
           aria-label="Editar a anotação"
+          data-guia="escrever-anotacao"
           className="rounded px-2 text-[14px] font-medium text-brand hover:bg-brand-soft"
         >
           Editar

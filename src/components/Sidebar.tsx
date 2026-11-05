@@ -195,6 +195,7 @@ export function Sidebar() {
           type="button"
           className="flex min-h-11 items-center gap-1 whitespace-nowrap rounded-xl border-2 border-dashed border-border-strong px-3 text-[15px] font-semibold text-brand hover:bg-brand-soft"
           onClick={() => setDialogOpen(true)}
+          data-guia="nova-lista"
         >
           <span aria-hidden="true" className="text-[18px] leading-none">+</span>
           Nova lista

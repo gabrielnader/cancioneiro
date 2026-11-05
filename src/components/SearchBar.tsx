@@ -29,7 +29,7 @@ export function SearchBar() {
       >
         Procurar uma música
       </label>
-      <div className="flex min-h-16 items-center gap-3 rounded-2xl border-2 border-brand bg-surface pl-5 pr-2 shadow-sm focus-within:ring-4 focus-within:ring-brand-soft-hover baixa:min-h-13 baixa:pl-4">
+      <div data-guia="busca" className="flex min-h-16 items-center gap-3 rounded-2xl border-2 border-brand bg-surface pl-5 pr-2 shadow-sm focus-within:ring-4 focus-within:ring-brand-soft-hover baixa:min-h-13 baixa:pl-4">
         <svg aria-hidden="true" width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" className="shrink-0 text-brand"><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>
         <input
           ref={inputRef}

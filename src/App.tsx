@@ -5,6 +5,7 @@ import { LyricsPanel } from "./components/LyricsPanel";
 import { PlayerBar } from "./components/PlayerBar";
 import { PlaylistView } from "./components/PlaylistView";
 import { SettingsView } from "./components/SettingsView";
+import { Guia } from "./components/Guia";
 import { Tutorial, deveAbrirSozinho } from "./components/Tutorial";
 import { Sidebar } from "./components/Sidebar";
 import { Toasts } from "./components/Toasts";
@@ -151,6 +152,7 @@ function App() {
       <PlayerBar />
       <EnrichReview />
       <Tutorial />
+      <Guia />
       <UpdateNotice />
       <Toasts />
     </div>
