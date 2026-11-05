@@ -320,7 +320,7 @@ export const GUIAS: Record<GuiaId, Guia> = {
       {
         alvo: "ordem",
         texto:
-          "Use “Subir” e “Descer” para trocar a música de lugar com a vizinha. Também dá para arrastar a música com o mouse e soltar no lugar novo.",
+          "Use as setas: ↑ sobe a música um lugar, e ↓ desce um lugar. Também dá para arrastar a música com o mouse e soltar no lugar novo.",
         avanca: "botao",
       },
     ],

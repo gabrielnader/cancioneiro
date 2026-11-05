@@ -599,7 +599,7 @@ test.describe("Playlists (F5)", () => {
     // e o "Como faço?" mostra os botões de verdade
     await page.getByRole("button", { name: "Como faço?" }).click();
     await page.getByRole("button", { name: "Como eu mudo a ordem das músicas numa lista?" }).click();
-    await expect(page.locator("section[role=dialog]")).toContainText("“Subir” e “Descer”");
+    await expect(page.locator("section[role=dialog]")).toContainText("Use as setas");
     await expect(page.getByTestId("guia-luz")).toBeVisible();
   });
 

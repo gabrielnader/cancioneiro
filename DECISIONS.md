@@ -2948,3 +2948,6 @@ gravação; o desfecho da gravação conta o que foi feito.
 - Arrastar não funcionava no app instalado por duas causas que o teste (no Chromium) não vê: o Tauri capturava o arrastar da janela para receber arquivos soltos (`dragDropEnabled`, ligado por padrão; o app nunca usou isso — desligado), e o WebKit do Mac não começa a arrastar um item que não diz o que leva (as linhas da lista agora dizem).
 - "Parar a ajuda" virou "Sair do passo a passo": o dono do produto não gosta da palavra "ajuda" (teste trava a palavra fora dos guias).
 - Perguntas novas: ver a letra (com o "Aa"), ver só as músicas de uma pasta, mudar a ordem, tocar uma lista inteira, tirar uma música da lista. A lista virou três grupos (Ouvir, Listas de músicas, Organizar), e abre com o foco na primeira pergunta — com o foco no "Fechar", ela abria rolada até o fim.
+
+## V16.9 — só as setas para mudar a ordem
+- Pedido do dono do produto, depois de confirmar que arrastar voltou a funcionar no Mac: "Subir"/"Descer" viram só "↑"/"↓", em botões quadrados — o "Como faço?" explica, e a palavra ocupava espaço demais. O nome inteiro continua no leitor de tela ("Subir <música>") e na dica do mouse.

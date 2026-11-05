@@ -288,11 +288,14 @@ export function PlaylistView() {
                 )}
                 </span>
                 {/* V16.8 — mudar a ordem sem arrastar: segurar o mouse e soltar
-                    no lugar certo é difícil para quem tem pouca prática */}
+                    no lugar certo é difícil para quem tem pouca prática. V16.9 —
+                    só as setas (pedido do dono do produto): o "Como faço?"
+                    explica, e a palavra ocupava espaço demais */}
                 <div className="flex shrink-0 gap-1" data-guia={index === 0 ? "ordem" : undefined}>
                   <button
                     type="button"
                     aria-label={`Subir ${item.song.title}`}
+                    title="Subir"
                     disabled={index === 0}
                     data-guia={index === 1 ? "subir" : undefined}
                     onClick={(e) => {
@@ -300,24 +303,23 @@ export function PlaylistView() {
                       void mover(index, -1);
                     }}
                     onDoubleClick={(e) => e.stopPropagation()}
-                    className="flex min-h-11 items-center gap-1 rounded-xl border-2 border-border-strong px-3 text-[15px] font-semibold text-ink hover:bg-surface-hover disabled:border-border disabled:text-disabled disabled:hover:bg-transparent"
+                    className="flex h-11 w-11 items-center justify-center rounded-xl border-2 border-border-strong font-semibold text-ink hover:bg-surface-hover disabled:border-border disabled:text-disabled disabled:hover:bg-transparent"
                   >
-                    <span aria-hidden="true" className="text-[17px] leading-none">↑</span>
-                    <span aria-hidden="true" className="max-md:hidden">Subir</span>
+                    <span aria-hidden="true" className="text-[18px] leading-none">↑</span>
                   </button>
                   <button
                     type="button"
                     aria-label={`Descer ${item.song.title}`}
+                    title="Descer"
                     disabled={index === items.length - 1}
                     onClick={(e) => {
                       e.stopPropagation();
                       void mover(index, 1);
                     }}
                     onDoubleClick={(e) => e.stopPropagation()}
-                    className="flex min-h-11 items-center gap-1 rounded-xl border-2 border-border-strong px-3 text-[15px] font-semibold text-ink hover:bg-surface-hover disabled:border-border disabled:text-disabled disabled:hover:bg-transparent"
+                    className="flex h-11 w-11 items-center justify-center rounded-xl border-2 border-border-strong font-semibold text-ink hover:bg-surface-hover disabled:border-border disabled:text-disabled disabled:hover:bg-transparent"
                   >
-                    <span aria-hidden="true" className="text-[17px] leading-none">↓</span>
-                    <span aria-hidden="true" className="max-md:hidden">Descer</span>
+                    <span aria-hidden="true" className="text-[18px] leading-none">↓</span>
                   </button>
                 </div>
                 {/* V15 — sempre visível: só com o mouse em cima, quem não
