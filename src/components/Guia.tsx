@@ -167,7 +167,7 @@ export function Guia() {
             onClick={parar}
             className={`${BOTAO} border-2 border-border-strong text-ink-secondary hover:bg-surface-hover`}
           >
-            Parar a ajuda
+            Sair do passo a passo
           </button>
           {atual.avanca === "botao" && (
             <button

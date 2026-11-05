@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { GUIAS, PERGUNTAS, useGuiaStore } from "./guias";
+import { GRUPOS_DE_PERGUNTAS, GUIAS, PERGUNTAS, useGuiaStore } from "./guias";
 import { posicaoDoBalao } from "../components/Guia";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlaylistStore } from "../stores/playlistStore";
@@ -15,17 +15,34 @@ describe("Como faço? — os guias (V16.7)", () => {
   });
   afterEach(() => useGuiaStore.getState().parar());
 
-  it("as oito perguntas pedidas, do jeito que a pessoa pensa", () => {
-    expect(PERGUNTAS.map((id) => GUIAS[id].pergunta)).toEqual([
+  it("as perguntas do jeito que a pessoa pensa, em três grupos", () => {
+    expect(GRUPOS_DE_PERGUNTAS.map((g) => g.titulo)).toEqual(["Ouvir", "Listas de músicas", "Organizar"]);
+    const todas = PERGUNTAS.map((id) => GUIAS[id].pergunta);
+    for (const p of [
       "Como eu acho uma música?",
       "Como eu toco uma música?",
+      "Como eu vejo a letra de uma música?",
       "Como eu deixo a letra maior?",
       "Como eu crio uma lista de músicas?",
       "Como eu ponho uma música numa lista?",
+      "Como eu mudo a ordem das músicas numa lista?",
       "Como eu escrevo uma anotação?",
       "Como eu corrijo o nome ou a letra de uma música?",
       "Como eu completo as letras que faltam?",
-    ]);
+    ]) {
+      expect(todas).toContain(p);
+    }
+    expect(new Set(PERGUNTAS).size).toBe(PERGUNTAS.length);
+    // nenhum texto usa a palavra "ajuda" (pedido do dono do produto)
+    for (const id of Object.keys(GUIAS) as (keyof typeof GUIAS)[]) {
+      const g = GUIAS[id];
+      for (const t of [g.pergunta, g.fim, ...g.passos.map((p) => p.texto)]) expect(t).not.toMatch(/ajuda/i);
+    }
+  });
+
+  it("mudar a ordem sem nenhuma lista manda criar uma primeiro", () => {
+    useGuiaStore.getState().iniciar("mudar-ordem");
+    expect(useGuiaStore.getState().impedimento).toMatch(/crie uma/);
   });
 
   it("sem músicas, o guia diz o que fazer antes em vez de apontar o vazio", () => {

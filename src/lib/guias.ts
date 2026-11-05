@@ -26,6 +26,11 @@ export type GuiaId =
   | "anotacao"
   | "corrigir"
   | "completar"
+  | "ver-letra"
+  | "mudar-ordem"
+  | "tocar-lista"
+  | "tirar-da-lista"
+  | "pasta"
   | "primeiros-passos";
 
 /** O retrato do começo do guia, para as condições compararem. */
@@ -98,6 +103,32 @@ const abrirOsDetalhes: Passo[] = [
     texto: "Clique aqui para abrir os detalhes da música.",
     avanca: "clique",
     pularSe: () => visivel("detalhes"),
+  },
+];
+
+/** Sem nenhuma lista, os guias de lista mandam criar uma primeiro. */
+const semListas = () =>
+  semMusicas() ??
+  (usePlaylistStore.getState().playlists.length === 0
+    ? "Você ainda não tem nenhuma lista. Primeiro crie uma: em “Como faço?”, escolha “Como eu crio uma lista de músicas?”."
+    : null);
+
+const naLista = () => useUiStore.getState().view === "playlist";
+
+/** Abrir uma lista (em janela estreita, a gaveta das listas antes). */
+const abrirUmaLista: Passo[] = [
+  {
+    alvo: "listas-e-pastas",
+    texto: "Clique aqui para abrir as suas listas.",
+    avanca: "clique",
+    pularSe: () => naLista() || visivel("lista-na-lateral"),
+  },
+  {
+    alvo: "lista-na-lateral",
+    texto: "Clique no nome de uma lista para abri-la.",
+    avanca: "quando",
+    quando: naLista,
+    pularSe: naLista,
   },
 ];
 
@@ -208,11 +239,7 @@ export const GUIAS: Record<GuiaId, Guia> = {
         avanca: "clique",
       },
     ],
-    impedimento: () =>
-      semMusicas() ??
-      (usePlaylistStore.getState().playlists.length === 0
-        ? "Você ainda não tem nenhuma lista. Primeiro crie uma: em “Como faço?”, escolha “Como eu crio uma lista de músicas?”."
-        : null),
+    impedimento: semListas,
     fim: "Pronto! A música foi para a lista. Para ver a lista, clique no nome dela, do lado esquerdo.",
   },
   anotacao: {
@@ -268,6 +295,81 @@ export const GUIAS: Record<GuiaId, Guia> = {
     impedimento: semMusicas,
     fim: "Pronto! Pode levar um tempo; dá para continuar ouvindo música enquanto isso.",
   },
+  "ver-letra": {
+    pergunta: "Como eu vejo a letra de uma música?",
+    passos: [
+      ...abrirOsDetalhes,
+      {
+        alvo: "detalhes",
+        texto: "A letra aparece aqui, do lado direito. Se for comprida, role para baixo com o mouse.",
+        avanca: "botao",
+      },
+      {
+        alvo: "aa",
+        texto: "Para deixar só a letra maior, clique em “Aa”. Cada clique muda o tamanho.",
+        avanca: "botao",
+      },
+    ],
+    impedimento: semMusicas,
+    fim: "Pronto! A letra da música que está tocando também aparece aí.",
+  },
+  "mudar-ordem": {
+    pergunta: "Como eu mudo a ordem das músicas numa lista?",
+    passos: [
+      ...abrirUmaLista,
+      {
+        alvo: "ordem",
+        texto:
+          "Use “Subir” e “Descer” para trocar a música de lugar com a vizinha. Também dá para arrastar a música com o mouse e soltar no lugar novo.",
+        avanca: "botao",
+      },
+    ],
+    impedimento: semListas,
+    fim: "Pronto! A ordem fica guardada, e a lista toca nessa ordem.",
+  },
+  "tocar-lista": {
+    pergunta: "Como eu toco uma lista inteira?",
+    passos: [
+      ...abrirUmaLista,
+      { alvo: "tocar-lista", texto: "Clique aqui para tocar a lista do começo ao fim.", avanca: "clique" },
+    ],
+    impedimento: semListas,
+    fim: "Pronto! Quando uma música acaba, a próxima da lista começa sozinha.",
+  },
+  "tirar-da-lista": {
+    pergunta: "Como eu tiro uma música de uma lista?",
+    passos: [
+      ...abrirUmaLista,
+      {
+        alvo: "tirar",
+        texto:
+          "Clique em “Tirar” ao lado da música. Ela sai só da lista: o arquivo continua no computador e na biblioteca.",
+        avanca: "botao",
+      },
+    ],
+    impedimento: semListas,
+    fim: "Pronto! Se tirar por engano, é só pôr de novo com “Pôr numa lista”.",
+  },
+  pasta: {
+    pergunta: "Como eu vejo só as músicas de uma pasta?",
+    passos: [
+      {
+        alvo: "listas-e-pastas",
+        texto: "Clique aqui para abrir as suas pastas.",
+        avanca: "clique",
+        pularSe: () => visivel("pasta"),
+        antes: naBiblioteca,
+      },
+      { alvo: "pasta", texto: "Clique no nome de uma pasta.", avanca: "clique" },
+      {
+        alvo: "lista-de-musicas",
+        texto: "Agora só aparecem as músicas dessa pasta. Para ver todas de novo, clique em “Todas as músicas”.",
+        avanca: "botao",
+      },
+    ],
+    impedimento: semMusicas,
+    fim: "Pronto! As pastas do app são as mesmas do seu computador.",
+  },
   "primeiros-passos": {
     pergunta: "Primeiros passos",
     passos: [
@@ -284,16 +386,14 @@ export const GUIAS: Record<GuiaId, Guia> = {
 };
 
 /** As perguntas da lista do "Como faço?", na ordem da tela. */
-export const PERGUNTAS: GuiaId[] = [
-  "achar",
-  "tocar",
-  "letra-maior",
-  "criar-lista",
-  "por-na-lista",
-  "anotacao",
-  "corrigir",
-  "completar",
+export const GRUPOS_DE_PERGUNTAS: { titulo: string; perguntas: GuiaId[] }[] = [
+  { titulo: "Ouvir", perguntas: ["achar", "tocar", "ver-letra", "letra-maior", "pasta"] },
+  { titulo: "Listas de músicas", perguntas: ["criar-lista", "por-na-lista", "mudar-ordem", "tocar-lista", "tirar-da-lista"] },
+  { titulo: "Organizar", perguntas: ["anotacao", "corrigir", "completar"] },
 ];
+
+/** Todas as perguntas do "Como faço?", na ordem da tela. */
+export const PERGUNTAS: GuiaId[] = GRUPOS_DE_PERGUNTAS.flatMap((g) => g.perguntas);
 
 interface GuiaState {
   ativo: GuiaId | null;

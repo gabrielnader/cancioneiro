@@ -138,9 +138,16 @@ test.describe("Primeiro uso guiado e “Como faço?” (V16.6/V16.7)", () => {
     await pronto().getByRole("button", { name: "Fechar" }).click();
     await expect(page.getByTestId("anotacoes")).toContainText("tom de ré");
 
-    // "Parar a ajuda" sai no meio
+    // a letra: escolhida a música, o guia mostra onde ela fica
+    await comoFaco("Como eu vejo a letra de uma música?");
+    await expect(balao(page, /A letra aparece aqui/)).toBeVisible();
+    await balao(page, /A letra aparece aqui/).getByRole("button", { name: "Entendi" }).click();
+    await balao(page, /“Aa”/).getByRole("button", { name: "Entendi" }).click();
+    await pronto().getByRole("button", { name: "Fechar" }).click();
+
+    // "Sair do passo a passo" sai no meio
     await comoFaco("Como eu deixo a letra maior?");
-    await page.getByRole("button", { name: "Parar a ajuda" }).click();
+    await page.getByRole("button", { name: "Sair do passo a passo" }).click();
     await expect(page.getByTestId("guia-luz")).toHaveCount(0);
     expect(errors).toEqual([]);
   });
@@ -561,6 +568,39 @@ test.describe("Playlists (F5)", () => {
     await expect(audio).toHaveJSProperty("paused", true);
     // seção 8 do PRD: sem erros no console no fluxo de playlist
     expect(errors).toEqual([]);
+  });
+
+  test("mudar a ordem: Subir, Descer e arrastar — e a ordem fica guardada", async ({ page }) => {
+    await resetApp(page);
+    await addMockFolder(page);
+    await createPlaylistWithSongs(page, "Ensaio");
+    const list = page.getByRole("listbox", { name: "Playlist Ensaio" });
+    const ordem = () => list.getByRole("option").evaluateAll((els) => els.map((e) => e.textContent ?? ""));
+    const primeira = async () => (await ordem())[0];
+    await expect.poll(primeira).toContain("Coração Sertanejo");
+
+    // a primeira não sobe e a última não desce
+    await expect(page.getByRole("button", { name: "Subir Coração Sertanejo" })).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Descer Instrumental Sem Letra" })).toBeDisabled();
+
+    await page.getByRole("button", { name: "Subir Instrumental Sem Letra" }).click();
+    await expect.poll(primeira).toContain("Instrumental Sem Letra");
+    await page.getByRole("button", { name: "Descer Instrumental Sem Letra" }).click();
+    await expect.poll(primeira).toContain("Coração Sertanejo");
+
+    // arrastar a segunda para cima da primeira
+    await list.getByRole("option").nth(1).dragTo(list.getByRole("option").nth(0));
+    await expect.poll(primeira).toContain("Instrumental Sem Letra");
+
+    await page.reload();
+    await page.getByRole("button", { name: /^Ensaio/ }).click();
+    await expect.poll(primeira).toContain("Instrumental Sem Letra");
+
+    // e o "Como faço?" mostra os botões de verdade
+    await page.getByRole("button", { name: "Como faço?" }).click();
+    await page.getByRole("button", { name: "Como eu mudo a ordem das músicas numa lista?" }).click();
+    await expect(page.locator("section[role=dialog]")).toContainText("“Subir” e “Descer”");
+    await expect(page.getByTestId("guia-luz")).toBeVisible();
   });
 
   test("playlist persiste (ordem) após reload; item ausente é pulado com toast", async ({

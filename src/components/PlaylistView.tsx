@@ -70,6 +70,15 @@ export function PlaylistView() {
     );
   }
 
+  /** V16.8 — troca a música de `index` com a vizinha (−1 sobe, +1 desce). */
+  function mover(index: number, direcao: -1 | 1) {
+    const destino = index + direcao;
+    if (destino < 0 || destino >= items.length) return;
+    const ids = items.map((i) => i.id);
+    [ids[index], ids[destino]] = [ids[destino], ids[index]];
+    return reorder(ids);
+  }
+
   function handleDrop() {
     if (dragIndex === null || dropIndex === null || dragIndex === dropIndex) {
       setDragIndex(null);
@@ -101,6 +110,7 @@ export function PlaylistView() {
           {playlist.name}
         </h1>
         <button
+          data-guia="tocar-lista"
           type="button"
           className="min-h-12 shrink-0 rounded-xl bg-brand-fill px-5 text-[17px] font-semibold text-white hover:bg-brand-fill-hover disabled:bg-disabled"
           disabled={items.length === 0}
@@ -211,7 +221,13 @@ export function PlaylistView() {
                 role="option"
                 aria-selected={selectedSongId === item.song.id}
                 draggable
-                onDragStart={() => setDragIndex(index)}
+                onDragStart={(e) => {
+                  // V16.8 — o WebKit do Mac só começa a arrastar quando o item
+                  // diz o que leva; sem isto, nada acontecia no app instalado
+                  e.dataTransfer.setData("text/plain", String(item.id));
+                  e.dataTransfer.effectAllowed = "move";
+                  setDragIndex(index);
+                }}
                 onDragOver={(e) => {
                   e.preventDefault();
                   setDropIndex(index);
@@ -271,11 +287,45 @@ export function PlaylistView() {
                   </span>
                 )}
                 </span>
+                {/* V16.8 — mudar a ordem sem arrastar: segurar o mouse e soltar
+                    no lugar certo é difícil para quem tem pouca prática */}
+                <div className="flex shrink-0 gap-1" data-guia={index === 0 ? "ordem" : undefined}>
+                  <button
+                    type="button"
+                    aria-label={`Subir ${item.song.title}`}
+                    disabled={index === 0}
+                    data-guia={index === 1 ? "subir" : undefined}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void mover(index, -1);
+                    }}
+                    onDoubleClick={(e) => e.stopPropagation()}
+                    className="flex min-h-11 items-center gap-1 rounded-xl border-2 border-border-strong px-3 text-[15px] font-semibold text-ink hover:bg-surface-hover disabled:border-border disabled:text-disabled disabled:hover:bg-transparent"
+                  >
+                    <span aria-hidden="true" className="text-[17px] leading-none">↑</span>
+                    <span aria-hidden="true" className="max-md:hidden">Subir</span>
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Descer ${item.song.title}`}
+                    disabled={index === items.length - 1}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void mover(index, 1);
+                    }}
+                    onDoubleClick={(e) => e.stopPropagation()}
+                    className="flex min-h-11 items-center gap-1 rounded-xl border-2 border-border-strong px-3 text-[15px] font-semibold text-ink hover:bg-surface-hover disabled:border-border disabled:text-disabled disabled:hover:bg-transparent"
+                  >
+                    <span aria-hidden="true" className="text-[17px] leading-none">↓</span>
+                    <span aria-hidden="true" className="max-md:hidden">Descer</span>
+                  </button>
+                </div>
                 {/* V15 — sempre visível: só com o mouse em cima, quem não
                     sabia que ele existia nunca o achava */}
                 <button
                   type="button"
                   aria-label={`Remover ${item.song.title} da playlist`}
+                  data-guia={index === 0 ? "tirar" : undefined}
                   className="flex min-h-11 shrink-0 items-center gap-1 rounded-xl px-3 text-[15px] font-semibold text-ink-secondary hover:bg-danger-soft hover:text-danger"
                   onClick={(e) => {
                     e.stopPropagation();

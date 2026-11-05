@@ -226,6 +226,7 @@ export function Sidebar() {
             <>
           <button
             type="button"
+            data-guia="lista-na-lateral"
             className={`${navClass(view === "playlist" && activePlaylistId === p.id)} ${
               dragOverId === p.id ? "ring-2 ring-brand" : ""
             }`}
@@ -427,6 +428,7 @@ function FolderTreeItem({ node, level }: { node: FolderNode; level: number }) {
         <button
           type="button"
           aria-label={`Pasta ${node.name}`}
+          data-guia="pasta"
           title={node.path}
           className={`flex min-h-10 w-full min-w-0 items-center justify-between gap-2 rounded-lg py-1.5 pl-1 text-left text-[16px] ${
             active

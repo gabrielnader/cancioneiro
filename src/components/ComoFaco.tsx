@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { GUIAS, PERGUNTAS, useGuiaStore } from "../lib/guias";
+import { GRUPOS_DE_PERGUNTAS, GUIAS, useGuiaStore } from "../lib/guias";
 import { useUiStore } from "../stores/uiStore";
 
 /**
@@ -51,25 +51,33 @@ export function ComoFaco() {
             <p className="text-[17px] text-ink-secondary">
               Escolha o que você quer fazer. Eu mostro o caminho na tela, passo a passo.
             </p>
-            <ul className="flex flex-col gap-2">
-              {PERGUNTAS.map((id) => (
-                <li key={id}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAberto(false);
-                      iniciar(id);
-                    }}
-                    className="flex min-h-14 w-full items-center justify-between gap-3 rounded-xl border-2 border-border bg-surface px-4 text-left text-[18px] font-semibold text-ink hover:border-brand hover:bg-brand-soft"
-                  >
-                    {GUIAS[id].pergunta}
-                    <span aria-hidden="true" className="text-[22px] text-brand">
-                      ›
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
+            {GRUPOS_DE_PERGUNTAS.map((grupo) => (
+              <div key={grupo.titulo} className="flex flex-col gap-2">
+                <h3 className="text-[16px] font-bold uppercase tracking-wide text-ink-tertiary">{grupo.titulo}</h3>
+                <ul className="flex flex-col gap-2">
+                  {grupo.perguntas.map((id) => (
+                    <li key={id}>
+                      <button
+                        type="button"
+                        // o foco na PRIMEIRA pergunta: no "Fechar", lá no pé, a
+                        // janela abria rolada até o fim, sem o título
+                        autoFocus={id === GRUPOS_DE_PERGUNTAS[0].perguntas[0]}
+                        onClick={() => {
+                          setAberto(false);
+                          iniciar(id);
+                        }}
+                        className="flex min-h-14 w-full items-center justify-between gap-3 rounded-xl border-2 border-border bg-surface px-4 text-left text-[18px] font-semibold text-ink hover:border-brand hover:bg-brand-soft"
+                      >
+                        {GUIAS[id].pergunta}
+                        <span aria-hidden="true" className="text-[22px] text-brand">
+                          ›
+                        </span>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
             <div className="flex flex-wrap items-center justify-between gap-3">
               <button
                 type="button"
@@ -83,7 +91,6 @@ export function ComoFaco() {
               </button>
               <button
                 type="button"
-                autoFocus
                 onClick={() => setAberto(false)}
                 className="min-h-12 rounded-xl border-2 border-border-strong px-5 text-[17px] font-semibold text-ink hover:bg-surface-hover"
               >

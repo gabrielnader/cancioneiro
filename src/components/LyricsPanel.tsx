@@ -170,6 +170,7 @@ export function LyricsPanel() {
                 onClick={cycleFontLevel}
                 className="rounded px-2 py-1 text-[15px] font-medium text-ink-secondary hover:bg-surface-hover"
                 aria-label="Tamanho da fonte da letra"
+                data-guia="aa"
                 title="Tamanho da fonte"
               >
                 Aa
