@@ -153,6 +153,90 @@ test.describe("Primeiro uso guiado e “Como faço?” (V16.6/V16.7)", () => {
   });
 });
 
+test("“Como faço?” de Organizar: completar, escrever letras, conferir, tema e o que não existe agora", async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  const errors = trackErrors(page);
+  await resetApp(page);
+  await addMockFolder(page);
+  const balao = page.locator("section[role=dialog]").last();
+  const comoFaco = async (pergunta: string) => {
+    await page.getByRole("button", { name: "Como faço?" }).click();
+    await page.getByRole("button", { name: pergunta }).click();
+  };
+  const entendi = () => balao.getByRole("button", { name: "Entendi" }).click();
+  const fechar = () =>
+    page.getByRole("dialog").filter({ hasText: "Pronto!" }).getByRole("button", { name: "Fechar" }).click();
+
+  // completar: vai para Organizar, mostra a pasta e o tempo, e o botão
+  await comoFaco("Como eu completo nome, cantor e letra das músicas?");
+  await expect(balao).toContainText("Organizar minhas músicas");
+  await page.getByRole("button", { name: "Organizar minhas músicas" }).click();
+  await expect(balao).toContainText("Toda a biblioteca");
+  await entendi();
+  await expect(balao).toContainText("pasta pequena");
+  await expect(page.getByTestId("guia-luz")).toBeVisible();
+  await entendi();
+  await expect(page.getByRole("dialog").filter({ hasText: "vazio é preenchido sozinho" })).toBeVisible();
+  await fechar();
+
+  // escrever as letras: já em Organizar, começa pelo cartão
+  await comoFaco("Como eu escrevo as letras ouvindo a música?");
+  await expect(balao).toContainText("nenhum site conhece");
+  await entendi();
+  await expect(balao).toContainText("vale também para escrever");
+  await entendi();
+  await expect(balao).toContainText(/Baixar|Começar agora/);
+  await entendi();
+  await expect(page.getByRole("dialog").filter({ hasText: "Pronto!" })).toBeVisible();
+  await fechar();
+
+  // conferir sem nada esperando: a frase do que fazer, e não um clique impossível
+  await comoFaco("Como eu confiro as sugestões?");
+  await expect(balao).toContainText("não há nada esperando", { timeout: 5000 });
+  await entendi();
+  await expect(page.getByTestId("guia-luz")).toHaveCount(0);
+
+  // consertar sem nenhum arquivo para consertar
+  await comoFaco("Uma música diz que “não aceita gravação”. E agora?");
+  await expect(balao).toContainText("nenhum arquivo precisa de conserto", { timeout: 5000 });
+  await entendi();
+
+  // tela escura: o clique no tema de verdade
+  await comoFaco("Como eu deixo a tela clara ou escura?");
+  await page.getByRole("radio", { name: "Escuro" }).click();
+  await expect(page.getByRole("dialog").filter({ hasText: "Pronto!" })).toBeVisible();
+  await fechar();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+
+  // tema: volta para a lista e o clique no tema de verdade busca por ele
+  await comoFaco("Como eu acho as músicas de um tema?");
+  await expect(balao).toContainText("palavrinhas verdes");
+  await page.getByTestId("tema-chip").first().click();
+  await expect(balao).toContainText("músicas desse tema");
+  await entendi();
+  await fechar();
+  expect(errors).toEqual([]);
+});
+
+test("“Como faço?”: conferir as sugestões por dentro da conferência", async ({ page }) => {
+  test.setTimeout(60_000);
+  await resetApp(page);
+  await addMockFolder(page);
+  await dispararCuradoria(page);
+  const conferir = page.getByRole("dialog", { name: "Conferir sugestões" });
+  await expect(conferir).toBeVisible({ timeout: 20000 });
+  // a conferência cobre a tela: o "Como faço?" dela começa o guia de conferir
+  await conferir.getByRole("button", { name: "Como faço?" }).click();
+  const balao = page.locator("section[role=dialog]").last();
+  await expect(balao).toContainText("como é hoje");
+  await balao.getByRole("button", { name: "Entendi" }).click();
+  await expect(balao).toContainText("Ouvir esta música");
+  await balao.getByRole("button", { name: "Entendi" }).click();
+  await expect(balao).toContainText("“Usar o novo” grava");
+});
+
 test("“Como faço?” em janela estreita: o guia abre a gaveta das listas primeiro", async ({ page }) => {
   await page.setViewportSize({ width: 800, height: 700 });
   await resetApp(page);

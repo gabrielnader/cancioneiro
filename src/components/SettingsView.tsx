@@ -57,6 +57,7 @@ function Cartao({
   descricao,
   icone,
   destaque = false,
+  guia,
   children,
 }: {
   id: string;
@@ -65,11 +66,14 @@ function Cartao({
   icone: React.ReactNode;
   /** âmbar: há algo esperando a pessoa (só o cartão de conferir usa) */
   destaque?: boolean;
+  /** V16.10 — a marca que o "Como faço?" aponta */
+  guia?: string;
   children: React.ReactNode;
 }) {
   return (
     <section
       aria-labelledby={id}
+      data-guia={guia}
       className={`flex flex-col gap-4 rounded-2xl border-2 p-6 max-lg:p-4 ${
         destaque ? "border-warning bg-warning-soft" : "border-border bg-surface"
       }`}
@@ -257,9 +261,12 @@ export function SettingsView() {
               </ul>
             )}
             <div className="flex flex-wrap gap-3">
-              <AddFolderButton variant="outline" />
+              <span data-guia="adicionar-pasta" className="inline-flex">
+                <AddFolderButton variant="outline" />
+              </span>
               <button
                 type="button"
+                data-guia="procurar-novas"
                 disabled={scanning !== null}
                 className={BOTAO_SECUNDARIO}
                 onClick={() => void handleRescan()}
@@ -293,6 +300,7 @@ export function SettingsView() {
               <div
                 role="radiogroup"
                 aria-label="Tema"
+                data-guia="tema-da-tela"
                 className="inline-flex flex-wrap overflow-hidden rounded-xl border-2 border-border-strong"
               >
                 {(
@@ -629,7 +637,7 @@ function CuradoriaSection() {
           </span>
         </div>
 
-        <div>
+        <div data-guia="pasta-e-tempo">
           <label
             htmlFor="curadoria-pasta"
             className="mb-1.5 block text-[16px] font-semibold text-ink-secondary"
@@ -759,7 +767,7 @@ function CuradoriaSection() {
             para depois.
           </p>
           <div>
-            <button type="button" onClick={openOverlay} className={BOTAO_PRINCIPAL}>
+            <button type="button" onClick={openOverlay} className={BOTAO_PRINCIPAL} data-guia="conferir">
               Conferir agora
             </button>
           </div>
@@ -774,6 +782,7 @@ function CuradoriaSection() {
       */}
       <Cartao
         id="cartao-ouvir"
+        guia="cartao-ouvir"
         titulo="Escrever a letra ouvindo a música"
         descricao="Para as músicas que nenhum site conhece, como gravações do próprio grupo."
         icone={ICONES.ouvir}
@@ -802,6 +811,7 @@ function CuradoriaSection() {
               Nada foi gravado nas músicas ainda: você confere antes.
             </p>
             <button
+              data-guia="conferir"
               type="button"
               onClick={() => void conferirLetrasGuardadas()}
               className={`mt-3 ${BOTAO_PRINCIPAL}`}
@@ -827,6 +837,7 @@ function CuradoriaSection() {
             {pendentes.disponivel && pendentes.musicas.length > 0 && (
               <div>
                 <button
+                  data-guia="comecar-transcricao"
                   type="button"
                   // duas filas ao mesmo tempo disputariam a CPU e embaralhariam as
                   // duas barras (a disciplina do M4): a store recusaria, e um botão
@@ -941,6 +952,7 @@ function ArquivosParaConsertar() {
   return (
     <Cartao
       id="cartao-consertar"
+      guia="consertar"
       titulo="Arquivos que não aceitam gravação"
       descricao="Consertar transforma o arquivo num MP3 de verdade, com o mesmo nome. O original fica guardado na pasta do app, e dá para voltar atrás nos detalhes de cada música."
       icone={ICONES.lapis}
@@ -1163,6 +1175,7 @@ function VerificarAtualizacoes() {
             const { enabled: _ignorado, ...deps } = tauriUpdaterDeps(true);
             void verificarAgora(deps, setEstado).then(setEstado);
           }}
+          data-guia="verificar-atualizacoes"
           className={BOTAO_SECUNDARIO}
         >
           Verificar atualizações
@@ -1319,6 +1332,9 @@ function CartaoDoAcessorio({
             <button
               type="button"
               onClick={() => void baixar(info.nome)}
+              // V16.10 — só os do "Escrever a letra ouvindo a música" (o
+              // programa e o modelo); o "Reconhecer pelo som" é outra coisa
+              data-guia={info.nome === "fpcalc" ? undefined : "baixar-programa"}
               className="mt-3 min-h-11 rounded-xl border-2 border-brand px-4 text-[16px] font-semibold text-brand hover:bg-brand-soft"
             >
               {rotuloBaixarAcessorio(info, estado === "corrompido")}

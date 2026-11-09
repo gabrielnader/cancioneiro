@@ -658,6 +658,7 @@ export function EditSongForm({
       */}
       <div>
         <label
+          data-guia="marcar-instrumental"
           htmlFor="edit-instrumental"
           className="flex items-center gap-2 text-[14px] text-ink-secondary"
         >

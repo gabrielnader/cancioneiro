@@ -2951,3 +2951,9 @@ gravação; o desfecho da gravação conta o que foi feito.
 
 ## V16.9 — só as setas para mudar a ordem
 - Pedido do dono do produto, depois de confirmar que arrastar voltou a funcionar no Mac: "Subir"/"Descer" viram só "↑"/"↓", em botões quadrados — o "Como faço?" explica, e a palavra ocupava espaço demais. O nome inteiro continua no leitor de tela ("Subir <música>") e na dica do mouse.
+
+## V16.10 — o "Como faço?" cobre a organização e o app
+- Pedido do dono do produto: os passos a passo precisam substituí-lo — quem não sabe usar o computador vai neles em vez de chamá-lo. Perguntas novas: completar nome/cantor/letra (com a escolha da pasta ou de "Toda a biblioteca", o tempo estimado e a dica de começar por uma pasta pequena), escrever as letras ouvindo a música (o cartão, a pasta, o download na primeira vez — só o do transcritor, não o "Reconhecer pelo som" —, o "Começar agora"), conferir as sugestões (por dentro da conferência: hoje × ficaria, "Ouvir esta música", as três decisões), marcar instrumental, achar por tema, outra pasta, músicas novas copiadas, o "não aceita gravação", atualizar, tela clara/escura. Quatro grupos: Ouvir, Listas de músicas, Nome, cantor e letra, Pastas e o app.
+- Corrigido o texto do completar: dizia "nada é gravado sem você aprovar", mas o que está VAZIO é preenchido sozinho; só a troca espera a pessoa (teste trava a frase).
+- O guia rola a página até o lugar apontado (Organizar é comprida). Quando o lugar não existe agora (nada esperando conferência, nenhum arquivo para consertar), o balão diz o que fazer em vez de pedir um clique impossível.
+- A conferência cobre a tela inteira, e com ela o "Como faço?" do alto: ganhou o seu, que começa direto o passo a passo de conferir.

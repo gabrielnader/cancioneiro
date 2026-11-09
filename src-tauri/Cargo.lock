@@ -256,7 +256,7 @@ dependencies = [
 
 [[package]]
 name = "cancioneiro"
-version = "0.13.21"
+version = "0.13.22"
 dependencies = [
  "flate2",
  "lofty",

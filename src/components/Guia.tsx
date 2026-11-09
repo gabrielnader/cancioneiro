@@ -14,7 +14,12 @@ const LARGURA_DO_BALAO = 420;
 function medir(alvo: string): Retangulo | null {
   const el = elementoDoGuia(alvo);
   if (!el) return null;
-  const r = el.getBoundingClientRect();
+  let r = el.getBoundingClientRect();
+  // fora da vista: rola até ele (uma vez basta; a próxima medida já o acha)
+  if (r.bottom <= 0 || r.top >= window.innerHeight) {
+    el.scrollIntoView({ block: "center" });
+    r = el.getBoundingClientRect();
+  }
   // dentro da tela: o player encosta no pé da janela, e o contorno sumiria
   const top = Math.max(2, r.top - FOLGA);
   const left = Math.max(2, r.left - FOLGA);
@@ -47,6 +52,9 @@ const BOTAO = "min-h-12 rounded-xl px-5 text-[17px] font-semibold";
 export function Guia() {
   const { ativo, passo, inicio, estado, impedimento, avancar, parar } = useGuiaStore();
   const [r, setR] = useState<Retangulo | null>(null);
+  // V16.10 — o lugar apontado não apareceu (depois de um tempo para a tela
+  // terminar de abrir): vale a frase `semAlvo` do passo
+  const [sumiu, setSumiu] = useState(false);
   const [tela, setTela] = useState({ largura: window.innerWidth, altura: window.innerHeight });
 
   const guia = ativo ? GUIAS[ativo] : null;
@@ -62,7 +70,12 @@ export function Guia() {
     };
     medirAgora();
     const id = window.setInterval(medirAgora, 150);
-    return () => window.clearInterval(id);
+    setSumiu(false);
+    const espera = window.setTimeout(() => setSumiu(medir(atual.alvo) === null), 1500);
+    return () => {
+      window.clearInterval(id);
+      window.clearTimeout(espera);
+    };
   }, [atual]);
 
   // avanço por condição (escreveu na busca, a lista foi criada…)
@@ -128,6 +141,7 @@ export function Guia() {
   }
 
   if (!atual) return null;
+  const semAlvo = sumiu && r === null && atual.semAlvo ? atual.semAlvo : null;
   const pos = posicaoDoBalao(r, tela);
   const escuro = "fixed z-[70] bg-black/55";
 
@@ -159,7 +173,7 @@ export function Guia() {
       >
         <p className="text-[15px] font-semibold text-ink-tertiary">{guia.pergunta}</p>
         <p className="text-[20px] font-semibold leading-snug text-ink" aria-live="polite">
-          {atual.texto}
+          {semAlvo ?? atual.texto}
         </p>
         <div className="flex flex-wrap justify-between gap-2">
           <button
@@ -169,11 +183,11 @@ export function Guia() {
           >
             Sair do passo a passo
           </button>
-          {atual.avanca === "botao" && (
+          {(atual.avanca === "botao" || semAlvo) && (
             <button
               type="button"
               autoFocus
-              onClick={avancar}
+              onClick={semAlvo ? parar : avancar}
               className={`${BOTAO} bg-brand-fill text-white hover:bg-brand-fill-hover`}
             >
               Entendi

@@ -6,6 +6,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import { getBackend, type EnrichProposal } from "../lib/api";
+import { useGuiaStore } from "../lib/guias";
 import { estadoAtualDa, substituiriaLetra } from "../lib/aplicacao";
 import {
   AVISO_LETRA_DE_MAQUINA,
@@ -595,6 +596,17 @@ function Conferir() {
         <h1 className="min-w-0 flex-1 truncate text-[21px] font-bold text-brand">
           Conferir sugestões
         </h1>
+        {/* V16.10 — esta tela cobre o "Como faço?" do alto: aqui ele leva
+            direto ao passo a passo de conferir */}
+        {p && !confirmandoTodas && (
+          <button
+            type="button"
+            onClick={() => useGuiaStore.getState().iniciar("conferir")}
+            className="flex min-h-12 shrink-0 items-center gap-2 rounded-xl border-2 border-warning bg-warning-soft px-3 text-[16px] font-semibold text-ink hover:bg-warning-accent"
+          >
+            Como faço?
+          </button>
+        )}
       </header>
 
       <main className="min-h-0 flex-1 overflow-y-auto px-8 py-6 max-lg:px-4 max-lg:py-4">
@@ -619,7 +631,7 @@ function Conferir() {
                     {origemDa(p)}
                   </p>
                 </div>
-                <button type="button" onClick={ouvir} className={SECUNDARIO}>
+                <button type="button" onClick={ouvir} className={SECUNDARIO} data-guia="ouvir-sugestao">
                   {tocandoId === p.song_id ? (
                     <>
                       <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1" /><rect x="14" y="5" width="4" height="14" rx="1" /></svg>
@@ -647,7 +659,7 @@ function Conferir() {
                 </p>
               )}
 
-              <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,320px),1fr))] gap-4">
+              <div data-guia="comparacao" className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,320px),1fr))] gap-4">
                 {(["hoje", "novo"] as const).map((lado) => (
                   <section
                     key={lado}
@@ -787,6 +799,7 @@ function Conferir() {
       {p && !confirmandoTodas && (
         <footer
           aria-label="Sua decisão"
+          data-guia="decisao"
           className="flex shrink-0 flex-wrap items-center gap-3 border-t border-border bg-surface px-6 py-3 max-lg:px-4 baixa:py-2"
         >
           <button ref={primeiroBotao} type="button" disabled={busy} onClick={() => void usarONovo()} className={PRINCIPAL}>

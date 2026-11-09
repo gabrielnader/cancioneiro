@@ -126,6 +126,7 @@ export function TemaChips({ temas, expansivel = false }: TemaChipsProps) {
           key={tema}
           type="button"
           data-testid="tema-chip"
+          data-guia="tema-chip"
           aria-label={`Tema: ${tema}`}
           title={`Buscar pelo tema "${tema}"`}
           className="max-w-32 shrink-0 truncate rounded-full bg-brand-soft px-2 py-0.5 text-[12px] text-brand hover:bg-brand-soft-hover"

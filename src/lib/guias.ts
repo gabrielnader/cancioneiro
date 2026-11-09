@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { useEnrichStore } from "../stores/enrichStore";
 import { useLibraryStore } from "../stores/libraryStore";
 import { usePlaylistStore } from "../stores/playlistStore";
 import { useUiStore } from "../stores/uiStore";
@@ -31,6 +32,15 @@ export type GuiaId =
   | "tocar-lista"
   | "tirar-da-lista"
   | "pasta"
+  | "tema"
+  | "escrever-letras"
+  | "conferir"
+  | "instrumental"
+  | "adicionar-pasta"
+  | "musicas-novas"
+  | "consertar-arquivo"
+  | "atualizar"
+  | "tela-escura"
   | "primeiros-passos";
 
 /** O retrato do começo do guia, para as condições compararem. */
@@ -48,6 +58,12 @@ export interface Passo {
   pularSe?: () => boolean;
   /** roda ao chegar no passo (ex.: sair de Configurações) */
   antes?: () => void;
+  /**
+   * V16.10 — o que dizer quando o lugar apontado não aparece na tela (não há
+   * nada esperando conferência, nenhum arquivo para consertar…). Sem isto, o
+   * balão ficaria no meio da tela pedindo um clique impossível.
+   */
+  semAlvo?: string;
 }
 
 export interface Guia {
@@ -58,14 +74,21 @@ export interface Guia {
   fim: string;
 }
 
-/** O primeiro elemento VISÍVEL com aquela marca. */
+/**
+ * O elemento com aquela marca que está na tela: o primeiro dentro da janela,
+ * ou — se nenhum estiver à vista (a página de Organizar é comprida) — o
+ * primeiro que existe, e o guia rola a tela até ele.
+ */
 export function elementoDoGuia(alvo: string): HTMLElement | null {
   const todos = document.querySelectorAll<HTMLElement>(`[data-guia="${alvo}"]`);
+  let fora: HTMLElement | null = null;
   for (const el of todos) {
     const r = el.getBoundingClientRect();
-    if (r.width > 0 && r.height > 0 && r.bottom > 0 && r.top < window.innerHeight) return el;
+    if (r.width === 0 || r.height === 0) continue;
+    if (r.bottom > 0 && r.top < window.innerHeight) return el;
+    fora ??= el;
   }
-  return null;
+  return fora;
 }
 
 export const visivel = (alvo: string) => elementoDoGuia(alvo) !== null;
@@ -131,6 +154,16 @@ const abrirUmaLista: Passo[] = [
     pularSe: naLista,
   },
 ];
+
+/** Ir para "Organizar minhas músicas" (Configurações). */
+const irParaOrganizar: Passo = {
+  alvo: "organizar",
+  texto: "Clique em “Organizar minhas músicas”, no alto da tela.",
+  avanca: "clique",
+  pularSe: () => useUiStore.getState().view === "settings",
+};
+
+const conferenciaAberta = () => useEnrichStore.getState().overlayOpen;
 
 const passosDeAchar: Passo[] = [
   {
@@ -277,23 +310,189 @@ export const GUIAS: Record<GuiaId, Guia> = {
     fim: "Pronto! Se mudou de ideia no meio, “Cancelar” desfaz tudo.",
   },
   completar: {
-    pergunta: "Como eu completo as letras que faltam?",
+    pergunta: "Como eu completo nome, cantor e letra das músicas?",
     passos: [
+      irParaOrganizar,
       {
-        alvo: "organizar",
-        texto: "Clique em “Organizar minhas músicas”.",
-        avanca: "clique",
-        pularSe: () => useUiStore.getState().view === "settings",
+        alvo: "pasta-e-tempo",
+        texto:
+          "Primeiro escolha o que vai ser completado: “Toda a biblioteca” ou só uma pasta. Logo embaixo, o app diz quanto tempo vai levar.",
+        avanca: "botao",
       },
       {
         alvo: "completar",
         texto:
-          "Quando quiser, clique neste botão. O app procura nome, cantor e letra na internet e depois mostra tudo para você conferir. Nada é gravado sem você aprovar.",
+          "Dica: na primeira vez, escolha uma pasta pequena, para ver como funciona. Depois, clique em “Completar agora”. Dá para continuar ouvindo música enquanto o app trabalha.",
         avanca: "botao",
       },
     ],
     impedimento: semMusicas,
-    fim: "Pronto! Pode levar um tempo; dá para continuar ouvindo música enquanto isso.",
+    fim: "Pronto! O que estiver vazio é preenchido sozinho. O que trocaria algo já escrito espera você conferir, num cartão amarelo aqui mesmo, em “Organizar minhas músicas”.",
+  },
+  "escrever-letras": {
+    pergunta: "Como eu escrevo as letras ouvindo a música?",
+    passos: [
+      irParaOrganizar,
+      {
+        alvo: "cartao-ouvir",
+        texto:
+          "Isto é para as músicas que nenhum site conhece, como as gravações do grupo: o computador ouve a música e escreve a letra. Demora, e o tempo aparece aqui.",
+        avanca: "botao",
+      },
+      {
+        alvo: "pasta-e-tempo",
+        texto: "A pasta escolhida aqui vale também para escrever as letras: escolha uma pasta ou “Toda a biblioteca”.",
+        avanca: "botao",
+      },
+      {
+        alvo: "baixar-programa",
+        texto:
+          "Na primeira vez, é preciso baixar o programa que ouve as músicas. Clique em “Baixar” aqui e no “Baixar” de “Entender o que é cantado”, logo abaixo. Isso acontece uma vez só.",
+        avanca: "botao",
+        pularSe: () => visivel("comecar-transcricao") || !visivel("baixar-programa"),
+      },
+      {
+        alvo: "comecar-transcricao",
+        texto:
+          "Quando quiser, clique em “Começar agora”. Dá para continuar usando o computador. No fim, você confere cada letra antes de ela ir para a música.",
+        avanca: "botao",
+        pularSe: () => !visivel("comecar-transcricao"),
+      },
+    ],
+    impedimento: semMusicas,
+    fim: "Pronto! Se precisar parar no meio, as letras já escritas ficam guardadas, esperando você conferir.",
+  },
+  conferir: {
+    pergunta: "Como eu confiro as sugestões?",
+    passos: [
+      { ...irParaOrganizar, pularSe: () => conferenciaAberta() || useUiStore.getState().view === "settings" },
+      {
+        alvo: "conferir",
+        texto: "Clique aqui para conferir.",
+        avanca: "clique",
+        pularSe: conferenciaAberta,
+        semAlvo:
+          "Agora não há nada esperando você conferir. Quando houver, aparece um cartão amarelo aqui, em “Organizar minhas músicas”, com o botão “Conferir agora”.",
+      },
+      {
+        alvo: "comparacao",
+        texto: "À esquerda está a música como é hoje; à direita, como ela ficaria.",
+        avanca: "botao",
+      },
+      {
+        alvo: "ouvir-sugestao",
+        texto: "Na dúvida, clique em “Ouvir esta música” para conferir de ouvido.",
+        avanca: "botao",
+      },
+      {
+        alvo: "decisao",
+        texto:
+          "“Usar o novo” grava a sugestão na música. “Manter como está” deixa como estava. “Decidir depois” pula esta e mostra a próxima.",
+        avanca: "botao",
+      },
+    ],
+    impedimento: semMusicas,
+    fim: "Pronto! Pode parar quando quiser: o que ficar para depois continua esperando.",
+  },
+  instrumental: {
+    pergunta: "Como eu marco uma música como instrumental (sem letra)?",
+    passos: [
+      ...abrirOsDetalhes,
+      { alvo: "editar", texto: "Clique em “Editar”.", avanca: "clique" },
+      {
+        alvo: "formulario-de-edicao",
+        texto:
+          "Lá embaixo, marque “Esta música é instrumental” e clique em “Salvar no arquivo”. Assim o app para de procurar letra para ela.",
+        avanca: "quando",
+        quando: () => !visivel("formulario-de-edicao"),
+      },
+    ],
+    impedimento: semMusicas,
+    fim: "Pronto! Para desfazer, é só desmarcar a mesma caixa.",
+  },
+  tema: {
+    pergunta: "Como eu acho as músicas de um tema?",
+    passos: [
+      {
+        alvo: "tema-chip",
+        texto: "Clique num tema, como este. Os temas são as palavrinhas verdes ao lado do nome das músicas.",
+        avanca: "clique",
+        antes: naBiblioteca,
+      },
+      {
+        alvo: "lista-de-musicas",
+        texto: "Agora aparecem as músicas desse tema. Para ver todas de novo, apague o que está escrito na busca.",
+        avanca: "botao",
+      },
+    ],
+    impedimento: () =>
+      semMusicas() ??
+      (useLibraryStore.getState().allSongs.some((m) => m.temas)
+        ? null
+        : "Nenhuma música tem tema ainda. Os temas aparecem quando a letra é completada, ou quando você os escreve em “Editar”."),
+    fim: "Pronto! Também dá para escrever o tema direto na busca.",
+  },
+  "adicionar-pasta": {
+    pergunta: "Como eu ponho outra pasta de músicas no app?",
+    passos: [
+      irParaOrganizar,
+      {
+        alvo: "adicionar-pasta",
+        texto: "Clique em “Adicionar pasta” e escolha a pasta no computador. O app só lê as músicas: não muda nada nelas.",
+        avanca: "clique",
+      },
+    ],
+    fim: "Pronto! As músicas da pasta nova aparecem em “Todas as músicas”, e a pasta, do lado esquerdo.",
+  },
+  "musicas-novas": {
+    pergunta: "Copiei músicas novas para a pasta. Como elas aparecem?",
+    passos: [
+      irParaOrganizar,
+      {
+        alvo: "procurar-novas",
+        texto: "Clique em “Procurar músicas novas”. O app também procura sozinho toda vez que é aberto.",
+        avanca: "clique",
+      },
+    ],
+    impedimento: semMusicas,
+    fim: "Pronto! As músicas novas já aparecem em “Todas as músicas”.",
+  },
+  "consertar-arquivo": {
+    pergunta: "Uma música diz que “não aceita gravação”. E agora?",
+    passos: [
+      irParaOrganizar,
+      {
+        alvo: "consertar",
+        texto:
+          "Aqui aparecem os arquivos que têm nome de MP3, mas por dentro são de outro tipo. “Consertar” transforma cada um num MP3 de verdade; o original fica guardado e dá para voltar atrás.",
+        avanca: "botao",
+        semAlvo:
+          "Agora nenhum arquivo precisa de conserto. Se uma música mostrar o aviso “Este arquivo não aceita gravação”, abra os detalhes dela e clique em “Consertar o arquivo”.",
+      },
+    ],
+    fim: "Pronto! Também dá para consertar uma música só: nos detalhes dela, clique em “Consertar o arquivo”.",
+  },
+  atualizar: {
+    pergunta: "Como eu atualizo o app?",
+    passos: [
+      irParaOrganizar,
+      {
+        alvo: "verificar-atualizacoes",
+        texto:
+          "Clique em “Verificar atualizações”. Se houver versão nova, aparece “Reiniciar agora”: clique nele, e o app abre de novo, já atualizado.",
+        avanca: "botao",
+        semAlvo: "O app procura atualização sozinho quando é aberto, e avisa quando há uma nova: é só clicar em “Reiniciar agora”.",
+      },
+    ],
+    fim: "Pronto! O app também procura atualização sozinho quando é aberto, e avisa quando há uma nova.",
+  },
+  "tela-escura": {
+    pergunta: "Como eu deixo a tela clara ou escura?",
+    passos: [
+      irParaOrganizar,
+      { alvo: "tema-da-tela", texto: "Escolha “Claro”, “Escuro” ou “Igual ao computador”.", avanca: "clique" },
+    ],
+    fim: "Pronto! O app guarda a sua escolha.",
   },
   "ver-letra": {
     pergunta: "Como eu vejo a letra de uma música?",
@@ -387,9 +586,13 @@ export const GUIAS: Record<GuiaId, Guia> = {
 
 /** As perguntas da lista do "Como faço?", na ordem da tela. */
 export const GRUPOS_DE_PERGUNTAS: { titulo: string; perguntas: GuiaId[] }[] = [
-  { titulo: "Ouvir", perguntas: ["achar", "tocar", "ver-letra", "letra-maior", "pasta"] },
+  { titulo: "Ouvir", perguntas: ["achar", "tocar", "ver-letra", "letra-maior", "pasta", "tema"] },
   { titulo: "Listas de músicas", perguntas: ["criar-lista", "por-na-lista", "mudar-ordem", "tocar-lista", "tirar-da-lista"] },
-  { titulo: "Organizar", perguntas: ["anotacao", "corrigir", "completar"] },
+  {
+    titulo: "Nome, cantor e letra",
+    perguntas: ["completar", "escrever-letras", "conferir", "corrigir", "instrumental", "anotacao"],
+  },
+  { titulo: "Pastas e o app", perguntas: ["adicionar-pasta", "musicas-novas", "consertar-arquivo", "atualizar", "tela-escura"] },
 ];
 
 /** Todas as perguntas do "Como faço?", na ordem da tela. */

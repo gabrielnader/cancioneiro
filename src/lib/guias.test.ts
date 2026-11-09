@@ -15,8 +15,13 @@ describe("Como faço? — os guias (V16.7)", () => {
   });
   afterEach(() => useGuiaStore.getState().parar());
 
-  it("as perguntas do jeito que a pessoa pensa, em três grupos", () => {
-    expect(GRUPOS_DE_PERGUNTAS.map((g) => g.titulo)).toEqual(["Ouvir", "Listas de músicas", "Organizar"]);
+  it("as perguntas do jeito que a pessoa pensa, em quatro grupos", () => {
+    expect(GRUPOS_DE_PERGUNTAS.map((g) => g.titulo)).toEqual([
+      "Ouvir",
+      "Listas de músicas",
+      "Nome, cantor e letra",
+      "Pastas e o app",
+    ]);
     const todas = PERGUNTAS.map((id) => GUIAS[id].pergunta);
     for (const p of [
       "Como eu acho uma música?",
@@ -28,7 +33,16 @@ describe("Como faço? — os guias (V16.7)", () => {
       "Como eu mudo a ordem das músicas numa lista?",
       "Como eu escrevo uma anotação?",
       "Como eu corrijo o nome ou a letra de uma música?",
-      "Como eu completo as letras que faltam?",
+      "Como eu completo nome, cantor e letra das músicas?",
+      "Como eu escrevo as letras ouvindo a música?",
+      "Como eu confiro as sugestões?",
+      "Como eu marco uma música como instrumental (sem letra)?",
+      "Como eu acho as músicas de um tema?",
+      "Como eu ponho outra pasta de músicas no app?",
+      "Copiei músicas novas para a pasta. Como elas aparecem?",
+      "Uma música diz que “não aceita gravação”. E agora?",
+      "Como eu atualizo o app?",
+      "Como eu deixo a tela clara ou escura?",
     ]) {
       expect(todas).toContain(p);
     }
@@ -107,5 +121,34 @@ describe("Como faço? — de dentro de uma lista (V16.7)", () => {
     useGuiaStore.getState().iniciar("por-na-lista");
     expect(useUiStore.getState().view).toBe("library");
     useGuiaStore.getState().parar();
+  });
+});
+
+describe("Como faço? — o que a tela não tem agora (V16.10)", () => {
+  it("todo guia de Organizar começa indo para lá, e só pula esse passo quando já está lá", () => {
+    useLibraryStore.setState({ folders: [{ id: 1, path: "/m", missing: false } as never] });
+    useUiStore.setState({ view: "library" });
+    for (const id of ["completar", "escrever-letras", "adicionar-pasta", "musicas-novas", "atualizar", "tela-escura"] as const) {
+      useGuiaStore.getState().iniciar(id);
+      expect(GUIAS[id].passos[useGuiaStore.getState().passo].alvo).toBe("organizar");
+      useGuiaStore.getState().parar();
+    }
+    useUiStore.setState({ view: "settings" });
+    useGuiaStore.getState().iniciar("completar");
+    expect(GUIAS.completar.passos[useGuiaStore.getState().passo].alvo).toBe("pasta-e-tempo");
+    useGuiaStore.getState().parar();
+  });
+
+  it("o passo cujo lugar pode não existir tem a frase do que fazer", () => {
+    const conferir = GUIAS.conferir.passos.find((p) => p.alvo === "conferir")!;
+    expect(conferir.semAlvo).toMatch(/não há nada esperando/);
+    expect(GUIAS["consertar-arquivo"].passos[GUIAS["consertar-arquivo"].passos.length - 1].semAlvo).toMatch(/nenhum arquivo precisa/);
+  });
+
+  it("o guia de completar não promete o que o app não faz", () => {
+    // o vazio É preenchido sem conferência; só a troca espera a pessoa
+    const textos = [GUIAS.completar.fim, ...GUIAS.completar.passos.map((p) => p.texto)].join(" ");
+    expect(textos).toMatch(/vazio é preenchido sozinho/);
+    expect(textos).not.toMatch(/Nada é gravado sem você/);
   });
 });
