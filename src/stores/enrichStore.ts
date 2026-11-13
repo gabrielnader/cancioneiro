@@ -177,6 +177,9 @@ interface EnrichState {
   gravando: { feitas: number; total: number } | null;
   /** V15 — quantas músicas foram completadas sozinhas nesta revisão. */
   autoAplicadas: number;
+  /** V16.11 — o que aconteceu no fim da última busca/escrita (ver `resumirOFim`) */
+  resumoDoFim: ResumoDoFim | null;
+  dispensarResumo: () => void;
   /** V15 — "Manter como está": a linha sai das pendentes, sem gravar nada. */
   manter: (linha: number) => void;
   /**
@@ -293,6 +296,17 @@ async function aplicarOQueSoPreenche(): Promise<void> {
   useEnrichStore.setState((atual) => ({ autoAplicadas: atual.autoAplicadas + gravadas }));
 }
 
+/** V16.11 — guarda o resumo do fim e avisa, quando há o que contar. */
+function contarOFim(gravadas: number, pendentes: number, desta?: EnrichProposal[]): void {
+  const resumo = resumirOFim(desta ?? useEnrichStore.getState().proposals, gravadas, pendentes);
+  useEnrichStore.setState({ resumoDoFim: resumo });
+  if (resumo) {
+    useToastStore
+      .getState()
+      .push(`${resumo.titulo} Veja o motivo em “Organizar minhas músicas”.`, resumo.comErro ? "warning" : "success");
+  }
+}
+
 // Guarda de corrida (mesmo padrão do runSearch do libraryStore): cancelar
 // durante a varredura invalida o resultado que chegar depois.
 let scanSeq = 0;
@@ -314,6 +328,45 @@ function textoEncontrado(n: number): string {
   return n === 1
     ? "1 sugestão espera a sua decisão — veja em Organizar."
     : `${n} sugestões esperam a sua decisão — veja em Organizar.`;
+}
+
+/**
+ * V16.11 — o resumo do fim de uma busca ou escrita de letras. Existe porque o
+ * fim podia ser CALADO: quando nenhuma música sobrava para decidir (todas em
+ * erro, ou nada encontrado), não havia aviso nem cartão — e "rodou tudo e nada
+ * mudou" era tudo o que a pessoa sabia (relato de campo, Windows).
+ */
+export interface ResumoDoFim {
+  titulo: string;
+  /** os motivos, agrupados, do mais comum para o menos */
+  motivos: string[];
+  /** houve erro: o cartão e o aviso saem em âmbar, e não em verde */
+  comErro: boolean;
+}
+
+const musicas = (n: number) => (n === 1 ? "1 música" : `${n} músicas`);
+
+/** null quando não há o que contar (só decisões esperando: o cartão delas já fala). */
+export function resumirOFim(
+  proposals: EnrichProposal[],
+  gravadas: number,
+  pendentes: number,
+): ResumoDoFim | null {
+  const erros = proposals.filter((p) => p.error !== null);
+  if (erros.length === 0 && (gravadas > 0 || pendentes > 0)) return null;
+  const porMotivo = new Map<string, number>();
+  for (const p of erros) porMotivo.set(p.error!, (porMotivo.get(p.error!) ?? 0) + 1);
+  const motivos = [...porMotivo.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 4)
+    .map(([m, n]) => `${musicas(n)}: ${m}`);
+  if (porMotivo.size > 4) motivos.push("…e outros motivos em menos músicas.");
+  const nadaMudou = gravadas === 0 && pendentes === 0;
+  const titulo = nadaMudou
+    ? "Terminou sem mudar nenhuma música."
+    : `${musicas(erros.length)} não ${erros.length === 1 ? "pôde" : "puderam"} ser completada${erros.length === 1 ? "" : "s"}.`;
+  if (erros.length === 0) motivos.push("Não foi encontrado nada que faltasse nestas músicas.");
+  return { titulo, motivos, comErro: erros.length > 0 };
 }
 
 /** Estado inicial da etapa 5: nada sabido, nada oferecido. */
@@ -341,6 +394,8 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
   scanInFlight: false,
   mantidas: [],
   autoAplicadas: 0,
+  resumoDoFim: null,
+  dispensarResumo: () => set({ resumoDoFim: null }),
 
   manter: (linha) => {
     const p = get().proposals[linha];
@@ -517,6 +572,7 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
     set({
       status: "scanning",
       overlayOpen: true,
+      resumoDoFim: null,
       folderPrefix,
       proposals: [],
       progress: null,
@@ -619,9 +675,11 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
         estimativaMedidaNestaMaquina: estimativaMedida ?? false,
       });
       // V15 — o que só preenche é gravado já, sem perguntar; o resto espera
+      const antes = get().autoAplicadas;
       await aplicarOQueSoPreenche();
       if (seq !== scanSeq) return; // cancelado enquanto gravava: nada a avisar
       const pendentes = decisoesPendentes(get()).length;
+      contarOFim(get().autoAplicadas - antes, pendentes);
       if (emSegundoPlano && pendentes > 0) {
         // o toast desta base não carrega ação de clique: quem leva de volta à
         // revisão é o indicador da lateral e o cartão de Organizar
@@ -661,6 +719,7 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
     const scanId = novoScanId();
     set({
       status: "transcribing",
+      resumoDoFim: null,
       overlayOpen: true,
       scanId,
       transcricaoProgress: null,
@@ -725,7 +784,11 @@ export const useEnrichStore = create<EnrichState>()((set, get) => ({
       }));
       // V15 — mesma regra da varredura (a letra escrita pelo computador nunca
       // entra sozinha: ver `linhasQueSoPreenchem`)
+      const antes = get().autoAplicadas;
       await aplicarOQueSoPreenche();
+      // só as linhas DESTA escrita contam no resumo (a varredura pode ter
+      // deixado as dela)
+      contarOFim(get().autoAplicadas - antes, decisoesPendentes(get()).length, propostas);
       if (!get().overlayOpen && decisoesPendentes(get()).length > 0) {
         useToastStore
           .getState()

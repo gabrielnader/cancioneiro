@@ -2957,3 +2957,9 @@ gravação; o desfecho da gravação conta o que foi feito.
 - Corrigido o texto do completar: dizia "nada é gravado sem você aprovar", mas o que está VAZIO é preenchido sozinho; só a troca espera a pessoa (teste trava a frase).
 - O guia rola a página até o lugar apontado (Organizar é comprida). Quando o lugar não existe agora (nada esperando conferência, nenhum arquivo para consertar), o balão diz o que fazer em vez de pedir um clique impossível.
 - A conferência cobre a tela inteira, e com ela o "Como faço?" do alto: ganhou o seu, que começa direto o passo a passo de conferir.
+
+## V16.11 — "rodou tudo e nada mudou", no Windows
+- Relato de campo (computador Windows recém-instalado): as duas etapas, completar e escrever as letras, terminaram sem mudar nada e sem mensagem nenhuma.
+- Causa 1, confirmada: o `whisper-cli` publicado para o Windows pedia MSVCP140, VCRUNTIME140, VCRUNTIME140_1 e VCOMP140 (o "Visual C++ Redistributable"), que muitos computadores têm e outros não. Sem eles o programa não abre. A máquina do GitHub tem o pacote, por isso a prova de "executa" passava. Novo acessório `whisper-cli-windows-x86_64-autonomo.exe`: runtime estático, sem OpenMP, e a montagem (`acessorio-transcritor-windows.yml`) confere que só pede DLLs do próprio Windows. Nome novo para não trocar a soma que as versões antigas conferem; quem já tinha baixado vê "Baixar (1,5 MB)" de novo.
+- Causa 2, o silêncio: quando nenhuma música sobrava para decidir (todas em erro, ou nada encontrado), o fim não tinha aviso nem cartão. Agora há o resumo do fim ("Terminou sem mudar nenhuma música" e os motivos agrupados), num aviso e num cartão em Organizar que fica até "Entendi".
+- O Windows encerrando o programa por DLL que falta (0xC0000135 e parentes) passou a ser veredito sobre a máquina, com a frase "o programa que escreve a letra não conseguiu ser executado neste computador", e não erro de áudio repetido em cada música.

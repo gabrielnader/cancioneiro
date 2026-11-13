@@ -12,7 +12,7 @@ import {
   avisoDeTranscricaoPendente,
   textoSemPropostas,
 } from "../lib/curadoria";
-import { decisoesPendentes, useEnrichStore } from "./enrichStore";
+import { decisoesPendentes, resumirOFim, useEnrichStore } from "./enrichStore";
 import { useToastStore } from "./toastStore";
 
 function proposal(overrides: Partial<EnrichProposal> = {}): EnrichProposal {
@@ -1233,6 +1233,34 @@ describe("enrichStore (V5 — F13)", () => {
       } as unknown as Backend;
     }
 
+    /*
+      V16.11 — relato de campo (Windows): "rodou tudo e nada mudou", sem
+      mensagem. O transcritor não abria, e cada música terminava em erro; como
+      nenhuma sobrava para decidir, o fim era calado.
+    */
+    it("todas em erro: o fim conta o que houve, e não fica calado", async () => {
+      const erro = "o programa que escreve a letra não conseguiu ser executado neste computador";
+      setBackendForTests(
+        backendComTranscricao({
+          transcreverMusicas: vi.fn(async () => ({
+            propostas: [
+              proposal({ song_id: 21, fonte: "erro", error: erro }),
+              proposal({ song_id: 22, fonte: "erro", error: erro }),
+            ],
+            razao_medida: null,
+            razao_desta_maquina: 1.2,
+          })),
+        }),
+      );
+      await useEnrichStore.getState().startTranscricao([21, 22]);
+      const resumo = useEnrichStore.getState().resumoDoFim;
+      expect(resumo?.titulo).toBe("Terminou sem mudar nenhuma música.");
+      expect(resumo?.motivos).toEqual([`2 músicas: ${erro}`]);
+      expect(resumo?.comErro).toBe(true);
+      const avisos = useToastStore.getState().toasts.map((t) => t.message);
+      expect(avisos.some((m) => m.startsWith("Terminou sem mudar nenhuma música."))).toBe(true);
+    });
+
     it("manda ao backend exatamente os ids que a varredura devolveu", async () => {
       const backend = backendComTranscricao();
       setBackendForTests(backend);
@@ -1665,5 +1693,31 @@ describe("letras guardadas da etapa 5", () => {
     expect(descartarTranscricoes).not.toHaveBeenCalled();
     useEnrichStore.getState().manter(1);
     expect(descartarTranscricoes).toHaveBeenCalledWith([7]);
+  });
+});
+
+describe("resumirOFim (V16.11)", () => {
+  it("só decisões esperando: o cartão delas já fala, sem resumo", () => {
+    expect(resumirOFim([proposal()], 0, 1)).toBeNull();
+  });
+  it("nada encontrado e nada mudou: diz isso", () => {
+    const r = resumirOFim([], 0, 0)!;
+    expect(r.titulo).toBe("Terminou sem mudar nenhuma música.");
+    expect(r.motivos).toEqual(["Não foi encontrado nada que faltasse nestas músicas."]);
+    expect(r.comErro).toBe(false);
+  });
+  it("erros agrupados pelo motivo, do mais comum ao menos", () => {
+    const r = resumirOFim(
+      [
+        proposal({ song_id: 1, error: "sem internet" }),
+        proposal({ song_id: 2, error: "arquivo sumiu" }),
+        proposal({ song_id: 3, error: "sem internet" }),
+        proposal({ song_id: 4 }),
+      ],
+      3,
+      0,
+    )!;
+    expect(r.titulo).toBe("3 músicas não puderam ser completadas.");
+    expect(r.motivos).toEqual(["2 músicas: sem internet", "1 música: arquivo sumiu"]);
   });
 });

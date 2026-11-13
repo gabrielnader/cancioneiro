@@ -196,6 +196,8 @@ export function SettingsView() {
           você completa o que falta nelas.
         </p>
 
+        <ResumoDoFimCartao />
+
         <div className="grid grid-cols-[repeat(auto-fit,minmax(min(100%,440px),1fr))] items-start gap-5">
           <CuradoriaSection />
 
@@ -874,6 +876,40 @@ function CuradoriaSection() {
         <Acessorios lista={acessorios} />
       </Cartao>
     </div>
+  );
+}
+
+/**
+ * V16.11 — o que aconteceu no fim da última busca ou escrita de letras, quando
+ * nada sobrou para decidir. Fica até a pessoa clicar em "Entendi": um aviso
+ * que some sozinho em segundos não serve a quem não estava olhando.
+ */
+function ResumoDoFimCartao() {
+  const resumo = useEnrichStore((s) => s.resumoDoFim);
+  const dispensar = useEnrichStore((s) => s.dispensarResumo);
+  if (!resumo) return null;
+  return (
+    <section
+      aria-labelledby="resumo-do-fim"
+      data-testid="resumo-do-fim"
+      className={`mb-5 flex flex-col gap-3 rounded-2xl border-2 p-6 max-lg:p-4 ${
+        resumo.comErro ? "border-warning bg-warning-soft" : "border-brand bg-brand-soft"
+      }`}
+    >
+      <h2 id="resumo-do-fim" className="text-[21px] font-bold leading-tight text-ink">
+        {resumo.titulo}
+      </h2>
+      <ul className="flex list-disc flex-col gap-1 pl-6 text-[17px] leading-relaxed text-ink-secondary">
+        {resumo.motivos.map((m, i) => (
+          <li key={i}>{m}</li>
+        ))}
+      </ul>
+      <div>
+        <button type="button" onClick={dispensar} className={BOTAO_SECUNDARIO}>
+          Entendi
+        </button>
+      </div>
+    </section>
   );
 }
 

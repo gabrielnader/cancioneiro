@@ -444,6 +444,15 @@ pub fn estimativa_da_transcricao(
 /// de um arquivo de música — vai acontecer em todos —, e é o único veredito da
 /// etapa 5 que a desliga pelo resto do trabalho, como o
 /// `fingerprint::ERRO_FPCALC_NAO_EXECUTA` faz com a etapa 2.
+/// V16.11 — os códigos com que o Windows encerra um programa que não chegou a
+/// começar: DLL que falta (STATUS_DLL_NOT_FOUND), função que falta numa DLL
+/// (STATUS_ENTRYPOINT_NOT_FOUND), executável de outra arquitetura
+/// (STATUS_INVALID_IMAGE_FORMAT) e DLL que falhou ao iniciar
+/// (STATUS_DLL_INIT_FAILED). No Unix nenhum código de saída tem esses valores.
+pub fn e_falha_ao_abrir_no_windows(codigo: i32) -> bool {
+    matches!(codigo as u32, 0xC000_0135 | 0xC000_0139 | 0xC000_007B | 0xC000_0142)
+}
+
 pub const ERRO_NAO_EXECUTA: &str =
     "o programa que escreve a letra não conseguiu ser executado neste computador";
 
@@ -1723,6 +1732,13 @@ pub fn transcrever(
         }
     }
     if !status.success() {
+        // V16.11 — o Windows "abre" o processo e ele morre na hora quando falta
+        // uma DLL (o Visual C++ Redistributable, no transcritor antigo). Isso
+        // é veredito sobre a MÁQUINA, e não sobre esta música: tratado como
+        // erro de áudio, cada música da fila terminava num erro calado.
+        if status.code().is_some_and(e_falha_ao_abrir_no_windows) {
+            return Err(AppError(ERRO_NAO_EXECUTA.into()));
+        }
         return Err(AppError(ERRO_AUDIO.into()));
     }
     // A segunda corroboração, de graça: o motor anuncia quanto áudio ABRIU no
@@ -2380,6 +2396,17 @@ mod tests {
     /// Binário que não existe é VEREDITO sobre a máquina, e é conferido ANTES
     /// de decodificar: decodificar cinco minutos de áudio para então descobrir
     /// que o programa não está lá é gastar o tempo de quem espera.
+    #[test]
+    fn dll_que_falta_no_windows_e_veredito_sobre_a_maquina() {
+        // o código que o Windows devolve, visto como i32 pelo Rust
+        assert!(e_falha_ao_abrir_no_windows(0xC000_0135_u32 as i32));
+        assert!(e_falha_ao_abrir_no_windows(-1_073_741_515)); // o mesmo, em decimal
+        assert!(e_falha_ao_abrir_no_windows(0xC000_007B_u32 as i32));
+        // saída comum de erro não é
+        assert!(!e_falha_ao_abrir_no_windows(1));
+        assert!(!e_falha_ao_abrir_no_windows(0));
+    }
+
     #[test]
     fn binario_que_nao_existe_e_veredito_sobre_a_maquina() {
         let dir = tempfile::tempdir().unwrap();

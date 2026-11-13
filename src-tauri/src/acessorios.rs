@@ -119,16 +119,15 @@ pub const CATALOGO: &[Acessorio] = &[
     Acessorio {
         nome: WHISPER_CLI,
         plataforma: "windows-x86_64",
-        arquivo: "whisper-cli-windows-x86_64.exe",
-        // Republicado: o `whisper-cli` do Windows NÃO é reprodutível (o MSVC
-        // carimba data e caminho no executável), então republicar o
-        // lançamento para acrescentar um MODELO trocou a soma deste binário
-        // sem que nada dele tivesse mudado. Linux e macOS saíram idênticos.
-        // Foi o aviso do próprio fluxo acontecendo: "rodar de novo com a
-        // mesma tag substitui os arquivos e muda os hashes que o app espera".
-        // Ver a trava que o `acessorio-modelo.yml` passou a dar.
-        sha256: "db0f063f489170c32bc6a59fe3b05db99e3ff3a317e2fe8b4362bdd95b9ab4de",
-        tamanho_bytes: 971_776,
+        // V16.11 — o "autônomo": runtime do MSVC estático e sem OpenMP. O
+        // anterior (`whisper-cli-windows-x86_64.exe`, que fica publicado para
+        // as versões antigas) pedia o "Visual C++ Redistributable" e não
+        // abria no computador sem ele — cada música terminava em erro, e a
+        // pessoa via "rodou tudo e nada mudou". Montado pelo
+        // `acessorio-transcritor-windows.yml`, que confere as DLLs pedidas.
+        arquivo: "whisper-cli-windows-x86_64-autonomo.exe",
+        sha256: "71b87a75d0a7c8541854a9049dc321d20aa546d66a10b5759d25018b51162801",
+        tamanho_bytes: 1_531_392,
         executavel: true,
     },
     Acessorio {
@@ -1106,7 +1105,7 @@ mod tests {
         // V15.4 — e o do Apple Silicon, com a placa de vídeo
         assert!(arquivos.contains(&"whisper-cli-macos12-arm64-metal"));
         assert!(arquivos.contains(&"whisper-cli-linux-x86_64"));
-        assert!(arquivos.contains(&"whisper-cli-windows-x86_64.exe"));
+        assert!(arquivos.contains(&"whisper-cli-windows-x86_64-autonomo.exe"));
         // V10.2 — o `medium` foi publicado no MESMO lançamento pelo fluxo
         // `acessorio-modelo.yml`, que recusa republicar por cima de um nome já
         // existente (acrescentar arquivo não muda a soma dos que já estão lá).
