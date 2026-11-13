@@ -1,0 +1,116 @@
+name: acessorio-transcritor-windows
+
+# V16.11 — o `whisper-cli` do Windows sem depender do "Visual C++
+# Redistributable". O de antes era montado com o runtime padrão do MSVC (/MD)
+# e com OpenMP: precisava de MSVCP140, VCRUNTIME140, VCRUNTIME140_1 e VCOMP140,
+# que vêm em muitos computadores, mas não em todos — e na máquina sem eles o
+# programa não abre, e cada música terminava em erro. A máquina do GitHub tem
+# o pacote, por isso a prova de "executa aqui" passava.
+#
+# Agora: runtime ESTÁTICO (/MT) e sem OpenMP (o ggml usa as próprias threads),
+# e a montagem CONFERE que o executável não pede nenhuma dessas DLLs. Publicado
+# com OUTRO nome, para não trocar a soma do arquivo que versões antigas do app
+# conferem.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Lançamento de acessórios onde publicar"
+        required: true
+        default: "acessorios-v1"
+      whisper:
+        description: "Tag do whisper.cpp a construir"
+        required: true
+        default: "v1.7.4"
+
+permissions:
+  contents: write
+
+env:
+  NOME: whisper-cli-windows-x86_64-autonomo.exe
+
+jobs:
+  construir:
+    runs-on: windows-latest
+    steps:
+      - name: Buscar o whisper.cpp
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "${{ github.event.inputs.whisper }}" \
+            https://github.com/ggml-org/whisper.cpp whisper
+
+      - name: Construir (runtime estático, sem OpenMP)
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd whisper
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DWHISPER_BUILD_TESTS=OFF \
+            -DWHISPER_BUILD_SERVER=OFF \
+            -DWHISPER_BUILD_EXAMPLES=ON \
+            -DGGML_OPENMP=OFF \
+            -DCMAKE_POLICY_DEFAULT_CMP0091=NEW \
+            -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
+          cmake --build build --config Release -j 4
+
+      - name: Achar o executável
+        shell: bash
+        run: |
+          set -euo pipefail
+          achado=$(find whisper/build -type f -name whisper-cli.exe -not -path '*/CMakeFiles/*' | sort | head -1)
+          [ -n "$achado" ] || { echo "::error::não achei o whisper-cli.exe"; exit 1; }
+          cp "$achado" "$NOME"
+          ls -l "$NOME"
+
+      - name: Conferir que não pede o pacote da Microsoft
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - "$NOME" <<'PY'
+          import re, sys
+          b = open(sys.argv[1], "rb").read()
+          dlls = sorted({m.decode().lower() for m in re.findall(rb"[A-Za-z0-9_\-]+\.dll", b, re.I)})
+          print("DLLs citadas:", dlls)
+          proibidas = [d for d in dlls if re.match(r"(msvcp|vcruntime|vcomp)\d+", d)]
+          if proibidas:
+              print(f"::error::ainda depende do Visual C++ Redistributable: {proibidas}")
+              sys.exit(1)
+          PY
+
+      - name: Provar que EXECUTA aqui mesmo
+        shell: bash
+        run: |
+          set -uo pipefail
+          saida=$(./$NOME --help 2>&1 || true)
+          printf '%s\n' "$saida" | head -5
+          printf '%s' "$saida" | grep -qi 'whisper' || {
+            echo "::error::o binário não se identifica como whisper"; exit 1; }
+          echo "ok"
+
+      - name: Somas de verificação
+        shell: bash
+        run: sha256sum "$NOME" | tee SHA256SUMS-transcritor-windows.txt
+
+      - name: Publicar no lançamento de acessórios
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            "$NOME" SHA256SUMS-transcritor-windows.txt
+
+      - name: Resumo (é daqui que o hash vai para o código)
+        shell: bash
+        run: |
+          {
+            echo "## Transcritor do Windows (autônomo) em \`${{ github.event.inputs.tag }}\`"
+            echo '```'
+            cat SHA256SUMS-transcritor-windows.txt
+            stat -c '%s bytes' "$NOME" 2>/dev/null || wc -c < "$NOME"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
