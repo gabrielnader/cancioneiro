@@ -1,6 +1,6 @@
 [package]
 name = "cancioneiro"
-version = "0.13.23"
+version = "0.13.24"
 description = "Cancioneiro — player offline com busca por letra"
 authors = ["Avantsoft"]
 edition = "2021"

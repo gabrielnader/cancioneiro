@@ -116,18 +116,28 @@ pub const CATALOGO: &[Acessorio] = &[
     // O whisper.cpp é CONSTRUÍDO por nós (`BUILD_SHARED_LIBS=OFF`, para o
     // acessório ser UM arquivo conferível por UM SHA-256). O macOS sai
     // universal, como o Chromaprint — ver o comentário da entrada dele.
+    // V16.12 — o transcritor do Windows em DUAS versões, escolhidas pelo
+    // processador (`plataformas_desta_maquina`). As anteriores
+    // (`whisper-cli-windows-x86_64.exe` e `-autonomo.exe`, que ficam
+    // publicadas para as versões antigas do app) traziam instruções AVX-512 da
+    // máquina do GitHub e paravam na primeira música de quase todo notebook;
+    // a primeira ainda pedia o "Visual C++ Redistributable". Estas: runtime
+    // estático, sem OpenMP, sem AVX-512 — o `acessorio-transcritor-windows.yml`
+    // confere as DLLs pedidas e as instruções usadas.
     Acessorio {
         nome: WHISPER_CLI,
-        plataforma: "windows-x86_64",
-        // V16.11 — o "autônomo": runtime do MSVC estático e sem OpenMP. O
-        // anterior (`whisper-cli-windows-x86_64.exe`, que fica publicado para
-        // as versões antigas) pedia o "Visual C++ Redistributable" e não
-        // abria no computador sem ele — cada música terminava em erro, e a
-        // pessoa via "rodou tudo e nada mudou". Montado pelo
-        // `acessorio-transcritor-windows.yml`, que confere as DLLs pedidas.
-        arquivo: "whisper-cli-windows-x86_64-autonomo.exe",
-        sha256: "71b87a75d0a7c8541854a9049dc321d20aa546d66a10b5759d25018b51162801",
-        tamanho_bytes: 1_531_392,
+        plataforma: "windows-x86_64-avx2",
+        arquivo: "whisper-cli-windows-x86_64-avx2.exe",
+        sha256: "cb924780496e40b22b0a0d4f64a3419ea52e667d53b2baa1a5ace05b172a0c9f",
+        tamanho_bytes: 1_525_248,
+        executavel: true,
+    },
+    Acessorio {
+        nome: WHISPER_CLI,
+        plataforma: "windows-x86_64-basico",
+        arquivo: "whisper-cli-windows-x86_64-basico.exe",
+        sha256: "0408a846d30f5730a426e3eb2bfcc976a23f2bdcc4b854e0d2a51ce80329ea4b",
+        tamanho_bytes: 1_529_344,
         executavel: true,
     },
     Acessorio {
@@ -1125,7 +1135,8 @@ mod tests {
         // V15.4 — e o do Apple Silicon, com a placa de vídeo
         assert!(arquivos.contains(&"whisper-cli-macos12-arm64-metal"));
         assert!(arquivos.contains(&"whisper-cli-linux-x86_64"));
-        assert!(arquivos.contains(&"whisper-cli-windows-x86_64-autonomo.exe"));
+        assert!(arquivos.contains(&"whisper-cli-windows-x86_64-avx2.exe"));
+        assert!(arquivos.contains(&"whisper-cli-windows-x86_64-basico.exe"));
         // V10.2 — o `medium` foi publicado no MESMO lançamento pelo fluxo
         // `acessorio-modelo.yml`, que recusa republicar por cima de um nome já
         // existente (acrescentar arquivo não muda a soma dos que já estão lá).
