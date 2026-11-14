@@ -27,12 +27,28 @@ on:
 permissions:
   contents: write
 
-env:
-  NOME: whisper-cli-windows-x86_64-autonomo.exe
+# V16.12 — e SEM afinar para o processador da máquina do GitHub. O cmake do
+# ggml liga GGML_NATIVE por padrão: o executável saía com instruções AVX-512,
+# que a máquina do GitHub tem e a maioria dos notebooks não — e parava na
+# primeira música ("não foi possível ouvir o áudio", 174 vezes). Duas versões:
+# a comum (AVX2, quase todo computador de 2013 em diante) e a básica (sem AVX,
+# para Celeron/Pentium simples). O app escolhe pelo processador.
 
 jobs:
   construir:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - NOME: whisper-cli-windows-x86_64-avx2.exe
+            instrucoes: "-DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON"
+            proibido: "zmm"
+          - NOME: whisper-cli-windows-x86_64-basico.exe
+            instrucoes: "-DGGML_AVX=OFF -DGGML_AVX2=OFF -DGGML_FMA=OFF -DGGML_F16C=OFF"
+            proibido: "ymm|zmm"
     runs-on: windows-latest
+    env:
+      NOME: ${{ matrix.NOME }}
     steps:
       - name: Buscar o whisper.cpp
         shell: bash
@@ -52,6 +68,7 @@ jobs:
             -DWHISPER_BUILD_SERVER=OFF \
             -DWHISPER_BUILD_EXAMPLES=ON \
             -DGGML_OPENMP=OFF \
+            -DGGML_NATIVE=OFF -DGGML_AVX512=OFF ${{ matrix.instrucoes }} \
             -DCMAKE_POLICY_DEFAULT_CMP0091=NEW \
             -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded
           cmake --build build --config Release -j 4
@@ -80,6 +97,21 @@ jobs:
               sys.exit(1)
           PY
 
+      - name: Conferir as instruções do processador
+        # o que o executável usa tem de existir no computador da pessoa, e não
+        # só na máquina do GitHub: AVX-512 (zmm) nunca; na básica, nem AVX (ymm)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # objdump (do MinGW/Strawberry) ou o llvm-objdump do LLVM, o que a
+          # máquina do GitHub tiver
+          ferramenta=$(command -v objdump || command -v llvm-objdump || echo "/c/Program Files/LLVM/bin/llvm-objdump.exe")
+          "$ferramenta" -d "$NOME" > desmontado.txt
+          [ "$(wc -l < desmontado.txt)" -gt 1000 ] || { echo "::error::não deu para desmontar o executável"; exit 1; }
+          n=$(grep -Ec "${{ matrix.proibido }}" desmontado.txt || true)
+          echo "instruções proibidas encontradas: $n"
+          [ "$n" = "0" ] || { echo "::error::o executável usa instruções que muitos processadores não têm"; exit 1; }
+
       - name: Provar que EXECUTA aqui mesmo
         shell: bash
         run: |
@@ -92,7 +124,7 @@ jobs:
 
       - name: Somas de verificação
         shell: bash
-        run: sha256sum "$NOME" | tee SHA256SUMS-transcritor-windows.txt
+        run: sha256sum "$NOME" | tee "SHA256SUMS-$NOME.txt"
 
       - name: Publicar no lançamento de acessórios
         shell: bash
@@ -102,15 +134,15 @@ jobs:
         run: |
           set -euo pipefail
           gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
-            "$NOME" SHA256SUMS-transcritor-windows.txt
+            "$NOME" "SHA256SUMS-$NOME.txt"
 
       - name: Resumo (é daqui que o hash vai para o código)
         shell: bash
         run: |
           {
-            echo "## Transcritor do Windows (autônomo) em \`${{ github.event.inputs.tag }}\`"
+            echo "## $NOME em \`${{ github.event.inputs.tag }}\`"
             echo '```'
-            cat SHA256SUMS-transcritor-windows.txt
+            cat "SHA256SUMS-$NOME.txt"
             stat -c '%s bytes' "$NOME" 2>/dev/null || wc -c < "$NOME"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
