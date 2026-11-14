@@ -44,13 +44,16 @@ jobs:
             instrucoes: "-DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON"
             proibido: "zmm"
             limite_ymm: "100000"
+            limite_fma: "100000"
           - NOME: whisper-cli-windows-x86_64-basico.exe
             instrucoes: "-DGGML_AVX=OFF -DGGML_AVX2=OFF -DGGML_FMA=OFF -DGGML_F16C=OFF"
-            # o runtime estático do MSVC traz ~200 instruções AVX (ymm) em
-            # memcpy/memset, usadas só depois de conferir o processador; o que
-            # denuncia o ggml com AVX2 é o FMA (vfmadd), que o runtime não usa
-            proibido: "zmm|vfmadd|vfmsub|vfnmadd"
+            # o runtime estático do MSVC traz ~220 instruções AVX (ymm, em
+            # memcpy/memset) e ~110 FMA (nas funções matemáticas), usadas só
+            # depois de conferir o processador. O ggml com AVX2 passaria de
+            # 3.000 ymm: os limites separam um do outro
+            proibido: "zmm"
             limite_ymm: "400"
+            limite_fma: "200"
     runs-on: windows-latest
     env:
       NOME: ${{ matrix.NOME }}
@@ -119,6 +122,9 @@ jobs:
           y=$(grep -c "ymm" desmontado.txt || true)
           echo "instruções AVX (ymm): $y (limite ${{ matrix.limite_ymm }})"
           [ "$y" -le "${{ matrix.limite_ymm }}" ] || { echo "::error::AVX demais para a versão básica"; exit 1; }
+          f=$(grep -Ec "vfmadd|vfmsub|vfnmadd" desmontado.txt || true)
+          echo "instruções FMA: $f (limite ${{ matrix.limite_fma }})"
+          [ "$f" -le "${{ matrix.limite_fma }}" ] || { echo "::error::FMA demais para a versão básica"; exit 1; }
 
       - name: Provar que EXECUTA aqui mesmo
         shell: bash
