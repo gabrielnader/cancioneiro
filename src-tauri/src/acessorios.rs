@@ -616,7 +616,14 @@ pub fn diretorio_de_cache(base: &Path) -> PathBuf {
 /// em vez de oferecer um download que não serviria (DECISIONS #101).
 pub fn plataformas_desta_maquina() -> &'static [&'static str] {
     if cfg!(target_os = "windows") && cfg!(target_arch = "x86_64") {
-        &["windows-x86_64", QUALQUER_PLATAFORMA]
+        // V16.12 — o transcritor do Windows tem duas versões, pelo processador:
+        // a comum (AVX2) e a básica (sem AVX). O resto (fpcalc) é um só, sob
+        // "windows-x86_64", que vem logo depois na cadeia.
+        if tem_avx2() {
+            &["windows-x86_64-avx2", "windows-x86_64", QUALQUER_PLATAFORMA]
+        } else {
+            &["windows-x86_64-basico", "windows-x86_64", QUALQUER_PLATAFORMA]
+        }
     } else if cfg!(target_os = "linux") && cfg!(target_arch = "x86_64") {
         &["linux-x86_64", QUALQUER_PLATAFORMA]
     } else if cfg!(target_os = "macos") && cfg!(target_arch = "aarch64") {
@@ -625,6 +632,19 @@ pub fn plataformas_desta_maquina() -> &'static [&'static str] {
         &["macos-x86_64", "macos", QUALQUER_PLATAFORMA]
     } else {
         &[]
+    }
+}
+
+/// V16.12 — o processador tem AVX2 e FMA (o que a versão comum do transcritor
+/// do Windows usa)? Fora do x86_64, a pergunta não se aplica.
+pub fn tem_avx2() -> bool {
+    #[cfg(target_arch = "x86_64")]
+    {
+        std::arch::is_x86_feature_detected!("avx2") && std::arch::is_x86_feature_detected!("fma")
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        false
     }
 }
 

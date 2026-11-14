@@ -449,8 +449,31 @@ pub fn estimativa_da_transcricao(
 /// (STATUS_ENTRYPOINT_NOT_FOUND), executável de outra arquitetura
 /// (STATUS_INVALID_IMAGE_FORMAT) e DLL que falhou ao iniciar
 /// (STATUS_DLL_INIT_FAILED). No Unix nenhum código de saída tem esses valores.
+///
+/// V16.12 — e os de quando o processador não tem uma instrução que o programa
+/// usa (STATUS_ILLEGAL_INSTRUCTION, STATUS_PRIVILEGED_INSTRUCTION): o
+/// transcritor saía com AVX-512 e parava na primeira música de quase todo
+/// notebook. Também é veredito sobre a máquina, e não sobre a música.
 pub fn e_falha_ao_abrir_no_windows(codigo: i32) -> bool {
-    matches!(codigo as u32, 0xC000_0135 | 0xC000_0139 | 0xC000_007B | 0xC000_0142)
+    matches!(
+        codigo as u32,
+        0xC000_0135 | 0xC000_0139 | 0xC000_007B | 0xC000_0142 | 0xC000_001D | 0xC000_0096
+    )
+}
+
+/// V16.12 — o mesmo no Linux/macOS: o processo morto por SIGILL (instrução que
+/// o processador não tem) não tem código de saída, só o sinal.
+fn morreu_por_instrucao_ilegal(status: &std::process::ExitStatus) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::ExitStatusExt;
+        status.signal() == Some(4)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = status;
+        false
+    }
 }
 
 pub const ERRO_NAO_EXECUTA: &str =
@@ -1736,7 +1759,7 @@ pub fn transcrever(
         // uma DLL (o Visual C++ Redistributable, no transcritor antigo). Isso
         // é veredito sobre a MÁQUINA, e não sobre esta música: tratado como
         // erro de áudio, cada música da fila terminava num erro calado.
-        if status.code().is_some_and(e_falha_ao_abrir_no_windows) {
+        if status.code().is_some_and(e_falha_ao_abrir_no_windows) || morreu_por_instrucao_ilegal(&status) {
             return Err(AppError(ERRO_NAO_EXECUTA.into()));
         }
         return Err(AppError(ERRO_AUDIO.into()));
@@ -2402,6 +2425,8 @@ mod tests {
         assert!(e_falha_ao_abrir_no_windows(0xC000_0135_u32 as i32));
         assert!(e_falha_ao_abrir_no_windows(-1_073_741_515)); // o mesmo, em decimal
         assert!(e_falha_ao_abrir_no_windows(0xC000_007B_u32 as i32));
+        // V16.12 — instrução que o processador não tem (o AVX-512)
+        assert!(e_falha_ao_abrir_no_windows(0xC000_001D_u32 as i32));
         // saída comum de erro não é
         assert!(!e_falha_ao_abrir_no_windows(1));
         assert!(!e_falha_ao_abrir_no_windows(0));
